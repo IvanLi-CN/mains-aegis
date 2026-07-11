@@ -39,6 +39,8 @@ const CHARGE_POLICY_OUTPUT_BLOCK_EXIT_POLLS: u8 = 3;
 pub(super) const BACKUP_USB_CHARGE_START_POWER_LIMIT_W10: u32 = 20;
 pub(super) const BACKUP_USB_CHARGE_STOP_POWER_LIMIT_W10: u32 = 30;
 pub(super) const BACKUP_USB_CHARGE_TELEMETRY_MISS_LIMIT: u8 = 2;
+pub(super) const BACKUP_USB_AUTO_CHARGE_ICHG_MA: u16 = CHARGE_POLICY_NORMAL_ICHG_MA;
+pub(super) const BACKUP_USB_AUTO_CHARGE_STATUS_TEXT: &str = "CHG500";
 pub(super) const DCIN_ADAPTIVE_START_ICHG_MA: u16 = 100;
 const DCIN_ADAPTIVE_STEP_UP_ICHG_MA: u16 = 100;
 const DCIN_ADAPTIVE_STEP_DOWN_ICHG_MA: u16 = 200;
@@ -3625,6 +3627,12 @@ mod tests {
             guard.observe(true, true, true, Some(19), Some(41), false),
             BackupUsbChargeGuardDecision::Allow
         );
+    }
+
+    #[test]
+    fn backup_usb_auto_charge_keeps_the_fixed_500ma_policy() {
+        assert_eq!(BACKUP_USB_AUTO_CHARGE_ICHG_MA, 500);
+        assert_eq!(BACKUP_USB_AUTO_CHARGE_STATUS_TEXT, "CHG500");
     }
 
     #[test]

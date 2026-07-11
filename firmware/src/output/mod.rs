@@ -11990,7 +11990,6 @@ where
             },
             self.advanced_power_expanded.vin_drop_threshold_pct,
         );
-        let requested_policy_target_ichg_ma = policy_target_ichg_ma;
         let mut effective_policy_target_ichg_ma = policy_target_ichg_ma;
         let mut policy_detail_status_text = dcin_charge_detail_status_text(
             policy_status_text,
@@ -12025,7 +12024,11 @@ where
             && !auto_force_charge
             && !activation_pending
         {
+            policy_target_ichg_ma = Some(BACKUP_USB_AUTO_CHARGE_ICHG_MA);
+            effective_policy_target_ichg_ma = Some(BACKUP_USB_AUTO_CHARGE_ICHG_MA);
+            policy_status_text = BACKUP_USB_AUTO_CHARGE_STATUS_TEXT;
             policy_notice_text = "backup_usb_low_output_charge";
+            policy_detail_status_text = BACKUP_USB_AUTO_CHARGE_STATUS_TEXT;
         } else if let Some(runtime_charge_override) = runtime_charge_override {
             allow_charge = runtime_charge_override.allow_charge;
             effective_policy_target_ichg_ma = None;
@@ -12033,6 +12036,7 @@ where
             policy_notice_text = runtime_charge_override.policy_notice_text;
             policy_detail_status_text = runtime_charge_override.policy_status_text;
         }
+        let requested_policy_target_ichg_ma = policy_target_ichg_ma;
         let mut applied_ctrl0 = ctrl0;
         let mut applied_vreg_mv: Option<u16> = None;
         let mut applied_ichg_ma: Option<u16> = None;
