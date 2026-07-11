@@ -11606,6 +11606,9 @@ where
             && backup_vin_mains_present == Some(false)
             && matches!(input_source, Some(DashboardInputSource::UsbC))
             && usb_pd_charge_gate_ready;
+        let manual_loopback_override_for_policy = self.manual_charge_runtime.active
+            && self.manual_charge_runtime.loopback_override
+            && self.manual_charge_runtime.loopback_override_mode == Some(self.ui_snapshot.mode);
         let requested_acdrv_path = match input_source {
             Some(DashboardInputSource::DcIn) if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
             Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
@@ -11736,7 +11739,11 @@ where
                     ibus_ma: input_sample.ui_ibus_ma,
                     output_enabled,
                     output_power_w10,
-                    defer_output_power_unknown_block: backup_usb_charge_context,
+                    defer_output_power_unknown_block:
+                        defer_output_power_unknown_block_for_backup_usb(
+                            backup_usb_charge_context,
+                            manual_loopback_override_for_policy,
+                        ),
                     telemetry: charge_policy_telemetry,
                     charger_done: matches!(
                         audio_charge_phase_from_chg_stat(charger_chg_stat),

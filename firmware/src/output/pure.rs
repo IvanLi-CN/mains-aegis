@@ -1005,6 +1005,13 @@ impl BackupUsbChargeGuardDecision {
     }
 }
 
+pub(super) const fn defer_output_power_unknown_block_for_backup_usb(
+    backup_usb_charge_context: bool,
+    manual_loopback_override: bool,
+) -> bool {
+    backup_usb_charge_context && !manual_loopback_override
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct BackupUsbChargeGuard {
     pub(super) admitted: bool,
@@ -5750,6 +5757,15 @@ mod tests {
         assert_eq!(decision.state, ChargePolicyState::Charging500mA);
         assert!(decision.allow_charge);
         assert_eq!(decision.output_block_reason, None);
+    }
+
+    #[test]
+    fn backup_usb_unknown_output_power_deferral_excludes_confirmed_manual_override() {
+        assert!(defer_output_power_unknown_block_for_backup_usb(true, false));
+        assert!(!defer_output_power_unknown_block_for_backup_usb(true, true));
+        assert!(!defer_output_power_unknown_block_for_backup_usb(
+            false, false
+        ));
     }
 
     #[test]
