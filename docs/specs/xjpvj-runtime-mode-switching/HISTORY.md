@@ -184,3 +184,14 @@
     误算成控制延迟。
 - 原始报告位于 `tools/hil/reports/source-limited-12v-20260711T1818Z/`；可提交摘要位于
   `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-20260711T1818Z-suite-summary.json`。
+
+## 2026-07-12
+
+- 归档 `source-limited-12v-20260712T0300Z` 的完整三场景 HIL evidence：suite overview、
+  各场景 `results.json`、`timeseries.jsonl` 与可交互 `voltage-chart.html` 均保留在
+  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-20260712T0300Z/`。
+- 此归档用于后续输出稳定性优化的可复核比较，不取代已接受的
+  `source-limited-12v-20260711T1818Z` sign-off。
+- `backup_only` 与 `source_limited_cut` 满足 sign-off；`source_limited_online` 的
+  source-limited 功能断言通过，但最大采样间隔为 `0.507s`，超过 `0.5s` 合同限制，
+  因而标记为 `invalid_diagnostic_only`。

@@ -430,6 +430,24 @@ post-latch sample 开始计算。runner 同时过滤显式 stale UPS status，�
 `file://` 页面策略阻止本次在浏览器中加载该离线页面，因此未把单独 overview HTML 当作
 视觉签核证据；正式签核仍以保留的原始报告、摘要及 verifier 结果为准。
 
+### Archived source-limited diagnostic rerun
+
+完整的后续 12V 三场景证据已归档在：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-20260712T0300Z/`
+
+该目录保留 suite overview、三个场景的 `results.json`、完整
+`timeseries.jsonl` 与 `voltage-chart.html`，可通过静态 HTTP 服务直接打开
+overview 并加载全部 iframe 图表。它是后续控制策略优化的可复核比较基线，不能被
+单独 HTML overview 替代。
+
+这次 rerun 的 `backup_only` 与 `source_limited_cut` 均为
+`valid_for_signoff`；`source_limited_online` 的功能断言也通过，观察到
+`source_limited`、额定目标与锁存后的无低压时段。但该场景有一个 `0.507s` 的
+采样间隔，超过 `0.5s` 合同上限，因此其 `run_validity=invalid_diagnostic_only`，
+整套证据不得宣称为新的 sign-off。归档的目的在于保留原始遥测和视觉证据，便于未来
+定位采样完整性或输出稳定性回归。
+
 当前最值得保留给下一轮实现/验证的结论是：
 
 - 以后再改 runtime-mode 逻辑时，必须继续服从 `docs/hil-runtime-mode-switching.md` 的 formal run-validity 合同

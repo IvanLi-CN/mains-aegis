@@ -151,6 +151,21 @@ overload class could remain around `10.5V` at the load while VIN was still
 online. It does not prove that the hardware is a mixed-supply topology; it
 proves the MCU can limit the duration of that hardware-only fallback.
 
+## Retained Diagnostic Evidence
+
+Keep complete rerun evidence with the implementation, even when a collection
+gate prevents sign-off. The 12V three-scene rerun is archived at
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-20260712T0300Z/`.
+It includes the suite overview, each scene's raw result, full time series, and
+interactive voltage chart.
+
+In that rerun, `backup_only` and `source_limited_cut` were sign-off valid. The
+online overload scene observed the intended source-limited takeover and passed
+its functional assertions, but a `0.507s` sample gap exceeded the `0.5s`
+collection contract. Treat the complete suite as diagnostic evidence, not a
+replacement sign-off. Retaining it allows later changes to distinguish output
+control regressions from telemetry-completeness regressions.
+
 ## Bench and Telemetry Lessons
 
 - A source control command must operate the physical banana/TPS output gate.
