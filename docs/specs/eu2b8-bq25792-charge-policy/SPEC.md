@@ -69,10 +69,10 @@
 - `TPS55288` 输出功率连续 `2` 个 poll 超过 `5W` 时停充；进入 `LOAD` 后连续 `3` 个 poll 低于 `4.5W` 才允许恢复。
 - 任一路输出已开启但聚合输出功率不可可信计算时，必须 fail-safe 禁充。
 - `BACKUP + USB-C` 例外的自动首次放行必须使用本会话内新鲜、可信的聚合 TPS 输出功率，且严格为 `P < 2.0W`；输出关闭视为已知 `0W`。
-- 已由该例外放行后，`2.0W <= P < 3.0W` 保持充电；任一新鲜样本 `P >= 3.0W` 必须立即停充并锁存 `backup_usb_output_high_latched`。
+- 已由该例外放行后，`2.0W <= P <= 3.0W` 保持充电；任一新鲜样本 `P > 3.0W` 必须立即停充并锁存 `backup_usb_output_high_latched`。
 - 输出开启时，已放行会话连续两次独立 TPS 遥测采样尝试都不能得到可信聚合功率，必须停充并锁存 `backup_usb_telemetry_lost_latched`；更快的 charger poll 不得重复计数同一采样缺失。
 - 上述两类 `BACKUP + USB-C` 锁存只可由新的前面板手动 `START` 判定或真实 USB-C detach 后的新会话清除；临时运行模式波动不得清除锁存。
-- 手动确认仅能绕过本段新增的 `<2W`、两次 TPS 缺样和 `>=3W` 门，不得绕过 BMS、温度、PD、输入故障或既有通用输出过载安全门。
+- 手动确认仅能绕过本段新增的 `<2W`、两次 TPS 缺样和 `>3W` 门，不得绕过 BMS、温度、PD、输入故障或既有通用输出过载安全门。
 - BMS 遥测缺失、输入缺失、`VBAT_PRESENT=false`、`TS_COLD=true` 或 `TS_HOT=true` 时 fail-safe 禁充。
 - `charge_ready=false` 默认 fail-safe 禁充；唯一例外是 DC IN 或 USB-C 输入在线且 BMS 明确处于可恢复 CUV 预充窗口（`PCHG=true`、`CUV=true`、`CUVC=false`、`PF=0`、无 charge inhibit/suspend）时，允许 `recovering_low_voltage`。
 
@@ -108,7 +108,7 @@
 - 当 `TPS55288` 总输出功率连续 `2` 个 poll 超过 `5W` 时，策略进入 `blocked_output_over_limit` 并停充；只有连续 `3` 个 poll 低于 `4.5W` 才退出该阻断态。
 - 当任一路输出已开启但聚合输出功率不可可信计算时，策略进入保守禁充分支；前台 token 继续显示 `LOAD`，notice/log 使用 `blocked_output_power_unknown`。
 - 在 `BACKUP` 中，只有 VIN 已确认无市电、USB-C PD 已可充电且主线 policy 已允许时才评估 USB 例外。输出关闭立即按 `0W` 放行；输出开启时必须等待本会话内新鲜的 `<2.0W` 聚合 TPS 样本，放行后保持自动 `500mA`。
-- USB 例外保持期间，`2.0W <= P < 3.0W` 不改变充电；一个新鲜 `P >= 3.0W` 样本立刻停充、状态为 `LOAD`、notice 为 `backup_usb_output_high_latched`。两次不同 TPS 遥测采样尝试缺失则状态为 `LOCK`、notice 为 `backup_usb_telemetry_lost_latched`。
+- USB 例外保持期间，`2.0W <= P <= 3.0W` 不改变充电；一个新鲜 `P > 3.0W` 样本立刻停充、状态为 `LOAD`、notice 为 `backup_usb_output_high_latched`。两次不同 TPS 遥测采样尝试缺失则状态为 `LOCK`、notice 为 `backup_usb_telemetry_lost_latched`。
 - USB-C detach 创建新判断周期而不恢复旧会话；只在 detach 或确认后的新手动 `START` 清除上述锁存。确认手动会话由 `zp4cg` 拥有，但在它有效时可绕过本段三个新回环门。
 - 前面板的 charger 电流显示优先取 `BQ25792 IBAT_ADC`，不再把 `ICHG` 设定值伪装成实测电流。
 - `BQ25792` 16-bit 配置/限流寄存器和只读 ADC word 都必须按 datasheet 的 `MSB-first` 顺序读写；日志中的 `REG03/REG06` 读回必须能解码成已写入的 `ICHG/IINDPM` 目标值，禁止把字节序写反后只记录软件期望值。
@@ -158,7 +158,7 @@ None。
 - Given 任一路输出已开启但聚合输出功率不可可信计算，When 进入 charger poll，Then 系统必须保守禁充，detail token 显示 `LOAD`，notice/log 使用 `blocked_output_power_unknown`。
 - Given `mode=backup`、VIN 已确认无市电、USB-C PD 可充电且既有安全门通过，When 输出关闭，Then 自动策略按已知 `0W` 允许 `500mA` 充电。
 - Given 同一上下文的输出开启，When 本会话内新鲜聚合功率为 `1.9W`，Then 自动策略允许 `CHG500`；When 为 `2.0W`，Then 不得自动启充。
-- Given 已由 `P < 2.0W` 自动放行，When 新鲜样本处于 `2.0W <= P < 3.0W`，Then 保持充电；When 单个新鲜样本为 `3.0W`，Then 立即停充并显示 `LOAD / backup_usb_output_high_latched`。
+- Given 已由 `P < 2.0W` 自动放行，When 新鲜样本处于 `2.0W <= P <= 3.0W`，Then 保持充电；When 单个新鲜样本大于 `3.0W`，Then 立即停充并显示 `LOAD / backup_usb_output_high_latched`。
 - Given 已自动放行且输出开启，When 两次不同 TPS 遥测采样尝试均无法得到可信聚合功率，Then 立即停充并显示 `LOCK / backup_usb_telemetry_lost_latched`；有效新样本必须将缺样计数归零，重复同一缺样不得增加计数。
 - Given 任一 USB 例外锁存，When 只有临时模式波动发生，Then 锁存保持；When 真实 USB-C detach 或确认后的新手动 `START` 发生，Then 才开始新的判断周期。
 - Given `IBAT_ADC` 可用，When 前面板显示 charger 电流，Then 应显示实测 `IBAT` 而不是目标 `ICHG`。
@@ -219,15 +219,15 @@ None。
 
 ![Charge home NOAC](./assets/charger-home-backup-noac.png)
 
-- `BACKUP USB low output`: 已确认无市电的 USB-C PD 输入在新鲜输出功率 `<2W` 时自动以 `CHG500` 放行；detail footer 明示 `USB OUT <2W`。
+- `BACKUP USB low output`: 已确认无市电的 USB-C PD 输入在新鲜输出功率 `<2W` 时自动以 `CHG500` 放行；detail footer 显示 `CHARGING ACTIVE`。
 
 ![Backup USB low-output charge](./assets/charger-backup-usb-low-output.png)
 
-- `BACKUP USB high output`: 一个新鲜 `>=3W` 样本立即锁存停充，状态为 `LOAD`。
+- `BACKUP USB high output`: 一个新鲜 `>3W` 样本立即锁存停充，状态为 `LOAD`；detail footer 显示 `LOAD: CHG PAUSED`，不显示功率条件。
 
 ![Backup USB output-high latch](./assets/charger-backup-usb-output-high-latched.png)
 
-- `BACKUP USB telemetry lost`: 两次独立 TPS 遥测缺失后锁存停充，状态为 `LOCK`。
+- `BACKUP USB telemetry lost`: 两次独立 TPS 遥测缺失后锁存停充，状态为 `LOCK`；detail footer 显示 `LOAD DATA LOST`。
 
 ![Backup USB telemetry-lost latch](./assets/charger-backup-usb-telemetry-lost-latched.png)
 

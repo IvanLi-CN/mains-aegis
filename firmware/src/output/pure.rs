@@ -1082,7 +1082,7 @@ impl BackupUsbChargeGuard {
             if is_new_attempt {
                 self.last_attempt_seq = telemetry_attempt_seq;
                 match output_power_w10 {
-                    Some(power_w10) if power_w10 >= BACKUP_USB_CHARGE_STOP_POWER_LIMIT_W10 => {
+                    Some(power_w10) if power_w10 > BACKUP_USB_CHARGE_STOP_POWER_LIMIT_W10 => {
                         self.admitted = false;
                         self.latched_reason = Some(BackupUsbChargeBlockReason::OutputHigh);
                         return BackupUsbChargeGuardDecision::Blocked(
@@ -3520,7 +3520,7 @@ mod tests {
     }
 
     #[test]
-    fn backup_usb_guard_keeps_charging_between_2w_and_3w_then_latches_at_3w() {
+    fn backup_usb_guard_keeps_charging_through_3w_then_latches_above_3w() {
         let mut guard = BackupUsbChargeGuard::default();
         let _ = guard.observe(false, false, true, Some(0), Some(10), false);
         assert_eq!(
@@ -3537,6 +3537,10 @@ mod tests {
         );
         assert_eq!(
             guard.observe(true, false, true, Some(30), Some(14), false),
+            BackupUsbChargeGuardDecision::Allow
+        );
+        assert_eq!(
+            guard.observe(true, false, true, Some(31), Some(15), false),
             BackupUsbChargeGuardDecision::Blocked(BackupUsbChargeBlockReason::OutputHigh)
         );
         assert_eq!(
@@ -3584,7 +3588,7 @@ mod tests {
         let _ = guard.observe(false, false, true, Some(0), Some(30), false);
         let _ = guard.observe(true, true, true, Some(19), Some(31), false);
         assert_eq!(
-            guard.observe(true, true, true, Some(30), Some(32), false),
+            guard.observe(true, true, true, Some(31), Some(32), false),
             BackupUsbChargeGuardDecision::Blocked(BackupUsbChargeBlockReason::OutputHigh)
         );
         assert_eq!(
@@ -3596,7 +3600,7 @@ mod tests {
             BackupUsbChargeGuardDecision::Blocked(BackupUsbChargeBlockReason::OutputHigh)
         );
         assert_eq!(
-            guard.observe(true, true, true, Some(30), Some(35), true),
+            guard.observe(true, true, true, Some(31), Some(35), true),
             BackupUsbChargeGuardDecision::Allow
         );
 

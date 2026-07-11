@@ -2656,9 +2656,9 @@ impl DashboardLiveData {
                 .output_notice
                 .unwrap_or("OUTPUT DETAIL SOURCE PENDING"),
             DashboardDetailPage::Charger => match self.detail.charger_notice {
-                Some("backup_usb_low_output_charge") => "USB BACKUP: OUT <2W",
-                Some("backup_usb_output_high_latched") => "USB BACKUP: OUT >=3W LOCK",
-                Some("backup_usb_telemetry_lost_latched") => "USB BACKUP: TPS DATA LOST",
+                Some("backup_usb_low_output_charge") => "USB BACKUP: CHARGING ACTIVE",
+                Some("backup_usb_output_high_latched") => "USB BACKUP: LOAD PRESENT",
+                Some("backup_usb_telemetry_lost_latched") => "USB BACKUP: LOAD DATA LOST",
                 Some("manual_loopback_confirmed_charging_100ma")
                 | Some("manual_loopback_confirmed_charging_500ma")
                 | Some("manual_loopback_confirmed_charging_1a") => "MANUAL: LOOP CHECK OK",
@@ -10169,9 +10169,9 @@ fn detail_footer_badge(
 
     if page == DashboardDetailPage::Charger {
         return match data.detail.charger_notice {
-            Some("backup_usb_low_output_charge") => (DetailFooterIcon::Live, "USB OUT <2W"),
-            Some("backup_usb_output_high_latched") => (DetailFooterIcon::Warn, "USB OUT >=3W"),
-            Some("backup_usb_telemetry_lost_latched") => (DetailFooterIcon::Warn, "TPS DATA LOST"),
+            Some("backup_usb_low_output_charge") => (DetailFooterIcon::Live, "CHARGING ACTIVE"),
+            Some("backup_usb_output_high_latched") => (DetailFooterIcon::Warn, "LOAD: CHG PAUSED"),
+            Some("backup_usb_telemetry_lost_latched") => (DetailFooterIcon::Warn, "LOAD DATA LOST"),
             Some("manual_loopback_confirmed_charging_100ma")
             | Some("manual_loopback_confirmed_charging_500ma")
             | Some("manual_loopback_confirmed_charging_1a") => {
@@ -11088,19 +11088,6 @@ fn draw_dashboard_manual_loopback_confirm_overlay<P: UiPainter>(
         HorizontalAlignment::Left,
         palette.text,
     )?;
-    text(
-        painter,
-        variant,
-        FontRole::TextCompact,
-        "This session only.",
-        Point::new(
-            (SELF_CHECK_DIALOG_X + 10) as i32,
-            (SELF_CHECK_DIALOG_Y + 65) as i32,
-        ),
-        HorizontalAlignment::Left,
-        palette.text_dim,
-    )?;
-
     draw_manual_action_button(
         painter,
         SELF_CHECK_CANCEL_BTN_X,
@@ -15306,11 +15293,11 @@ mod tests {
         let low = DashboardLiveData::from_snapshot(base_model(UpsMode::Backup), &snapshot);
         assert_eq!(
             low.page_notice(DashboardDetailPage::Charger),
-            "USB BACKUP: OUT <2W"
+            "USB BACKUP: CHARGING ACTIVE"
         );
         assert_eq!(
             detail_footer_badge(DashboardDetailPage::Charger, low),
-            (DetailFooterIcon::Live, "USB OUT <2W")
+            (DetailFooterIcon::Live, "CHARGING ACTIVE")
         );
 
         snapshot.dashboard_detail.charger_status = Some("LOAD");
@@ -15318,11 +15305,11 @@ mod tests {
         let high = DashboardLiveData::from_snapshot(base_model(UpsMode::Backup), &snapshot);
         assert_eq!(
             high.page_notice(DashboardDetailPage::Charger),
-            "USB BACKUP: OUT >=3W LOCK"
+            "USB BACKUP: LOAD PRESENT"
         );
         assert_eq!(
             detail_footer_badge(DashboardDetailPage::Charger, high),
-            (DetailFooterIcon::Warn, "USB OUT >=3W")
+            (DetailFooterIcon::Warn, "LOAD: CHG PAUSED")
         );
 
         snapshot.dashboard_detail.charger_status = Some("LOCK");
@@ -15330,11 +15317,11 @@ mod tests {
         let lost = DashboardLiveData::from_snapshot(base_model(UpsMode::Backup), &snapshot);
         assert_eq!(
             lost.page_notice(DashboardDetailPage::Charger),
-            "USB BACKUP: TPS DATA LOST"
+            "USB BACKUP: LOAD DATA LOST"
         );
         assert_eq!(
             detail_footer_badge(DashboardDetailPage::Charger, lost),
-            (DetailFooterIcon::Warn, "TPS DATA LOST")
+            (DetailFooterIcon::Warn, "LOAD DATA LOST")
         );
     }
 

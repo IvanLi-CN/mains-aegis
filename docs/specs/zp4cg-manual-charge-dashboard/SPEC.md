@@ -26,7 +26,7 @@
 - 仅持久化 `ManualChargePrefs`：默认值固定为 `100% / 500mA / 2h`。
 - 所有手动会话状态（`active / takeover / stop_inhibit / deadline / last_stop_reason`）只保存在运行时 RAM；MCU 复位后回到自动策略。
 - 手动 `START` 必须先显示“USB-C 输入未与 UPS OUT 回环”的前面板确认弹窗；取消不得创建会话，确认才产生新的手动会话。
-- 确认后的 RAM 会话保留用户选择的 `100 / 500 / 1000mA`，并只绕过 USB Backup 新增的 `<2W`、两次 TPS 缺样和 `>=3W` 回环门。
+- 确认后的 RAM 会话保留用户选择的 `100 / 500 / 1000mA`，并只绕过 USB Backup 新增的 `<2W`、两次 TPS 缺样和 `>3W` 回环门。
 - 手动会话可接管主线 charger state machine，但不绕过已有硬安全门。
 - 在 EEPROM 中落地通用布局：`superblock + record table + ManualChargePrefsV1 + reserved future area`。
 
@@ -90,7 +90,7 @@
 - 三组字段不再额外包一层 row card，只保留左侧标签与右侧可点选项，减少小屏视觉噪声。
 - 底部统一为唯一操作条：`BACK + footer notice + START/STOP`。
 - 仅当手动会话 `active=true` 时，设置区锁定只读，只允许 `STOP/BACK`；系统自动充电但手动会话未 active 时，页面仍显示 `START` 并允许调整偏好，点击后以 `takeover=true` 接管自动充电。
-- `START` 不直接发起 charger 写入：先打开 `USB-C LOOP CHECK` 弹窗，`CANCEL` 关闭且不发 action，`CONFIRM` 才发出 `StartConfirmedLoopback`。有效会话 footer 显示 `LOOP OK`。
+- `START` 不直接发起 charger 写入：先打开 `USB-C LOOP CHECK` 弹窗，正文固定为“未连接 UPS OUT”的两行确认提示，不显示会话范围的第三行说明；`CANCEL` 关闭且不发 action，`CONFIRM` 才发出 `StartConfirmedLoopback`。有效会话 footer 显示 `LOOP OK`。
 
 ### 3. 目标定义与停止条件
 
@@ -128,7 +128,7 @@
   - 目标充电电流映射为 `100 / 500 / 1000mA`
   - 允许依据现有 DC derate 逻辑降档到 `100mA`
   - UI status chip 可显示 `CHG100 / CHG500 / CHG1A`
-  - `loopback_override=true` 时仅忽略 USB Backup 的低输出准入、两次 TPS 缺样和 `>=3W` 停充；BMS、温度、PD、输入故障与既有通用输出过载仍可立即终止会话
+  - `loopback_override=true` 时仅忽略 USB Backup 的低输出准入、两次 TPS 缺样和 `>3W` 停充；BMS、温度、PD、输入故障与既有通用输出过载仍可立即终止会话
 - `loopback_override` 在用户 `STOP`、目标/计时器/安全停止、运行模式变化、真实 USB-C detach 或 MCU 复位后失效；USB-C detach 后的新手动操作必须重新确认，不能恢复旧会话。
 - MCU 每次上电或复位：
   - `manual_active=false`
@@ -206,7 +206,7 @@
 - Given 用户在本次运行中执行 `STOP`，When charger 下一轮 poll，Then 自动策略不得立刻恢复充电。
 - Given MCU 在手动会话中复位，When 系统重新启动，Then 手动会话状态与停止抑制必须全部清空。
 - Given 用户点按 `START`，When 回环确认弹窗出现后选择 `CANCEL`，Then 不得发送实际启动 action 或创建手动会话。
-- Given 用户在弹窗中选择 `CONFIRM`，When 当前会话处于 USB Backup，Then 用户选择的 `100 / 500 / 1000mA` 档位可工作且前面板显示 `LOOP OK`；该会话可越过 `<2W`、两次 TPS 缺样和 `>=3W` 新回环门。
+- Given 用户在弹窗中选择 `CONFIRM`，When 当前会话处于 USB Backup，Then 用户选择的 `100 / 500 / 1000mA` 档位可工作且前面板显示 `LOOP OK`；该会话可越过 `<2W`、两次 TPS 缺样和 `>3W` 新回环门。
 - Given 已确认的手动会话，When BMS、温度、PD、输入故障或既有通用输出过载门命中，Then 仍必须立即结束会话，确认不得绕过这些安全门。
 - Given 已确认的手动会话，When 模式变化、真实 USB-C detach、用户停止或 MCU 复位，Then `loopback_override` 必须失效；下一次 `START` 必须再次确认。
 - Given 用户执行手动充电 `START/STOP`，When monitor 正在运行，Then 普通串口输出必须记录 `manual_charge` 事件、目标档位、速度、计时器与 takeover 状态，便于确认前面板动作已送达运行态。

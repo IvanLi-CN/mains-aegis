@@ -631,8 +631,8 @@ fn charger_policy_snapshot_for_state(
             snapshot.input_ibus_ma = Some(220);
             snapshot.tps_a_enabled = Some(true);
             snapshot.out_a_vbus_mv = Some(20_000);
-            snapshot.tps_a_iout_ma = Some(150);
-            snapshot.ina_total_ma = Some(150);
+            snapshot.tps_a_iout_ma = Some(155);
+            snapshot.ina_total_ma = Some(155);
         }
         ChargerPolicyPreviewState::BackupUsbTelemetryLostLatched => {
             snapshot.vin_mains_present = Some(false);

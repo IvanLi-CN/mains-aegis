@@ -187,7 +187,7 @@
 ### ManualChargeLoopbackConfirmDialog
 
 - Responsibility: 在手动 START 前要求确认 USB-C 输入未与 UPS OUT 回环。
-- Required fields: `dialog_title=USB-C LOOP CHECK`, `cancel`, `confirm`, `session_only_hint`。
+- Required fields: `dialog_title=USB-C LOOP CHECK`, two-line loopback confirmation, `cancel`, `confirm`。
 - Forbidden fields: 直接写 charger、持久化豁免、覆盖 BMS/温度/PD/输入/通用输出过载安全门。
 - Allowed states: `DashboardRoute::ManualCharge` 且尚未建立手动会话。
 - Geometry anchor: 对话框 `x=20 y=34 w=280 h=112`；`CANCEL x=32 y=116 w=108 h=24`；`CONFIRM x=152 y=116 w=136 h=24`。
