@@ -2194,21 +2194,29 @@ where
         }
 
         if self.self_check_overlay == SelfCheckOverlay::ManualChargeLoopbackConfirm {
-            if right_edge {
-                self.self_check_overlay = SelfCheckOverlay::None;
-                self.note_interaction_feedback();
-                self.needs_redraw = true;
-                defmt::info!("ui: manual_charge loopback confirm cancel via key");
-                esp_println::println!("ui: manual_charge loopback confirm cancel via key");
-            } else if left_edge || center_edge {
-                self.self_check_overlay = SelfCheckOverlay::None;
-                self.note_interaction_feedback();
-                self.needs_redraw = true;
-                defmt::info!("ui: manual_charge loopback confirm accept via key");
-                esp_println::println!("ui: manual_charge loopback confirm accept via key");
-                return Some(UiAction::ManualCharge(
-                    ManualChargeUiAction::StartConfirmedLoopback,
-                ));
+            match front_panel_scene::manual_charge_loopback_confirm_key_target(
+                left_edge,
+                right_edge,
+                center_edge,
+            ) {
+                Some(ManualChargeLoopbackConfirmTarget::Cancel) => {
+                    self.self_check_overlay = SelfCheckOverlay::None;
+                    self.note_interaction_feedback();
+                    self.needs_redraw = true;
+                    defmt::info!("ui: manual_charge loopback confirm cancel via key");
+                    esp_println::println!("ui: manual_charge loopback confirm cancel via key");
+                }
+                Some(ManualChargeLoopbackConfirmTarget::Confirm) => {
+                    self.self_check_overlay = SelfCheckOverlay::None;
+                    self.note_interaction_feedback();
+                    self.needs_redraw = true;
+                    defmt::info!("ui: manual_charge loopback confirm accept via key");
+                    esp_println::println!("ui: manual_charge loopback confirm accept via key");
+                    return Some(UiAction::ManualCharge(
+                        ManualChargeUiAction::StartConfirmedLoopback,
+                    ));
+                }
+                None => {}
             }
             return None;
         }

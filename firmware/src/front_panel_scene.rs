@@ -1820,6 +1820,20 @@ pub fn manual_charge_loopback_confirm_hit_test(
     }
 }
 
+pub const fn manual_charge_loopback_confirm_key_target(
+    left: bool,
+    right: bool,
+    center: bool,
+) -> Option<ManualChargeLoopbackConfirmTarget> {
+    if left {
+        Some(ManualChargeLoopbackConfirmTarget::Cancel)
+    } else if right || center {
+        Some(ManualChargeLoopbackConfirmTarget::Confirm)
+    } else {
+        None
+    }
+}
+
 #[allow(dead_code)]
 pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<DashboardTouchTarget> {
     match route {
@@ -15281,6 +15295,22 @@ mod tests {
             Some(ManualChargeLoopbackConfirmTarget::Confirm)
         );
         assert_eq!(manual_charge_loopback_confirm_hit_test(8, 8), None);
+    }
+
+    #[test]
+    fn manual_loopback_confirmation_keys_match_the_button_order() {
+        assert_eq!(
+            manual_charge_loopback_confirm_key_target(true, false, false),
+            Some(ManualChargeLoopbackConfirmTarget::Cancel)
+        );
+        assert_eq!(
+            manual_charge_loopback_confirm_key_target(false, true, false),
+            Some(ManualChargeLoopbackConfirmTarget::Confirm)
+        );
+        assert_eq!(
+            manual_charge_loopback_confirm_key_target(false, false, true),
+            Some(ManualChargeLoopbackConfirmTarget::Confirm)
+        );
     }
 
     #[test]
