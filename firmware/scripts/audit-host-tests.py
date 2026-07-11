@@ -19,6 +19,7 @@ ALLOWED = {
     "net_contract.rs",
     "net_logic.rs",
     "net_types.rs",
+    "output/mod.rs",
     "output/pure.rs",
     "output_protection.rs",
     "output_retry.rs",
