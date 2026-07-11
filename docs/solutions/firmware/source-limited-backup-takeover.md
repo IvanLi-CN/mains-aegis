@@ -77,15 +77,16 @@ Exit source-limited backup only after hysteresis:
 
 ## Reusable Defaults
 
-Use conservative defaults so ordinary assist behavior is not replaced by backup:
+Use defaults that bound detection delay while retaining the fresh-telemetry
+guard:
 
-- `source_limited_vin_drop_pct=4`
-- `source_limited_enter_delta_ma=1900`
+- `source_limited_vin_drop_pct=1`
+- `source_limited_enter_delta_ma=1000`
 - `source_limited_exit_delta_ma=0`
 - `source_limited_required_samples=2`
 - `source_limited_recover_margin_mv=400`
 
-With the current rated enter base, the default source-limited enter threshold is `2000mA`. This targets overloaded source cases such as `12V / 3A source + 3900mA load`, not normal 1A-class backup-only validation.
+With the current rated enter base, the default source-limited enter threshold is `1100mA`. A fresh TPS sample still requires the full output-current and input-current evidence. When that aggregate TPS sample is stale, a fast path may use only `VIN baseline/drop` plus `vin_iin_ma` to lock takeover; it must never replace the normal fresh-sample path.
 
 ## Observability
 
@@ -137,3 +138,30 @@ trigger from UPS-local VIN/current telemetry.
 The USB-C low-output charging exception belongs only to confirmed
 `input_absent` backup. It must never turn a `source_limited` backup into a
 charging state, because the upstream DC source is still present but unsafe.
+
+## HIL-confirmed behavior
+
+The `source-limited-12v` contract passed on a 12V build with a `12V / 3A`
+source and `3900mA` electronic load. The online scene latched source-limited
+backup with no measured interval below `11000mV`; the following VIN cut stayed
+in backup and changed the reason to `input_absent`.
+
+This is an improvement over the older assist-path observation, where the same
+overload class could remain around `10.5V` at the load while VIN was still
+online. It does not prove that the hardware is a mixed-supply topology; it
+proves the MCU can limit the duration of that hardware-only fallback.
+
+## Bench and Telemetry Lessons
+
+- A source control command must operate the physical banana/TPS output gate.
+  For the verified IsolaPurr path that is `power runtime output --enabled`, not
+  an automatic-output or USB-C-path configuration command.
+- Start every scene only after UPS status confirms an online non-backup state.
+  Otherwise a previous source-limited latch invalidates the next scene's entry
+  timing.
+- Do not include explicitly stale UPS status frames in formal telemetry.
+- Measure source-limited entry from actual LoadLynx CC telemetry, not from the
+  host command subprocess start time.
+- UPS and load collectors are asynchronous. Treat the source-limited decision
+  sample as pre-latch status evidence and begin post-latch voltage acceptance
+  on the subsequent aligned sample.

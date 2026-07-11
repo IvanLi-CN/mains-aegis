@@ -159,5 +159,28 @@
 - scene telemetry 增加 `backup_reason`、charger state / allow-charge 和 source-limited
   电压持续时间指标；HTML chart 的阶段转移同时显示 backup reason 与 charger state。
 - 已完成 dry-run、host tests、firmware host tests、12V release HIL build；真实 HIL
-  暂未签核，因为 UPS 指定 USB 被外部 `flux-purr-devd` 占用，LoadLynx 指定 USB
-  返回 released-devd serial-open failure。
+  已完成签核：`source-limited-12v-20260711T1818Z` 的三场景均为
+  `signoff_valid=true`，且无 acceptance failure。
+
+## 2026-07-11
+
+- `12V / 3A source + 3900mA load` 的 source-limited 策略完成真机验证：
+  - VIN 在线时，MCU 在 `source_limited` 下主动进入 `mode=backup`，而非继续等待
+    输入物理断电。
+  - `source_limited_online` 锁存后最低负载端电压为 `12139mV`，低于 `11000mV` 的
+    最长时段为 `0s`。
+  - `source_limited_cut` 在线锁存延迟为 `0.405s`，后续 cut 保持 backup 并转换为
+    `backup_reason=input_absent`。
+- `backup_only / 1000mA` 同时确认普通 VIN cut 仍遵循 `input_absent` 语义。
+- 为避免 TPS 汇总输出电流遥测滞后延长跌落窗口：
+  - 默认 source-limited drop 阈值调为 `1%`，进入增量调为 `1000mA`。
+  - fresh TPS 样本维持完整保守判据；仅 TPS 样本未前进时允许使用
+    `VIN baseline/drop + vin_iin_ma` 快速锁存。
+- Power Path Validation runner 同步收敛：
+  - IsolaPurr 香蕉口输出使用 `power runtime output --enabled true|false` 控制，
+    不再把 `power output auto` 当作实际断源门。
+  - 每场景开始前确认 UPS 已回到在线态，显式 stale UPS 样本不进入 formal timeseries。
+  - source-limited 进入计时从 LoadLynx 实际 CC 负载生效开始，避免把 CLI 子进程启动时间
+    误算成控制延迟。
+- 原始报告位于 `tools/hil/reports/source-limited-12v-20260711T1818Z/`；可提交摘要位于
+  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-20260711T1818Z-suite-summary.json`。

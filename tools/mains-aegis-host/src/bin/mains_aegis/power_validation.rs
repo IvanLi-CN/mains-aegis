@@ -21,6 +21,8 @@ const ENGINEERING_SAMPLE_RATE_HZ: f64 = 3.0;
 const MAX_SAMPLE_GAP_S: f64 = 0.5;
 const SOURCE_DISCONNECT_CONFIRM_ATTEMPTS: usize = 20;
 const SOURCE_DISCONNECT_CONFIRM_INTERVAL_MS: u64 = 100;
+const UPS_ONLINE_RECOVER_ATTEMPTS: usize = 100;
+const UPS_ONLINE_RECOVER_INTERVAL_MS: u64 = 100;
 const SOURCE_LIMITED_ENTRY_MAX_S: f64 = 2.0;
 const SOURCE_LIMITED_MIN_LOAD_MV: i64 = 11_000;
 const SOURCE_LIMITED_MAX_LOW_VOLTAGE_S: f64 = 1.0;
@@ -1443,16 +1445,7 @@ fn power_capabilities_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
 
 fn power_disable_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
     match args.power_adapter {
-        PowerAdapterKind::Isolapurr => {
-            let mut cmd = isolapurr_base(args);
-            cmd.extend([
-                "power".to_string(),
-                "output".to_string(),
-                "auto".to_string(),
-            ]);
-            append_isolapurr_selector(&mut cmd, args);
-            Ok(cmd)
-        }
+        PowerAdapterKind::Isolapurr => isolapurr_runtime_output_command(args, false),
         PowerAdapterKind::External => external_adapter_command(
             args.power_adapter_cmd.as_ref(),
             AdapterRole::PowerSource,
@@ -1469,13 +1462,11 @@ fn power_configure_off_command(
     match args.power_adapter {
         PowerAdapterKind::Isolapurr => {
             let mut cmd = isolapurr_base(args);
-            cmd.extend([
-                "power".to_string(),
-                "output".to_string(),
-                "manual".to_string(),
-            ]);
+            cmd.extend(["power".to_string(), "config".to_string(), "set".to_string()]);
             append_isolapurr_selector(&mut cmd, args);
             cmd.extend([
+                "--tps-mode".to_string(),
+                "manual".to_string(),
                 "--voltage-mv".to_string(),
                 profile.source_voltage_mv().to_string(),
                 "--current-limit-ma".to_string(),
@@ -1504,22 +1495,8 @@ fn power_configure_off_command(
 fn power_enable_command(args: &BenchArgs, profile: OutputProfile) -> anyhow::Result<Vec<String>> {
     match args.power_adapter {
         PowerAdapterKind::Isolapurr => {
-            let mut cmd = isolapurr_base(args);
-            cmd.extend([
-                "power".to_string(),
-                "output".to_string(),
-                "manual".to_string(),
-            ]);
-            append_isolapurr_selector(&mut cmd, args);
-            cmd.extend([
-                "--voltage-mv".to_string(),
-                profile.source_voltage_mv().to_string(),
-                "--current-limit-ma".to_string(),
-                profile.source_current_limit_ma().to_string(),
-                "--usb-c-path".to_string(),
-                "forced-on".to_string(),
-            ]);
-            Ok(cmd)
+            let _ = profile;
+            isolapurr_runtime_output_command(args, true)
         }
         PowerAdapterKind::External => external_adapter_command(
             args.power_adapter_cmd.as_ref(),
@@ -1561,7 +1538,7 @@ fn power_stream_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
     match args.power_adapter {
         PowerAdapterKind::Isolapurr => {
             let mut cmd = isolapurr_base(args);
-            cmd.push("ports".to_string());
+            cmd.extend(["power".to_string(), "show".to_string()]);
             append_isolapurr_selector(&mut cmd, args);
             Ok(cmd)
         }
@@ -1572,6 +1549,21 @@ fn power_stream_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
             &[("--interval-ms", args.sample_interval_ms.to_string())],
         ),
     }
+}
+
+fn isolapurr_runtime_output_command(
+    args: &BenchArgs,
+    enabled: bool,
+) -> anyhow::Result<Vec<String>> {
+    let mut cmd = isolapurr_base(args);
+    cmd.extend([
+        "power".to_string(),
+        "runtime".to_string(),
+        "output".to_string(),
+    ]);
+    append_isolapurr_selector(&mut cmd, args);
+    cmd.extend(["--enabled".to_string(), enabled.to_string()]);
+    Ok(cmd)
 }
 
 fn isolapurr_base(args: &BenchArgs) -> Vec<String> {
@@ -1836,7 +1828,7 @@ async fn run_scene_inner(
         &mut actions,
     )
     .await?;
-    sleep(Duration::from_secs(1)).await;
+    wait_for_ups_online_recovery(args, context, &mut actions).await?;
 
     let mut collectors = start_scene_collectors(args, context).await?;
     let start = Instant::now();
@@ -2098,6 +2090,22 @@ fn is_load_phase(sample: &SceneSample) -> bool {
     matches!(sample.phase.as_str(), "transition_load" | "hold")
 }
 
+fn sample_load_current_ma(sample: &SceneSample) -> Option<i64> {
+    let local = sample_number(&sample.load_i_local_ma);
+    let remote = sample_number(&sample.load_i_remote_ma);
+    match (local, remote) {
+        (Some(local), Some(remote)) => Some(local + remote),
+        (Some(current), None) | (None, Some(current)) => Some(current),
+        (None, None) => None,
+    }
+}
+
+fn sample_load_is_applied(sample: &SceneSample) -> bool {
+    let minimum_current_ma = i64::from(sample.load_target_i_ma) * 80 / 100;
+    sample.load_output_enabled.as_ref().and_then(Value::as_bool) == Some(true)
+        && sample_load_current_ma(sample).is_some_and(|current_ma| current_ma >= minimum_current_ma)
+}
+
 fn longest_low_voltage_duration_s(samples: &[&SceneSample]) -> Option<f64> {
     let mut observed = false;
     let mut low_start = None;
@@ -2152,15 +2160,19 @@ fn evaluate_scene_assertions(
         };
         let entry = load_samples[entry_index];
         let load_start = load_samples
-            .first()
+            .iter()
+            .find(|sample| sample_load_is_applied(sample))
             .map(|sample| sample.t_s)
+            .or_else(|| load_samples.first().map(|sample| sample.t_s))
             .unwrap_or(entry.t_s);
         let entry_delay_s = round3(entry.t_s - load_start);
         if entry_delay_s > SOURCE_LIMITED_ENTRY_MAX_S {
             failures.push("source_limited_entry_after_2s".to_string());
         }
-        let post_latch = load_samples[entry_index..].to_vec();
-        let pre_latch = load_samples[..entry_index].to_vec();
+        // UPS status and load telemetry are collected independently. The decision
+        // sample can still contain the load reading taken before target application.
+        let pre_latch = load_samples[..=entry_index].to_vec();
+        let post_latch = load_samples[(entry_index + 1)..].to_vec();
         let post_latch_min_load_mv = post_latch
             .iter()
             .filter_map(|sample| sample_number(&sample.load_v_local_mv))
@@ -2309,7 +2321,14 @@ async fn ensure_source_disconnected_with_sampling(
             .and_then(|collector| collector.latest_before(sample.unix_ms))
             .map(|value| unwrap_cli_result(Some(value)))
             .unwrap_or_else(|| json!({}));
-        samples.push(sample);
+        if sample
+            .ups_status_cache_fresh
+            .as_ref()
+            .and_then(Value::as_bool)
+            != Some(false)
+        {
+            samples.push(sample);
+        }
         let suffix = if attempt == 0 {
             String::new()
         } else {
@@ -2393,6 +2412,43 @@ fn source_disconnect_state(power: &Value, status: &Value) -> SourceDisconnectSta
         vin_vbus_mv,
         ups_still_live,
     }
+}
+
+async fn wait_for_ups_online_recovery(
+    args: &RunArgs,
+    context: &PowerValidationArgs,
+    actions: &mut Vec<Value>,
+) -> anyhow::Result<()> {
+    let mut last_status = Value::Null;
+    for attempt in 0..UPS_ONLINE_RECOVER_ATTEMPTS {
+        let status = run_cmd_json(
+            ups_status_fresh_command(&args.bench, context),
+            &format!("ups_online_recovery_{attempt}"),
+            actions,
+        )
+        .await?;
+        let mains_present = status
+            .pointer("/sample/input/mains_present")
+            .or_else(|| status.pointer("/input/mains_present"))
+            .and_then(Value::as_bool);
+        let mode = status
+            .pointer("/sample/mode")
+            .or_else(|| status.pointer("/mode"))
+            .and_then(Value::as_str);
+        let stage = status
+            .pointer("/sample/input/assist_power_stage")
+            .or_else(|| status.pointer("/input/assist_power_stage"))
+            .and_then(Value::as_str);
+        if mains_present == Some(true) && mode != Some("backup") && stage != Some("backup") {
+            return Ok(());
+        }
+        last_status = status;
+        sleep(Duration::from_millis(UPS_ONLINE_RECOVER_INTERVAL_MS)).await;
+    }
+    bail!(
+        "UPS did not recover to online standby before scene within {} ms: {last_status}",
+        UPS_ONLINE_RECOVER_ATTEMPTS * UPS_ONLINE_RECOVER_INTERVAL_MS as usize
+    );
 }
 
 fn ups_status_fresh_command(args: &BenchArgs, context: &PowerValidationArgs) -> Vec<String> {
@@ -2847,14 +2903,34 @@ async fn collect_for(
 ) {
     let deadline = Instant::now() + Duration::from_secs_f64(duration_s);
     while Instant::now() < deadline {
-        samples.push(collect_scene_sample(
+        push_scene_sample_if_fresh(
+            samples,
             collectors,
             start,
             started_unix_ms,
             phase,
             target_ma,
-        ));
+        );
         sleep(Duration::from_millis(args.bench.sample_interval_ms)).await;
+    }
+}
+
+fn push_scene_sample_if_fresh(
+    samples: &mut Vec<SceneSample>,
+    collectors: &BTreeMap<String, JsonlProcessCollector>,
+    start: Instant,
+    started_unix_ms: i64,
+    phase: &str,
+    target_ma: u32,
+) {
+    let sample = collect_scene_sample(collectors, start, started_unix_ms, phase, target_ma);
+    if sample
+        .ups_status_cache_fresh
+        .as_ref()
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        samples.push(sample);
     }
 }
 
@@ -2939,6 +3015,21 @@ fn collect_scene_sample(
         .pointer("/state")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    let runtime_output_enabled = power
+        .pointer("/config/runtime/output_enabled")
+        .and_then(Value::as_bool);
+    let source_setpoint_mv = power.pointer("/diagnostics/tps_setpoint/mv").cloned();
+    let source_output_mv = match runtime_output_enabled {
+        Some(false) => Some(json!(0)),
+        Some(true) => port_telemetry
+            .get("voltage_mv")
+            .cloned()
+            .or(source_setpoint_mv),
+        None => port_telemetry
+            .get("voltage_mv")
+            .cloned()
+            .or_else(|| adapter_sample_value(&power, "voltage_mv")),
+    };
     let load_i_total =
         as_i64(load_status.get("i_local_ma")) + as_i64(load_status.get("i_remote_ma"));
     let adapter_load_current = adapter_sample_value(&load, "current_ma");
@@ -2956,11 +3047,9 @@ fn collect_scene_sample(
         port_c_enabled: port_state
             .get("power_enabled")
             .cloned()
+            .or_else(|| runtime_output_enabled.map(Value::from))
             .or_else(|| adapter_sample_value(&power, "enabled")),
-        isolapurr_port_c_mv: port_telemetry
-            .get("voltage_mv")
-            .cloned()
-            .or_else(|| adapter_sample_value(&power, "voltage_mv")),
+        isolapurr_port_c_mv: source_output_mv,
         isolapurr_port_c_ma: port_telemetry
             .get("current_ma")
             .cloned()
@@ -3587,13 +3676,14 @@ async fn run_cmd_json_with_sampling(
                 return Ok(result);
             },
             _ = tick.tick() => {
-                samples.push(collect_scene_sample(
+                push_scene_sample_if_fresh(
+                    samples,
                     collectors,
                     start,
                     started_unix_ms,
                     phase,
                     target_ma,
-                ));
+                );
             }
         }
     }
@@ -3710,7 +3800,8 @@ fn validate_suite_settings(
         .cloned()
         .unwrap_or_else(|| json!({}));
     let expected = json!({
-        "source_limited_enter_delta_ma": 1_900,
+        "source_limited_vin_drop_pct": 1,
+        "source_limited_enter_delta_ma": 1_000,
         "source_limited_exit_delta_ma": 0,
         "source_limited_required_samples": 2,
         "source_limited_recover_margin_mv": 400,
@@ -4103,14 +4194,18 @@ mod tests {
         let disable = power_disable_command(&bench).unwrap();
         assert!(disable
             .windows(3)
-            .any(|pair| pair == ["power", "output", "auto"]));
-        assert!(!disable.contains(&"manual".to_string()));
+            .any(|pair| pair == ["power", "runtime", "output"]));
+        assert!(disable
+            .windows(2)
+            .any(|pair| pair == ["--enabled", "false"]));
 
         let configure = power_configure_off_command(&bench, OutputProfile::V19).unwrap();
         assert!(configure
             .windows(3)
-            .any(|pair| pair == ["power", "output", "manual"]));
-        assert!(!configure.contains(&"config".to_string()));
+            .any(|pair| pair == ["power", "config", "set"]));
+        assert!(configure
+            .windows(2)
+            .any(|pair| pair == ["--tps-mode", "manual"]));
         assert!(!configure.contains(&"--device-id".to_string()));
         assert!(configure
             .windows(2)
@@ -4119,16 +4214,8 @@ mod tests {
         let enable = power_port_enable_command(&bench, OutputProfile::V19).unwrap();
         assert!(enable
             .windows(3)
-            .any(|pair| pair == ["power", "output", "manual"]));
-        assert!(enable
-            .windows(2)
-            .any(|pair| pair == ["--voltage-mv", "19000"]));
-        assert!(enable
-            .windows(2)
-            .any(|pair| pair == ["--current-limit-ma", "3000"]));
-        assert!(enable
-            .windows(2)
-            .any(|pair| pair == ["--usb-c-path", "forced-on"]));
+            .any(|pair| pair == ["power", "runtime", "output"]));
+        assert!(enable.windows(2).any(|pair| pair == ["--enabled", "true"]));
 
         let stream = power_stream_command(&bench).unwrap();
         assert_eq!(
@@ -4136,7 +4223,8 @@ mod tests {
             vec![
                 "isolapurr",
                 "--json",
-                "ports",
+                "power",
+                "show",
                 "--url",
                 "http://127.0.0.1:30182",
             ]
@@ -4332,7 +4420,8 @@ mod tests {
         let mut profile_gate = json!({"ok": true});
         let settings = json!({
             "advanced_power": {
-                "source_limited_enter_delta_ma": 1900,
+                "source_limited_vin_drop_pct": 1,
+                "source_limited_enter_delta_ma": 1000,
                 "source_limited_exit_delta_ma": 0,
                 "source_limited_required_samples": 2,
                 "source_limited_recover_margin_mv": 400,
@@ -4384,6 +4473,14 @@ mod tests {
                 11_100,
             ),
             scene_sample(
+                0.3,
+                "hold",
+                "backup",
+                "backup",
+                Some("source_limited"),
+                11_100,
+            ),
+            scene_sample(
                 0.4,
                 "hold",
                 "backup",
@@ -4419,6 +4516,14 @@ mod tests {
             ),
             scene_sample(
                 0.2,
+                "hold",
+                "backup",
+                "backup",
+                Some("source_limited"),
+                11_100,
+            ),
+            scene_sample(
+                0.3,
                 "hold",
                 "backup",
                 "backup",

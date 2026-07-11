@@ -503,14 +503,14 @@ mod tests {
         let decoded = AdvancedPowerRecordV1::decode(bytes).unwrap();
         assert_eq!(decoded.standby_drop_mv, 1_400);
         assert_eq!(decoded.assist_low_drop_mv, 800);
-        assert_eq!(decoded.source_limited_vin_drop_pct, 4);
-        assert_eq!(decoded.source_limited_enter_delta_ma, 1_900);
+        assert_eq!(decoded.source_limited_vin_drop_pct, 1);
+        assert_eq!(decoded.source_limited_enter_delta_ma, 1_000);
         assert_eq!(decoded.source_limited_exit_delta_ma, 0);
         assert_eq!(decoded.source_limited_required_samples, 2);
         assert_eq!(decoded.source_limited_recover_margin_mv, 400);
         assert_eq!(
             decoded.expand(12_000).unwrap().source_limited_enter_iout_ma,
-            2_000
+            1_100
         );
         assert_eq!(
             decoded,

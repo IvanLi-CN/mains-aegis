@@ -82,15 +82,15 @@
   - `assist_target_vout_mv`
   - `backup_reason`
 
-新增 source-limited 默认值保持保守：
+新增 source-limited 默认值优先保证检测延迟可控：
 
-- `source_limited_vin_drop_pct=4`
-- `source_limited_enter_delta_ma=1900`
+- `source_limited_vin_drop_pct=1`
+- `source_limited_enter_delta_ma=1000`
 - `source_limited_exit_delta_ma=0`
 - `source_limited_required_samples=2`
 - `source_limited_recover_margin_mv=400`
 
-因此默认 source-limited 进入电流门槛为 `rated_enter_base 100mA + 1900mA = 2000mA`，目标是覆盖 `12V / 3A source + 3900mA load` 这类超电源能力负载，而不是把 1A 级一般 assist 负载提前切到 backup。
+因此默认 source-limited 进入电流门槛为 `rated_enter_base 100mA + 1000mA = 1100mA`。fresh TPS 样本仍走完整 `VIN drop + TPS output + input current` 判据；只有 TPS 聚合输出样本滞后时，才允许基于 `VIN baseline/drop + vin_iin_ma` 快速锁存，避免上级限流时等待滞后遥测而延长负载端跌落。
 
 ## 当前验证状态
 
@@ -384,11 +384,51 @@ Current software gates passed on the implementation branch:
 - `source-limited-12v` Power Path Validation dry-run with the fixed 12V/3A,
   1000mA, and 3900mA command plan
 
-Real HIL evidence is not yet signed off. The specified UPS USB port was held
-by an external `flux-purr-devd` session, and the specified LoadLynx USB path
-returned a released-devd serial-open failure. Neither condition was bypassed
-or force-cleared; the next live run must start only after those owners release
-the ports and the preflight read paths are healthy.
+### Source-limited 12V HIL sign-off
+
+已完成真实台架三场景验证，正式 suite 为
+`tools/hil/reports/source-limited-12v-20260711T1818Z/`。可提交的摘要副本为：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-20260711T1818Z-suite-summary.json`
+
+该 suite 使用以下绑定设备和传输：
+
+- UPS：`serial-04f3bb3f5367`，12V build
+  `617069c4-dirty-4fac56a8bfb7e0ef`
+- IsolaPurr：`f293cc9c139e`，`http://192.168.31.224`，manual `12000mV / 3000mA`
+- LoadLynx：`loadlynx-d68638`
+
+本次冻结的 `advanced_power` 为：
+
+- `standby_drop_mv=1200`，`assist_low_drop_mv=600`
+- `assist_enter_delta_ma=0`，`assist_exit_delta_ma=0`，`assist_required_samples=2`
+- `assist_ramp_step_mv=100`，`assist_ramp_interval_ms=200`
+- `rated_enter_delta_ma=0`，`rated_exit_delta_ma=0`
+- `vin_drop_threshold_pct=4`，`required_samples=2`
+- `source_limited_vin_drop_pct=1`，`source_limited_enter_delta_ma=1000`
+- `source_limited_exit_delta_ma=0`，`source_limited_required_samples=2`
+- `source_limited_recover_margin_mv=400`
+
+`mains-aegis power-validation report --write-overview` 已验证三个 report 均
+`signoff_valid=true`，无 failed acceptance checks：
+
+- `12v-backup_only-1000ma`：`5.074Hz`，max gap `0.207s`；VIN cut 后确认
+  `input_absent`，backup 连续成立。
+- `12v-source_limited_online-3900ma`：`4.945Hz`，max gap `0.213s`；VIN 保持在线时
+  `source_limited` 成立，额定输出目标已观察到，锁存后最低负载端电压 `12139mV`，
+  锁存前后低于 `11000mV` 的最长时段均为 `0s`。
+- `12v-source_limited_cut-3900ma`：`5.064Hz`，max gap `0.354s`；在线
+  `source_limited` 于 `0.405s` 锁存，锁存后最低负载端电压 `12151mV`，随后 VIN cut
+  保持 backup 并转换为 `input_absent`。
+
+HIL collector 的决定样本与 UPS status collector 存在一次采样偏移，因此报告把
+source-limited latch 前的 status 样本作为 pre-latch evidence；正式低电压指标从下一帧
+post-latch sample 开始计算。runner 同时过滤显式 stale UPS status，并在每个 scene 开始前
+等待 UPS 回到在线态，避免前一场景的 backup 锁存污染下一场景。
+
+报告目录中的 `suite-overview.html` 依赖同目录的 scene chart iframe。Chrome 的本地
+`file://` 页面策略阻止本次在浏览器中加载该离线页面，因此未把单独 overview HTML 当作
+视觉签核证据；正式签核仍以保留的原始报告、摘要及 verifier 结果为准。
 
 当前最值得保留给下一轮实现/验证的结论是：
 

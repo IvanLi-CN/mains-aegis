@@ -1554,10 +1554,6 @@ pub(super) fn assist_power_stage_step(
         && input
             .tps_total_iout_sample_seq
             .is_some_and(|sample_seq| tracker.last_tps_total_iout_sample_seq != Some(sample_seq));
-    if !sample_is_new {
-        return tracker.stage;
-    }
-    tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
 
     let assist_low_vin_enter_mv = input
         .standby_target_vout_mv
@@ -1593,34 +1589,57 @@ pub(super) fn assist_power_stage_step(
     let source_limited_vin_drop_threshold_mv = input.vin_baseline_mv.map(|baseline_mv| {
         dcin_vin_drop_threshold_mv(baseline_mv, input.source_limited_vin_drop_pct)
     });
+    let source_limited_vin_drop_mv = if sample_is_new {
+        input.vin_drop_mv
+    } else {
+        input
+            .vin_baseline_mv
+            .zip(input.vin_vbus_mv)
+            .map(|(baseline_mv, vin_vbus_mv)| baseline_mv.saturating_sub(vin_vbus_mv))
+            .or(input.vin_drop_mv)
+    };
     let source_limited_vin_drop_recover_mv = source_limited_vin_drop_threshold_mv
         .map(|threshold| threshold / ASSIST_RATED_VIN_DROP_RECOVER_DIVISOR);
     let source_limited_low_vin_mv = input
         .rated_vout_mv
         .saturating_sub(input.source_limited_recover_margin_mv);
-    let source_limited_enter_ready = matches!(
-        (
-            input.vin_vbus_mv,
-            input.vin_drop_mv,
-            source_limited_vin_drop_threshold_mv,
-            input.vin_iin_ma,
-            input.tps_total_iout_ma
-        ),
-        (
-            Some(vin_vbus_mv),
-            Some(vin_drop_mv),
-            Some(threshold_mv),
-            Some(vin_iin_ma),
-            Some(tps_total_iout_ma)
-        ) if tps_total_iout_ma >= input.source_limited_enter_iout_ma
-            && (vin_vbus_mv <= source_limited_low_vin_mv
-                || (vin_drop_mv > threshold_mv
-                    && vin_iin_ma >= ASSIST_LOW_DCIN_ENTER_IIN_THRESHOLD_MA))
-    );
+    let source_limited_fast_enter_ready = !sample_is_new
+        && matches!(
+            (
+                input.vin_vbus_mv,
+                source_limited_vin_drop_mv,
+                source_limited_vin_drop_threshold_mv,
+                input.vin_iin_ma
+            ),
+            (Some(vin_vbus_mv), Some(vin_drop_mv), Some(threshold_mv), Some(vin_iin_ma))
+                if vin_iin_ma >= input.source_limited_enter_iout_ma
+                    && (vin_vbus_mv <= source_limited_low_vin_mv
+                        || vin_drop_mv >= threshold_mv)
+        );
+    let source_limited_enter_ready = source_limited_fast_enter_ready
+        || matches!(
+            (
+                input.vin_vbus_mv,
+                input.vin_drop_mv,
+                source_limited_vin_drop_threshold_mv,
+                input.vin_iin_ma,
+                input.tps_total_iout_ma
+            ),
+            (
+                Some(vin_vbus_mv),
+                Some(vin_drop_mv),
+                Some(threshold_mv),
+                Some(vin_iin_ma),
+                Some(tps_total_iout_ma)
+            ) if tps_total_iout_ma >= input.source_limited_enter_iout_ma
+                && (vin_vbus_mv <= source_limited_low_vin_mv
+                    || (vin_drop_mv > threshold_mv
+                        && vin_iin_ma >= ASSIST_LOW_DCIN_ENTER_IIN_THRESHOLD_MA))
+        );
     let source_limited_recover_ready = matches!(
         (
             input.vin_vbus_mv,
-            input.vin_drop_mv,
+            source_limited_vin_drop_mv,
             source_limited_vin_drop_recover_mv,
             input.tps_total_iout_ma
         ),
@@ -1633,6 +1652,12 @@ pub(super) fn assist_power_stage_step(
             && vin_drop_mv <= recover_mv
             && tps_total_iout_ma <= input.source_limited_exit_iout_ma
     );
+    if !sample_is_new && !source_limited_enter_ready {
+        return tracker.stage;
+    }
+    if sample_is_new {
+        tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
+    }
     let assist_low_ramp_ready =
         input.current_assist_target_vout_mv >= input.assist_low_target_vout_mv;
     let assist_low_takeover_pinned = matches!(
@@ -7195,16 +7220,53 @@ mod tests {
     }
 
     #[test]
-    fn assist_stage_does_not_enter_source_limited_backup_on_vin_drop_without_input_limit() {
+    fn assist_stage_enters_source_limited_backup_below_fixed_input_current_ceiling() {
         let mut tracker = AssistPowerStageTracker::default();
-        let input = assist_stage_input(
-            Some(10_900),
-            Some(12_000),
-            Some(1_100),
-            Some(2_400),
-            Some(1_240),
-            1,
+        tracker.last_tps_total_iout_sample_seq = Some(1);
+        let input = AssistPowerStageInput {
+            source_limited_enter_iout_ma: 1_100,
+            ..assist_stage_input(
+                Some(10_900),
+                Some(12_000),
+                Some(1_100),
+                Some(2_400),
+                Some(1_240),
+                1,
+            )
+        };
+
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
+            AssistPowerStage::Standby
         );
+        assert_eq!(
+            assist_power_stage_step(
+                &mut tracker,
+                AssistPowerStageInput {
+                    tps_total_iout_sample_seq: Some(2),
+                    ..input
+                }
+            ),
+            AssistPowerStage::Backup
+        );
+        assert_eq!(tracker.backup_reason, Some(BackupReason::SourceLimited));
+    }
+
+    #[test]
+    fn assist_stage_does_not_enter_source_limited_backup_without_tps_contribution() {
+        let mut tracker = AssistPowerStageTracker::default();
+        tracker.last_tps_total_iout_sample_seq = Some(1);
+        let input = AssistPowerStageInput {
+            source_limited_enter_iout_ma: 1_100,
+            ..assist_stage_input(
+                Some(10_900),
+                Some(12_000),
+                Some(1_100),
+                Some(900),
+                Some(1_000),
+                1,
+            )
+        };
 
         assert_eq!(
             assist_power_stage_step(&mut tracker, input),
