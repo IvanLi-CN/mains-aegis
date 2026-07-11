@@ -270,6 +270,11 @@
 - Given `backup_reason=input_absent` 已锁存且不满足 `eu2b8` 的 USB-C 例外，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
 - Given `backup_reason=source_limited` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD` / source-limited backup notice。
 - Given `mode=backup`、`backup_reason=input_absent`、VIN 已确认无市电且 `eu2b8` 已以新鲜 `<2W` USB-C 输出样本放行，When 查看 mode，Then mode 仍为 `backup`，但 charger 可显示 `CHG500`；该例外不得把 mode 改写为 `standby`。
+- Given 执行 `--suite-contract source-limited-12v`，When Power Path Validation 生成执行计划，Then 必须只生成 `12V backup_only / 1000mA`、`12V source_limited_online / 3900mA`、`12V source_limited_cut / 3900mA` 三个独立 scene；不得复用 dual-voltage 四场景的签核合同。
+- Given `source_limited_online` 的 `3900mA` 负载已下发，When hold phase 开始，Then UPS 必须在 `2s` 内发布 `mode=backup`、`assist_power_stage=backup`、`backup_reason=source_limited`，并观察到额定 `assist_target_vout_mv`。
+- Given `source_limited_online` 已锁存，When VIN 仍在线，Then LoadLynx 电压必须保持不低于 `11000mV`；锁存前的低于 `11000mV` 连续时间不得超过 `1s`。
+- Given `source_limited_cut` 尚未观察到 source-limited backup，When runner 到达 source-cut 边界，Then 必须跳过物理 VIN cut 并将 scene 标记为 diagnostic failure。
+- Given `source_limited_cut` 已观察到 source-limited backup，When runner 切断 VIN，Then `mode=backup` 与 `assist_power_stage=backup` 必须连续保持，且 `backup_reason` 必须转为 `input_absent`。
 - Given 当前 topic 进入 `12V` Power Path Validation sign-off，When 判定任何边界、在线接管、切断或恢复结论，Then 必须同时满足 `docs/hil-runtime-mode-switching.md` 中定义的三设备实时数据、输出电压波动与 scene-complete gate。
 - Given 当前 topic 进入 formal dual-voltage suite，When 执行 `12V assist_path / 12V backup_only / 19V assist_path / 19V backup_only` 四场景，Then source profile、load target 与保护栏必须固定为 `12V|19V @ 3000mA`、`3900mA|1000mA`、`UVP=3000mV/OCP=4000mA/OPP=80000mW`，不得按口头约定漂移。
 - Given 需要在 formal suite 中从 `12V` 切到 `19V` 或从 `19V` 切回 `12V`，When 做 artifact select / flash，Then 必须先 disable load、cut IsolaPurr `port_c`、确认 UPS 已脱离外部 `DCIN` 高压输入，再进行切换或烧录；并行 USB-C 供电/通信允许保留，不构成切换阻断。

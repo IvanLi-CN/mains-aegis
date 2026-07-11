@@ -353,6 +353,43 @@ owner-facing suite entry。
 
 ## 当前后续方向
 
+## Source-limited 12V validation implementation
+
+`mains-aegis power-validation` now has an explicit
+`--suite-contract source-limited-12v` contract. It keeps the existing
+dual-voltage four-scene contract unchanged and creates only these independent
+12V reports:
+
+- `backup_only / 1000mA`
+- `source_limited_online / 3900mA`
+- `source_limited_cut / 3900mA`
+
+The runner records status and diag `backup_reason`, charger state, charger
+allow-charge, source-limited latch timing, and load-voltage duration metrics.
+It refuses to cut source in the overload-cut scene unless the final pre-cut
+hold sample is still `source_limited` backup. The suite verifier expects exactly
+three reports for this contract and rejects missing phase assertions.
+
+The source-limited firmware integration also restricts the controlled USB-C
+low-output charge exception to `backup_reason=input_absent`. A source-limited
+backup remains a `LOAD` non-charging state even when the USB guard would
+otherwise permit charging.
+
+Current software gates passed on the implementation branch:
+
+- `cargo test --manifest-path tools/mains-aegis-host/Cargo.toml`
+- `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml`
+- `just firmware-build-hil`
+- `bun run web:check`
+- `source-limited-12v` Power Path Validation dry-run with the fixed 12V/3A,
+  1000mA, and 3900mA command plan
+
+Real HIL evidence is not yet signed off. The specified UPS USB port was held
+by an external `flux-purr-devd` session, and the specified LoadLynx USB path
+returned a released-devd serial-open failure. Neither condition was bypassed
+or force-cleared; the next live run must start only after those owners release
+the ports and the preflight read paths are healthy.
+
 当前最值得保留给下一轮实现/验证的结论是：
 
 - 以后再改 runtime-mode 逻辑时，必须继续服从 `docs/hil-runtime-mode-switching.md` 的 formal run-validity 合同

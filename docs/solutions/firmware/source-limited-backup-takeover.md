@@ -110,3 +110,30 @@ For HIL validation, prove three 12V cases separately:
 - overload then VIN cut: after source-limited backup at `3900mA`, cut VIN and remain in backup without a long deep sag.
 
 Each report must satisfy sample-rate, max-gap, scene-complete, required voltage-series, and freshness gates before it can be used as sign-off evidence.
+
+## Formal 12V Contract
+
+Use `mains-aegis power-validation run --suite-contract source-limited-12v` for
+this behavior. The contract is intentionally separate from the legacy
+dual-voltage suite so online source limitation is not hidden inside a later
+physical source cut.
+
+It produces three reports:
+
+- `backup_only / 1000mA`: prove `input_absent` after a normal VIN cut.
+- `source_limited_online / 3900mA`: prove `source_limited` while VIN remains
+  online.
+- `source_limited_cut / 3900mA`: only cut VIN while the final pre-cut sample
+  still proves online takeover, then prove continuous backup and `input_absent`
+  reason truth.
+
+For the overloaded online phase, capture the time to source-limited latch,
+the rated TPS target observation, the minimum LoadLynx voltage after latch,
+and low-voltage durations. Treat load voltage below `11000mV` after latch, or
+a pre-latch low-voltage interval longer than one second, as a failed stability
+criterion. These are HIL acceptance signals only; firmware must continue to
+trigger from UPS-local VIN/current telemetry.
+
+The USB-C low-output charging exception belongs only to confirmed
+`input_absent` backup. It must never turn a `source_limited` backup into a
+charging state, because the upstream DC source is still present but unsafe.

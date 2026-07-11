@@ -393,14 +393,23 @@ pub(super) fn runtime_charge_override_for_charger(
 
 pub(super) fn runtime_charge_override_for_backup_usb_charger(
     mode: UpsMode,
+    backup_reason: Option<&'static str>,
     force_allow_charge: bool,
     auto_force_charge: bool,
     backup_usb_charge_allowed: bool,
 ) -> Option<RuntimeChargeOverride> {
-    if mode == UpsMode::Backup && backup_usb_charge_allowed {
+    if mode == UpsMode::Backup
+        && matches!(backup_reason, Some("input_absent"))
+        && backup_usb_charge_allowed
+    {
         None
     } else {
-        runtime_charge_override_for_charger(mode, force_allow_charge, auto_force_charge)
+        runtime_charge_override_for_charger(
+            mode,
+            backup_reason,
+            force_allow_charge,
+            auto_force_charge,
+        )
     }
 }
 
@@ -3788,16 +3797,44 @@ mod tests {
     #[test]
     fn backup_usb_runtime_override_only_opens_backup_for_the_guard_allowance() {
         assert_eq!(
-            runtime_charge_override_for_backup_usb_charger(UpsMode::Backup, false, false, true),
+            runtime_charge_override_for_backup_usb_charger(
+                UpsMode::Backup,
+                Some("input_absent"),
+                false,
+                false,
+                true,
+            ),
             None
         );
         assert_eq!(
-            runtime_charge_override_for_backup_usb_charger(UpsMode::Backup, false, false, false),
-            runtime_charge_override(UpsMode::Backup)
+            runtime_charge_override_for_backup_usb_charger(
+                UpsMode::Backup,
+                Some("input_absent"),
+                false,
+                false,
+                false,
+            ),
+            runtime_charge_override(UpsMode::Backup, Some("input_absent"))
         );
         assert_eq!(
-            runtime_charge_override_for_backup_usb_charger(UpsMode::Supplement, false, false, true),
-            runtime_charge_override(UpsMode::Supplement)
+            runtime_charge_override_for_backup_usb_charger(
+                UpsMode::Backup,
+                Some("source_limited"),
+                false,
+                false,
+                true,
+            ),
+            runtime_charge_override(UpsMode::Backup, Some("source_limited"))
+        );
+        assert_eq!(
+            runtime_charge_override_for_backup_usb_charger(
+                UpsMode::Supplement,
+                None,
+                false,
+                false,
+                true,
+            ),
+            runtime_charge_override(UpsMode::Supplement, None)
         );
     }
 

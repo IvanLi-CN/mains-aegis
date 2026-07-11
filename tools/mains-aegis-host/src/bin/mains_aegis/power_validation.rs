@@ -21,6 +21,9 @@ const ENGINEERING_SAMPLE_RATE_HZ: f64 = 3.0;
 const MAX_SAMPLE_GAP_S: f64 = 0.5;
 const SOURCE_DISCONNECT_CONFIRM_ATTEMPTS: usize = 20;
 const SOURCE_DISCONNECT_CONFIRM_INTERVAL_MS: u64 = 100;
+const SOURCE_LIMITED_ENTRY_MAX_S: f64 = 2.0;
+const SOURCE_LIMITED_MIN_LOAD_MV: i64 = 11_000;
+const SOURCE_LIMITED_MAX_LOW_VOLTAGE_S: f64 = 1.0;
 
 #[derive(Debug)]
 pub struct PowerValidationArgs {
@@ -55,6 +58,9 @@ pub struct CheckArgs {
 pub struct RunArgs {
     #[command(flatten)]
     bench: BenchArgs,
+    /// Validation suite contract. The default preserves the existing four-scene suite.
+    #[arg(long, value_enum, default_value_t = SuiteContract::Standard)]
+    suite_contract: SuiteContract,
     /// Output profiles to run.
     #[arg(long = "profile", value_enum, default_values_t = [OutputProfile::V12, OutputProfile::V19])]
     profiles: Vec<OutputProfile>,
@@ -113,6 +119,9 @@ pub struct ReportArgs {
 
 #[derive(Debug, Args)]
 pub struct ComposeArgs {
+    /// Validation suite contract used by the supplied scene reports.
+    #[arg(long, value_enum, default_value_t = SuiteContract::Standard)]
+    suite_contract: SuiteContract,
     /// Suite id to write into the generated suite-summary.json.
     #[arg(long)]
     suite_id: String,
@@ -182,6 +191,67 @@ pub enum OutputProfile {
     V19,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum SuiteContract {
+    #[value(name = "standard")]
+    Standard,
+    #[value(name = "source-limited-12v")]
+    #[serde(rename = "source_limited_12v")]
+    SourceLimited12v,
+}
+
+impl SuiteContract {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::SourceLimited12v => "source_limited_12v",
+        }
+    }
+
+    fn selected_profiles(self, requested: &[OutputProfile]) -> Vec<OutputProfile> {
+        match self {
+            Self::Standard => requested.to_vec(),
+            Self::SourceLimited12v => vec![OutputProfile::V12],
+        }
+    }
+
+    fn selected_scenes(self, requested: &[SceneKind]) -> Vec<SceneKind> {
+        match self {
+            Self::Standard => requested.to_vec(),
+            Self::SourceLimited12v => vec![
+                SceneKind::BackupOnly,
+                SceneKind::SourceLimitedOnline,
+                SceneKind::SourceLimitedCut,
+            ],
+        }
+    }
+
+    fn expected_reports(self) -> Vec<(&'static str, &'static str)> {
+        match self {
+            Self::Standard => vec![
+                ("12v", "assist_path"),
+                ("12v", "backup_only"),
+                ("19v", "assist_path"),
+                ("19v", "backup_only"),
+            ],
+            Self::SourceLimited12v => vec![
+                ("12v", "backup_only"),
+                ("12v", "source_limited_online"),
+                ("12v", "source_limited_cut"),
+            ],
+        }
+    }
+
+    fn from_summary(value: &Value) -> anyhow::Result<Self> {
+        match value.get("suite_contract").and_then(Value::as_str) {
+            None | Some("standard") => Ok(Self::Standard),
+            Some("source_limited_12v") => Ok(Self::SourceLimited12v),
+            Some(other) => bail!("unknown suite contract in report: {other}"),
+        }
+    }
+}
+
 impl OutputProfile {
     fn key(self) -> &'static str {
         match self {
@@ -213,6 +283,10 @@ pub enum SceneKind {
     AssistPath,
     #[value(name = "backup-only")]
     BackupOnly,
+    #[value(name = "source-limited-online")]
+    SourceLimitedOnline,
+    #[value(name = "source-limited-cut")]
+    SourceLimitedCut,
 }
 
 impl SceneKind {
@@ -220,6 +294,8 @@ impl SceneKind {
         match self {
             Self::AssistPath => "assist_path",
             Self::BackupOnly => "backup_only",
+            Self::SourceLimitedOnline => "source_limited_online",
+            Self::SourceLimitedCut => "source_limited_cut",
         }
     }
 
@@ -227,13 +303,27 @@ impl SceneKind {
         match self {
             Self::AssistPath => 3_900,
             Self::BackupOnly => 1_000,
+            Self::SourceLimitedOnline | Self::SourceLimitedCut => 3_900,
         }
     }
 
     fn include_backup(self) -> bool {
         match self {
-            Self::AssistPath | Self::BackupOnly => true,
+            Self::AssistPath | Self::BackupOnly | Self::SourceLimitedCut => true,
+            Self::SourceLimitedOnline => false,
         }
+    }
+
+    fn requires_source_limited(self) -> bool {
+        matches!(self, Self::SourceLimitedOnline | Self::SourceLimitedCut)
+    }
+
+    fn requires_input_absent_after_cut(self) -> bool {
+        matches!(self, Self::BackupOnly | Self::SourceLimitedCut)
+    }
+
+    fn requires_source_limited_before_cut(self) -> bool {
+        matches!(self, Self::SourceLimitedCut)
     }
 }
 
@@ -252,6 +342,7 @@ pub enum LoadAdapterKind {
 #[derive(Debug, Serialize)]
 struct SuitePlan {
     suite_id: String,
+    suite_contract: SuiteContract,
     created_at: String,
     transport: TransportPlan,
     thresholds: Thresholds,
@@ -360,6 +451,7 @@ struct SceneSample {
     phase: String,
     stage: Option<Value>,
     mode: Option<Value>,
+    backup_reason: Option<Value>,
     load_target_i_ma: u32,
     ups_status_cache_age_ms: Option<Value>,
     ups_status_cache_fresh: Option<Value>,
@@ -373,11 +465,15 @@ struct SceneSample {
     vin_iin_ma: Option<Value>,
     tps_total_iout_ma: Option<Value>,
     battery_current_ma: Option<Value>,
+    charger_state: Option<Value>,
+    charger_allow_charge: Option<Value>,
     out_a_vbus_mv: Option<Value>,
     out_b_vbus_mv: Option<Value>,
     out_a_iout_ma: Option<Value>,
     out_b_iout_ma: Option<Value>,
     diag_stage: Option<Value>,
+    diag_backup_reason: Option<Value>,
+    diag_charger_notice: Option<Value>,
     diag_assist_target_vout_mv: Option<Value>,
     diag_vin_baseline_mv: Option<Value>,
     diag_vin_drop_mv: Option<Value>,
@@ -511,9 +607,19 @@ async fn run_suite(args: RunArgs, context: PowerValidationArgs) -> anyhow::Resul
         return Ok(());
     }
     let mut reports = Vec::new();
-    for profile in args.profiles.iter().copied() {
-        for scene in args.scenes.iter().copied() {
-            reports.push(run_scene(&args, &context, &suite_dir, profile, scene).await?);
+    for profile in args.suite_contract.selected_profiles(&args.profiles) {
+        for scene in args.suite_contract.selected_scenes(&args.scenes) {
+            reports.push(
+                run_scene(
+                    &args,
+                    &context,
+                    &suite_dir,
+                    profile,
+                    scene,
+                    args.suite_contract,
+                )
+                .await?,
+            );
         }
     }
     let mut suite_value = serde_json::to_value(&plan)?;
@@ -570,18 +676,19 @@ fn verify_report(path: PathBuf, write_overview: bool) -> anyhow::Result<Value> {
         .filter(|report| report.get("signoff_valid").and_then(Value::as_bool) != Some(true))
         .cloned()
         .collect();
+    let suite_contract = SuiteContract::from_summary(&value)?;
     let mut suite_failures = Vec::new();
     let mut report_failures = Vec::new();
-    if reports.len() != 4 {
-        suite_failures
-            .push(json!({"suite_failure": "expected_four_reports", "actual": reports.len()}));
+    let expected_reports = suite_contract.expected_reports();
+    if reports.len() != expected_reports.len() {
+        suite_failures.push(json!({
+            "suite_failure": "unexpected_report_count",
+            "suite_contract": suite_contract.key(),
+            "expected": expected_reports.len(),
+            "actual": reports.len(),
+        }));
     }
-    for (profile, scene) in [
-        ("12v", "assist_path"),
-        ("12v", "backup_only"),
-        ("19v", "assist_path"),
-        ("19v", "backup_only"),
-    ] {
+    for (profile, scene) in expected_reports {
         let found = reports.iter().any(|report| {
             report.get("output_profile").and_then(Value::as_str) == Some(profile)
                 && report.get("scene_type").and_then(Value::as_str) == Some(scene)
@@ -591,7 +698,7 @@ fn verify_report(path: PathBuf, write_overview: bool) -> anyhow::Result<Value> {
         }
     }
     for report in &reports {
-        report_failures.extend(validate_scene_report(&summary_dir, report)?);
+        report_failures.extend(validate_scene_report(&summary_dir, report, suite_contract)?);
     }
     let overview_path = summary_dir.join("suite-overview.html");
     if write_overview {
@@ -610,6 +717,7 @@ fn verify_report(path: PathBuf, write_overview: bool) -> anyhow::Result<Value> {
         "suite_failures": suite_failures,
         "report_failures": report_failures,
         "suite_id": value.get("suite_id"),
+        "suite_contract": suite_contract.key(),
         "thresholds": value.get("thresholds"),
     }))
 }
@@ -623,6 +731,7 @@ async fn run_compose_report(args: ComposeArgs) -> anyhow::Result<()> {
     }
     let suite = json!({
         "suite_id": args.suite_id,
+        "suite_contract": args.suite_contract.key(),
         "created_at": Utc::now().to_rfc3339(),
         "transport": infer_suite_transport(&reports),
         "thresholds": {
@@ -687,6 +796,7 @@ fn compose_scene_report_entry(suite_dir: &Path, scene_dir: &Path) -> anyhow::Res
     let report_dir = path_relative_to(scene_dir, suite_dir);
     Ok(json!({
         "report_dir": report_dir,
+        "suite_contract": metadata.get("suite_contract").cloned().unwrap_or_else(|| json!("standard")),
         "output_profile": output_profile,
         "scene_type": scene_type,
         "target_ma": target_ma,
@@ -704,6 +814,7 @@ fn compose_scene_report_entry(suite_dir: &Path, scene_dir: &Path) -> anyhow::Res
         "failures": completeness.get("failures").cloned().unwrap_or_else(|| json!([])),
         "failed_acceptance_checks": acceptance.get("failed_acceptance_checks").cloned().unwrap_or_else(|| json!([])),
         "advanced_power": results.pointer("/settings_snapshot/advanced_power").cloned().unwrap_or_else(|| json!({})),
+        "scene_assertions": results.get("scene_assertions").cloned().unwrap_or(Value::Null),
         "transport": {
             "ups": metadata.get("ups_transport").cloned().unwrap_or(Value::Null),
             "power_source": metadata.get("power_transport").cloned().unwrap_or(Value::Null),
@@ -791,7 +902,11 @@ fn infer_profiles(reports: &[Value]) -> Vec<Value> {
     by_profile.into_values().collect()
 }
 
-fn validate_scene_report(summary_dir: &Path, report: &Value) -> anyhow::Result<Vec<Value>> {
+fn validate_scene_report(
+    summary_dir: &Path,
+    report: &Value,
+    suite_contract: SuiteContract,
+) -> anyhow::Result<Vec<Value>> {
     let mut failures = Vec::new();
     let Some(report_dir_value) = report.get("report_dir").and_then(Value::as_str) else {
         failures.push(json!({"report_failure": "missing_report_dir", "report": report}));
@@ -857,6 +972,30 @@ fn validate_scene_report(summary_dir: &Path, report: &Value) -> anyhow::Result<V
             "summary": report.get("target_ma"),
             "results": metadata.get("target_ma"),
         }));
+    }
+    if suite_contract == SuiteContract::SourceLimited12v {
+        if metadata.get("suite_contract").and_then(Value::as_str)
+            != Some(SuiteContract::SourceLimited12v.key())
+        {
+            failures.push(json!({
+                "report_failure": "results_suite_contract_mismatch",
+                "report_dir": report_dir_value,
+                "expected": SuiteContract::SourceLimited12v.key(),
+                "results": metadata.get("suite_contract"),
+            }));
+        }
+        if results
+            .get("scene_assertions")
+            .and_then(|value| value.get("passed"))
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            failures.push(json!({
+                "report_failure": "source_limited_scene_assertions_failed",
+                "report_dir": report_dir_value,
+                "assertions": results.get("scene_assertions"),
+            }));
+        }
     }
 
     let completeness = results
@@ -1081,8 +1220,9 @@ fn build_suite_plan(
         load_max_i_ma_total: 4_000,
         load_max_p_mw: 80_000,
     };
-    let profiles = args
-        .profiles
+    let selected_profiles = args.suite_contract.selected_profiles(&args.profiles);
+    let selected_scenes = args.suite_contract.selected_scenes(&args.scenes);
+    let profiles = selected_profiles
         .iter()
         .copied()
         .map(|profile| ProfilePlan {
@@ -1093,8 +1233,8 @@ fn build_suite_plan(
         })
         .collect::<Vec<_>>();
     let mut reports = Vec::new();
-    for profile in &args.profiles {
-        for scene in &args.scenes {
+    for profile in &selected_profiles {
+        for scene in &selected_scenes {
             let report_name = format!("{}-{}-{}ma", profile.key(), scene.key(), scene.target_ma());
             let report_dir = suite_dir.join(&report_name);
             reports.push(ScenePlan {
@@ -1114,6 +1254,7 @@ fn build_suite_plan(
     }
     Ok(SuitePlan {
         suite_id: suite_id.to_string(),
+        suite_contract: args.suite_contract,
         created_at: Utc::now().to_rfc3339(),
         transport: TransportPlan {
             ups: "mains-aegis CLI + native IPC + USB".to_string(),
@@ -1618,8 +1759,9 @@ async fn run_scene(
     suite_dir: &Path,
     profile: OutputProfile,
     scene: SceneKind,
+    suite_contract: SuiteContract,
 ) -> anyhow::Result<Value> {
-    let result = run_scene_inner(args, context, suite_dir, profile, scene).await;
+    let result = run_scene_inner(args, context, suite_dir, profile, scene, suite_contract).await;
     let cleanup = cleanup_scene(args).await;
     match (result, cleanup) {
         (Ok(report), Ok(_)) => Ok(report),
@@ -1640,6 +1782,7 @@ async fn run_scene_inner(
     suite_dir: &Path,
     profile: OutputProfile,
     scene: SceneKind,
+    suite_contract: SuiteContract,
 ) -> anyhow::Result<Value> {
     let protection = LoadProtection {
         load_min_v_mv: 3_000,
@@ -1673,7 +1816,7 @@ async fn run_scene_inner(
     .await?;
     wait_for_ups_status_watch_ready(args, context, "after_profile_switch").await?;
     let (_identity, settings, profile_gate) =
-        ensure_profile_ready(args, context, profile, &mut actions).await?;
+        ensure_profile_ready(args, context, profile, suite_contract, &mut actions).await?;
     actions.push(json!({"ups_profile_gate": profile_gate}));
     run_cmd_json(
         power_configure_off_command(&args.bench, profile)?,
@@ -1733,7 +1876,19 @@ async fn run_scene_inner(
         args.hold_s,
     )
     .await;
-    if scene.include_backup() {
+    let source_limited_before_cut = samples
+        .iter()
+        .rev()
+        .find(|sample| matches!(sample.phase.as_str(), "transition_load" | "hold"))
+        .is_some_and(sample_is_source_limited);
+    let should_cut_source = scene.include_backup()
+        && (!scene.requires_source_limited_before_cut() || source_limited_before_cut);
+    if scene.requires_source_limited_before_cut() && !source_limited_before_cut {
+        actions.push(json!({
+            "power_cut_skipped": "source_limited_not_latched_before_cut",
+        }));
+    }
+    if should_cut_source {
         run_cmd_json_with_sampling(
             power_disable_command(&args.bench)?,
             "power_cut_for_backup",
@@ -1845,6 +2000,16 @@ async fn run_scene_inner(
             summary.failures.push(format!("{name}_collector_error"));
         }
     }
+    let scene_assertions = evaluate_scene_assertions(scene, profile, &samples);
+    for failure in scene_assertions
+        .get("failures")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        summary.failures.push(failure.to_string());
+    }
     summary.scene_complete = summary.failures.is_empty();
     let acceptance = json!({
         "signoff_valid": summary.scene_complete,
@@ -1854,6 +2019,7 @@ async fn run_scene_inner(
     });
     write_timeseries(&report_dir.join("timeseries.jsonl"), &samples)?;
     let metadata = json!({
+        "suite_contract": suite_contract.key(),
         "output_profile": profile.key(),
         "scene_type": scene.key(),
         "target_ma": scene.target_ma(),
@@ -1876,12 +2042,14 @@ async fn run_scene_inner(
         "actions": actions,
         "collector_diagnostics": collector_diagnostics,
         "settings_snapshot": settings,
+        "scene_assertions": scene_assertions,
         "samples": samples,
         "summary": {"all": {"completeness": summary, "acceptance": acceptance}},
     });
     write_json_value(&report_dir.join("results.json"), &results)?;
     let _ = render_scene_chart(args, &report_dir, profile, scene).await;
     Ok(json!({
+        "suite_contract": suite_contract.key(),
         "output_profile": profile.key(),
         "scene_type": scene.key(),
         "target_ma": scene.target_ma(),
@@ -1900,7 +2068,177 @@ async fn run_scene_inner(
         "effective_sample_rate_hz": summary.effective_sample_rate_hz,
         "max_sample_gap_s": summary.max_sample_gap_s,
         "advanced_power": advanced_power,
+        "scene_assertions": results.get("scene_assertions").cloned().unwrap_or(Value::Null),
     }))
+}
+
+fn sample_string(value: &Option<Value>) -> Option<&str> {
+    value.as_ref().and_then(Value::as_str)
+}
+
+fn sample_number(value: &Option<Value>) -> Option<i64> {
+    value.as_ref().and_then(Value::as_i64)
+}
+
+fn sample_backup_reason(sample: &SceneSample) -> Option<&str> {
+    sample_string(&sample.backup_reason).or_else(|| sample_string(&sample.diag_backup_reason))
+}
+
+fn sample_is_backup(sample: &SceneSample) -> bool {
+    sample_string(&sample.mode) == Some("backup")
+        && (sample_string(&sample.stage) == Some("backup")
+            || sample_string(&sample.diag_stage) == Some("backup"))
+}
+
+fn sample_is_source_limited(sample: &SceneSample) -> bool {
+    sample_is_backup(sample) && sample_backup_reason(sample) == Some("source_limited")
+}
+
+fn is_load_phase(sample: &SceneSample) -> bool {
+    matches!(sample.phase.as_str(), "transition_load" | "hold")
+}
+
+fn longest_low_voltage_duration_s(samples: &[&SceneSample]) -> Option<f64> {
+    let mut observed = false;
+    let mut low_start = None;
+    let mut low_end = None;
+    let mut longest = 0.0_f64;
+
+    for sample in samples {
+        let Some(voltage_mv) = sample_number(&sample.load_v_local_mv) else {
+            continue;
+        };
+        observed = true;
+        if voltage_mv < SOURCE_LIMITED_MIN_LOAD_MV {
+            low_start.get_or_insert(sample.t_s);
+            low_end = Some(sample.t_s);
+        } else if let (Some(start), Some(end)) = (low_start.take(), low_end.take()) {
+            longest = longest.max(end - start);
+        }
+    }
+    if let (Some(start), Some(end)) = (low_start, low_end) {
+        longest = longest.max(end - start);
+    }
+    observed.then_some(round3(longest))
+}
+
+fn evaluate_scene_assertions(
+    scene: SceneKind,
+    profile: OutputProfile,
+    samples: &[SceneSample],
+) -> Value {
+    let mut failures = Vec::<String>::new();
+    let load_samples = samples
+        .iter()
+        .filter(|sample| is_load_phase(sample))
+        .collect::<Vec<_>>();
+    let source_limited_entry = load_samples
+        .iter()
+        .position(|sample| sample_is_source_limited(sample));
+    let source_limited = if scene.requires_source_limited() {
+        let Some(entry_index) = source_limited_entry else {
+            failures.push("source_limited_not_observed".to_string());
+            return json!({
+                "passed": false,
+                "failures": failures,
+                "source_limited": {
+                    "observed": false,
+                    "entry_delay_s": Value::Null,
+                    "post_latch_min_load_mv": Value::Null,
+                    "pre_latch_low_voltage_max_duration_s": Value::Null,
+                    "post_latch_low_voltage_max_duration_s": Value::Null,
+                },
+            });
+        };
+        let entry = load_samples[entry_index];
+        let load_start = load_samples
+            .first()
+            .map(|sample| sample.t_s)
+            .unwrap_or(entry.t_s);
+        let entry_delay_s = round3(entry.t_s - load_start);
+        if entry_delay_s > SOURCE_LIMITED_ENTRY_MAX_S {
+            failures.push("source_limited_entry_after_2s".to_string());
+        }
+        let post_latch = load_samples[entry_index..].to_vec();
+        let pre_latch = load_samples[..entry_index].to_vec();
+        let post_latch_min_load_mv = post_latch
+            .iter()
+            .filter_map(|sample| sample_number(&sample.load_v_local_mv))
+            .min();
+        if post_latch_min_load_mv.is_none() {
+            failures.push("source_limited_post_latch_load_voltage_missing".to_string());
+        } else if post_latch_min_load_mv < Some(SOURCE_LIMITED_MIN_LOAD_MV) {
+            failures.push("source_limited_post_latch_load_below_11v".to_string());
+        }
+        let post_latch_low_voltage_max_duration_s = longest_low_voltage_duration_s(&post_latch);
+        if post_latch_low_voltage_max_duration_s
+            .is_some_and(|duration| duration > SOURCE_LIMITED_MAX_LOW_VOLTAGE_S)
+        {
+            failures.push("source_limited_post_latch_low_voltage_over_1s".to_string());
+        }
+        let pre_latch_low_voltage_max_duration_s = longest_low_voltage_duration_s(&pre_latch);
+        if pre_latch_low_voltage_max_duration_s
+            .is_some_and(|duration| duration > SOURCE_LIMITED_MAX_LOW_VOLTAGE_S)
+        {
+            failures.push("source_limited_pre_latch_low_voltage_over_1s".to_string());
+        }
+        let target_observed = post_latch.iter().any(|sample| {
+            sample_number(&sample.assist_target_vout_mv)
+                .or_else(|| sample_number(&sample.diag_assist_target_vout_mv))
+                == Some(profile.rated_vout_mv() as i64)
+        });
+        if !target_observed {
+            failures.push("source_limited_target_not_rated".to_string());
+        }
+        json!({
+            "observed": true,
+            "entry_t_s": entry.t_s,
+            "entry_delay_s": entry_delay_s,
+            "target_rated_observed": target_observed,
+            "post_latch_min_load_mv": post_latch_min_load_mv,
+            "pre_latch_low_voltage_max_duration_s": pre_latch_low_voltage_max_duration_s,
+            "post_latch_low_voltage_max_duration_s": post_latch_low_voltage_max_duration_s,
+        })
+    } else {
+        Value::Null
+    };
+
+    let backup_cut = if scene.requires_input_absent_after_cut() {
+        let backup_samples = samples
+            .iter()
+            .filter(|sample| matches!(sample.phase.as_str(), "transition_backup" | "backup"))
+            .collect::<Vec<_>>();
+        let input_absent_observed = backup_samples.iter().any(|sample| {
+            sample_is_backup(sample) && sample_backup_reason(sample) == Some("input_absent")
+        });
+        if !input_absent_observed {
+            failures.push("input_absent_not_observed_after_cut".to_string());
+        }
+        let stable_backup_samples = backup_samples
+            .iter()
+            .filter(|sample| sample.phase == "backup")
+            .collect::<Vec<_>>();
+        let backup_continuous = !stable_backup_samples.is_empty()
+            && stable_backup_samples
+                .iter()
+                .all(|sample| sample_is_backup(sample));
+        if !backup_continuous {
+            failures.push("backup_not_continuous_after_cut".to_string());
+        }
+        json!({
+            "input_absent_observed": input_absent_observed,
+            "backup_continuous": backup_continuous,
+        })
+    } else {
+        Value::Null
+    };
+
+    json!({
+        "passed": failures.is_empty(),
+        "failures": failures,
+        "source_limited": source_limited,
+        "backup_cut": backup_cut,
+    })
 }
 
 async fn ensure_source_disconnected(
@@ -2095,6 +2433,7 @@ async fn ensure_profile_ready(
     args: &RunArgs,
     context: &PowerValidationArgs,
     profile: OutputProfile,
+    suite_contract: SuiteContract,
     actions: &mut Vec<Value>,
 ) -> anyhow::Result<(Value, Value, Value)> {
     let mut identity = run_cmd_json_retry(
@@ -2113,6 +2452,7 @@ async fn ensure_profile_ready(
     .await?;
     let mut profile_gate = validate_profile_gate(profile, &identity, &settings);
     if profile_gate.get("ok").and_then(Value::as_bool) == Some(true) {
+        validate_suite_settings(suite_contract, &settings, &mut profile_gate)?;
         return Ok((identity, settings, profile_gate));
     }
     if !args.allow_profile_flash {
@@ -2189,6 +2529,7 @@ async fn ensure_profile_ready(
     if profile_gate.get("ok").and_then(Value::as_bool) != Some(true) {
         bail!("UPS profile gate still failed after profile switch: {profile_gate}");
     }
+    validate_suite_settings(suite_contract, &settings, &mut profile_gate)?;
     Ok((identity, settings, profile_gate))
 }
 
@@ -2571,6 +2912,14 @@ fn collect_scene_sample(
         .or_else(|| status.pointer("/input"))
         .cloned()
         .unwrap_or_else(|| json!({}));
+    let charger = status
+        .pointer("/charger")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let diag_charger = diag
+        .pointer("/charger")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let load_status = load
         .pointer("/payload/status")
         .or_else(|| load.pointer("/status"))
@@ -2599,6 +2948,7 @@ fn collect_scene_sample(
         phase: phase.to_string(),
         stage: input.get("assist_power_stage").cloned(),
         mode: status.get("mode").cloned(),
+        backup_reason: input.get("backup_reason").cloned(),
         load_target_i_ma: target_ma,
         ups_status_cache_age_ms: status_meta.get("cache_age_ms").cloned(),
         ups_status_cache_fresh: status_meta.get("cache_fresh").cloned(),
@@ -2627,11 +2977,18 @@ fn collect_scene_sample(
             .or_else(|| input.get("input_ibus_ma").cloned()),
         tps_total_iout_ma: input.get("tps_total_iout_ma").cloned(),
         battery_current_ma: status.pointer("/battery/current_ma").cloned(),
+        charger_state: charger.get("state").cloned(),
+        charger_allow_charge: charger.get("allow_charge").cloned(),
         out_a_vbus_mv: out_a.get("vbus_mv").cloned(),
         out_b_vbus_mv: out_b.get("vbus_mv").cloned(),
         out_a_iout_ma: out_a.get("iout_ma").cloned(),
         out_b_iout_ma: out_b.get("iout_ma").cloned(),
         diag_stage: diag_input.get("assist_power_stage").cloned(),
+        diag_backup_reason: diag_input.get("backup_reason").cloned(),
+        diag_charger_notice: diag_charger
+            .pointer("/policy/notice")
+            .or_else(|| diag_charger.get("notice"))
+            .cloned(),
         diag_assist_target_vout_mv: diag_input.get("assist_target_vout_mv").cloned(),
         diag_vin_baseline_mv: diag_input.get("vin_baseline_mv").cloned(),
         diag_vin_drop_mv: diag_input.get("vin_drop_mv").cloned(),
@@ -3340,6 +3697,44 @@ fn validate_profile_gate(profile: OutputProfile, identity: &Value, settings: &Va
     })
 }
 
+fn validate_suite_settings(
+    suite_contract: SuiteContract,
+    settings: &Value,
+    profile_gate: &mut Value,
+) -> anyhow::Result<()> {
+    if suite_contract != SuiteContract::SourceLimited12v {
+        return Ok(());
+    }
+    let advanced_power = settings
+        .get("advanced_power")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let expected = json!({
+        "source_limited_enter_delta_ma": 1_900,
+        "source_limited_exit_delta_ma": 0,
+        "source_limited_required_samples": 2,
+        "source_limited_recover_margin_mv": 400,
+        "vin_drop_threshold_pct": 4,
+    });
+    let mut failures = Vec::new();
+    for (key, expected_value) in expected.as_object().into_iter().flatten() {
+        if advanced_power.get(key) != Some(expected_value) {
+            failures.push(format!("advanced_power_{key}_mismatch"));
+        }
+    }
+    let settings_gate = json!({
+        "ok": failures.is_empty(),
+        "failures": failures,
+        "expected": expected,
+        "actual": advanced_power,
+    });
+    profile_gate["source_limited_settings"] = settings_gate.clone();
+    if settings_gate.get("ok").and_then(Value::as_bool) != Some(true) {
+        bail!("source-limited 12V settings preflight failed: {settings_gate}");
+    }
+    Ok(())
+}
+
 fn summarize_scene(samples: &[SceneSample]) -> SceneSummary {
     let mut failures = Vec::new();
     if samples.len() < 2 {
@@ -3582,6 +3977,59 @@ mod tests {
         }
     }
 
+    fn scene_sample(
+        t_s: f64,
+        phase: &str,
+        stage: &str,
+        mode: &str,
+        backup_reason: Option<&str>,
+        load_v_local_mv: i64,
+    ) -> SceneSample {
+        SceneSample {
+            t_s,
+            unix_ms: (t_s * 1000.0) as i64,
+            phase: phase.to_string(),
+            stage: Some(json!(stage)),
+            mode: Some(json!(mode)),
+            backup_reason: backup_reason.map(|reason| json!(reason)),
+            load_target_i_ma: 3_900,
+            ups_status_cache_age_ms: Some(json!(20)),
+            ups_status_cache_fresh: Some(json!(true)),
+            ups_status_monitor_running: Some(json!(true)),
+            port_c_enabled: Some(json!(true)),
+            isolapurr_port_c_mv: Some(json!(12_000)),
+            isolapurr_port_c_ma: Some(json!(3_000)),
+            mains_present: Some(json!(backup_reason != Some("input_absent"))),
+            assist_target_vout_mv: Some(json!(12_000)),
+            vin_vbus_mv: Some(json!(11_800)),
+            vin_iin_ma: Some(json!(3_000)),
+            tps_total_iout_ma: Some(json!(3_900)),
+            battery_current_ma: Some(json!(-500)),
+            charger_state: Some(json!(if backup_reason == Some("input_absent") {
+                "NOAC"
+            } else {
+                "LOAD"
+            })),
+            charger_allow_charge: Some(json!(false)),
+            out_a_vbus_mv: Some(json!(12_000)),
+            out_b_vbus_mv: None,
+            out_a_iout_ma: Some(json!(3_900)),
+            out_b_iout_ma: None,
+            diag_stage: Some(json!(stage)),
+            diag_backup_reason: backup_reason.map(|reason| json!(reason)),
+            diag_charger_notice: None,
+            diag_assist_target_vout_mv: Some(json!(12_000)),
+            diag_vin_baseline_mv: Some(json!(12_000)),
+            diag_vin_drop_mv: Some(json!(200)),
+            diag_tps_total_iout_ma: Some(json!(3_900)),
+            load_output_enabled: Some(json!(true)),
+            load_v_local_mv: Some(json!(load_v_local_mv)),
+            load_i_local_ma: Some(json!(3_900)),
+            load_i_remote_ma: Some(json!(0)),
+            load_i_total_ma: Some(json!(3_900)),
+        }
+    }
+
     #[test]
     fn ups_commands_propagate_no_auto_start() {
         let cmd = ups_status_fresh_command(
@@ -3789,6 +4237,7 @@ mod tests {
     fn suite_plan_has_four_default_scenes() {
         let run = RunArgs {
             bench: bench(Some("loadlynx")),
+            suite_contract: SuiteContract::Standard,
             profiles: vec![OutputProfile::V12, OutputProfile::V19],
             scenes: vec![SceneKind::AssistPath, SceneKind::BackupOnly],
             report_root: PathBuf::from("reports"),
@@ -3830,6 +4279,214 @@ mod tests {
         assert_eq!(plan.reports[1].scene_type, "backup_only");
         assert_eq!(plan.reports[1].target_ma, 1000);
         assert_eq!(plan.reports[1].include_backup, true);
+    }
+
+    #[test]
+    fn source_limited_contract_forces_three_12v_scenes() {
+        let run = RunArgs {
+            bench: bench(Some("loadlynx")),
+            suite_contract: SuiteContract::SourceLimited12v,
+            profiles: vec![OutputProfile::V19],
+            scenes: vec![SceneKind::AssistPath],
+            report_root: PathBuf::from("reports"),
+            suite_id: Some("suite".to_string()),
+            dry_run: true,
+            allow_profile_flash: false,
+            artifact_manifest_12v: None,
+            artifact_manifest_19v: None,
+            pre_s: 0.1,
+            hold_s: 0.1,
+            backup_s: 0.1,
+            restore_s: 0.1,
+            post_s: 0.1,
+            profile_flash_settle_s: 12,
+            render_chart: PathBuf::from("tools/hil/render_voltage_chart_html.py"),
+        };
+        let plan = build_suite_plan(
+            &run,
+            &PowerValidationArgs {
+                ups_ipc: "/tmp/ups.sock".to_string(),
+                no_auto_start: false,
+            },
+            "suite",
+            Path::new("reports/suite"),
+        )
+        .unwrap();
+
+        assert_eq!(plan.suite_contract, SuiteContract::SourceLimited12v);
+        assert_eq!(plan.profiles.len(), 1);
+        assert_eq!(plan.profiles[0].output_profile, "12v");
+        assert_eq!(
+            plan.reports
+                .iter()
+                .map(|report| report.scene_type)
+                .collect::<Vec<_>>(),
+            vec!["backup_only", "source_limited_online", "source_limited_cut"]
+        );
+        assert!(!plan.reports[1].include_backup);
+        assert!(plan.reports[2].include_backup);
+    }
+
+    #[test]
+    fn source_limited_settings_preflight_requires_the_bench_defaults() {
+        let mut profile_gate = json!({"ok": true});
+        let settings = json!({
+            "advanced_power": {
+                "source_limited_enter_delta_ma": 1900,
+                "source_limited_exit_delta_ma": 0,
+                "source_limited_required_samples": 2,
+                "source_limited_recover_margin_mv": 400,
+                "vin_drop_threshold_pct": 4,
+            }
+        });
+        validate_suite_settings(
+            SuiteContract::SourceLimited12v,
+            &settings,
+            &mut profile_gate,
+        )
+        .unwrap();
+        assert_eq!(
+            profile_gate.pointer("/source_limited_settings/ok"),
+            Some(&json!(true))
+        );
+
+        let mut mismatch_gate = json!({"ok": true});
+        let mismatch = json!({"advanced_power": {}});
+        assert!(validate_suite_settings(
+            SuiteContract::SourceLimited12v,
+            &mismatch,
+            &mut mismatch_gate,
+        )
+        .is_err());
+        assert!(mismatch_gate
+            .pointer("/source_limited_settings/failures")
+            .and_then(Value::as_array)
+            .is_some_and(|failures| !failures.is_empty()));
+    }
+
+    #[test]
+    fn source_limited_online_assertions_require_fast_rated_handoff_and_stable_load() {
+        let samples = vec![
+            scene_sample(
+                0.0,
+                "transition_load",
+                "assist_low",
+                "supplement",
+                None,
+                11_400,
+            ),
+            scene_sample(
+                0.2,
+                "hold",
+                "backup",
+                "backup",
+                Some("source_limited"),
+                11_100,
+            ),
+            scene_sample(
+                0.4,
+                "hold",
+                "backup",
+                "backup",
+                Some("source_limited"),
+                11_050,
+            ),
+        ];
+
+        let assertions =
+            evaluate_scene_assertions(SceneKind::SourceLimitedOnline, OutputProfile::V12, &samples);
+        assert_eq!(assertions.get("passed"), Some(&json!(true)));
+        assert_eq!(
+            assertions.pointer("/source_limited/entry_delay_s"),
+            Some(&json!(0.2))
+        );
+        assert_eq!(
+            assertions.pointer("/source_limited/post_latch_min_load_mv"),
+            Some(&json!(11_050))
+        );
+    }
+
+    #[test]
+    fn source_limited_cut_assertions_require_input_absent_and_continuous_backup() {
+        let samples = vec![
+            scene_sample(
+                0.0,
+                "transition_load",
+                "assist_low",
+                "supplement",
+                None,
+                11_400,
+            ),
+            scene_sample(
+                0.2,
+                "hold",
+                "backup",
+                "backup",
+                Some("source_limited"),
+                11_100,
+            ),
+            scene_sample(
+                0.4,
+                "transition_backup",
+                "backup",
+                "backup",
+                Some("source_limited"),
+                11_100,
+            ),
+            scene_sample(
+                0.6,
+                "backup",
+                "backup",
+                "backup",
+                Some("input_absent"),
+                11_050,
+            ),
+        ];
+
+        let assertions =
+            evaluate_scene_assertions(SceneKind::SourceLimitedCut, OutputProfile::V12, &samples);
+        assert_eq!(assertions.get("passed"), Some(&json!(true)));
+        assert_eq!(
+            assertions.pointer("/backup_cut/input_absent_observed"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            assertions.pointer("/backup_cut/backup_continuous"),
+            Some(&json!(true))
+        );
+    }
+
+    #[test]
+    fn source_limited_report_verifier_requires_three_reports() {
+        let temp = tempfile::tempdir().unwrap();
+        let summary = temp.path().join("suite-summary.json");
+        write_json_value(
+            &summary,
+            &json!({
+                "suite_id": "source-limited",
+                "suite_contract": "source_limited_12v",
+                "reports": [],
+            }),
+        )
+        .unwrap();
+
+        let verification = verify_report(summary, false).unwrap();
+        assert_eq!(verification.get("signoff_valid"), Some(&json!(false)));
+        assert!(verification
+            .get("suite_failures")
+            .and_then(Value::as_array)
+            .is_some_and(|failures| failures.iter().any(|failure| {
+                failure.get("suite_failure") == Some(&json!("unexpected_report_count"))
+                    && failure.get("expected") == Some(&json!(3))
+            })));
+    }
+
+    #[test]
+    fn source_limited_contract_serializes_with_verifier_key() {
+        assert_eq!(
+            serde_json::to_value(SuiteContract::SourceLimited12v).unwrap(),
+            json!("source_limited_12v")
+        );
     }
 
     #[test]
@@ -4053,6 +4710,7 @@ mod tests {
                     phase: "hold".to_string(),
                     stage: None,
                     mode: None,
+                    backup_reason: None,
                     load_target_i_ma: 3900,
                     ups_status_cache_age_ms: None,
                     ups_status_cache_fresh: None,
@@ -4066,11 +4724,15 @@ mod tests {
                     vin_iin_ma: None,
                     tps_total_iout_ma: None,
                     battery_current_ma: None,
+                    charger_state: None,
+                    charger_allow_charge: None,
                     out_a_vbus_mv: Some(json!(10800)),
                     out_b_vbus_mv: None,
                     out_a_iout_ma: None,
                     out_b_iout_ma: None,
                     diag_stage: None,
+                    diag_backup_reason: None,
+                    diag_charger_notice: None,
                     diag_assist_target_vout_mv: None,
                     diag_vin_baseline_mv: None,
                     diag_vin_drop_mv: None,
@@ -4088,6 +4750,7 @@ mod tests {
                     phase: "hold".to_string(),
                     stage: None,
                     mode: None,
+                    backup_reason: None,
                     load_target_i_ma: 3900,
                     ups_status_cache_age_ms: None,
                     ups_status_cache_fresh: None,
@@ -4101,11 +4764,15 @@ mod tests {
                     vin_iin_ma: None,
                     tps_total_iout_ma: None,
                     battery_current_ma: None,
+                    charger_state: None,
+                    charger_allow_charge: None,
                     out_a_vbus_mv: Some(json!(10810)),
                     out_b_vbus_mv: None,
                     out_a_iout_ma: None,
                     out_b_iout_ma: None,
                     diag_stage: None,
+                    diag_backup_reason: None,
+                    diag_charger_notice: None,
                     diag_assist_target_vout_mv: None,
                     diag_vin_baseline_mv: None,
                     diag_vin_drop_mv: None,
@@ -4123,6 +4790,7 @@ mod tests {
                     phase: "hold".to_string(),
                     stage: None,
                     mode: None,
+                    backup_reason: None,
                     load_target_i_ma: 3900,
                     ups_status_cache_age_ms: None,
                     ups_status_cache_fresh: None,
@@ -4136,11 +4804,15 @@ mod tests {
                     vin_iin_ma: None,
                     tps_total_iout_ma: None,
                     battery_current_ma: None,
+                    charger_state: None,
+                    charger_allow_charge: None,
                     out_a_vbus_mv: Some(json!(10820)),
                     out_b_vbus_mv: None,
                     out_a_iout_ma: None,
                     out_b_iout_ma: None,
                     diag_stage: None,
+                    diag_backup_reason: None,
+                    diag_charger_notice: None,
                     diag_assist_target_vout_mv: None,
                     diag_vin_baseline_mv: None,
                     diag_vin_drop_mv: None,
@@ -4166,7 +4838,7 @@ mod tests {
             "target_ma": 3900,
             "signoff_valid": true
         });
-        let failures = validate_scene_report(&suite_dir, &report).unwrap();
+        let failures = validate_scene_report(&suite_dir, &report, SuiteContract::Standard).unwrap();
         assert!(failures.iter().any(|failure| {
             failure.get("report_failure")
                 == Some(&json!("timeseries_missing_required_voltage_series"))

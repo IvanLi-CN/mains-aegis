@@ -513,6 +513,41 @@ Before treating any future rerun as valid, confirm in this order:
 
 If any one item fails, the rerun is diagnostic-only.
 
+## Source-limited 12V Suite
+
+Use the dedicated contract when validating MCU takeover of an upstream source
+that remains connected but cannot sustain the load:
+
+```bash
+mains-aegis power-validation run \
+  --suite-contract source-limited-12v \
+  --ups-device <ups-device-id> \
+  --power-device <isolapurr-device-id> \
+  --load-device <loadlynx-device-id> \
+  --load-cli <loadlynx-cli>
+```
+
+The contract always runs exactly three 12V scenes with a `12000mV / 3000mA`
+source and `3000mV / 4000mA / 80000mW` load protection rails:
+
+Before enabling the source, the runner reads the selected UPS identity and
+settings. It requires the 12V profile with `rated_vout_mv=12000` and the
+following source-limited settings: `enter_delta=1900mA`, `exit_delta=0mA`,
+`required_samples=2`, `recover_margin=400mV`, and `vin_drop_pct=4`.
+
+- `backup_only / 1000mA`: physical VIN cut must yield `backup_reason=input_absent`.
+- `source_limited_online / 3900mA`: VIN stays online and the UPS must enter
+  `backup_reason=source_limited` within two seconds of load transition.
+- `source_limited_cut / 3900mA`: the runner must observe source-limited backup
+  in its final pre-cut sample before cutting VIN, then require continuous backup
+  and `input_absent` truth.
+
+For source-limited scenes, the report stores `backup_reason`, charger state,
+the source-limited entry time, pre/post-latch low-voltage durations, and the
+post-latch LoadLynx voltage minimum. Formal acceptance additionally requires
+the post-latch load voltage to remain at or above `11000mV`; any pre-latch
+sub-`11000mV` interval may not exceed one second.
+
 ## References
 
 - `docs/specs/xjpvj-runtime-mode-switching/SPEC.md`

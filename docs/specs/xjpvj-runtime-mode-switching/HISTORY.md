@@ -148,3 +148,16 @@
   - `source_limited_recover_margin_mv`
 - 旧 `12V assist_path / 3900mA` sign-off 结果保留为旧方案实测证据；该结果说明场景可完成，但也记录了 assist 阶段负载端约 `10.5V` 级长时间深跌落观察。
 - `.mhtml` 被明确为可离线打开并保留内嵌图表的 evidence；单独 `.html` overview 若没有 scene 子目录会缺少 iframe 图表资源。
+
+## Source-limited 12V validation contract
+
+- `mains-aegis power-validation` 增加 `--suite-contract source-limited-12v`，与既有
+  dual-voltage 四场景合同并存。
+- 新合同固定三个独立 scene：普通负载 VIN cut、过载 VIN online、过载后 VIN cut。
+- `source_limited_cut` 必须在最终 pre-cut hold sample 仍处于 `source_limited`，否则不得
+  切断 source；报告将保留这一 failure 而不是把未验证的 cut 当成正常结果。
+- scene telemetry 增加 `backup_reason`、charger state / allow-charge 和 source-limited
+  电压持续时间指标；HTML chart 的阶段转移同时显示 backup reason 与 charger state。
+- 已完成 dry-run、host tests、firmware host tests、12V release HIL build；真实 HIL
+  暂未签核，因为 UPS 指定 USB 被外部 `flux-purr-devd` 占用，LoadLynx 指定 USB
+  返回 released-devd serial-open failure。

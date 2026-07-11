@@ -131,6 +131,9 @@ def load_rows(path: Path) -> list[dict]:
                 "phase": phase,
                 "stage": raw.get("stage"),
                 "mode": raw.get("mode"),
+                "backup_reason": raw.get("backup_reason") or raw.get("diag_backup_reason"),
+                "charger_state": raw.get("charger_state"),
+                "charger_allow_charge": raw.get("charger_allow_charge"),
                 "target_ma": raw.get("load_target_i_ma"),
                 "port_c_enabled": raw.get("port_c_enabled"),
                 "mains_present": raw.get("mains_present"),
@@ -191,20 +194,32 @@ def build_tag_spans(rows: list[dict]) -> list[dict]:
 
 def build_stage_transitions(rows: list[dict]) -> list[dict]:
     transitions: list[dict] = []
-    last_stage = last_mode = None
+    last_stage = last_mode = last_reason = last_charger = None
     for row in rows:
         stage = row.get("stage")
         mode = row.get("mode")
-        if stage != last_stage or mode != last_mode:
+        reason = row.get("backup_reason")
+        charger = row.get("charger_state")
+        if (
+            stage != last_stage
+            or mode != last_mode
+            or reason != last_reason
+            or charger != last_charger
+        ):
             transitions.append(
                 {
                     "t_s": row["t_s"],
                     "stage": stage,
                     "mode": mode,
+                    "backup_reason": reason,
+                    "charger_state": charger,
+                    "charger_allow_charge": row.get("charger_allow_charge"),
                 }
             )
             last_stage = stage
             last_mode = mode
+            last_reason = reason
+            last_charger = charger
     return transitions
 
 
@@ -721,7 +736,12 @@ def render_html(
         const color = tagColors[span.phase] || "#f1f1f1";
         const transitions = stageTransitions
           .filter(item => item.t_s >= span.start && item.t_s <= span.end)
-          .map(item => `${{fmtT(item.t_s)}} ${{item.stage || item.mode || "unknown"}}`)
+          .map(item => {{
+            const state = item.stage || item.mode || "unknown";
+            const reason = item.backup_reason ? ` / ${{item.backup_reason}}` : "";
+            const charger = item.charger_state ? ` / ${{item.charger_state}}` : "";
+            return `${{fmtT(item.t_s)}} ${{state}}${{reason}}${{charger}}`;
+          }})
           .join(" · ");
         li.innerHTML = `<strong><span class="swatch" style="background:${{color}}"></span>P${{index + 1}}</strong> ${{span.label}}<br><span class="small">${{fmtT(span.start)}}..${{fmtT(span.end)}} | phase=${{span.phase}}${{transitions ? "<br>stage: " + transitions : ""}}</span>`;
         phaseMap.appendChild(li);
