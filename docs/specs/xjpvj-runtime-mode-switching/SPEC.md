@@ -283,8 +283,15 @@
 - Given `source_limited_cut` 尚未观察到 source-limited backup，When runner 到达 source-cut 边界，Then 必须跳过物理 VIN cut 并将 scene 标记为 diagnostic failure。
 - Given `source_limited_cut` 已观察到 source-limited backup，When runner 切断 VIN，Then `mode=backup` 与 `assist_power_stage=backup` 必须连续保持，且 `backup_reason` 必须转为 `input_absent`。
 - Given 执行 `--suite-contract source-limited-19v`，When Power Path Validation 生成执行计划，Then 必须只生成 `19V backup_only / 1000mA`、`19V source_limited_online / 3900mA`、`19V source_limited_cut / 3900mA` 三个独立 scene，且 source 固定为 `19000mV / 3000mA`。
+- Given Power Path Validation 将样本标记为 `hold`，When 该样本的 UPS VOUT 与 `tps_total_iout_ma` 均为 fresh，Then `tps_output_power_mw = tps_total_iout_ma * ups_vout_mv / 1000` 必须 `<=2000mW`；`ups_vout_mv` 使用 `out_a_vbus_mv` 与 `out_b_vbus_mv` 中所有已启用输出的算术平均值，任一 `hold` 样本超过 `2000mW` 都必须使 scene 失去 sign-off 资格，不设持续时间、样本数或平均值豁免。
+- Given `backup_only / 1000mA` 的 VIN 仍在线，When scene 处于 `hold`，Then `mode=standby`、`assist_power_stage=standby`、`backup_reason=null`，且 TPS 输出功率必须始终 `<=2000mW`；否则表明电池路径已在正常在线阶段承担负载，该 scene 必须标记为 `invalid_diagnostic_only`。
+- Given `source_limited_online` 或 `source_limited_cut` 的 3900mA 负载已生效，When 首个 fresh 样本显示 TPS 输出功率 `>2000mW`，Then 该样本及其后的接管窗口必须标记为 `transition_source_limited`，不得继续标记为 `hold`；MCU 锁存后阶段必须标记为 `backup_online`，直到 VIN cut 或负载撤销。
+- Given scene 已进入 `transition_source_limited`，When MCU 尚未锁存 `backup_reason=source_limited`，Then runner 仍须执行既有 `<=2s` 接管时间与锁存前低压持续时间验收；该过渡窗口不是正常 hold，也不得用于证明上级电源独立承担负载。
+- Given scene 已进入 `backup_online`，When VIN 仍在线且 `backup_reason=source_limited`，Then TPS 输出功率允许超过 `2000mW`，因为此时 UPS 已显式接管；报告必须将其与 `hold_tps_power_max_mw` 分开统计，禁止用 post-latch 样本稀释或覆盖 hold 违规。
+- Given Power Path Validation 生成 scene 结果，When 进行 sign-off，Then 必须输出 `hold_tps_power_max_mw`、`hold_tps_power_over_2w_samples`、`transition_source_limited_started_at_s` 与 `backup_online_started_at_s`；任一 required power input 缺失、非 fresh 或无法对齐时，该 scene 只能作为诊断证据。
 - Given 19V 的 source-limited scene 已锁存，When VIN 仍在线，Then LoadLynx 电压必须保持不低于 `18000mV`；锁存前或后低于该门槛的连续时间不得超过 `1s`。
-- Given 19V VIN drop 与输入电流已接近 source-limited 门槛，When ADC 与线损误差使 drop 距百分比门槛不超过 `80mV`，Then MCU 可以将其视为 drop 条件满足；该容差不得绕过 `VIN IIN >= 2000mA`、TPS 输出负载或连续样本门槛。
+- Given 19V VIN drop 与输入电流已接近 source-limited 门槛，When ADC 与线损误差使 drop 距百分比门槛不超过 `80mV`，Then MCU 可以将其视为 drop 条件满足；该容差不得绕过 `VIN IIN >= 2300mA`、TPS 输出负载或连续样本门槛。
+- Given 19V `backup_only / 1000mA` 正常在线，When VIN IIN 约为 `1100mA` 且 VIN drop 位于容差边缘，Then MCU 必须保持 `standby`，不得误锁存 `source_limited`。
 - Given 当前 topic 进入 `12V` Power Path Validation sign-off，When 判定任何边界、在线接管、切断或恢复结论，Then 必须同时满足 `docs/hil-runtime-mode-switching.md` 中定义的三设备实时数据、输出电压波动与 scene-complete gate。
 - Given 当前 topic 进入 formal dual-voltage suite，When 执行 `12V assist_path / 12V backup_only / 19V assist_path / 19V backup_only` 四场景，Then source profile、load target 与保护栏必须固定为 `12V|19V @ 3000mA`、`3900mA|1000mA`、`UVP=3000mV/OCP=4000mA/OPP=80000mW`，不得按口头约定漂移。
 - Given 需要在 formal suite 中从 `12V` 切到 `19V` 或从 `19V` 切回 `12V`，When 做 artifact select / flash，Then 必须先 disable load、cut IsolaPurr `port_c`、确认 UPS 已脱离外部 `DCIN` 高压输入，再进行切换或烧录；并行 USB-C 供电/通信允许保留，不构成切换阻断。

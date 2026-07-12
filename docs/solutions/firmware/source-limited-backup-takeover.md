@@ -246,11 +246,37 @@ standby point, a bounded `80mV` VIN-drop tolerance is acceptable only together w
 implicit battery contribution into an explicit `source_limited` Backup decision without allowing
 normal 1000mA operation to latch Backup.
 
-The final composed suite is retained at
+The composed suite is retained at
 `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-tuned-final-20260713T0020Z/`.
-All three reports are sign-off valid. The ordinary cut transition stayed above `18143mV`; both
-overload scenes stayed at or above `18744mV` after latch, and the cut scene preserved Backup while
-changing the reason to `input_absent`.
+It passed the voltage and reason checks available at generation time, but is diagnostic-only after
+adding the missing hold-power contract. In its ordinary-load hold, `137/158` samples exceeded
+`2W` TPS output; the overload holds had `73/80` and `71/79` samples above `2W`. Those samples prove
+that the phase labels and acceptance logic were incomplete even though the ordinary cut transition
+stayed above `18143mV` and both overload scenes stayed at or above `18744mV` after latch.
+
+Define hold as source-only normal operation, not merely a wall-clock interval after applying load.
+Every fresh hold sample must remain at or below `2W` TPS output. The first sample above that limit
+starts `transition_source_limited`; a confirmed source-limited latch starts `backup_online`. Never
+average post-latch TPS power into hold metrics, and never let successful voltage checks override a
+hold-power violation.
+
+## Optimize Against Path State, Not Voltage Alone
+
+The 19V standby path has a discontinuity between `820mV` and `840mV` drop. A normal 1000mA load
+produced about `20.389W` TPS output at 820mV, while a short 840mV probe stayed near `1.092W`.
+Do not choose the closest passing step: temperature, previous path state, and measurement error can
+cross that boundary. The retained product setting is `900mV`, leaving 60mV above the observed edge.
+
+Parameter margin alone was insufficient. With the earlier 2A source-limited input threshold, a
+normal load could reach about `1.1A` VIN input near the VIN-drop tolerance and be falsely latched
+into Backup. The corrected threshold is `2.3A`: below the observed 3900mA limited-source range of
+`2.394–2.411A`, but well above the normal-load range. VIN drop, meaningful TPS output, and
+consecutive fresh samples remain mandatory.
+
+The final suite at
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-optimized-cut-r3-20260713T0155Z/`
+passes the recomputed 2W hold gate. Its three hold maxima are `1089mW`, `1089mW`, and `1016mW`;
+the normal VIN-cut minimum is `18049mV`, and both overload post-latch minima are `18744mV`.
 
 ## Retained Diagnostic Evidence
 

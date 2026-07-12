@@ -595,14 +595,58 @@ LoadLynx 最低为 `17754mV`。将完整 advanced-power 快照中的该字段恢
 
 - `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-tuned-final-20260713T0020Z/`
 
-suite verifier 为 `signoff_valid=true`：
+旧版 suite verifier 在当时不包含 hold 阶段 TPS `2W` 门禁，因此曾返回
+`signoff_valid=true`。按当前 Spec 重新审计后，该结果必须降级为诊断 evidence：
 
 - `backup_only`：`9.963Hz`，max gap `0.301s`，VIN cut 后持续 `input_absent` Backup。
 - `source_limited_online`：接管后负载最低 `18744mV`，无低于 `18000mV` 的时段。
 - `source_limited_cut`：`0.800s` 内接管，接管前低于 `18000mV` 的最长时段为
   `0.599s`；接管后最低 `18744mV`，VIN cut 后持续 Backup 并转为 `input_absent`。
 
+降级依据不是电压合同，而是阶段与功率合同缺失：
+
+- `backup_only` hold 共 `158` 个样本，TPS 输出功率超过 `2W` 的样本为 `137` 个；
+  TPS 输出电流平均约 `898mA`，按约 `18.95V` VOUT 折算平均约 `17W`。
+- `source_limited_online` hold 共 `80` 个样本，其中 `73` 个超过 `2W`。
+- `source_limited_cut` hold 共 `79` 个样本，其中 `71` 个超过 `2W`。
+
+因此该报告只能证明接管后的电压与 reason 转换，不得证明 hold 正常，也不得作为最终产品
+签核。Power Path Validation 在实现新的 hold 功率字段、阶段拆分和 hard failure 前，现有
+`signoff_valid` 字段不能用于本任务收口。
+
 最终 firmware build 为 `71cbb46b-dirty-5616ee2f7a23d6eb`。IsolaPurr 在测试前后保持
 manual `19000mV / 3000mA` 与 `tps_cdc_rise_mv=300`，结束时 source 和 load 均关闭。
 首次 800mV 诊断 suite 暴露了 source-limited 未触发，另有 LoadLynx transient 503；
 这些 run 保留为诊断证据，不构成最终签核的一部分。
+
+### Final 19V parameter and strategy optimization
+
+Power Path Validation 现在从 fresh `tps_total_iout_ma` 与已启用 UPS VOUT 计算 TPS 输出
+功率。任一 `hold` 样本超过 `2000mW` 即失败；3900mA 场景在首次超限后改标
+`transition_source_limited`，锁存后改标 `backup_online`。独立 report verifier 也从
+`timeseries.jsonl` 重算门禁，因此旧 summary 不能继续伪装通过。
+
+参数扫描确认路径存在非线性跳变：`standby_drop=820mV` 时 1000mA hold TPS 最大约
+`20.389W`；840mV 短探针约 `1.092W`，但紧贴边界；1000mV 可行但 VIN cut 下限更低。
+最终采用 `900mV`，相对 840mV 单次边界保留 `60mV` 裕量，同时比原 1200mV 热备目标
+提高 `300mV`。
+
+900mV 的首次完整 run 还暴露了策略误判：正常 1000mA 的 VIN 输入约 `1102mA`，旧
+`2000mA` 固定门槛配合 fast-enter 历史状态会错误锁存。真实 3900mA 源受限样本为
+`2394–2411mA`，所以 VIN 输入必要门槛收紧到 `2300mA`；VIN drop、TPS 输出负载和连续
+fresh 样本仍全部必需。
+
+最终 evidence 位于：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-optimized-cut-r3-20260713T0155Z/`
+
+新 verifier 返回 `signoff_valid=true`：
+
+- `backup_only`：hold TPS 最大 `1089mW`，0 个超限样本，hold 全程 `standby`；VIN cut
+  切换期 LoadLynx 最低 `18049mV`。
+- `source_limited_online`：hold TPS 最大 `1089mW`，0 个超限样本；`0.400s` 内锁存，
+  接管后最低 `18744mV`。
+- `source_limited_cut`：hold TPS 最大 `1016mW`，0 个超限样本；接管后最低
+  `18744mV`，VIN cut 后持续 Backup 并转换为 `input_absent`。
+
+IsolaPurr `tps_cdc_rise_mv=300` 未被覆盖；最终 source 与 load 均关闭。

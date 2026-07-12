@@ -243,7 +243,22 @@
     TPS 输出负载和连续样本三重门槛；普通 1000mA 负载不会触发。
 - 最终组合 evidence 为
   `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-tuned-final-20260713T0020Z/`，
-  suite verifier 为 `signoff_valid=true`，三个 scene 均为 `valid_for_signoff`。
+  旧版 suite verifier 曾返回 `signoff_valid=true`；该结论因缺失 hold TPS `2W` 门禁而撤销，
+  evidence 降级为 `invalid_diagnostic_only`。
 - 两个 3900mA 场景接管后最低 LoadLynx 电压均为 `18744mV`，无低于 `18000mV`
   的持续段；cut scene 在物理断源后保持 Backup 并切换为 `input_absent`。
 - IsolaPurr `tps_cdc_rise_mv=300` 未被覆盖，测试结束时 source 与 load 均关闭。
+- Spec 增加 hold 功率硬合同：任一 fresh hold 样本的 TPS 输出功率超过 `2000mW` 即失败，
+  不允许用平均值或持续时间豁免；3900mA 场景必须把首次超限后的窗口拆为
+  `transition_source_limited`，锁存后拆为 `backup_online`。
+- 重新审计发现 tuned evidence 的 `backup_only` hold 有 `137/158` 个样本超过 `2W`，
+  两个 3900mA hold 分别有 `73/80` 与 `71/79` 个样本超过 `2W`，因此不得作为最终签核。
+- Power Path Validation 实现 hold TPS 功率硬门禁、阶段重分类与 timeseries 重算；旧错误
+  suite 现在明确返回 `hold_tps_power_over_2w`。
+- 参数扫描确认 `820–840mV` 之间存在路径跳变；最终不贴边，采用
+  `standby_drop_mv=900`。
+- 修复正常 1000mA 被误判 source-limited：VIN 输入必要门槛从 `2000mA` 收紧为
+  `2300mA`，同时保留 VIN drop、TPS 输出与连续样本门槛。
+- `source-limited-19v-optimized-cut-r3-20260713T0155Z` 完整三场景通过新 verifier：hold
+  TPS 最大分别 `1089mW / 1089mW / 1016mW`，均无超 2W 样本；普通 VIN cut 最低
+  `18049mV`，两个过载场景接管后最低均为 `18744mV`。

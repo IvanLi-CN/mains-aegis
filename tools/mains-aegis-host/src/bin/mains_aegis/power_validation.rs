@@ -507,6 +507,8 @@ struct SceneSample {
     load_i_total_ma: Option<Value>,
 }
 
+const HOLD_TPS_POWER_MAX_MW: i64 = 2_000;
+
 #[derive(Debug, Serialize)]
 struct SceneSummary {
     scene_complete: bool,
@@ -1159,6 +1161,15 @@ fn validate_scene_report(
             &timeseries_summary,
             completeness,
         );
+        if suite_contract.is_source_limited() {
+            let (_, hold_failures) = hold_power_assertions(&timeseries_samples);
+            for hold_failure in hold_failures {
+                failures.push(json!({
+                    "report_failure": hold_failure,
+                    "report_dir": report_dir_value,
+                }));
+            }
+        }
     }
     if !chart_path.exists() {
         failures.push(json!({
@@ -2111,6 +2122,7 @@ async fn run_scene_inner(
             summary.failures.push(format!("{name}_collector_error"));
         }
     }
+    classify_load_acceptance_phases(scene, &mut samples);
     let scene_assertions = evaluate_scene_assertions(scene, profile, &samples);
     for failure in scene_assertions
         .get("failures")
@@ -2209,8 +2221,78 @@ fn sample_is_source_limited(sample: &SceneSample) -> bool {
     sample_is_backup(sample) && sample_backup_reason(sample) == Some("source_limited")
 }
 
+fn sample_tps_output_power_mw(sample: &SceneSample) -> Option<i64> {
+    let current_ma = sample_number(&sample.tps_total_iout_ma)?;
+    let mut voltages = [None, None];
+    voltages[0] = sample_number(&sample.out_a_vbus_mv);
+    voltages[1] = sample_number(&sample.out_b_vbus_mv);
+    let present = voltages.into_iter().flatten().collect::<Vec<_>>();
+    if present.is_empty() {
+        return None;
+    }
+    let average_mv = present.iter().sum::<i64>() / present.len() as i64;
+    Some(current_ma.saturating_mul(average_mv) / 1_000)
+}
+
+fn classify_load_acceptance_phases(scene: SceneKind, samples: &mut [SceneSample]) {
+    if !scene.requires_source_limited() {
+        return;
+    }
+    let mut transition_started = false;
+    let mut backup_started = false;
+    for sample in samples.iter_mut().filter(|sample| is_load_phase(sample)) {
+        if sample_is_source_limited(sample) {
+            backup_started = true;
+        } else if sample_tps_output_power_mw(sample)
+            .is_some_and(|power_mw| power_mw > HOLD_TPS_POWER_MAX_MW)
+        {
+            transition_started = true;
+        }
+        if backup_started {
+            sample.phase = "backup_online".to_string();
+        } else if transition_started {
+            sample.phase = "transition_source_limited".to_string();
+        }
+    }
+}
+
+fn hold_power_assertions(samples: &[SceneSample]) -> (Value, Vec<String>) {
+    let hold = samples
+        .iter()
+        .filter(|sample| sample.phase == "hold")
+        .collect::<Vec<_>>();
+    let powers = hold
+        .iter()
+        .filter_map(|sample| sample_tps_output_power_mw(sample))
+        .collect::<Vec<_>>();
+    let missing = hold.len().saturating_sub(powers.len());
+    let over = powers
+        .iter()
+        .filter(|power_mw| **power_mw > HOLD_TPS_POWER_MAX_MW)
+        .count();
+    let mut failures = Vec::new();
+    if missing > 0 {
+        failures.push("hold_tps_power_missing".to_string());
+    }
+    if over > 0 {
+        failures.push("hold_tps_power_over_2w".to_string());
+    }
+    (
+        json!({
+            "maximum_mw": powers.iter().max(),
+            "over_2w_samples": over,
+            "missing_samples": missing,
+            "limit_mw": HOLD_TPS_POWER_MAX_MW,
+        }),
+        failures,
+    )
+}
+
 fn is_load_phase(sample: &SceneSample) -> bool {
-    matches!(sample.phase.as_str(), "transition_load" | "hold")
+    matches!(
+        sample.phase.as_str(),
+        "transition_load" | "hold" | "transition_source_limited" | "backup_online"
+    )
 }
 
 fn sample_load_current_ma(sample: &SceneSample) -> Option<i64> {
@@ -2262,7 +2344,7 @@ fn evaluate_scene_assertions(
     profile: OutputProfile,
     samples: &[SceneSample],
 ) -> Value {
-    let mut failures = Vec::<String>::new();
+    let (hold_tps_power, mut failures) = hold_power_assertions(samples);
     let load_samples = samples
         .iter()
         .filter(|sample| is_load_phase(sample))
@@ -2379,6 +2461,9 @@ fn evaluate_scene_assertions(
     json!({
         "passed": failures.is_empty(),
         "failures": failures,
+        "hold_tps_power": hold_tps_power,
+        "transition_source_limited_started_at_s": samples.iter().find(|sample| sample.phase == "transition_source_limited").map(|sample| sample.t_s),
+        "backup_online_started_at_s": samples.iter().find(|sample| sample.phase == "backup_online").map(|sample| sample.t_s),
         "source_limited": source_limited,
         "backup_cut": backup_cut,
     })
@@ -4797,6 +4882,9 @@ mod tests {
             ),
         ];
 
+        let mut samples = samples;
+        classify_load_acceptance_phases(SceneKind::SourceLimitedOnline, &mut samples);
+
         let assertions =
             evaluate_scene_assertions(SceneKind::SourceLimitedOnline, OutputProfile::V12, &samples);
         assert_eq!(assertions.get("passed"), Some(&json!(true)));
@@ -4854,6 +4942,9 @@ mod tests {
                 11_050,
             ),
         ];
+
+        let mut samples = samples;
+        classify_load_acceptance_phases(SceneKind::SourceLimitedCut, &mut samples);
 
         let assertions =
             evaluate_scene_assertions(SceneKind::SourceLimitedCut, OutputProfile::V12, &samples);
