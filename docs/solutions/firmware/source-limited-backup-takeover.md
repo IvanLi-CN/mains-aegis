@@ -232,6 +232,26 @@ Retain such failed evidence instead of averaging it away or relaxing the contrac
 full rerun that passes every scene is the sign-off candidate; the failed run remains the boundary
 for future TPS transient work.
 
+## Standby Target Changes Require Source-Limited Recalibration
+
+Raising the 19V standby target from `17.8V` to `18.2V` improved the ordinary VIN-cut floor, but
+also changed how the hardware shared a `3900mA` load. The bench then reported about `2017mA`
+VIN input and `2324mA` TPS output while the battery supplied the remainder. A detector calibrated
+only around the previous near-3A input-current point therefore remained in standby even though the
+source could not carry the load alone.
+
+Treat standby voltage and source-limited admission as one control surface. For the verified 18.2V
+standby point, a bounded `80mV` VIN-drop tolerance is acceptable only together with at least
+`2000mA` VIN input, meaningful TPS output load, and consecutive fresh samples. This converts the
+implicit battery contribution into an explicit `source_limited` Backup decision without allowing
+normal 1000mA operation to latch Backup.
+
+The final composed suite is retained at
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-tuned-final-20260713T0020Z/`.
+All three reports are sign-off valid. The ordinary cut transition stayed above `18143mV`; both
+overload scenes stayed at or above `18744mV` after latch, and the cut scene preserved Backup while
+changing the reason to `input_absent`.
+
 ## Retained Diagnostic Evidence
 
 Keep complete rerun evidence with the implementation, even when a collection

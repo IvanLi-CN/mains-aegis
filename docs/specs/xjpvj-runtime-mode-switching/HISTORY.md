@@ -231,3 +231,19 @@
     VIN 输入电流和连续 fresh samples，避免正常在线源误切换。
   - r6 记录为诊断反例：source-limited 逻辑与 cut 连续性成立，但 post-latch 最低
     `17589mV`，持续 `0.303s`，因此不构成 sign-off；r7 重新完整执行后通过。
+
+## 2026-07-13
+
+- 完成 19V 热备目标与 source-limited 联合调优：
+  - `standby_drop_mv` 从 `1200` 恢复为 `800`，普通 VIN cut 切换期 LoadLynx 最低由
+    `17754mV` 提高到 `18143mV`。
+  - 18.2V standby 下，3900mA 诊断样本显示 `vin_iin≈2017mA`、
+    `tps_total_iout≈2324mA`、VIN drop `120mV`，旧的高输入电流限定不再适用。
+  - source-limited 有界 VIN-drop 容差调为 `80mV`，并保持 `VIN IIN >= 2000mA`、
+    TPS 输出负载和连续样本三重门槛；普通 1000mA 负载不会触发。
+- 最终组合 evidence 为
+  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-tuned-final-20260713T0020Z/`，
+  suite verifier 为 `signoff_valid=true`，三个 scene 均为 `valid_for_signoff`。
+- 两个 3900mA 场景接管后最低 LoadLynx 电压均为 `18744mV`，无低于 `18000mV`
+  的持续段；cut scene 在物理断源后保持 Backup 并切换为 `input_absent`。
+- IsolaPurr `tps_cdc_rise_mv=300` 未被覆盖，测试结束时 source 与 load 均关闭。

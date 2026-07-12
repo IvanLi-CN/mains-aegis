@@ -58,8 +58,8 @@ const ASSIST_LOW_DCIN_ENTER_IIN_THRESHOLD_MA: i32 =
 // Source-limited takeover tolerates normal ADC and wiring error near the 3A
 // source ceiling without relaxing the regular assist-low admission gate.
 const SOURCE_LIMITED_DCIN_ENTER_IIN_THRESHOLD_MA: i32 =
-    CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA as i32 - 300;
-const SOURCE_LIMITED_VIN_DROP_TOLERANCE_MV: u16 = 60;
+    CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA as i32 - 1_000;
+const SOURCE_LIMITED_VIN_DROP_TOLERANCE_MV: u16 = 80;
 // A physical DCIN loss can collapse input current before the 3V mains-present
 // threshold is crossed. Require a severe voltage collapse after sustained load.
 // A loaded DCIN source that loses 15% from its established online baseline
@@ -7436,6 +7436,38 @@ mod tests {
                 Some(136),
                 Some(2_742),
                 Some(1_388),
+                1,
+            )
+        };
+
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
+            AssistPowerStage::Standby
+        );
+        input.tps_total_iout_sample_seq = Some(2);
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
+            AssistPowerStage::Backup
+        );
+        assert_eq!(tracker.backup_reason, Some(BackupReason::SourceLimited));
+    }
+
+    #[test]
+    fn assist_stage_enters_source_limited_backup_at_19v_when_standby_is_18v2() {
+        let mut tracker = AssistPowerStageTracker::default();
+        let mut input = AssistPowerStageInput {
+            source_limited_enter_iout_ma: 1_100,
+            source_limited_vin_drop_pct: 1,
+            rated_vout_mv: 19_000,
+            standby_target_vout_mv: 18_200,
+            current_assist_target_vout_mv: 18_200,
+            assist_low_target_vout_mv: 18_400,
+            ..assist_stage_input(
+                Some(18_896),
+                Some(19_016),
+                Some(120),
+                Some(2_017),
+                Some(2_324),
                 1,
             )
         };

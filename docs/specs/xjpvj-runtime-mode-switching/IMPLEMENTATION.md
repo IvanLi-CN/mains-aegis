@@ -577,3 +577,32 @@ drop 成立；容差不会单独触发接管。
 同一 firmware 的前序 r6 cut scene 留下 `17589mV / 0.303s` 的 post-latch 低压反例，
 所以 r6 只保留为诊断 evidence。r7 完整重跑才是最终 sign-off；未来若优化 TPS 动态，
 必须保留 `>=18000mV` 和最长低压 `<=1s` 这两个合同门槛，不能通过放宽报告判据消除反例。
+
+### Tuned 19V standby and source-limited validation
+
+`standby_drop_mv=1200` 的最终 r7 虽通过 source-limited 合同，但普通 VIN cut 的切换期
+LoadLynx 最低为 `17754mV`。将完整 advanced-power 快照中的该字段恢复为 `800` 后，
+普通 VIN cut 的可签核重测把切换期最低值提高至 `18143mV`，UPS VOUT 最低为
+`19016mV`，backup 稳态最低负载电压为 `18945mV`。
+
+18.2V standby 同时改变了 3900mA 下的功率分配：诊断 run 实测 `vin_iin≈2017mA`、
+`tps_total_iout≈2324mA`、VIN drop `120mV`，且电池在 standby 下持续放电。原先针对
+17.8V 工作点的高输入电流门槛无法识别该状态。固件因此仅在 VIN drop 接近 1% 门槛、
+`VIN IIN >= 2000mA`、TPS 输出超过配置门槛且连续样本成立时，允许 `80mV` 有界容差
+触发 `source_limited`。这把隐式混供转换为可观测的主动 Backup，不允许仅凭容差触发。
+
+最终组合 suite 位于：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-tuned-final-20260713T0020Z/`
+
+suite verifier 为 `signoff_valid=true`：
+
+- `backup_only`：`9.963Hz`，max gap `0.301s`，VIN cut 后持续 `input_absent` Backup。
+- `source_limited_online`：接管后负载最低 `18744mV`，无低于 `18000mV` 的时段。
+- `source_limited_cut`：`0.800s` 内接管，接管前低于 `18000mV` 的最长时段为
+  `0.599s`；接管后最低 `18744mV`，VIN cut 后持续 Backup 并转为 `input_absent`。
+
+最终 firmware build 为 `71cbb46b-dirty-5616ee2f7a23d6eb`。IsolaPurr 在测试前后保持
+manual `19000mV / 3000mA` 与 `tps_cdc_rise_mv=300`，结束时 source 和 load 均关闭。
+首次 800mV 诊断 suite 暴露了 source-limited 未触发，另有 LoadLynx transient 503；
+这些 run 保留为诊断证据，不构成最终签核的一部分。
