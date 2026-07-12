@@ -55,6 +55,11 @@ pub(super) const ASSIST_RATED_VIN_DROP_RECOVER_DIVISOR: u16 = 2;
 // allowing assist_low online takeover on 12V input.
 const ASSIST_LOW_DCIN_ENTER_IIN_THRESHOLD_MA: i32 =
     CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA as i32 - 50;
+// Source-limited takeover tolerates normal ADC and wiring error near the 3A
+// source ceiling without relaxing the regular assist-low admission gate.
+const SOURCE_LIMITED_DCIN_ENTER_IIN_THRESHOLD_MA: i32 =
+    CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA as i32 - 300;
+const SOURCE_LIMITED_VIN_DROP_TOLERANCE_MV: u16 = 25;
 pub(super) const ASSIST_LOW_STANDBY_ENTER_MARGIN_MV: u16 = 40;
 pub(super) const ASSIST_LOW_STANDBY_EXIT_MARGIN_MV: u16 = 200;
 const ASSIST_RATED_LOW_TARGET_ENTER_MARGIN_MV: u16 = 60;
@@ -1462,6 +1467,7 @@ pub(super) struct AssistPowerStageTracker {
     assist_exit_streak: u8,
     promote_streak: u8,
     recover_streak: u8,
+    source_limited_online_streak: u8,
     source_limited_enter_streak: u8,
     source_limited_recover_streak: u8,
     last_tps_total_iout_sample_seq: Option<u32>,
@@ -1509,6 +1515,7 @@ impl AssistPowerStageTracker {
         self.assist_exit_streak = 0;
         self.promote_streak = 0;
         self.recover_streak = 0;
+        self.source_limited_online_streak = 0;
         self.source_limited_enter_streak = 0;
         self.source_limited_recover_streak = 0;
     }
@@ -1518,10 +1525,43 @@ pub(super) fn assist_power_stage_step(
     tracker: &mut AssistPowerStageTracker,
     input: AssistPowerStageInput,
 ) -> AssistPowerStage {
+    let source_limited_online_current = matches!(
+        (input.mains_present, input.dcin_assist_allowed, input.vin_iin_ma),
+        (Some(true), true, Some(vin_iin_ma))
+            if vin_iin_ma >= input.source_limited_enter_iout_ma
+    );
+    if source_limited_online_current {
+        tracker.source_limited_online_streak =
+            tracker.source_limited_online_streak.saturating_add(1);
+    } else if input.mains_present != Some(false) {
+        tracker.source_limited_online_streak = 0;
+    }
+    let source_limited_low_vin_mv = input
+        .rated_vout_mv
+        .saturating_sub(input.source_limited_recover_margin_mv);
+    let source_limited_brownout_after_online_current = matches!(
+        (input.vin_baseline_mv, input.vin_vbus_mv, input.vin_iin_ma),
+        (Some(vin_baseline_mv), Some(vin_vbus_mv), Some(vin_iin_ma))
+            if vin_iin_ma >= input.source_limited_enter_iout_ma
+                && (vin_vbus_mv <= source_limited_low_vin_mv
+                    || vin_baseline_mv.saturating_sub(vin_vbus_mv)
+                        >= dcin_vin_drop_threshold_mv(
+                            vin_baseline_mv,
+                            input.source_limited_vin_drop_pct,
+                        ))
+    );
+    let preserve_source_limited_on_brownout = tracker.stage != AssistPowerStage::Backup
+        && tracker.source_limited_online_streak >= input.source_limited_required_samples
+        && source_limited_brownout_after_online_current;
+
     match input.mains_present {
         Some(false) => {
             tracker.stage = AssistPowerStage::Backup;
-            tracker.backup_reason = Some(BackupReason::InputAbsent);
+            tracker.backup_reason = Some(if preserve_source_limited_on_brownout {
+                BackupReason::SourceLimited
+            } else {
+                BackupReason::InputAbsent
+            });
             tracker.reset_for_online();
             if input.tps_total_iout_fresh {
                 tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
@@ -1600,9 +1640,11 @@ pub(super) fn assist_power_stage_step(
     };
     let source_limited_vin_drop_recover_mv = source_limited_vin_drop_threshold_mv
         .map(|threshold| threshold / ASSIST_RATED_VIN_DROP_RECOVER_DIVISOR);
-    let source_limited_low_vin_mv = input
-        .rated_vout_mv
-        .saturating_sub(input.source_limited_recover_margin_mv);
+    let source_limited_vin_drop_ready = matches!(
+        (source_limited_vin_drop_mv, source_limited_vin_drop_threshold_mv),
+        (Some(vin_drop_mv), Some(threshold_mv))
+            if vin_drop_mv.saturating_add(SOURCE_LIMITED_VIN_DROP_TOLERANCE_MV) >= threshold_mv
+    );
     let source_limited_fast_enter_ready = !sample_is_new
         && matches!(
             (
@@ -1614,7 +1656,8 @@ pub(super) fn assist_power_stage_step(
             (Some(vin_vbus_mv), Some(vin_drop_mv), Some(threshold_mv), Some(vin_iin_ma))
                 if vin_iin_ma >= input.source_limited_enter_iout_ma
                     && (vin_vbus_mv <= source_limited_low_vin_mv
-                        || vin_drop_mv >= threshold_mv)
+                        || vin_drop_mv.saturating_add(SOURCE_LIMITED_VIN_DROP_TOLERANCE_MV)
+                            >= threshold_mv)
         );
     let source_limited_enter_ready = source_limited_fast_enter_ready
         || matches!(
@@ -1627,14 +1670,14 @@ pub(super) fn assist_power_stage_step(
             ),
             (
                 Some(vin_vbus_mv),
-                Some(vin_drop_mv),
-                Some(threshold_mv),
+                Some(_vin_drop_mv),
+                Some(_threshold_mv),
                 Some(vin_iin_ma),
                 Some(tps_total_iout_ma)
             ) if tps_total_iout_ma >= input.source_limited_enter_iout_ma
                 && (vin_vbus_mv <= source_limited_low_vin_mv
-                    || (vin_drop_mv > threshold_mv
-                        && vin_iin_ma >= ASSIST_LOW_DCIN_ENTER_IIN_THRESHOLD_MA))
+                    || (source_limited_vin_drop_ready
+                        && vin_iin_ma >= SOURCE_LIMITED_DCIN_ENTER_IIN_THRESHOLD_MA))
         );
     let source_limited_recover_ready = matches!(
         (
@@ -2942,6 +2985,18 @@ pub(super) const fn enabled_outputs_from_flags(out_a: bool, out_b: bool) -> Enab
         (false, true) => EnabledOutputs::Only(OutputChannel::OutB),
         (false, false) => EnabledOutputs::None,
     }
+}
+
+pub(super) fn output_admission_retry_needed(
+    requested: EnabledOutputs,
+    active: EnabledOutputs,
+    recoverable: EnabledOutputs,
+    gate_reason: OutputGateReason,
+) -> bool {
+    requested != EnabledOutputs::None
+        && active == EnabledOutputs::None
+        && recoverable == EnabledOutputs::None
+        && gate_reason == OutputGateReason::None
 }
 
 pub(super) fn confirmed_active_outputs_from_tps_readback(
@@ -7156,6 +7211,93 @@ mod tests {
     }
 
     #[test]
+    fn output_admission_retry_requires_an_ungated_unadmitted_output() {
+        assert!(output_admission_retry_needed(
+            EnabledOutputs::Both,
+            EnabledOutputs::None,
+            EnabledOutputs::None,
+            OutputGateReason::None,
+        ));
+        assert!(!output_admission_retry_needed(
+            EnabledOutputs::None,
+            EnabledOutputs::None,
+            EnabledOutputs::None,
+            OutputGateReason::None,
+        ));
+        assert!(!output_admission_retry_needed(
+            EnabledOutputs::Both,
+            EnabledOutputs::Both,
+            EnabledOutputs::None,
+            OutputGateReason::None,
+        ));
+        assert!(!output_admission_retry_needed(
+            EnabledOutputs::Both,
+            EnabledOutputs::None,
+            EnabledOutputs::Both,
+            OutputGateReason::BmsNotReady,
+        ));
+    }
+
+    #[test]
+    fn assist_stage_preserves_source_limited_after_online_current_brownout() {
+        let mut tracker = AssistPowerStageTracker::default();
+        let mut online =
+            assist_stage_input(Some(12_000), Some(12_000), Some(0), Some(3_050), Some(0), 1);
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, online),
+            AssistPowerStage::Standby
+        );
+        online.tps_total_iout_sample_seq = Some(2);
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, online),
+            AssistPowerStage::Standby
+        );
+
+        let mut brownout = assist_stage_input(
+            Some(2_752),
+            Some(12_000),
+            Some(9_248),
+            Some(3_034),
+            Some(0),
+            3,
+        );
+        brownout.mains_present = Some(false);
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, brownout),
+            AssistPowerStage::Backup
+        );
+        assert_eq!(tracker.backup_reason, Some(BackupReason::SourceLimited));
+    }
+
+    #[test]
+    fn assist_stage_changes_latched_source_limited_to_input_absent_after_cut() {
+        let mut tracker = AssistPowerStageTracker::default();
+        let mut limited = assist_stage_input(
+            Some(10_850),
+            Some(12_000),
+            Some(1_150),
+            Some(3_050),
+            Some(2_400),
+            1,
+        );
+        let _ = assist_power_stage_step(&mut tracker, limited);
+        limited.tps_total_iout_sample_seq = Some(2);
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, limited),
+            AssistPowerStage::Backup
+        );
+        assert_eq!(tracker.backup_reason, Some(BackupReason::SourceLimited));
+
+        let mut cut = assist_stage_input(Some(0), Some(12_000), None, Some(0), Some(0), 3);
+        cut.mains_present = Some(false);
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, cut),
+            AssistPowerStage::Backup
+        );
+        assert_eq!(tracker.backup_reason, Some(BackupReason::InputAbsent));
+    }
+
+    #[test]
     fn assist_stage_enters_source_limited_backup_after_consecutive_limited_samples() {
         let mut tracker = AssistPowerStageTracker::default();
         let mut input = assist_stage_input(
@@ -7247,6 +7389,38 @@ mod tests {
                     ..input
                 }
             ),
+            AssistPowerStage::Backup
+        );
+        assert_eq!(tracker.backup_reason, Some(BackupReason::SourceLimited));
+    }
+
+    #[test]
+    fn assist_stage_enters_source_limited_backup_at_19v_near_the_3a_ceiling() {
+        let mut tracker = AssistPowerStageTracker::default();
+        let mut input = AssistPowerStageInput {
+            source_limited_enter_iout_ma: 1_100,
+            source_limited_vin_drop_pct: 1,
+            rated_vout_mv: 19_000,
+            standby_target_vout_mv: 17_800,
+            current_assist_target_vout_mv: 18_400,
+            assist_low_target_vout_mv: 18_400,
+            ..assist_stage_input(
+                Some(18_896),
+                Some(19_064),
+                Some(168),
+                Some(2_760),
+                Some(1_368),
+                1,
+            )
+        };
+
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
+            AssistPowerStage::Standby
+        );
+        input.tps_total_iout_sample_seq = Some(2);
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
             AssistPowerStage::Backup
         );
         assert_eq!(tracker.backup_reason, Some(BackupReason::SourceLimited));

@@ -160,6 +160,20 @@ manual `12V / 3A`, a `3900mA` CC load latched source-limited in `0.400s` and
 The test runner preserved IsolaPurr `tps_cdc_rise_mv=300` before and after the
 run.
 
+The dedicated 19V contract also passed. With IsolaPurr at manual `19V / 3A`
+and LoadLynx at `3900mA` CC, online source limitation latched in `0.097s`; the
+following source-cut case latched in `0.203s`, stayed in backup, and changed
+the cause to `input_absent`. Both post-latch minima were `18732mV`, above the
+19V acceptance floor of `18000mV`. The retained evidence is
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-20260712T1020Z/`.
+
+The 19V input drop was `168mV` at `2760mA` input current and `1368mA` TPS
+output current. That is just below the percentage-derived drop threshold after
+normal ADC and wiring error. Keep a bounded `25mV` VIN-drop tolerance only in
+the source-limited qualifier; retain the independent TPS, input-current, and
+consecutive-sample gates so the tolerance cannot turn a normal online source
+into backup.
+
 ## Retained Diagnostic Evidence
 
 Keep complete rerun evidence with the implementation, even when a collection

@@ -202,3 +202,9 @@
 - 两个 `3900mA` CC 过载场景分别在 `0.400s` 和 `0.406s` 锁存 `source_limited`，锁存后
   LoadLynx 最低电压分别为 `11743mV` 和 `11731mV`，均没有低于 `11000mV` 的持续段。
 - IsolaPurr 保持 manual `12000mV / 3000mA`；`tps_cdc_rise_mv=300` 在测试前后保持不变。
+- 独立 `source-limited-19v` 三场景完成真机签核：
+  - `source-limited-19v-20260712T1020Z` 的 suite verifier 为 `signoff_valid=true`。
+  - `3900mA` 在线限流场景分别在 `0.097s` 和 `0.203s` 锁存 `source_limited`；锁存后最低 LoadLynx 电压均为 `18732mV`，高于 `18000mV` 门槛。
+  - VIN cut 场景持续保持 backup，并将原因切换为 `input_absent`。
+  - 19V 实测 `vin_drop=168mV`、`vin_iin=2760mA`、`tps_total_iout=1368mA`，因此 source-limited VIN-drop 判据增加有界 `25mV` ADC/线损容差。
+  - IsolaPurr 保持 manual `19000mV / 3000mA`，`tps_cdc_rise_mv=300` 在测试前后保持不变。

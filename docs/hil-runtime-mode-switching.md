@@ -532,13 +532,16 @@ source and `3000mV / 4000mA / 80000mW` load protection rails:
 
 Before enabling the source, the runner reads the selected UPS identity and
 settings. It requires the 12V profile with `rated_vout_mv=12000` and the
-following source-limited settings: `enter_delta=1900mA`, `exit_delta=0mA`,
+following source-limited settings: `enter_delta=1000mA`, `exit_delta=0mA`,
 `required_samples=2`, `recover_margin=400mV`, and `vin_drop_pct=4`.
 
 - `backup_only / 1000mA`: physical VIN cut must yield `backup_reason=input_absent`.
-- `source_limited_online / 3900mA`: VIN stays online and the UPS must enter
-  `backup_reason=source_limited` within two seconds of load transition.
-- `source_limited_cut / 3900mA`: the runner must observe source-limited backup
+- `source_limited_online / 3900mA`: LoadLynx applies `CC 3900mA` while
+  IsolaPurr remains at `12000mV / 3000mA`. This deliberately exceeds upstream
+  capability and verifies that UPS backup supplies the missing load current.
+  VIN stays connected and the UPS must enter `backup_reason=source_limited`
+  within two seconds of the load transition.
+- `source_limited_cut / 3900mA`: uses the same `CC 3900mA` stimulus. The runner must observe source-limited backup
   in its final pre-cut sample before cutting VIN, then require continuous backup
   and `input_absent` truth.
 

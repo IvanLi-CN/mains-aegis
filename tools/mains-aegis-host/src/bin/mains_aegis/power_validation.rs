@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::time::{sleep, timeout, Duration, Instant};
+use tokio::time::{sleep, timeout, Duration, Instant, MissedTickBehavior};
 
 const DEFAULT_REPORT_ROOT: &str = "tools/hil/reports";
 const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 200;
@@ -24,7 +24,7 @@ const SOURCE_DISCONNECT_CONFIRM_INTERVAL_MS: u64 = 100;
 const UPS_ONLINE_RECOVER_ATTEMPTS: usize = 100;
 const UPS_ONLINE_RECOVER_INTERVAL_MS: u64 = 100;
 const SOURCE_LIMITED_ENTRY_MAX_S: f64 = 2.0;
-const SOURCE_LIMITED_MIN_LOAD_MV: i64 = 11_000;
+const SOURCE_LIMITED_LOAD_MARGIN_MV: i64 = 1_000;
 const SOURCE_LIMITED_MAX_LOW_VOLTAGE_S: f64 = 1.0;
 
 #[derive(Debug)]
@@ -201,6 +201,9 @@ pub enum SuiteContract {
     #[value(name = "source-limited-12v")]
     #[serde(rename = "source_limited_12v")]
     SourceLimited12v,
+    #[value(name = "source-limited-19v")]
+    #[serde(rename = "source_limited_19v")]
+    SourceLimited19v,
 }
 
 impl SuiteContract {
@@ -208,13 +211,19 @@ impl SuiteContract {
         match self {
             Self::Standard => "standard",
             Self::SourceLimited12v => "source_limited_12v",
+            Self::SourceLimited19v => "source_limited_19v",
         }
+    }
+
+    fn is_source_limited(self) -> bool {
+        matches!(self, Self::SourceLimited12v | Self::SourceLimited19v)
     }
 
     fn selected_profiles(self, requested: &[OutputProfile]) -> Vec<OutputProfile> {
         match self {
             Self::Standard => requested.to_vec(),
             Self::SourceLimited12v => vec![OutputProfile::V12],
+            Self::SourceLimited19v => vec![OutputProfile::V19],
         }
     }
 
@@ -222,6 +231,11 @@ impl SuiteContract {
         match self {
             Self::Standard => requested.to_vec(),
             Self::SourceLimited12v => vec![
+                SceneKind::BackupOnly,
+                SceneKind::SourceLimitedOnline,
+                SceneKind::SourceLimitedCut,
+            ],
+            Self::SourceLimited19v => vec![
                 SceneKind::BackupOnly,
                 SceneKind::SourceLimitedOnline,
                 SceneKind::SourceLimitedCut,
@@ -242,6 +256,11 @@ impl SuiteContract {
                 ("12v", "source_limited_online"),
                 ("12v", "source_limited_cut"),
             ],
+            Self::SourceLimited19v => vec![
+                ("19v", "backup_only"),
+                ("19v", "source_limited_online"),
+                ("19v", "source_limited_cut"),
+            ],
         }
     }
 
@@ -249,6 +268,7 @@ impl SuiteContract {
         match value.get("suite_contract").and_then(Value::as_str) {
             None | Some("standard") => Ok(Self::Standard),
             Some("source_limited_12v") => Ok(Self::SourceLimited12v),
+            Some("source_limited_19v") => Ok(Self::SourceLimited19v),
             Some(other) => bail!("unknown suite contract in report: {other}"),
         }
     }
@@ -527,23 +547,31 @@ pub async fn run(
 }
 
 async fn run_check(args: CheckArgs, context: PowerValidationArgs) -> anyhow::Result<()> {
+    let ups_monitor =
+        run_cmd_output(ups_command(&args.bench, &context, ["monitor", "start"])).await;
+    let source_command = power_stream_command(&args.bench)?;
+    let load_command = load_stream_command(&args.bench, args.samples)?;
+    // Preflight isolates each device's cadence from host-side process contention.
     let ups_status = run_json_probe(
         ups_watch_command(&args.bench, &context, "status", args.samples),
         args.samples,
     )
     .await;
+    let ups_diag_snapshot = run_json_probe(
+        ups_watch_command(&args.bench, &context, "diag-snapshot", args.samples),
+        args.samples,
+    )
+    .await;
     let source = run_polling_json_probe(
-        power_stream_command(&args.bench)?,
+        source_command,
         args.samples,
         Duration::from_millis(args.bench.sample_interval_ms),
     )
     .await;
-    let load = run_adapter_probe(
-        load_stream_command(&args.bench, args.samples)?,
-        args.samples,
-    )
-    .await;
-    let ups_ok = ups_status.as_ref().is_ok_and(|probe| probe.ok);
+    let load = run_adapter_probe(load_command, args.samples).await;
+    let ups_ok = ups_monitor.is_ok()
+        && ups_status.as_ref().is_ok_and(|probe| probe.ok)
+        && ups_diag_snapshot.as_ref().is_ok_and(|probe| probe.ok);
     let ok = ups_ok
         && source.as_ref().is_ok_and(|probe| probe.ok)
         && load.as_ref().is_ok_and(|probe| probe.ok);
@@ -552,13 +580,17 @@ async fn run_check(args: CheckArgs, context: PowerValidationArgs) -> anyhow::Res
         "ups": {
             "device_id": args.bench.ups_device,
             "ipc": context.ups_ipc,
+            "monitor": match ups_monitor {
+                Ok(value) => json!({"ok": true, "result": value}),
+                Err(error) => json!({"ok": false, "error": error.to_string()}),
+            },
             "status": match ups_status {
                 Ok(probe) => json!(probe),
                 Err(error) => json!({"ok": false, "error": error.to_string()}),
             },
-            "diag_snapshot": {
-                "ok": ups_ok,
-                "source": "status_derived",
+            "diag_snapshot": match ups_diag_snapshot {
+                Ok(probe) => json!(probe),
+                Err(error) => json!({"ok": false, "error": error.to_string()}),
             },
         },
         "power_source": {
@@ -975,14 +1007,12 @@ fn validate_scene_report(
             "results": metadata.get("target_ma"),
         }));
     }
-    if suite_contract == SuiteContract::SourceLimited12v {
-        if metadata.get("suite_contract").and_then(Value::as_str)
-            != Some(SuiteContract::SourceLimited12v.key())
-        {
+    if suite_contract.is_source_limited() {
+        if metadata.get("suite_contract").and_then(Value::as_str) != Some(suite_contract.key()) {
             failures.push(json!({
                 "report_failure": "results_suite_contract_mismatch",
                 "report_dir": report_dir_value,
-                "expected": SuiteContract::SourceLimited12v.key(),
+                "expected": suite_contract.key(),
                 "results": metadata.get("suite_contract"),
             }));
         }
@@ -1443,6 +1473,22 @@ fn power_capabilities_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
     }
 }
 
+fn power_config_show_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
+    match args.power_adapter {
+        PowerAdapterKind::Isolapurr => {
+            let mut cmd = isolapurr_base(args);
+            cmd.extend([
+                "power".to_string(),
+                "config".to_string(),
+                "show".to_string(),
+            ]);
+            append_isolapurr_selector(&mut cmd, args);
+            Ok(cmd)
+        }
+        PowerAdapterKind::External => Ok(Vec::new()),
+    }
+}
+
 fn power_disable_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
     match args.power_adapter {
         PowerAdapterKind::Isolapurr => isolapurr_runtime_output_command(args, false),
@@ -1538,7 +1584,7 @@ fn power_stream_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
     match args.power_adapter {
         PowerAdapterKind::Isolapurr => {
             let mut cmd = isolapurr_base(args);
-            cmd.extend(["power".to_string(), "show".to_string()]);
+            cmd.extend(["power".to_string(), "telemetry".to_string()]);
             append_isolapurr_selector(&mut cmd, args);
             Ok(cmd)
         }
@@ -1548,6 +1594,61 @@ fn power_stream_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
             "stream",
             &[("--interval-ms", args.sample_interval_ms.to_string())],
         ),
+    }
+}
+
+async fn read_isolapurr_tps_cdc_rise_mv(
+    args: &BenchArgs,
+    actions: &mut Vec<Value>,
+    action_name: &str,
+) -> anyhow::Result<Option<Value>> {
+    if args.power_adapter != PowerAdapterKind::Isolapurr {
+        return Ok(None);
+    }
+    for attempt in 0..2 {
+        match run_cmd_json(power_config_show_command(args)?, action_name, actions).await {
+            Ok(config) => {
+                return config
+                    .pointer("/manual/tps_cdc_rise_mv")
+                    .cloned()
+                    .map(Some)
+                    .ok_or_else(|| {
+                        anyhow!("IsolaPurr power config does not expose manual.tps_cdc_rise_mv")
+                    });
+            }
+            Err(error) if attempt == 0 => {
+                actions.push(json!({
+                    "power_tps_cdc_rise_read_retry": {
+                        "action": action_name,
+                        "delay_ms": 500,
+                        "error": error.to_string(),
+                    }
+                }));
+                sleep(Duration::from_millis(500)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("two-attempt IsolaPurr config read loop always returns")
+}
+
+fn ensure_isolapurr_tps_cdc_rise_preserved(
+    before: Option<&Value>,
+    after: Option<&Value>,
+    actions: &mut Vec<Value>,
+) -> anyhow::Result<()> {
+    let preserved = before.is_some() && before == after;
+    actions.push(json!({
+        "power_tps_cdc_rise_guard": {
+            "before_mv": before,
+            "after_mv": after,
+            "preserved": preserved,
+        }
+    }));
+    if preserved {
+        Ok(())
+    } else {
+        bail!("IsolaPurr manual.tps_cdc_rise_mv changed or disappeared during power configuration")
     }
 }
 
@@ -1810,22 +1911,41 @@ async fn run_scene_inner(
     let (_identity, settings, profile_gate) =
         ensure_profile_ready(args, context, profile, suite_contract, &mut actions).await?;
     actions.push(json!({"ups_profile_gate": profile_gate}));
+    let tps_cdc_rise_before = read_isolapurr_tps_cdc_rise_mv(
+        &args.bench,
+        &mut actions,
+        "power_tps_cdc_rise_before_configure",
+    )
+    .await?;
     run_cmd_json(
         power_configure_off_command(&args.bench, profile)?,
         "power_configure_off",
         &mut actions,
     )
     .await?;
-    run_cmd_json(
+    let tps_cdc_rise_after = read_isolapurr_tps_cdc_rise_mv(
+        &args.bench,
+        &mut actions,
+        "power_tps_cdc_rise_after_configure",
+    )
+    .await?;
+    ensure_isolapurr_tps_cdc_rise_preserved(
+        tps_cdc_rise_before.as_ref(),
+        tps_cdc_rise_after.as_ref(),
+        &mut actions,
+    )?;
+    run_cmd_json_retry(
         power_enable_command(&args.bench, profile)?,
         "power_enable",
         &mut actions,
+        3,
     )
     .await?;
-    run_cmd_json(
+    run_cmd_json_retry(
         power_port_enable_command(&args.bench, profile)?,
         "power_port_enable",
         &mut actions,
+        3,
     )
     .await?;
     wait_for_ups_online_recovery(args, context, &mut actions).await?;
@@ -1881,7 +2001,7 @@ async fn run_scene_inner(
         }));
     }
     if should_cut_source {
-        run_cmd_json_with_sampling(
+        run_cmd_json_with_sampling_retry(
             power_disable_command(&args.bench)?,
             "power_cut_for_backup",
             &mut actions,
@@ -1892,6 +2012,7 @@ async fn run_scene_inner(
             started_unix_ms,
             "transition_backup",
             scene.target_ma(),
+            3,
         )
         .await?;
         ensure_source_disconnected_with_sampling(
@@ -1918,7 +2039,7 @@ async fn run_scene_inner(
             args.backup_s,
         )
         .await;
-        run_cmd_json_with_sampling(
+        run_cmd_json_with_sampling_retry(
             power_enable_command(&args.bench, profile)?,
             "power_restore",
             &mut actions,
@@ -1929,9 +2050,10 @@ async fn run_scene_inner(
             started_unix_ms,
             "transition_restore",
             scene.target_ma(),
+            3,
         )
         .await?;
-        run_cmd_json_with_sampling(
+        run_cmd_json_with_sampling_retry(
             power_port_enable_command(&args.bench, profile)?,
             "power_port_enable_restore",
             &mut actions,
@@ -1942,6 +2064,7 @@ async fn run_scene_inner(
             started_unix_ms,
             "transition_restore",
             scene.target_ma(),
+            3,
         )
         .await?;
         collect_for(
@@ -2034,6 +2157,10 @@ async fn run_scene_inner(
         "actions": actions,
         "collector_diagnostics": collector_diagnostics,
         "settings_snapshot": settings,
+        "source_tps_cdc_rise_mv": {
+            "before_configure": tps_cdc_rise_before,
+            "after_configure": tps_cdc_rise_after,
+        },
         "scene_assertions": scene_assertions,
         "samples": samples,
         "summary": {"all": {"completeness": summary, "acceptance": acceptance}},
@@ -2106,7 +2233,11 @@ fn sample_load_is_applied(sample: &SceneSample) -> bool {
         && sample_load_current_ma(sample).is_some_and(|current_ma| current_ma >= minimum_current_ma)
 }
 
-fn longest_low_voltage_duration_s(samples: &[&SceneSample]) -> Option<f64> {
+fn source_limited_min_load_mv(profile: OutputProfile) -> i64 {
+    i64::from(profile.rated_vout_mv()) - SOURCE_LIMITED_LOAD_MARGIN_MV
+}
+
+fn longest_low_voltage_duration_s(samples: &[&SceneSample], min_load_mv: i64) -> Option<f64> {
     let mut observed = false;
     let mut low_start = None;
     let mut low_end = None;
@@ -2117,7 +2248,7 @@ fn longest_low_voltage_duration_s(samples: &[&SceneSample]) -> Option<f64> {
             continue;
         };
         observed = true;
-        if voltage_mv < SOURCE_LIMITED_MIN_LOAD_MV {
+        if voltage_mv < min_load_mv {
             low_start.get_or_insert(sample.t_s);
             low_end = Some(sample.t_s);
         } else if let (Some(start), Some(end)) = (low_start.take(), low_end.take()) {
@@ -2177,18 +2308,21 @@ fn evaluate_scene_assertions(
             .iter()
             .filter_map(|sample| sample_number(&sample.load_v_local_mv))
             .min();
+        let min_load_mv = source_limited_min_load_mv(profile);
         if post_latch_min_load_mv.is_none() {
             failures.push("source_limited_post_latch_load_voltage_missing".to_string());
-        } else if post_latch_min_load_mv < Some(SOURCE_LIMITED_MIN_LOAD_MV) {
-            failures.push("source_limited_post_latch_load_below_11v".to_string());
+        } else if post_latch_min_load_mv < Some(min_load_mv) {
+            failures.push("source_limited_post_latch_load_below_minimum".to_string());
         }
-        let post_latch_low_voltage_max_duration_s = longest_low_voltage_duration_s(&post_latch);
+        let post_latch_low_voltage_max_duration_s =
+            longest_low_voltage_duration_s(&post_latch, min_load_mv);
         if post_latch_low_voltage_max_duration_s
             .is_some_and(|duration| duration > SOURCE_LIMITED_MAX_LOW_VOLTAGE_S)
         {
             failures.push("source_limited_post_latch_low_voltage_over_1s".to_string());
         }
-        let pre_latch_low_voltage_max_duration_s = longest_low_voltage_duration_s(&pre_latch);
+        let pre_latch_low_voltage_max_duration_s =
+            longest_low_voltage_duration_s(&pre_latch, min_load_mv);
         if pre_latch_low_voltage_max_duration_s
             .is_some_and(|duration| duration > SOURCE_LIMITED_MAX_LOW_VOLTAGE_S)
         {
@@ -2207,6 +2341,7 @@ fn evaluate_scene_assertions(
             "entry_t_s": entry.t_s,
             "entry_delay_s": entry_delay_s,
             "target_rated_observed": target_observed,
+            "minimum_load_mv": min_load_mv,
             "post_latch_min_load_mv": post_latch_min_load_mv,
             "pre_latch_low_voltage_max_duration_s": pre_latch_low_voltage_max_duration_s,
             "post_latch_low_voltage_max_duration_s": post_latch_low_voltage_max_duration_s,
@@ -2591,10 +2726,10 @@ async fn ensure_profile_ready(
 
 async fn cleanup_scene(args: &RunArgs) -> anyhow::Result<()> {
     let mut errors = Vec::new();
-    if let Err(error) = run_cmd_output(load_disable_command(&args.bench)?).await {
+    if let Err(error) = run_cmd_output_retry(load_disable_command(&args.bench)?, 3).await {
         errors.push(format!("load_disable: {error}"));
     }
-    if let Err(error) = run_cmd_output(power_disable_command(&args.bench)?).await {
+    if let Err(error) = run_cmd_output_retry(power_disable_command(&args.bench)?, 3).await {
         errors.push(format!("power_disable: {error}"));
     }
     if errors.is_empty() {
@@ -2843,6 +2978,7 @@ fn spawn_poll_loop(
 ) {
     tokio::spawn(async move {
         while !stop_flag.load(Ordering::Relaxed) {
+            let sample_started = Instant::now();
             match run_cmd_output(cmd.clone()).await {
                 Ok(value) => {
                     let _ = rows.lock().map(|mut rows| {
@@ -2858,7 +2994,7 @@ fn spawn_poll_loop(
                         .map(|mut errors| errors.push(format!("{name}: {error}")));
                 }
             }
-            sleep(interval).await;
+            sleep(interval.saturating_sub(sample_started.elapsed())).await;
         }
     });
 }
@@ -2902,7 +3038,13 @@ async fn collect_for(
     duration_s: f64,
 ) {
     let deadline = Instant::now() + Duration::from_secs_f64(duration_s);
+    let mut ticker = tokio::time::interval(Duration::from_millis(args.bench.sample_interval_ms));
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Burst);
     while Instant::now() < deadline {
+        ticker.tick().await;
+        if Instant::now() >= deadline {
+            break;
+        }
         push_scene_sample_if_fresh(
             samples,
             collectors,
@@ -2911,7 +3053,6 @@ async fn collect_for(
             phase,
             target_ma,
         );
-        sleep(Duration::from_millis(args.bench.sample_interval_ms)).await;
     }
 }
 
@@ -3017,13 +3158,19 @@ fn collect_scene_sample(
         .unwrap_or_else(|| json!({}));
     let runtime_output_enabled = power
         .pointer("/config/runtime/output_enabled")
-        .and_then(Value::as_bool);
-    let source_setpoint_mv = power.pointer("/diagnostics/tps_setpoint/mv").cloned();
+        .and_then(Value::as_bool)
+        .or_else(|| adapter_sample_value(&power, "enabled").and_then(|value| value.as_bool()));
+    let source_setpoint_mv = power
+        .pointer("/diagnostics/tps_setpoint/mv")
+        .cloned()
+        .or_else(|| power.pointer("/config/manual/voltage_mv").cloned())
+        .or_else(|| adapter_sample_value(&power, "voltage_mv"));
     let source_output_mv = match runtime_output_enabled {
         Some(false) => Some(json!(0)),
         Some(true) => port_telemetry
             .get("voltage_mv")
             .cloned()
+            .or_else(|| adapter_sample_value(&power, "voltage_mv"))
             .or(source_setpoint_mv),
         None => port_telemetry
             .get("voltage_mv")
@@ -3188,12 +3335,13 @@ async fn run_polling_json_probe(
 ) -> anyhow::Result<ProbeSummary> {
     let mut rows = Vec::new();
     for _ in 0..samples {
-        let received_at_ms = now_ms();
+        let sample_started = Instant::now();
+        let payload = run_cmd_output(cmd.clone()).await?;
         rows.push(json!({
-            "received_at_ms": received_at_ms,
-            "payload": run_cmd_output(cmd.clone()).await?,
+            "received_at_ms": now_ms(),
+            "payload": payload,
         }));
-        sleep(interval).await;
+        sleep(interval.saturating_sub(sample_started.elapsed())).await;
     }
     let mut times = rows
         .iter()
@@ -3364,13 +3512,22 @@ fn json_frame_time_ms(value: &Value) -> Option<i64> {
 fn json_frame_has_telemetry(value: &Value) -> bool {
     value.pointer("/result/input/vin_vbus_mv").is_some()
         || value.pointer("/result/sample/input/vin_vbus_mv").is_some()
+        || value
+            .pointer("/result/sample/packages/derived.power/payload/input/vin_vbus_mv")
+            .is_some()
         || value.pointer("/result/input/mains_present").is_some()
         || value
             .pointer("/result/sample/input/mains_present")
             .is_some()
+        || value
+            .pointer("/result/sample/packages/derived.power/payload/input/mains_present")
+            .is_some()
         || value.pointer("/result/input/tps_total_iout_ma").is_some()
         || value
             .pointer("/result/sample/input/tps_total_iout_ma")
+            .is_some()
+        || value
+            .pointer("/result/sample/packages/derived.power/payload/input/tps_total_iout_ma")
             .is_some()
         || value.pointer("/result/output/out_a/vbus_mv").is_some()
         || value
@@ -3389,9 +3546,20 @@ fn json_frame_has_telemetry(value: &Value) -> bool {
             .and_then(Value::as_array)
             .is_some_and(|ports| !ports.is_empty())
         || value
+            .pointer("/ports/ports")
+            .and_then(Value::as_array)
+            .is_some_and(|ports| !ports.is_empty())
+        || value
             .pointer("/payload/ports")
             .and_then(Value::as_array)
             .is_some_and(|ports| !ports.is_empty())
+        || value
+            .pointer("/payload/ports/ports")
+            .and_then(Value::as_array)
+            .is_some_and(|ports| !ports.is_empty())
+        || value.pointer("/payload/sample/voltage_mv").is_some()
+        || value.pointer("/payload/sample/current_ma").is_some()
+        || value.pointer("/payload/sample/enabled").is_some()
         || value.pointer("/payload/status/v_local_mv").is_some()
 }
 
@@ -3632,6 +3800,23 @@ async fn run_cmd_json_retry(
         .with_context(|| format!("running {name}"))
 }
 
+async fn run_cmd_output_retry(cmd: Vec<String>, attempts: usize) -> anyhow::Result<Value> {
+    let attempts = attempts.max(1);
+    let mut last_error = None;
+    for attempt in 1..=attempts {
+        match run_cmd_output(cmd.clone()).await {
+            Ok(result) => return Ok(result),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < attempts {
+                    sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow!("command retry failed without error")))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_cmd_json_with_sampling(
     cmd: Vec<String>,
@@ -3687,6 +3872,52 @@ async fn run_cmd_json_with_sampling(
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_cmd_json_with_sampling_retry(
+    cmd: Vec<String>,
+    name: &str,
+    actions: &mut Vec<Value>,
+    args: &RunArgs,
+    collectors: &BTreeMap<String, JsonlProcessCollector>,
+    samples: &mut Vec<SceneSample>,
+    start: Instant,
+    started_unix_ms: i64,
+    phase: &str,
+    target_ma: u32,
+    attempts: usize,
+) -> anyhow::Result<Value> {
+    let attempts = attempts.max(1);
+    let mut last_error = None;
+    for attempt in 1..=attempts {
+        match run_cmd_json_with_sampling(
+            cmd.clone(),
+            name,
+            actions,
+            args,
+            collectors,
+            samples,
+            start,
+            started_unix_ms,
+            phase,
+            target_ma,
+        )
+        .await
+        {
+            Ok(result) => return Ok(result),
+            Err(error) => {
+                actions.push(
+                    json!({name: {"cmd": cmd, "attempt": attempt, "error": error.to_string()}}),
+                );
+                last_error = Some(error);
+                if attempt < attempts {
+                    sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow!("sampled command retry failed without error")))
 }
 
 async fn run_cmd_output(cmd: Vec<String>) -> anyhow::Result<Value> {
@@ -3792,7 +4023,7 @@ fn validate_suite_settings(
     settings: &Value,
     profile_gate: &mut Value,
 ) -> anyhow::Result<()> {
-    if suite_contract != SuiteContract::SourceLimited12v {
+    if !suite_contract.is_source_limited() {
         return Ok(());
     }
     let advanced_power = settings
@@ -3821,7 +4052,7 @@ fn validate_suite_settings(
     });
     profile_gate["source_limited_settings"] = settings_gate.clone();
     if settings_gate.get("ok").and_then(Value::as_bool) != Some(true) {
-        bail!("source-limited 12V settings preflight failed: {settings_gate}");
+        bail!("source-limited settings preflight failed: {settings_gate}");
     }
     Ok(())
 }
@@ -4160,6 +4391,7 @@ mod tests {
         let bench = bench(Some("loadlynx"));
         for cmd in [
             power_capabilities_command(&bench).unwrap(),
+            power_config_show_command(&bench).unwrap(),
             power_disable_command(&bench).unwrap(),
             power_stream_command(&bench).unwrap(),
         ] {
@@ -4167,6 +4399,29 @@ mod tests {
             assert!(cmd.contains(&"--ipc".to_string()));
             assert!(cmd.contains(&"/tmp/isolapurr.sock".to_string()));
         }
+        let stream = power_stream_command(&bench).unwrap();
+        assert!(stream.contains(&"telemetry".to_string()));
+    }
+
+    #[test]
+    fn isolapurr_tps_cdc_rise_guard_requires_an_unchanged_value() {
+        let before = json!(300);
+        let changed_after = json!(0);
+        let mut actions = Vec::new();
+        ensure_isolapurr_tps_cdc_rise_preserved(Some(&before), Some(&before), &mut actions)
+            .unwrap();
+        assert_eq!(
+            actions[0].pointer("/power_tps_cdc_rise_guard/preserved"),
+            Some(&json!(true))
+        );
+
+        let mut actions = Vec::new();
+        assert!(ensure_isolapurr_tps_cdc_rise_preserved(
+            Some(&before),
+            Some(&changed_after),
+            &mut actions,
+        )
+        .is_err());
     }
 
     #[test]
@@ -4224,7 +4479,7 @@ mod tests {
                 "isolapurr",
                 "--json",
                 "power",
-                "show",
+                "telemetry",
                 "--url",
                 "http://127.0.0.1:30182",
             ]
@@ -4322,6 +4577,39 @@ mod tests {
     }
 
     #[test]
+    fn json_probe_accepts_isolapurr_nested_port_telemetry() {
+        let frame = json!({
+            "received_at_ms": 1000,
+            "payload": {
+                "ports": {
+                    "ports": [{
+                        "portId": "port_a",
+                        "telemetry": {"voltage_mv": 5013, "current_ma": 0}
+                    }]
+                }
+            }
+        });
+        assert!(json_frame_has_telemetry(&frame));
+    }
+
+    #[test]
+    fn json_probe_accepts_ups_diag_snapshot_power_package() {
+        let frame = json!({
+            "sample_received_at_ms": 1000,
+            "result": {
+                "sample": {
+                    "packages": {
+                        "derived.power": {
+                            "payload": {"input": {"vin_vbus_mv": 12_000}}
+                        }
+                    }
+                }
+            }
+        });
+        assert!(json_frame_has_telemetry(&frame));
+    }
+
+    #[test]
     fn suite_plan_has_four_default_scenes() {
         let run = RunArgs {
             bench: bench(Some("loadlynx")),
@@ -4413,6 +4701,37 @@ mod tests {
         );
         assert!(!plan.reports[1].include_backup);
         assert!(plan.reports[2].include_backup);
+    }
+
+    #[test]
+    fn source_limited_19v_contract_forces_three_19v_scenes() {
+        let contract = SuiteContract::SourceLimited19v;
+        assert_eq!(
+            contract.selected_profiles(&[OutputProfile::V12]),
+            vec![OutputProfile::V19]
+        );
+        assert_eq!(
+            contract.selected_scenes(&[SceneKind::AssistPath]),
+            vec![
+                SceneKind::BackupOnly,
+                SceneKind::SourceLimitedOnline,
+                SceneKind::SourceLimitedCut,
+            ]
+        );
+        assert_eq!(
+            contract.expected_reports(),
+            vec![
+                ("19v", "backup_only"),
+                ("19v", "source_limited_online"),
+                ("19v", "source_limited_cut"),
+            ]
+        );
+    }
+
+    #[test]
+    fn source_limited_load_floor_tracks_the_rated_output_profile() {
+        assert_eq!(source_limited_min_load_mv(OutputProfile::V12), 11_000);
+        assert_eq!(source_limited_min_load_mv(OutputProfile::V19), 18_000);
     }
 
     #[test]
@@ -4591,6 +4910,10 @@ mod tests {
         assert_eq!(
             serde_json::to_value(SuiteContract::SourceLimited12v).unwrap(),
             json!("source_limited_12v")
+        );
+        assert_eq!(
+            serde_json::to_value(SuiteContract::SourceLimited19v).unwrap(),
+            json!("source_limited_19v")
         );
     }
 

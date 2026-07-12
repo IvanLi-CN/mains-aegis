@@ -10248,6 +10248,32 @@ where
             self.output_state =
                 output_state_gate_transition(self.output_state, OutputGateReason::None);
         }
+
+        if output_admission_retry_needed(
+            self.output_state.requested_outputs,
+            self.output_state.active_outputs,
+            self.output_state.recoverable_outputs,
+            self.output_state.gate_reason,
+        ) && self.ina_ready
+            && self.ui_snapshot.tmp_a != SelfCheckCommState::Err
+            && self.ui_snapshot.tmp_b != SelfCheckCommState::Err
+        {
+            let restore = self.output_state.requested_outputs;
+            let now = Instant::now();
+            self.output_state.active_outputs = restore;
+            self.output_state.recoverable_outputs = restore;
+            self.recoverable_output_source = OutputGateReason::None;
+            if restore.is_enabled(OutputChannel::OutA) {
+                self.mark_tps_failed(OutputChannel::OutA, Some(now));
+            }
+            if restore.is_enabled(OutputChannel::OutB) {
+                self.mark_tps_failed(OutputChannel::OutB, Some(now));
+            }
+            defmt::info!(
+                "power: output admission retry requested_outputs={}",
+                restore.describe()
+            );
+        }
     }
 
     #[allow(dead_code)]

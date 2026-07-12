@@ -174,6 +174,11 @@
     - `VIN <= rated_vout_mv - source_limited_recover_margin_mv`；或
     - `vin_drop_mv` 超过 `source_limited_vin_drop_pct` 派生阈值，且 `vin_iin_ma` 已接近 DCIN 限流门槛；并且
   - 连续 `source_limited_required_samples` 个 fresh 样本满足。
+- 若已连续观测到 DCIN 在线且 `vin_iin_ma` 达到 source-limited 入口门槛，随后
+  在同一高载窗口内发生 VIN 棕断，则必须保留 `source_limited` 原因接管，不能因
+  `mains_present=false` 先到而覆盖成 `input_absent`。
+- 已锁存 `source_limited` 后的物理 VIN cut 必须转换为 `input_absent`；这表示上级电源
+  已从“不可承担负载”变为“实际离线”。
 - 当输入状态未知时：
   - 必须保持上一确认模式
   - 不得因 `TPS` 有输出、输出 enable、或其它保守推断而直接切到 `BACKUP`
@@ -275,6 +280,9 @@
 - Given `source_limited_online` 已锁存，When VIN 仍在线，Then LoadLynx 电压必须保持不低于 `11000mV`；锁存前的低于 `11000mV` 连续时间不得超过 `1s`。
 - Given `source_limited_cut` 尚未观察到 source-limited backup，When runner 到达 source-cut 边界，Then 必须跳过物理 VIN cut 并将 scene 标记为 diagnostic failure。
 - Given `source_limited_cut` 已观察到 source-limited backup，When runner 切断 VIN，Then `mode=backup` 与 `assist_power_stage=backup` 必须连续保持，且 `backup_reason` 必须转为 `input_absent`。
+- Given 执行 `--suite-contract source-limited-19v`，When Power Path Validation 生成执行计划，Then 必须只生成 `19V backup_only / 1000mA`、`19V source_limited_online / 3900mA`、`19V source_limited_cut / 3900mA` 三个独立 scene，且 source 固定为 `19000mV / 3000mA`。
+- Given 19V 的 source-limited scene 已锁存，When VIN 仍在线，Then LoadLynx 电压必须保持不低于 `18000mV`；锁存前或后低于该门槛的连续时间不得超过 `1s`。
+- Given 19V VIN drop 与输入电流已接近 source-limited 门槛，When ADC 与线损误差使 drop 距百分比门槛不超过 `25mV`，Then MCU 可以将其视为 drop 条件满足；该容差不得改变低 VIN 或连续样本门槛。
 - Given 当前 topic 进入 `12V` Power Path Validation sign-off，When 判定任何边界、在线接管、切断或恢复结论，Then 必须同时满足 `docs/hil-runtime-mode-switching.md` 中定义的三设备实时数据、输出电压波动与 scene-complete gate。
 - Given 当前 topic 进入 formal dual-voltage suite，When 执行 `12V assist_path / 12V backup_only / 19V assist_path / 19V backup_only` 四场景，Then source profile、load target 与保护栏必须固定为 `12V|19V @ 3000mA`、`3900mA|1000mA`、`UVP=3000mV/OCP=4000mA/OPP=80000mW`，不得按口头约定漂移。
 - Given 需要在 formal suite 中从 `12V` 切到 `19V` 或从 `19V` 切回 `12V`，When 做 artifact select / flash，Then 必须先 disable load、cut IsolaPurr `port_c`、确认 UPS 已脱离外部 `DCIN` 高压输入，再进行切换或烧录；并行 USB-C 供电/通信允许保留，不构成切换阻断。

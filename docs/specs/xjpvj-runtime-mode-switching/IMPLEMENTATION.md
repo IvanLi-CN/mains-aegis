@@ -476,6 +476,30 @@ suite 或场景 failure：
   `0.406s` 锁存，锁存后最低负载端电压为 `11731mV`，VIN cut 后保持 backup 并转换为
   `input_absent`。
 
+### Source-limited 19V HIL sign-off
+
+独立 `source-limited-19v` 三场景合同已完成真机签核，完整 evidence 位于：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-20260712T1020Z/`
+
+该目录同时保留从已验证 HTTP overview 导出的 `suite-overview.mhtml`，可离线打开并包含三个内嵌 chart。
+
+本次 UPS artifact 为 `main-vout-19v`，
+`build_id=b81fcc07-dirty-87c6532c4a89dd5e`。IsolaPurr 保持 manual
+`19000mV / 3000mA`，并在测试前后回读到不变的 `tps_cdc_rise_mv=300`。本次采集以
+`sample_interval_ms=100`、`ups_watch_freshness_ms=1000` 执行；该配置记录在 suite
+summary 中，不与旧的 `750ms` cache-freshness run 混称。
+
+`power-validation report --write-overview` 返回 `signoff_valid=true`：
+
+- `19v-backup_only-1000ma`：`10.006Hz`，max gap `0.204s`；VIN cut 后持续 backup，并观察到 `input_absent`。
+- `19v-source_limited_online-3900ma`：`10.036Hz`，max gap `0.123s`；`0.097s` 锁存 `source_limited`，锁存后最低 LoadLynx 电压为 `18732mV`，高于 `18000mV` 门槛。
+- `19v-source_limited_cut-3900ma`：`10.042Hz`，max gap `0.201s`；`0.203s` 锁存 `source_limited`，随后 VIN cut 持续保持 backup，并转换为 `input_absent`。
+
+在线限流窗口实测为 `vin_vbus=18896mV`、`vin_iin=2760mA`、
+`tps_total_iout=1368mA`、`vin_drop=168mV`。百分比 drop 门槛附近的 ADC/线损偏差采用
+有界 `25mV` 容差；TPS 输出、电流接近限流和连续样本条件仍必须同时成立。
+
 当前最值得保留给下一轮实现/验证的结论是：
 
 - 以后再改 runtime-mode 逻辑时，必须继续服从 `docs/hil-runtime-mode-switching.md` 的 formal run-validity 合同
