@@ -208,3 +208,15 @@
   - VIN cut 场景持续保持 backup，并将原因切换为 `input_absent`。
   - 19V 实测 `vin_drop=168mV`、`vin_iin=2760mA`、`tps_total_iout=1368mA`，因此 source-limited VIN-drop 判据增加有界 `25mV` ADC/线损容差。
   - IsolaPurr 保持 manual `19000mV / 3000mA`，`tps_cdc_rise_mv=300` 在测试前后保持不变。
+- 19V 普通 VIN cut 的 input-collapse 优化完成实机复测：
+  - r5 保留为诊断 evidence：控制断言通过且 `tps_cdc_rise_mv=300` 保持不变，但 max gap
+    `0.601s` 超过 formal 门槛，因此不得作为 sign-off。
+  - r6 将已建立 VIN baseline 的严重输入崩落作为 `input_absent` 接管条件；正式结果为
+    `4.952Hz`、max gap `0.401s`、无 acceptance failure，首个 backup 样本不再等待 VIN
+    接近 2V。
+  - r7 仅将 `standby_drop_mv` 从 `1200` 调为 `800`，并以 `4.967Hz`、max gap `0.401s`
+    完成 sign-off。热备目标从 `17.8V` 升至 `18.2V`，负载端最低 `18.155V`，无低于
+    `18.0V` 的采样点。
+  - 最终 evidence 为
+    `docs/specs/xjpvj-runtime-mode-switching/evidence/input-collapse-19v-backup-only-r7-20260712T1320Z/`；
+    source 和 load 均由 runner 清理关闭，IsolaPurr `tps_cdc_rise_mv=300` 未被覆盖。

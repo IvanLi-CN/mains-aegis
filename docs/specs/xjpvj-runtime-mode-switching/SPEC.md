@@ -22,7 +22,7 @@
 - 固定 `assist_low` 入口为 `dcin` 在线场景下的双判据：运行时内部绝对 `VIN` 门槛 + `TPS total output current` 已实际参与，并要求连续 fresh 样本锁存。
 - 固定 `standby -> assist_low` 通过限速爬升推进到低补能目标，不再一帧跳到固定 `assist_low` 电压目标。
 - 固定 `BACKUP` 表示 UPS 已接管负载；进入原因必须可区分为 `backup_reason=input_absent` 或 `backup_reason=source_limited`。
-- 固定 `input_absent` 只在确认无输入时进入；当 `mains_present` 未知时保持上一确认模式，不得因输出活跃而直接跳 `BACKUP`。
+- 固定 `input_absent` 在确认无输入或已建立的 DCIN baseline 严重崩落、不能继续供能时进入；当 `mains_present` 未知且没有该崩落证据时保持上一确认模式，不得因输出活跃而直接跳 `BACKUP`。
 - 固定 `source_limited` 表示 `VIN` 仍在线，但上级电源已进入限流/棕断或低于合理工作电压，MCU 主动切入 `BACKUP` 以减少输出长时间深跌落。
 - 固定 `ASSIST` 是 non-charging mode。`BACKUP` 默认停充；`source_limited` 必须停充，而唯一受控 USB-C 低输出充电例外仅适用于 `input_absent`，并且不得改变 VIN 或 mode 的真相源。
 
@@ -97,7 +97,7 @@
   - 固定为 non-charging mode。
 - `BACKUP`
   - UPS 已接管负载，进入原因由 `backup_reason` 标明：
-    - `input_absent`: 输入确认离线。
+    - `input_absent`: 输入确认离线，或先前已在线的 DCIN 已崩落到不能继续供能。
     - `source_limited`: 输入仍在线，但 MCU 判定上级电源不可继续承担当前负载。
   - 输出由电池侧供能。
   - TPS 目标保持额定输出档位。
@@ -166,6 +166,7 @@
 - `backup_reason=input_absent` 的充分条件：
   - fresh `VIN < 3V`；或
   - `VIN` 连续缺样超过 latch 窗口后，fallback `aggregate input-present=false`
+  - 已建立 DCIN `VIN baseline` 后，`VIN <= 85% baseline` 且 `vin_iin_ma` 已低于 source-limited 入口门槛；该条件表示上级输入已实际失去供能能力，即使硬件的 presence 位尚未转为 false。
 - `backup_reason=source_limited` 的充分条件：
   - 输入确认在线；并且
   - `input_source=dcin` / `dcin_assist_allowed=true`；并且
@@ -269,6 +270,7 @@
 - Given 输入状态未知，When `TPS` 仍在输出，Then 模式保持上一确认态，不得仅因输出活跃直接进入 `BACKUP`。
 - Given `VIN < 3V`，When 自动模式判定更新，Then 结果为 `BACKUP` 且 `backup_reason=input_absent`。
 - Given `VIN` 连续缺样超过窗口且 `aggregate input-present=false`，When 自动模式判定更新，Then 结果为 `BACKUP` 且 `backup_reason=input_absent`。
+- Given 已建立 DCIN `VIN baseline`，When `VIN <= 85% baseline` 且 `vin_iin_ma` 已低于 source-limited 入口门槛，Then 结果为 `BACKUP` 且 `backup_reason=input_absent`，即使 `mains_present` 尚未转为 false。
 - Given 输入仍在线、`TPS total output current` 超过 source-limited 进入门槛、`VIN` 低于合理工作电压或 `VIN drop + VIN input current` 显示上级限流，When 连续 fresh 样本满足，Then 结果为 `BACKUP` 且 `backup_reason=source_limited`，TPS 目标切到额定输出。
 - Given 已处于 `backup_reason=source_limited`，When `VIN` 与 `vin_drop_mv` 恢复到回差内且输出电流低于退出门槛，Then 必须连续满足样本数后才退出 `BACKUP`，不得在阈值附近抖动。
 - Given `ASSIST` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD`。

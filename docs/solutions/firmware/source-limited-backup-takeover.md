@@ -20,7 +20,7 @@ related_specs:
 
 The UPS has two different failure classes on the input side:
 
-- `input_absent`: upstream input is physically absent or confirmed below the offline threshold.
+- `input_absent`: upstream input is physically absent, confirmed below the offline threshold, or has collapsed from an established online baseline so it can no longer supply the load.
 - `source_limited`: upstream input is still present, but it is current-limited, browned out, or otherwise unable to carry the active load.
 
 Both classes require the UPS to protect the output. They should not be collapsed into the same internal condition.
@@ -32,6 +32,11 @@ Hardware assist can protect the output before firmware reacts, but it is not a c
 The observed `12V / 3A source + 3900mA load` sign-off evidence completed successfully, but the assist phase still showed a load-side voltage sag around the `10.5V` level. That is consistent with a hardware path that only starts to share current after a significant voltage difference, possibly through an ideal-diode MOSFET body-diode path before active conduction.
 
 If firmware waits for `VIN` to become physically absent, the output can remain in a deep sag for too long while the upstream supply is merely limited.
+
+The physical source-cut case needs the same protection. A source can remain above the
+presence threshold while its voltage and available current have already collapsed. In
+that interval, treating it as a viable online source delays UPS takeover without
+providing useful input power.
 
 ## Resolution
 
@@ -101,6 +106,20 @@ Charger token policy should remain non-charging:
 - `backup_reason=source_limited`: `LOAD` plus a source-limited backup notice
 
 This wording prevents operators from misreading a limited-but-present upstream supply as a physical unplug event.
+
+## Input-collapse Rule
+
+For a source that was previously online, enter `backup_reason=input_absent` before the
+fixed offline threshold when all of these are true:
+
+- `mains_present=true`.
+- a DCIN `VIN baseline` is available.
+- `VIN <= 85%` of that baseline.
+- `vin_iin_ma` is below the configured source-limited entry threshold.
+
+This is a supply-loss classifier, not an electronic-load trigger. It uses only UPS-local
+telemetry and requires a prior baseline, so an initially unknown or weak input does not
+become backup merely because TPS is enabled.
 
 ## Validation
 
@@ -173,6 +192,28 @@ normal ADC and wiring error. Keep a bounded `25mV` VIN-drop tolerance only in
 the source-limited qualifier; retain the independent TPS, input-current, and
 consecutive-sample gates so the tolerance cannot turn a normal online source
 into backup.
+
+## 19V Input-Collapse Evidence
+
+The dedicated `19V / 3A source + 1000mA load` VIN-cut evidence is retained under
+`docs/specs/xjpvj-runtime-mode-switching/evidence/input-collapse-19v-backup-only-r7-20260712T1320Z/`.
+It uses the 19V `main-vout-19v` build with the input-collapse rule above.
+
+The final run is `valid_for_signoff` at `4.967Hz` with a maximum sample gap of
+`0.401s`, all required voltage series, and no acceptance failures. Its first recorded
+backup sample had `VIN=9.696V` and `vin_iin=108mA`, while `mains_present` was still
+online; `backup_reason=input_absent` was published immediately rather than waiting for
+the old sub-3V rule.
+
+The first control-only pass retained `standby_drop_mv=1200`, leaving a `17.8V` hot-standby
+target and a minimum load sample of `17.742V`. Reducing only `standby_drop_mv` to `800`
+raised hot standby to `18.2V`; the final signed-off run reached a minimum of `18.155V`
+and had no sample below `18.0V`. This validates a smaller hot-standby differential for
+this bench, not a claim that all analog-path switching transient has disappeared.
+
+The runner read `tps_cdc_rise_mv=300` before and after each run. It did not change that
+source compensation setting; IsolaPurr was left at manual `19000mV / 3000mA` with output
+disabled after completion.
 
 ## Retained Diagnostic Evidence
 

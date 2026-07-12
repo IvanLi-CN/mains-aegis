@@ -512,3 +512,35 @@ summary 中，不与旧的 `750ms` cache-freshness run 混称。
   - 输出电压异常属于在线 assist 逻辑问题
   - 还是 backup / restore 过渡问题
   - 再决定是否继续动 `assist_low` / `assist_rated` 控制逻辑
+
+### 19V input-collapse takeover and standby-voltage validation
+
+已完成专门针对 19V 普通 VIN cut 的实机迭代。完整最终 evidence 位于：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/input-collapse-19v-backup-only-r7-20260712T1320Z/`
+
+UPS 固件为 `main-vout-19v`，`build_id=ca380d08-dirty-b553b1672f280754`。该场景使用
+IsolaPurr manual `19000mV / 3000mA`、LoadLynx `CC 1000mA`、`200ms` 采样和
+`750ms` UPS watch freshness。IsolaPurr 的 `tps_cdc_rise_mv=300` 在 runner 配置前后
+均回读为 `300`；测试结束后 source 和 load 输出均已关闭。
+
+本轮将 `input_absent` 的快速接管依据从“必须先等 VIN < 3V”扩展为“已有 DCIN baseline
+时，VIN 跌至 baseline 的 85% 以下且输入电流已塌陷”。这与物理断源一致：上级电源虽可能
+尚未把 presence 位清除，但已无法继续供能，UPS 应立即承担负载。
+
+- 早期 r4 的 `standby_drop_mv=1200` evidence 表明，VIN 从 `18.928V` 跌至 `14.216V`
+  后仍保持 standby，直到约 `2.776V` 才进入 backup。
+- r5 已验证 runner 保持 `tps_cdc_rise_mv=300` 且 backup 断言通过，但一个 `0.601s`
+  采样缺口使其只能作为诊断 evidence，不能用于 sign-off。
+- r6 使用新的 input-collapse 判据并正式签核：`4.952Hz`、max gap `0.401s`、无 acceptance
+  failure；首个 backup 样本在 `VIN=5.432V`、`vin_iin=40mA` 时出现，而不是等待约 2V。
+  它同时显示热备目标为 `17.8V` 时，负载端仍会出现约一个采样窗口的 `17.742V` 瞬态。
+- r7 仅把完整 `advanced_power` 快照中的 `standby_drop_mv` 从 `1200` 改为 `800`，其余
+  15 个字段保持不变，并再次正式签核：`4.967Hz`、max gap `0.401s`、`scene_complete=true`、
+  `failed_acceptance_checks=[]`。热备目标升至 `18.2V`，该场景最低 LoadLynx 电压为
+  `18.155V`，没有采样点低于 `18.0V`；首个 backup 样本为 `VIN=9.696V`、
+  `vin_iin=108mA`，并保持 `backup_reason=input_absent`。
+
+结论必须区分：MCU 接管判定延迟已缩短到首个可观测严重崩落样本，且减小热备压差已消除本次
+19V/1000mA 报告中的低于 18V 样本；但 TPS VOUT 遥测仍在目标切换后约一个采样周期才上升，
+因而这不是“硬件切换瞬态已完全消除”的结论。

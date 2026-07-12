@@ -60,6 +60,13 @@ const ASSIST_LOW_DCIN_ENTER_IIN_THRESHOLD_MA: i32 =
 const SOURCE_LIMITED_DCIN_ENTER_IIN_THRESHOLD_MA: i32 =
     CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA as i32 - 300;
 const SOURCE_LIMITED_VIN_DROP_TOLERANCE_MV: u16 = 25;
+// A physical DCIN loss can collapse input current before the 3V mains-present
+// threshold is crossed. Require a severe voltage collapse after sustained load.
+// A loaded DCIN source that loses 15% from its established online baseline
+// has already left its normal operating region.  Waiting for a 25% collapse
+// delayed the 19V backup handover until the input was nearly absent.
+const INPUT_COLLAPSE_BASELINE_NUMERATOR: u16 = 17;
+const INPUT_COLLAPSE_BASELINE_DENOMINATOR: u16 = 20;
 pub(super) const ASSIST_LOW_STANDBY_ENTER_MARGIN_MV: u16 = 40;
 pub(super) const ASSIST_LOW_STANDBY_EXIT_MARGIN_MV: u16 = 200;
 const ASSIST_RATED_LOW_TARGET_ENTER_MARGIN_MV: u16 = 60;
@@ -1553,6 +1560,16 @@ pub(super) fn assist_power_stage_step(
     let preserve_source_limited_on_brownout = tracker.stage != AssistPowerStage::Backup
         && tracker.source_limited_online_streak >= input.source_limited_required_samples
         && source_limited_brownout_after_online_current;
+    let input_collapsing_after_online_current = tracker.stage != AssistPowerStage::Backup
+        && matches!(
+            (input.vin_baseline_mv, input.vin_vbus_mv, input.vin_iin_ma),
+            (Some(vin_baseline_mv), Some(vin_vbus_mv), Some(vin_iin_ma))
+                if vin_vbus_mv
+                    <= ((u32::from(vin_baseline_mv) * u32::from(INPUT_COLLAPSE_BASELINE_NUMERATOR)
+                        / u32::from(INPUT_COLLAPSE_BASELINE_DENOMINATOR))
+                        .min(u32::from(u16::MAX)) as u16)
+                    && vin_iin_ma < input.source_limited_enter_iout_ma
+        );
 
     match input.mains_present {
         Some(false) => {
@@ -1562,6 +1579,15 @@ pub(super) fn assist_power_stage_step(
             } else {
                 BackupReason::InputAbsent
             });
+            tracker.reset_for_online();
+            if input.tps_total_iout_fresh {
+                tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
+            }
+            return tracker.stage;
+        }
+        Some(true) if input_collapsing_after_online_current => {
+            tracker.stage = AssistPowerStage::Backup;
+            tracker.backup_reason = Some(BackupReason::InputAbsent);
             tracker.reset_for_online();
             if input.tps_total_iout_fresh {
                 tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
@@ -7424,6 +7450,50 @@ mod tests {
             AssistPowerStage::Backup
         );
         assert_eq!(tracker.backup_reason, Some(BackupReason::SourceLimited));
+    }
+
+    #[test]
+    fn assist_stage_enters_input_absent_backup_when_loaded_vin_collapses_before_mains_false() {
+        let mut tracker = AssistPowerStageTracker::default();
+        let collapsed = AssistPowerStageInput {
+            source_limited_enter_iout_ma: 1_100,
+            rated_vout_mv: 19_000,
+            standby_target_vout_mv: 17_800,
+            current_assist_target_vout_mv: 17_800,
+            assist_low_target_vout_mv: 18_400,
+            ..assist_stage_input(
+                Some(14_216),
+                Some(19_064),
+                Some(4_848),
+                Some(268),
+                Some(60),
+                1,
+            )
+        };
+
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, collapsed),
+            AssistPowerStage::Backup
+        );
+        assert_eq!(tracker.backup_reason, Some(BackupReason::InputAbsent));
+    }
+
+    #[test]
+    fn assist_stage_does_not_classify_low_vin_without_an_online_baseline_as_input_absent() {
+        let mut tracker = AssistPowerStageTracker::default();
+        let input = AssistPowerStageInput {
+            source_limited_enter_iout_ma: 1_100,
+            vin_baseline_mv: None,
+            vin_vbus_mv: Some(9_000),
+            vin_iin_ma: Some(100),
+            ..assist_stage_input(Some(9_000), Some(19_000), Some(0), Some(100), Some(60), 1)
+        };
+
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(tracker.backup_reason, None);
     }
 
     #[test]

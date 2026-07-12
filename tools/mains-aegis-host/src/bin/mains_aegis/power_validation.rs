@@ -1794,10 +1794,6 @@ fn load_stream_command(args: &BenchArgs, samples: usize) -> anyhow::Result<Vec<S
     }
 }
 
-fn load_sample_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
-    load_stream_command(args, 1)
-}
-
 fn load_cli_base(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
     let cli = args
         .load_cli
@@ -2793,22 +2789,14 @@ async fn wait_for_ups_status_watch_ready(
 
 async fn spawn_load_collector(
     args: &RunArgs,
-    interval: Duration,
+    _interval: Duration,
 ) -> anyhow::Result<JsonlProcessCollector> {
     match args.bench.load_adapter {
-        LoadAdapterKind::External => {
+        LoadAdapterKind::External | LoadAdapterKind::Loadlynx => {
             JsonlProcessCollector::spawn(
                 "load",
                 load_stream_command(&args.bench, 0)?,
                 JsonFrameMode::Raw,
-            )
-            .await
-        }
-        LoadAdapterKind::Loadlynx => {
-            JsonlProcessCollector::spawn_polling(
-                "load",
-                load_sample_command(&args.bench)?,
-                interval,
             )
             .await
         }
