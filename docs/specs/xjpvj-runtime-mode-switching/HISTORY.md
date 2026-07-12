@@ -195,3 +195,10 @@
 - `backup_only` 与 `source_limited_cut` 满足 sign-off；`source_limited_online` 的
   source-limited 功能断言通过，但最大采样间隔为 `0.507s`，超过 `0.5s` 合同限制，
   因而标记为 `invalid_diagnostic_only`。
+- 更换 IsolaPurr 上级电源后，`source-limited-12v-20260712T0759Z` 完整重测通过：三个
+  scene 均为 `valid_for_signoff`，suite verifier 为 `signoff_valid=true`，无 acceptance
+  failure。完整可离线复核 evidence 位于
+  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-20260712T0759Z/`。
+- 两个 `3900mA` CC 过载场景分别在 `0.400s` 和 `0.406s` 锁存 `source_limited`，锁存后
+  LoadLynx 最低电压分别为 `11743mV` 和 `11731mV`，均没有低于 `11000mV` 的持续段。
+- IsolaPurr 保持 manual `12000mV / 3000mA`；`tps_cdc_rise_mv=300` 在测试前后保持不变。

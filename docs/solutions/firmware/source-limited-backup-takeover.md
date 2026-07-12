@@ -151,6 +151,15 @@ overload class could remain around `10.5V` at the load while VIN was still
 online. It does not prove that the hardware is a mixed-supply topology; it
 proves the MCU can limit the duration of that hardware-only fallback.
 
+A repeat of the complete contract after replacing the upstream supply feeding
+IsolaPurr also passed all three scenes. With IsolaPurr still configured for
+manual `12V / 3A`, a `3900mA` CC load latched source-limited in `0.400s` and
+`0.406s`; the respective post-latch minimum load voltages were `11743mV` and
+`11731mV`, with no interval below `11000mV`. The retained evidence is
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-20260712T0759Z/`.
+The test runner preserved IsolaPurr `tps_cdc_rise_mv=300` before and after the
+run.
+
 ## Retained Diagnostic Evidence
 
 Keep complete rerun evidence with the implementation, even when a collection

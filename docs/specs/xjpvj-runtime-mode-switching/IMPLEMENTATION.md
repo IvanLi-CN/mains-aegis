@@ -364,6 +364,11 @@ dual-voltage four-scene contract unchanged and creates only these independent
 - `source_limited_online / 3900mA`
 - `source_limited_cut / 3900mA`
 
+`backup_only` 使用 LoadLynx `CC 1000mA`，两个 source-limited 场景使用
+LoadLynx `CC 3900mA`。这是刻意施加超过上级 `12000mV / 3000mA` 能力的真实负载，
+用于验证 UPS 是否主动进入 backup 并由电池补足缺口，不能替换为改变负载需求的 CV
+刺激。`4000mA` 是电子负载保护上限，不是 source-limited 的判据。
+
 The runner records status and diag `backup_reason`, charger state, charger
 allow-charge, source-limited latch timing, and load-voltage duration metrics.
 It refuses to cut source in the overload-cut scene unless the final pre-cut
@@ -447,6 +452,29 @@ overview 并加载全部 iframe 图表。它是后续控制策略优化的可复
 采样间隔，超过 `0.5s` 合同上限，因此其 `run_validity=invalid_diagnostic_only`，
 整套证据不得宣称为新的 sign-off。归档的目的在于保留原始遥测和视觉证据，便于未来
 定位采样完整性或输出稳定性回归。
+
+### Revalidated source-limited 12V HIL sign-off
+
+更换 IsolaPurr 上级电源后，重新执行完整的 `source-limited-12v` 合同。正式报告归档在：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-20260712T0759Z/`
+
+该归档包含 suite overview、三个场景的 `results.json`、`timeseries.jsonl` 与
+`voltage-chart.html`。源端仍固定为 manual `12000mV / 3000mA`，两个过载场景仍使用
+LoadLynx `CC 3900mA`；IsolaPurr 的 `tps_cdc_rise_mv=300` 在测试前后回读一致，未被
+runner 覆盖。
+
+`power-validation report --write-overview` 的 verifier 结果为 `signoff_valid=true`，无
+suite 或场景 failure：
+
+- `12v-backup_only-1000ma`：`5.004Hz`，max gap `0.268s`；VIN cut 后持续 backup，并观察到
+  `input_absent`。
+- `12v-source_limited_online-3900ma`：`4.991Hz`，max gap `0.234s`；`source_limited` 在
+  `0.400s` 锁存，额定输出目标已观察到，锁存后最低负载端电压为 `11743mV`，低于
+  `11000mV` 的最长时段为 `0s`。
+- `12v-source_limited_cut-3900ma`：`5.006Hz`，max gap `0.205s`；`source_limited` 在
+  `0.406s` 锁存，锁存后最低负载端电压为 `11731mV`，VIN cut 后保持 backup 并转换为
+  `input_absent`。
 
 当前最值得保留给下一轮实现/验证的结论是：
 
