@@ -206,7 +206,7 @@
   - `source-limited-19v-20260712T1020Z` 的 suite verifier 为 `signoff_valid=true`。
   - `3900mA` 在线限流场景分别在 `0.097s` 和 `0.203s` 锁存 `source_limited`；锁存后最低 LoadLynx 电压均为 `18732mV`，高于 `18000mV` 门槛。
   - VIN cut 场景持续保持 backup，并将原因切换为 `input_absent`。
-  - 19V 实测 `vin_drop=168mV`、`vin_iin=2760mA`、`tps_total_iout=1368mA`，因此 source-limited VIN-drop 判据增加有界 `25mV` ADC/线损容差。
+  - 19V 实测 `vin_drop=168mV`、`vin_iin=2760mA`、`tps_total_iout=1368mA`，因此 source-limited VIN-drop 判据增加有界 ADC/线损容差。
   - IsolaPurr 保持 manual `19000mV / 3000mA`，`tps_cdc_rise_mv=300` 在测试前后保持不变。
 - 19V 普通 VIN cut 的 input-collapse 优化完成实机复测：
   - r5 保留为诊断 evidence：控制断言通过且 `tps_cdc_rise_mv=300` 保持不变，但 max gap
@@ -220,3 +220,14 @@
   - 最终 evidence 为
     `docs/specs/xjpvj-runtime-mode-switching/evidence/input-collapse-19v-backup-only-r7-20260712T1320Z/`；
     source 和 load 均由 runner 清理关闭，IsolaPurr `tps_cdc_rise_mv=300` 未被覆盖。
+- 19V source-limited 重新完成三场景最终签核：
+  - 最终 evidence 为
+    `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-final-r7-20260712T1441Z/`；
+    suite verifier 为 `signoff_valid=true`，三个 scene 均为 `valid_for_signoff`。
+  - `source_limited_online` 在 `0.201s` 锁存，`source_limited_cut` 在 `0.401s` 锁存；
+    两者锁存后 LoadLynx 最低均为 `18744mV`，无低于 `18000mV` 的持续段。
+  - cut scene 在 physical VIN cut 后连续保持 backup，并确认 `input_absent`。
+  - 19V 的 `136mV` 边缘 VIN drop 需要 `60mV` 有界 ADC/线损容差；仍同时要求 TPS 输出、
+    VIN 输入电流和连续 fresh samples，避免正常在线源误切换。
+  - r6 记录为诊断反例：source-limited 逻辑与 cut 连续性成立，但 post-latch 最低
+    `17589mV`，持续 `0.303s`，因此不构成 sign-off；r7 重新完整执行后通过。

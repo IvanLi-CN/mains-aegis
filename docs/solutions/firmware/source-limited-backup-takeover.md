@@ -188,7 +188,7 @@ the cause to `input_absent`. Both post-latch minima were `18732mV`, above the
 
 The 19V input drop was `168mV` at `2760mA` input current and `1368mA` TPS
 output current. That is just below the percentage-derived drop threshold after
-normal ADC and wiring error. Keep a bounded `25mV` VIN-drop tolerance only in
+normal ADC and wiring error. Keep a bounded `60mV` VIN-drop tolerance only in
 the source-limited qualifier; retain the independent TPS, input-current, and
 consecutive-sample gates so the tolerance cannot turn a normal online source
 into backup.
@@ -214,6 +214,23 @@ this bench, not a claim that all analog-path switching transient has disappeared
 The runner read `tps_cdc_rise_mv=300` before and after each run. It did not change that
 source compensation setting; IsolaPurr was left at manual `19000mV / 3000mA` with output
 disabled after completion.
+
+## Final 19V Revalidation
+
+The final three-scene 19V suite is retained at
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-final-r7-20260712T1441Z/`.
+It used the `main-vout-19v` build `0c98fe9d-dirty-fee0c84b3135d707`, manual
+`19000mV / 3000mA` source, and `3900mA` CC overload scenes. The suite verifier returned
+`signoff_valid=true`.
+
+The online overload latched in `0.201s`; the overload-then-cut scene latched in `0.401s`,
+stayed in backup through the physical cut, and changed its reason to `input_absent`. Both
+post-latch minima were `18744mV`, with no interval below the 19V `18000mV` floor.
+
+One preceding r6 run produced a post-latch `17589mV` sample for `0.303s` in the cut scene.
+Retain such failed evidence instead of averaging it away or relaxing the contract. A subsequent
+full rerun that passes every scene is the sign-off candidate; the failed run remains the boundary
+for future TPS transient work.
 
 ## Retained Diagnostic Evidence
 

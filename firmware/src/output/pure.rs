@@ -59,7 +59,7 @@ const ASSIST_LOW_DCIN_ENTER_IIN_THRESHOLD_MA: i32 =
 // source ceiling without relaxing the regular assist-low admission gate.
 const SOURCE_LIMITED_DCIN_ENTER_IIN_THRESHOLD_MA: i32 =
     CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA as i32 - 300;
-const SOURCE_LIMITED_VIN_DROP_TOLERANCE_MV: u16 = 25;
+const SOURCE_LIMITED_VIN_DROP_TOLERANCE_MV: u16 = 60;
 // A physical DCIN loss can collapse input current before the 3V mains-present
 // threshold is crossed. Require a severe voltage collapse after sustained load.
 // A loaded DCIN source that loses 15% from its established online baseline
@@ -7431,11 +7431,11 @@ mod tests {
             current_assist_target_vout_mv: 18_400,
             assist_low_target_vout_mv: 18_400,
             ..assist_stage_input(
-                Some(18_896),
-                Some(19_064),
-                Some(168),
-                Some(2_760),
-                Some(1_368),
+                Some(18_880),
+                Some(19_016),
+                Some(136),
+                Some(2_742),
+                Some(1_388),
                 1,
             )
         };

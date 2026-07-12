@@ -152,6 +152,16 @@ flash-current-real device confirm: host-tools-build
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --dry-run && \
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --real
 
+# Build, select, dry-run, and real-flash the explicit 19V HIL artifact. Requires confirm=flash.
+flash-current-real-hil-19v device confirm: host-tools-build
+    [[ "{{ confirm }}" == "flash" ]] || { echo "Refusing real flash: pass confirm=flash"; exit 2; }
+    just firmware-artifact-hil-19v
+    manifest=$(ls -t {{ artifact_out }}/*main-vout-19v*.manifest.json | head -n 1) && \
+    test -n "$manifest" && \
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} artifact select --manifest-path "$manifest" && \
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --dry-run && \
+    cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --real
+
 # Run the standard local validation set.
 check: web-check host-test firmware-host-test firmware-check
     git diff --check

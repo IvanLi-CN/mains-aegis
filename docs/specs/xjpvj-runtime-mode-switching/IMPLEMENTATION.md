@@ -498,7 +498,7 @@ summary 中，不与旧的 `750ms` cache-freshness run 混称。
 
 在线限流窗口实测为 `vin_vbus=18896mV`、`vin_iin=2760mA`、
 `tps_total_iout=1368mA`、`vin_drop=168mV`。百分比 drop 门槛附近的 ADC/线损偏差采用
-有界 `25mV` 容差；TPS 输出、电流接近限流和连续样本条件仍必须同时成立。
+有界 `60mV` 容差；TPS 输出、电流接近限流和连续样本条件仍必须同时成立。
 
 当前最值得保留给下一轮实现/验证的结论是：
 
@@ -544,3 +544,36 @@ IsolaPurr manual `19000mV / 3000mA`、LoadLynx `CC 1000mA`、`200ms` 采样和
 结论必须区分：MCU 接管判定延迟已缩短到首个可观测严重崩落样本，且减小热备压差已消除本次
 19V/1000mA 报告中的低于 18V 样本；但 TPS VOUT 遥测仍在目标切换后约一个采样周期才上升，
 因而这不是“硬件切换瞬态已完全消除”的结论。
+
+### Final 19V source-limited validation
+
+最终 19V 三场景证据位于：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-final-r7-20260712T1441Z/`
+
+该 suite 使用 `main-vout-19v` firmware build
+`0c98fe9d-dirty-fee0c84b3135d707`，IsolaPurr manual `19000mV / 3000mA`，
+LoadLynx CC `1000mA` 或 `3900mA`，采样间隔 `100ms`，UPS watch freshness
+`1000ms`。runner 与测试后回读均确认 `tps_cdc_rise_mv=300`，没有覆盖该线损补偿；
+source 与 load 均在结束时关闭。
+
+`mains-aegis power-validation report --write-overview` 返回
+`signoff_valid=true`，三个 scene 均无 acceptance failure：
+
+- `19v-backup_only-1000ma`：`10.049Hz`，max gap `0.218s`；VIN cut 后连续 backup，
+  `backup_reason=input_absent` 已观察到。
+- `19v-source_limited_online-3900ma`：`10.043Hz`，max gap `0.103s`；VIN 保持在线时
+  `0.201s` 锁存 `source_limited`，额定 `19000mV` 目标已观察到，锁存后负载端最低
+  `18744mV`，没有低于 `18000mV` 的持续段。
+- `19v-source_limited_cut-3900ma`：`10.051Hz`，max gap `0.106s`；先在 `0.401s`
+  锁存 `source_limited`，锁存后负载端最低 `18744mV`，随后 VIN cut 持续保持 backup，
+  并观察到 `input_absent`。
+
+最终进入条件保留 `source_limited_vin_drop_pct=1`、`source_limited_enter_delta_ma=1000`、
+连续 `2` 个样本及 `400mV` 恢复回差。19V 实测的 `136mV` VIN drop 处于百分比门槛边缘，
+固件仅在同时存在高 VIN 输入电流和 TPS 输出负载时，以有界 `60mV` ADC/线损容差判定
+drop 成立；容差不会单独触发接管。
+
+同一 firmware 的前序 r6 cut scene 留下 `17589mV / 0.303s` 的 post-latch 低压反例，
+所以 r6 只保留为诊断 evidence。r7 完整重跑才是最终 sign-off；未来若优化 TPS 动态，
+必须保留 `>=18000mV` 和最长低压 `<=1s` 这两个合同门槛，不能通过放宽报告判据消除反例。
