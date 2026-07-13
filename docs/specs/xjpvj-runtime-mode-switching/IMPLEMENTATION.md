@@ -85,12 +85,18 @@
 新增 source-limited 默认值优先保证检测延迟可控：
 
 - `source_limited_vin_drop_pct=1`
-- `source_limited_enter_delta_ma=1000`
+- `source_limited_enter_delta_ma=2500`
 - `source_limited_exit_delta_ma=0`
 - `source_limited_required_samples=2`
 - `source_limited_recover_margin_mv=400`
 
-因此默认 source-limited 进入电流门槛为 `rated_enter_base 100mA + 1000mA = 1100mA`。fresh TPS 样本仍走完整 `VIN drop + TPS output + input current` 判据；只有 TPS 聚合输出样本滞后时，才允许基于 `VIN baseline/drop + vin_iin_ma` 快速锁存，避免上级限流时等待滞后遥测而延长负载端跌落。
+因此默认 source-limited 进入电流门槛为 `rated_enter_base 100mA + 2500mA = 2600mA`。fresh TPS 样本仍走完整 `VIN drop + TPS output + input current` 判据；只有 TPS 聚合输出样本滞后时，才允许基于 `VIN baseline/drop + vin_iin_ma` 快速锁存，避免上级限流时等待滞后遥测而延长负载端跌落。该门槛在 12V/3A 台架上为 `2900mA` in-budget 场景保留 guard band，同时仍能在 `3900mA` 负载下观测到足够的 TPS 补充电流后锁存。
+
+当前规范还新增了一条负向 guard：
+
+- 当 formal/source-limited 台架 source 固定为 `rated_vout_mv / 3000mA` 时，在线 `2900mA` 负载不得误锁存 `backup_reason=source_limited`。
+- 这不是新的正向 source-limited 场景，而是“不得误入 BACKUP”的回归门。
+- 现有 `3900mA` 三场景 sign-off 只能证明过载接管成立，不能替代这条 `2900mA` 非接管约束。
 
 ## 当前验证状态
 
@@ -361,10 +367,12 @@ dual-voltage four-scene contract unchanged and creates only these independent
 12V reports:
 
 - `backup_only / 1000mA`
+- `source_in_budget / 2900mA`
 - `source_limited_online / 3900mA`
 - `source_limited_cut / 3900mA`
 
-`backup_only` 使用 LoadLynx `CC 1000mA`，两个 source-limited 场景使用
+`backup_only` 使用 LoadLynx `CC 1000mA`；`source_in_budget` 使用 `CC 2900mA`，证明
+`12000mV / 3000mA` 上级电源能力内的负载不会误入 Backup；两个 source-limited 场景使用
 LoadLynx `CC 3900mA`。这是刻意施加超过上级 `12000mV / 3000mA` 能力的真实负载，
 用于验证 UPS 是否主动进入 backup 并由电池补足缺口，不能替换为改变负载需求的 CV
 刺激。`4000mA` 是电子负载保护上限，不是 source-limited 的判据。
@@ -372,8 +380,12 @@ LoadLynx `CC 3900mA`。这是刻意施加超过上级 `12000mV / 3000mA` 能力�
 The runner records status and diag `backup_reason`, charger state, charger
 allow-charge, source-limited latch timing, and load-voltage duration metrics.
 It refuses to cut source in the overload-cut scene unless the final pre-cut
-hold sample is still `source_limited` backup. The suite verifier expects exactly
-three reports for this contract and rejects missing phase assertions.
+hold sample is still `source_limited` backup. `source_in_budget` 要求 VIN 全程在线，且
+所有负载已生效样本均不得出现 Backup。suite verifier expects exactly four reports for
+this contract and rejects missing phase assertions.
+
+LoadLynx 电流在 formal evidence 中只保留 `load_i_total_ma`。runner 从负载端实测功率与
+端电压派生单一总电流，不再把 `local/remote` 字段写入时序或图表。
 
 The source-limited firmware integration also restricts the controlled USB-C
 low-output charge exception to `backup_reason=input_absent`. A source-limited
@@ -620,6 +632,28 @@ drop 成立；容差不会单独触发接管。
 必须保留 `>=18000mV` 和最长低压 `<=1s` 这两个合同门槛，不能通过放宽报告判据消除反例。
 
 ### Tuned 19V standby and source-limited validation
+
+### Final 12V source-limited validation
+
+The final 12V implementation uses `source_limited_enter_delta_ma=2500`, which expands to a
+`2600mA` TPS admission threshold. This preserves the `2900mA` in-budget guard while allowing
+the `3900mA` limited-source case to take over after fresh consecutive samples. A latched
+`input_absent` backup remains latched while VIN is collapsed even if `mains_present` has not
+yet transitioned; a source-limited latch remains source-limited until explicit input absence.
+
+The runner keeps IsolaPurr USB config reads as setup/teardown evidence and uses the UPS USB VIN
+ADC for continuous source-path voltage. During control-command scheduling gaps, it backfills
+scene samples from received UPS frames using their actual receive timestamps; it does not
+interpolate voltage or state. The LoadLynx contract contains only `load_i_total_ma`.
+
+Final evidence:
+
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-62179e3c-final-r6-20260714T0010Z/`
+
+The recomputed report verifier returned `signoff_valid=true`. The four scenes had effective
+sample rates from `5.005Hz` to `5.199Hz` and maximum gaps from `0.205s` to `0.296s`. The 3900mA
+online scene latched `source_limited` in `0.6s`, with post-latch minimum load voltage `11766mV`;
+the cut scene latched in `0.2s`, remained continuously in Backup, and observed `input_absent`.
 
 `standby_drop_mv=1200` 的最终 r7 虽通过 source-limited 合同，但普通 VIN cut 的切换期
 LoadLynx 最低为 `17754mV`。将完整 advanced-power 快照中的该字段恢复为 `800` 后，

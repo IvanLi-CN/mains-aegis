@@ -215,7 +215,7 @@ pub const ADVANCED_POWER_DEFAULT_RATED_EXIT_DELTA_MA: i16 = 0;
 pub const ADVANCED_POWER_DEFAULT_VIN_DROP_THRESHOLD_PCT: u8 = 4;
 pub const ADVANCED_POWER_DEFAULT_REQUIRED_SAMPLES: u8 = 2;
 pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_VIN_DROP_PCT: u8 = 1;
-pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_ENTER_DELTA_MA: i16 = 1_000;
+pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_ENTER_DELTA_MA: i16 = 2_500;
 pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_EXIT_DELTA_MA: i16 = 0;
 pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_REQUIRED_SAMPLES: u8 = 2;
 pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_RECOVER_MARGIN_MV: u16 = 400;
@@ -1452,7 +1452,7 @@ mod tests {
         assert_eq!(expanded.vin_drop_threshold_pct, 4);
         assert_eq!(expanded.required_samples, 2);
         assert_eq!(expanded.source_limited_vin_drop_pct, 1);
-        assert_eq!(expanded.source_limited_enter_iout_ma, 1_100);
+        assert_eq!(expanded.source_limited_enter_iout_ma, 2_600);
         assert_eq!(expanded.source_limited_exit_iout_ma, 50);
         assert_eq!(expanded.source_limited_required_samples, 2);
         assert_eq!(expanded.source_limited_recover_margin_mv, 400);

@@ -4,7 +4,7 @@
 
 - Status: active
 - Created: 2026-06-16
-- Last: 2026-07-12
+- Last: 2026-07-13
 
 ## 背景 / 问题陈述
 
@@ -176,10 +176,14 @@
     - `VIN <= rated_vout_mv - source_limited_recover_margin_mv`；或
     - `vin_drop_mv` 超过 `source_limited_vin_drop_pct` 派生阈值，且 `vin_iin_ma` 已接近 DCIN 限流门槛；并且
   - 连续 `source_limited_required_samples` 个 fresh 样本满足。
+- `source_limited` 的本质是“上级输入已不能承担当前负载”的证据，不是“目标负载已经接近源电流限值”的保守猜测。
+- 当 formal/source-limited bench source 固定为 `rated_vout_mv / 3000mA` 时，在线负载目标 `<= 2900mA` 必须视为 in-budget guard band。若未同时满足上述 `source_limited` 充分条件中的 `VIN`/`vin_drop_mv`/`vin_iin_ma` 证据，MCU 不得发布 `mode=backup` 或 `backup_reason=source_limited`。
 - 若已连续观测到 DCIN 在线且 `vin_iin_ma` 达到 source-limited 入口门槛，随后
-  在同一高载窗口内发生 VIN 棕断，则必须保留 `source_limited` 原因接管，不能因
-  `mains_present=false` 先到而覆盖成 `input_absent`。
-- 已锁存 `source_limited` 后的物理 VIN cut 必须转换为 `input_absent`；这表示上级电源
+  在同一高载窗口内出现单个 `mains_present=false` 或 VIN 棕断样本，但尚未满足
+  `input_absent` 的确认条件，则必须保留 `source_limited` 原因接管；不得让先到的
+  瞬态 presence 样本覆盖原因。
+- 已锁存 `source_limited` 后，只有当物理 VIN cut 已由 source telemetry 与
+  `input_absent` 充分条件共同确认时，才必须转换为 `input_absent`；这表示上级电源
   已从“不可承担负载”变为“实际离线”。
 - 当输入状态未知时：
   - 必须保持上一确认模式
@@ -278,7 +282,7 @@
 - Given `backup_reason=input_absent` 已锁存且不满足 `eu2b8` 的 USB-C 例外，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
 - Given `backup_reason=source_limited` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD` / source-limited backup notice。
 - Given `mode=backup`、`backup_reason=input_absent`、VIN 已确认无市电且 `eu2b8` 已以新鲜 `<2W` USB-C 输出样本放行，When 查看 mode，Then mode 仍为 `backup`，但 charger 可显示 `CHG500`；该例外不得把 mode 改写为 `standby`。
-- Given 执行 `--suite-contract source-limited-12v`，When Power Path Validation 生成执行计划，Then 必须只生成 `12V backup_only / 1000mA`、`12V source_limited_online / 3900mA`、`12V source_limited_cut / 3900mA` 三个独立 scene；不得复用 dual-voltage 四场景的签核合同。
+- Given 执行 `--suite-contract source-limited-12v`，When Power Path Validation 生成执行计划，Then 必须只生成 `12V backup_only / 1000mA`、`12V source_in_budget / 2900mA`、`12V source_limited_online / 3900mA`、`12V source_limited_cut / 3900mA` 四个独立 scene；不得复用 dual-voltage 四场景的签核合同。
 - Given `source_limited_online` 的 `3900mA` 负载已下发，When hold phase 开始，Then UPS 必须在 `2s` 内发布 `mode=backup`、`assist_power_stage=backup`、`backup_reason=source_limited`，并观察到额定 `assist_target_vout_mv`。
 - Given `source_limited_online` 已锁存，When VIN 仍在线，Then LoadLynx 电压必须保持不低于 `11000mV`；锁存前的低于 `11000mV` 连续时间不得超过 `1s`。
 - Given `source_limited_cut` 尚未观察到 source-limited backup，When runner 到达 source-cut 边界，Then 必须跳过物理 VIN cut 并将 scene 标记为 diagnostic failure。
@@ -294,6 +298,8 @@
 - Given 19V VIN drop 与输入电流已接近 source-limited 门槛，When ADC 与线损误差使 drop 距百分比门槛不超过 `80mV`，Then MCU 可以将其视为 drop 条件满足；该容差不得绕过 `VIN IIN >= 2300mA`、TPS 输出负载或连续样本门槛。
 - Given 19V `backup_only / 1000mA` 正常在线，When VIN IIN 约为 `1100mA` 且 VIN drop 位于容差边缘，Then MCU 必须保持 `standby`，不得误锁存 `source_limited`。
 - Given 12V `backup_only / 1000mA` 正常在线，When 只出现一次瞬时高 `VIN IIN` 而后续 fresh 样本已回到低输入电流，Then MCU 必须保持 `standby`，不得用后续 TPS-only 样本补齐 `source_limited` 连续计数。
+- Given formal/source-limited bench source 固定为 `rated_vout_mv / 3000mA`，When `source_in_budget` 在线负载目标为 `2900mA` 且 VIN 始终在线，Then UPS 必须保持 non-backup（`standby` 或 `supplement` 允许，`backup_reason` 必须为 `null`）；任一 `mode=backup`、`assist_power_stage=backup` 或 `backup_reason=source_limited` 都是误判，必须阻断 scene 与 suite sign-off。
+- Given Power Path Validation 采集 LoadLynx 电流，When 写入 `timeseries.jsonl` 或渲染报告，Then 只允许记录单一 `load_i_total_ma` owner-facing 测量值；不得合成、展示或用 `local/remote` 分量作为验收依据。
 - Given 当前 topic 进入 `12V` Power Path Validation sign-off，When 判定任何边界、在线接管、切断或恢复结论，Then 必须同时满足 `docs/hil-runtime-mode-switching.md` 中定义的三设备实时数据、输出电压波动与 scene-complete gate。
 - Given 当前 topic 进入 formal dual-voltage suite，When 执行 `12V assist_path / 12V backup_only / 19V assist_path / 19V backup_only` 四场景，Then source profile、load target 与保护栏必须固定为 `12V|19V @ 3000mA`、`3900mA|1000mA`、`UVP=3000mV/OCP=4000mA/OPP=80000mW`，不得按口头约定漂移。
 - Given 需要在 formal suite 中从 `12V` 切到 `19V` 或从 `19V` 切回 `12V`，When 做 artifact select / flash，Then 必须先 disable load、cut IsolaPurr `port_c`、确认 UPS 已脱离外部 `DCIN` 高压输入，再进行切换或烧录；并行 USB-C 供电/通信允许保留，不构成切换阻断。

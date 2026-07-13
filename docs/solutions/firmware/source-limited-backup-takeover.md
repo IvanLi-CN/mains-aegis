@@ -123,9 +123,10 @@ become backup merely because TPS is enabled.
 
 ## Validation
 
-For HIL validation, prove three 12V cases separately:
+For current HIL validation, prove four 12V cases separately:
 
 - normal load VIN cut: `12V / 3A source`, `1000mA load`, then cut VIN.
+- in-budget online guard: `12V / 3A source`, `2900mA load`, VIN remains online and Backup must not occur.
 - overload with VIN online: `12V / 3A source`, `3900mA load`, source-limited backup must occur.
 - overload then VIN cut: after source-limited backup at `3900mA`, cut VIN and remain in backup without a long deep sag.
 
@@ -138,9 +139,11 @@ this behavior. The contract is intentionally separate from the legacy
 dual-voltage suite so online source limitation is not hidden inside a later
 physical source cut.
 
-It produces three reports:
+It produces four reports:
 
 - `backup_only / 1000mA`: prove `input_absent` after a normal VIN cut.
+- `source_in_budget / 2900mA`: prove that a load within the 3A source budget
+  remains non-backup while VIN stays online.
 - `source_limited_online / 3900mA`: prove `source_limited` while VIN remains
   online.
 - `source_limited_cut / 3900mA`: only cut VIN while the final pre-cut sample
@@ -153,6 +156,10 @@ and low-voltage durations. Treat load voltage below `11000mV` after latch, or
 a pre-latch low-voltage interval longer than one second, as a failed stability
 criterion. These are HIL acceptance signals only; firmware must continue to
 trigger from UPS-local VIN/current telemetry.
+
+Formal LoadLynx evidence keeps only one measured total-current field. Do not
+invent, preserve, or display local/remote current components in owner-facing
+reports.
 
 The USB-C low-output charging exception belongs only to confirmed
 `input_absent` backup. It must never turn a `source_limited` backup into a
@@ -317,6 +324,27 @@ replacement sign-off. Retaining it allows later changes to distinguish output
 control regressions from telemetry-completeness regressions.
 
 ## Bench and Telemetry Lessons
+
+## 12V Final Validation Pattern
+
+The final 12V evidence is archived at
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-62179e3c-final-r6-20260714T0010Z/`.
+It contains four signed-off scenes: 1000mA input-absent cut, 2900mA in-budget online,
+3900mA source-limited online, and 3900mA source-limited cut. The suite used USB for all
+three devices, retained `tps_cdc_rise_mv=300`, and reported only `load_i_total_ma`.
+
+The validation runner must not treat a control command as a high-rate source telemetry stream.
+IsolaPurr `power show` can temporarily fail while its output is disabled because its device
+info endpoint is unavailable. Keep its config and `tps_cdc_rise_mv` reads as explicit action
+evidence, and use the UPS USB VIN ADC for continuous source-path voltage. If the scene control
+task misses a scheduling interval, recover only real UPS frames already received by the collector,
+using their timestamps; never synthesize or interpolate a voltage sample.
+
+The firmware-side boundary is equally important: once a collapsed VIN has caused
+`input_absent` Backup, do not clear Backup merely because `mains_present` has not yet settled.
+Conversely, a `source_limited` latch must retain that reason during the intermediate DCIN window
+and convert to `input_absent` only after explicit input absence. This prevents both long output
+sags and misleading reason transitions.
 
 - A source control command must operate the physical banana/TPS output gate.
   For the verified IsolaPurr path that is `power runtime output --enabled`, not

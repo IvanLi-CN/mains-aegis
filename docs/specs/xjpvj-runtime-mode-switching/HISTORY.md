@@ -234,6 +234,33 @@
 
 ## 2026-07-13
 
+- `source-limited-12v` 验收合同增加 `source_in_budget / 2900mA`：在 `12V / 3A`
+  source 在线时不得出现 `mode=backup`、`assist_power_stage=backup` 或
+  `backup_reason=source_limited`；suite 从三个 scene 扩为四个 scene。
+
+## 2026-07-14
+
+- 12V 固件修复 VIN 已严重崩落但 `mains_present` 尚未翻转时的状态抖动：已进入
+  `backup_reason=input_absent` 后持续保持 Backup；已锁存 `source_limited` 时仍保持该原因，
+  直到明确观察到 `mains_present=false` 才转换为 `input_absent`。
+- Power Validation 将 IsolaPurr 的 USB config 快照与 UPS/LoadLynx 连续遥测分离，避免在
+  IsolaPurr 输出关闭时重复查询 `info` 造成 collector error；源实际电压以 UPS USB DCIN ADC
+  记录，IsolaPurr 的 `tps_cdc_rise_mv=300` 仍由前后快照校验。
+- runner 使用已接收的 UPS USB 原始帧时间回填控制动作期间的 scene gap，不插值电压或状态。
+  r6 最终四场景签核证据：
+  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-62179e3c-final-r6-20260714T0010Z/`
+  ，离线 verifier 返回 `signoff_valid=true`。
+  `backup_only`、`source_in_budget`、`source_limited_online`、`source_limited_cut` 的最大
+  gap 分别为 `0.253s`、`0.232s`、`0.205s`、`0.296s`；四个 scene 均无 acceptance failure。
+- r6 使用 build `ea9c41d7-dirty-62179e3c72e2da65`，12V `rated_vout_mv=12000`，
+  source `12000mV / 3000mA`，IsolaPurr `tps_cdc_rise_mv=300` 前后保持一致；LoadLynx
+  报告仅使用 `load_i_total_ma`。
+- 12V source-limited VIN-drop 容差改为不超过百分比阈值的一半，避免固定 `80mV`
+  容差在 `1%` 门槛下把约 `50mV` 的能力内压降误判为限流，同时保留约 `112mV`
+  过载压降的接管能力。
+- Power Path Validation 的 LoadLynx evidence 收敛为单一 `load_i_total_ma`，不再记录
+  或展示错误的 `local/remote` 电流分量。
+
 - 归档 12V source-limited 诊断反例
   `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0320Z/`：
   - 前一轮修复后，`source_limited_online` 与 `source_limited_cut` 已恢复签核通过；

@@ -25,6 +25,9 @@ class VoltageChartTooltipTests(unittest.TestCase):
         self.assertIn("const viewportWidth = document.documentElement.clientWidth", html)
         self.assertIn("const viewportHeight = document.documentElement.clientHeight", html)
         self.assertIn("translate3d(${tipX}px, ${tipY}px, 0)", html)
+        self.assertIn("target=${fmtMa(nearest.target_ma)} | actual=${fmtMa(nearest.load_i_total_ma)}", html)
+        self.assertNotIn("load_i_local_ma", html)
+        self.assertNotIn("load_i_remote_ma", html)
 
     def test_backup_transition_span_starts_on_first_live_cut_effect(self):
         rows = [

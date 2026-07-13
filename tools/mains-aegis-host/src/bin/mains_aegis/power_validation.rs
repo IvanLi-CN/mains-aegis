@@ -232,6 +232,7 @@ impl SuiteContract {
             Self::Standard => requested.to_vec(),
             Self::SourceLimited12v => vec![
                 SceneKind::BackupOnly,
+                SceneKind::SourceInBudget,
                 SceneKind::SourceLimitedOnline,
                 SceneKind::SourceLimitedCut,
             ],
@@ -253,6 +254,7 @@ impl SuiteContract {
             ],
             Self::SourceLimited12v => vec![
                 ("12v", "backup_only"),
+                ("12v", "source_in_budget"),
                 ("12v", "source_limited_online"),
                 ("12v", "source_limited_cut"),
             ],
@@ -305,6 +307,8 @@ pub enum SceneKind {
     AssistPath,
     #[value(name = "backup-only")]
     BackupOnly,
+    #[value(name = "source-in-budget")]
+    SourceInBudget,
     #[value(name = "source-limited-online")]
     SourceLimitedOnline,
     #[value(name = "source-limited-cut")]
@@ -316,6 +320,7 @@ impl SceneKind {
         match self {
             Self::AssistPath => "assist_path",
             Self::BackupOnly => "backup_only",
+            Self::SourceInBudget => "source_in_budget",
             Self::SourceLimitedOnline => "source_limited_online",
             Self::SourceLimitedCut => "source_limited_cut",
         }
@@ -325,6 +330,7 @@ impl SceneKind {
         match self {
             Self::AssistPath => 3_900,
             Self::BackupOnly => 1_000,
+            Self::SourceInBudget => 2_900,
             Self::SourceLimitedOnline | Self::SourceLimitedCut => 3_900,
         }
     }
@@ -332,12 +338,16 @@ impl SceneKind {
     fn include_backup(self) -> bool {
         match self {
             Self::AssistPath | Self::BackupOnly | Self::SourceLimitedCut => true,
-            Self::SourceLimitedOnline => false,
+            Self::SourceInBudget | Self::SourceLimitedOnline => false,
         }
     }
 
     fn requires_source_limited(self) -> bool {
         matches!(self, Self::SourceLimitedOnline | Self::SourceLimitedCut)
+    }
+
+    fn requires_non_backup_online(self) -> bool {
+        matches!(self, Self::SourceInBudget)
     }
 
     fn requires_input_absent_after_cut(self) -> bool {
@@ -502,8 +512,6 @@ struct SceneSample {
     diag_tps_total_iout_ma: Option<Value>,
     load_output_enabled: Option<Value>,
     load_v_local_mv: Option<Value>,
-    load_i_local_ma: Option<Value>,
-    load_i_remote_ma: Option<Value>,
     load_i_total_ma: Option<Value>,
 }
 
@@ -552,7 +560,12 @@ async fn run_check(args: CheckArgs, context: PowerValidationArgs) -> anyhow::Res
     let ups_monitor =
         run_cmd_output(ups_command(&args.bench, &context, ["monitor", "start"])).await;
     let source_command = power_stream_command(&args.bench)?;
-    let load_command = load_stream_command(&args.bench, args.samples)?;
+    let load_command = preflight_load_stream_command(&args.bench, args.samples)?;
+    let ups_warmup = if ups_monitor.is_ok() {
+        wait_for_ups_watch_ready(&args.bench, &context, "check_warmup").await
+    } else {
+        Err(anyhow!("UPS monitor did not start"))
+    };
     // Preflight isolates each device's cadence from host-side process contention.
     let ups_status = run_json_probe(
         ups_watch_command(&args.bench, &context, "status", args.samples),
@@ -570,18 +583,9 @@ async fn run_check(args: CheckArgs, context: PowerValidationArgs) -> anyhow::Res
         Duration::from_millis(args.bench.sample_interval_ms),
     )
     .await;
-    let load = match args.bench.load_adapter {
-        LoadAdapterKind::Loadlynx => {
-            run_polling_json_probe(
-                load_status_command(&args.bench)?,
-                args.samples,
-                Duration::from_millis(args.bench.sample_interval_ms),
-            )
-            .await
-        }
-        LoadAdapterKind::External => run_adapter_probe(load_command, args.samples).await,
-    };
+    let load = run_adapter_probe(load_command, args.samples).await;
     let ups_ok = ups_monitor.is_ok()
+        && ups_warmup.as_ref().is_ok_and(|probe| probe.ok)
         && ups_status.as_ref().is_ok_and(|probe| probe.ok)
         && ups_diag_snapshot.as_ref().is_ok_and(|probe| probe.ok);
     let ok = ups_ok
@@ -594,6 +598,10 @@ async fn run_check(args: CheckArgs, context: PowerValidationArgs) -> anyhow::Res
             "ipc": context.ups_ipc,
             "monitor": match ups_monitor {
                 Ok(value) => json!({"ok": true, "result": value}),
+                Err(error) => json!({"ok": false, "error": error.to_string()}),
+            },
+            "warmup": match ups_warmup {
+                Ok(probe) => json!(probe),
                 Err(error) => json!({"ok": false, "error": error.to_string()}),
             },
             "status": match ups_status {
@@ -1171,7 +1179,12 @@ fn validate_scene_report(
             &timeseries_summary,
             completeness,
         );
-        if suite_contract.is_source_limited() {
+        if suite_contract.is_source_limited()
+            && matches!(
+                expected_scene,
+                Some("source_limited_online" | "source_limited_cut")
+            )
+        {
             let (_, hold_failures) = hold_power_assertions(&timeseries_samples);
             for hold_failure in hold_failures {
                 failures.push(json!({
@@ -1605,7 +1618,11 @@ fn power_stream_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
     match args.power_adapter {
         PowerAdapterKind::Isolapurr => {
             let mut cmd = isolapurr_base(args);
-            cmd.extend(["power".to_string(), "telemetry".to_string()]);
+            cmd.extend([
+                "power".to_string(),
+                "config".to_string(),
+                "show".to_string(),
+            ]);
             append_isolapurr_selector(&mut cmd, args);
             Ok(cmd)
         }
@@ -1786,7 +1803,20 @@ fn load_cc_command(
 
 fn load_stream_command(args: &BenchArgs, samples: usize) -> anyhow::Result<Vec<String>> {
     match args.load_adapter {
-        LoadAdapterKind::Loadlynx => load_status_command(args),
+        LoadAdapterKind::Loadlynx => load_cli_base(args).map(|mut cmd| {
+            cmd.extend([
+                "--json".to_string(),
+                "status-stream".to_string(),
+                "--device".to_string(),
+                args.load_device.clone(),
+                "--interval-ms".to_string(),
+                args.sample_interval_ms.to_string(),
+            ]);
+            if samples > 0 {
+                cmd.extend(["--count".to_string(), samples.to_string()]);
+            }
+            cmd
+        }),
         LoadAdapterKind::External => {
             let mut extra = vec![("--interval-ms", args.sample_interval_ms.to_string())];
             if samples > 0 {
@@ -1802,16 +1832,11 @@ fn load_stream_command(args: &BenchArgs, samples: usize) -> anyhow::Result<Vec<S
     }
 }
 
-fn load_status_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
-    load_cli_base(args).map(|mut cmd| {
-        cmd.extend([
-            "--json".to_string(),
-            "status".to_string(),
-            "--device".to_string(),
-            args.load_device.clone(),
-        ]);
-        cmd
-    })
+fn preflight_load_stream_command(args: &BenchArgs, samples: usize) -> anyhow::Result<Vec<String>> {
+    // Match the formal collector: it owns termination after receiving the requested
+    // number of samples, so LoadLynx never enters its bounded-stream exit path.
+    let _ = samples;
+    load_stream_command(args, 0)
 }
 
 fn load_cli_base(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
@@ -1903,16 +1928,18 @@ async fn run_scene_inner(
     fs::create_dir_all(&report_dir)?;
     let mut actions = Vec::<Value>::new();
     let mut samples = Vec::<SceneSample>::new();
-    run_cmd_json(
+    run_cmd_json_retry(
         load_disable_command(&args.bench)?,
         "load_disable_before_scene",
         &mut actions,
+        3,
     )
     .await?;
-    run_cmd_json(
+    run_cmd_json_retry(
         power_disable_command(&args.bench)?,
         "power_disable_before_scene",
         &mut actions,
+        3,
     )
     .await?;
     ensure_source_disconnected(args, context, &mut actions, "before_scene").await?;
@@ -1933,10 +1960,11 @@ async fn run_scene_inner(
         "power_tps_cdc_rise_before_configure",
     )
     .await?;
-    run_cmd_json(
+    run_cmd_json_retry(
         power_configure_off_command(&args.bench, profile)?,
         "power_configure_off",
         &mut actions,
+        3,
     )
     .await?;
     let tps_cdc_rise_after = read_isolapurr_tps_cdc_rise_mv(
@@ -2120,6 +2148,13 @@ async fn run_scene_inner(
     )
     .await;
     stop_collectors(&mut collectors).await;
+    backfill_scene_samples_from_ups(
+        &mut samples,
+        &collectors,
+        started_unix_ms,
+        scene.target_ma(),
+        (args.bench.sample_interval_ms as i64 / 2).max(1),
+    );
     let collector_diagnostics = collector_diagnostics(&collectors);
     let mut summary = summarize_scene(&samples);
     for (name, diag) in collector_diagnostics.as_object().into_iter().flatten() {
@@ -2224,6 +2259,12 @@ fn sample_is_backup(sample: &SceneSample) -> bool {
     sample_string(&sample.mode) == Some("backup")
         && (sample_string(&sample.stage) == Some("backup")
             || sample_string(&sample.diag_stage) == Some("backup"))
+}
+
+fn sample_has_backup_signal(sample: &SceneSample) -> bool {
+    sample_string(&sample.mode) == Some("backup")
+        || sample_string(&sample.stage) == Some("backup")
+        || sample_string(&sample.diag_stage) == Some("backup")
 }
 
 fn sample_is_source_limited(sample: &SceneSample) -> bool {
@@ -2397,13 +2438,7 @@ fn is_load_phase(sample: &SceneSample) -> bool {
 }
 
 fn sample_load_current_ma(sample: &SceneSample) -> Option<i64> {
-    let local = sample_number(&sample.load_i_local_ma);
-    let remote = sample_number(&sample.load_i_remote_ma);
-    match (local, remote) {
-        (Some(local), Some(remote)) => Some(local + remote),
-        (Some(current), None) | (None, Some(current)) => Some(current),
-        (None, None) => None,
-    }
+    sample_number(&sample.load_i_total_ma)
 }
 
 fn sample_load_is_applied(sample: &SceneSample) -> bool {
@@ -2445,7 +2480,12 @@ fn evaluate_scene_assertions(
     profile: OutputProfile,
     samples: &[SceneSample],
 ) -> Value {
-    let (hold_tps_power, mut failures) = hold_power_assertions(samples);
+    let (hold_tps_power, hold_power_failures) = hold_power_assertions(samples);
+    let mut failures = if scene.requires_source_limited() {
+        hold_power_failures
+    } else {
+        Vec::new()
+    };
     let load_samples = samples
         .iter()
         .filter(|sample| is_load_phase(sample))
@@ -2529,6 +2569,49 @@ fn evaluate_scene_assertions(
         Value::Null
     };
 
+    let in_budget_guard = if scene.requires_non_backup_online() {
+        let applied_samples = load_samples
+            .iter()
+            .copied()
+            .filter(|sample| sample_load_is_applied(sample))
+            .collect::<Vec<_>>();
+        let backup_samples = applied_samples
+            .iter()
+            .filter(|sample| sample_has_backup_signal(sample))
+            .count();
+        let source_limited_samples = applied_samples
+            .iter()
+            .filter(|sample| sample_backup_reason(sample) == Some("source_limited"))
+            .count();
+        let backup_reason_samples = applied_samples
+            .iter()
+            .filter(|sample| sample_backup_reason(sample).is_some())
+            .count();
+        let offline_samples = applied_samples
+            .iter()
+            .filter(|sample| sample_mains_present(sample) != Some(true))
+            .count();
+        if applied_samples.is_empty() {
+            failures.push("source_in_budget_load_not_observed".to_string());
+        }
+        if backup_samples > 0 || backup_reason_samples > 0 {
+            failures.push("source_in_budget_entered_backup".to_string());
+        }
+        if offline_samples > 0 {
+            failures.push("source_in_budget_mains_not_continuously_online".to_string());
+        }
+        json!({
+            "target_ma": scene.target_ma(),
+            "applied_samples": applied_samples.len(),
+            "backup_samples": backup_samples,
+            "source_limited_samples": source_limited_samples,
+            "backup_reason_samples": backup_reason_samples,
+            "offline_samples": offline_samples,
+        })
+    } else {
+        Value::Null
+    };
+
     let backup_cut = if scene.requires_input_absent_after_cut() {
         let backup_samples = samples
             .iter()
@@ -2565,6 +2648,7 @@ fn evaluate_scene_assertions(
         "hold_tps_power": hold_tps_power,
         "transition_source_limited_started_at_s": samples.iter().find(|sample| sample.phase == "transition_source_limited").map(|sample| sample.t_s),
         "backup_online_started_at_s": samples.iter().find(|sample| sample.phase == "backup_online").map(|sample| sample.t_s),
+        "in_budget_guard": in_budget_guard,
         "source_limited": source_limited,
         "backup_cut": backup_cut,
     })
@@ -2936,14 +3020,7 @@ async fn start_scene_collectors(
         )
         .await?,
     );
-    collectors.insert(
-        "load".to_string(),
-        spawn_load_collector(args, Duration::from_millis(args.bench.sample_interval_ms)).await?,
-    );
-    collectors.insert(
-        "power".to_string(),
-        spawn_power_collector(args, Duration::from_millis(args.bench.sample_interval_ms)).await?,
-    );
+    collectors.insert("load".to_string(), spawn_load_collector(args).await?);
     wait_for_ups_status_watch_ready(args, context, "collector_warmup").await?;
     Ok(collectors)
 }
@@ -2953,18 +3030,26 @@ async fn wait_for_ups_status_watch_ready(
     context: &PowerValidationArgs,
     label: &str,
 ) -> anyhow::Result<ProbeSummary> {
+    wait_for_ups_watch_ready(&args.bench, context, label).await
+}
+
+async fn wait_for_ups_watch_ready(
+    bench: &BenchArgs,
+    context: &PowerValidationArgs,
+    label: &str,
+) -> anyhow::Result<ProbeSummary> {
     let started = Instant::now();
     let deadline = started + Duration::from_secs(20);
     let mut last_probe = None;
     while Instant::now() < deadline {
-        let probe = run_json_probe(ups_watch_command(&args.bench, context, "status", 8), 8)
+        let probe = run_json_probe(ups_watch_command(bench, context, "status", 8), 8)
             .await
             .with_context(|| format!("probing UPS status watch {label}"))?;
         if probe.ok {
             return Ok(probe);
         }
         last_probe = Some(probe);
-        sleep(Duration::from_millis(args.bench.sample_interval_ms)).await;
+        sleep(Duration::from_millis(bench.sample_interval_ms)).await;
     }
     bail!(
         "UPS status watch did not become ready for {label} within {:?}: {:?}",
@@ -2973,52 +3058,13 @@ async fn wait_for_ups_status_watch_ready(
     );
 }
 
-async fn spawn_load_collector(
-    args: &RunArgs,
-    interval: Duration,
-) -> anyhow::Result<JsonlProcessCollector> {
-    match args.bench.load_adapter {
-        LoadAdapterKind::External => {
-            JsonlProcessCollector::spawn(
-                "load",
-                load_stream_command(&args.bench, 0)?,
-                JsonFrameMode::Raw,
-            )
-            .await
-        }
-        LoadAdapterKind::Loadlynx => {
-            JsonlProcessCollector::spawn_polling(
-                "load",
-                load_status_command(&args.bench)?,
-                interval,
-            )
-            .await
-        }
-    }
-}
-
-async fn spawn_power_collector(
-    args: &RunArgs,
-    interval: Duration,
-) -> anyhow::Result<JsonlProcessCollector> {
-    match args.bench.power_adapter {
-        PowerAdapterKind::External => {
-            JsonlProcessCollector::spawn(
-                "power",
-                power_stream_command(&args.bench)?,
-                JsonFrameMode::Raw,
-            )
-            .await
-        }
-        PowerAdapterKind::Isolapurr => {
-            JsonlProcessCollector::spawn_polling(
-                "power",
-                power_stream_command(&args.bench)?,
-                interval,
-            )
-            .await
-        }
-    }
+async fn spawn_load_collector(args: &RunArgs) -> anyhow::Result<JsonlProcessCollector> {
+    JsonlProcessCollector::spawn(
+        "load",
+        load_stream_command(&args.bench, 0)?,
+        JsonFrameMode::Raw,
+    )
+    .await
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3047,38 +3093,6 @@ impl JsonlProcessCollector {
             errors,
             child,
             stop_flag: None,
-        })
-    }
-
-    async fn spawn_polling(
-        name: &str,
-        cmd: Vec<String>,
-        interval: Duration,
-    ) -> anyhow::Result<Self> {
-        let child = Command::new("sh")
-            .arg("-c")
-            .arg("sleep 86400")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let rows = Arc::new(Mutex::new(Vec::new()));
-        let errors = Arc::new(Mutex::new(Vec::new()));
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        spawn_poll_loop(
-            name.to_string(),
-            cmd.clone(),
-            interval,
-            rows.clone(),
-            errors.clone(),
-            stop_flag.clone(),
-        );
-        Ok(Self {
-            name: name.to_string(),
-            cmd,
-            rows,
-            errors,
-            child,
-            stop_flag: Some(stop_flag),
         })
     }
 
@@ -3145,37 +3159,6 @@ fn spawn_stderr_reader(
             let _ = errors
                 .lock()
                 .map(|mut errors| errors.push(format!("{name} stderr: {line}")));
-        }
-    });
-}
-
-fn spawn_poll_loop(
-    name: String,
-    cmd: Vec<String>,
-    interval: Duration,
-    rows: Arc<Mutex<Vec<RawFrame>>>,
-    errors: Arc<Mutex<Vec<String>>>,
-    stop_flag: Arc<AtomicBool>,
-) {
-    tokio::spawn(async move {
-        while !stop_flag.load(Ordering::Relaxed) {
-            let sample_started = Instant::now();
-            match run_cmd_output(cmd.clone()).await {
-                Ok(value) => {
-                    let _ = rows.lock().map(|mut rows| {
-                        rows.push(RawFrame {
-                            received_ms: now_ms(),
-                            value,
-                        })
-                    });
-                }
-                Err(error) => {
-                    let _ = errors
-                        .lock()
-                        .map(|mut errors| errors.push(format!("{name}: {error}")));
-                }
-            }
-            sleep(interval.saturating_sub(sample_started.elapsed())).await;
         }
     });
 }
@@ -3264,6 +3247,16 @@ fn collect_scene_sample(
     target_ma: u32,
 ) -> SceneSample {
     let elapsed_ms = start.elapsed().as_millis() as i64;
+    collect_scene_sample_at(collectors, elapsed_ms, started_unix_ms, phase, target_ma)
+}
+
+fn collect_scene_sample_at(
+    collectors: &BTreeMap<String, JsonlProcessCollector>,
+    elapsed_ms: i64,
+    started_unix_ms: i64,
+    phase: &str,
+    target_ma: u32,
+) -> SceneSample {
     let unix_ms = started_unix_ms + elapsed_ms;
     let status_frame = collectors
         .get("ups_status")
@@ -3284,11 +3277,7 @@ fn collect_scene_sample(
             .get("load")
             .and_then(|c| c.latest_before(unix_ms)),
     );
-    let power = unwrap_cli_result(
-        collectors
-            .get("power")
-            .and_then(|c| c.latest_before(unix_ms)),
-    );
+    let power = json!({});
     let input = status
         .pointer("/input")
         .cloned()
@@ -3339,12 +3328,14 @@ fn collect_scene_sample(
         .unwrap_or_else(|| json!({}));
     let runtime_output_enabled = power
         .pointer("/config/runtime/output_enabled")
+        .or_else(|| power.pointer("/runtime/output_enabled"))
         .and_then(Value::as_bool)
         .or_else(|| adapter_sample_value(&power, "enabled").and_then(|value| value.as_bool()));
     let source_setpoint_mv = power
         .pointer("/diagnostics/tps_setpoint/mv")
         .cloned()
         .or_else(|| power.pointer("/config/manual/voltage_mv").cloned())
+        .or_else(|| power.pointer("/manual/voltage_mv").cloned())
         .or_else(|| adapter_sample_value(&power, "voltage_mv"));
     let source_output_mv = match runtime_output_enabled {
         Some(false) => Some(json!(0)),
@@ -3358,9 +3349,9 @@ fn collect_scene_sample(
             .cloned()
             .or_else(|| adapter_sample_value(&power, "voltage_mv")),
     };
-    let load_i_total =
-        as_i64(load_status.get("i_local_ma")) + as_i64(load_status.get("i_remote_ma"));
     let adapter_load_current = adapter_sample_value(&load, "current_ma");
+    let measured_load_current = adapter_load_current
+        .or_else(|| load_total_current_from_status(&load_status).map(Value::from));
     SceneSample {
         t_s: round3(elapsed_ms as f64 / 1000.0),
         unix_ms,
@@ -3377,7 +3368,7 @@ fn collect_scene_sample(
             .cloned()
             .or_else(|| runtime_output_enabled.map(Value::from))
             .or_else(|| adapter_sample_value(&power, "enabled")),
-        isolapurr_port_c_mv: source_output_mv,
+        isolapurr_port_c_mv: source_output_mv.or_else(|| input.get("vin_vbus_mv").cloned()),
         isolapurr_port_c_ma: port_telemetry
             .get("current_ma")
             .cloned()
@@ -3418,13 +3409,76 @@ fn collect_scene_sample(
             .get("v_local_mv")
             .cloned()
             .or_else(|| adapter_sample_value(&load, "voltage_mv")),
-        load_i_local_ma: load_status
-            .get("i_local_ma")
-            .cloned()
-            .or_else(|| adapter_load_current.clone()),
-        load_i_remote_ma: load_status.get("i_remote_ma").cloned(),
-        load_i_total_ma: adapter_load_current.or_else(|| Some(json!(load_i_total))),
+        load_i_total_ma: measured_load_current,
     }
+}
+
+fn backfill_scene_samples_from_ups(
+    samples: &mut Vec<SceneSample>,
+    collectors: &BTreeMap<String, JsonlProcessCollector>,
+    started_unix_ms: i64,
+    target_ma: u32,
+    minimum_spacing_ms: i64,
+) {
+    let Some(status_rows) = collectors
+        .get("ups_status")
+        .and_then(|collector| collector.rows.lock().ok().map(|rows| rows.clone()))
+    else {
+        return;
+    };
+    let Some(first_unix_ms) = samples.first().map(|sample| sample.unix_ms) else {
+        return;
+    };
+    let Some(last_unix_ms) = samples.last().map(|sample| sample.unix_ms) else {
+        return;
+    };
+    let timeline = samples
+        .iter()
+        .map(|sample| (sample.unix_ms, sample.phase.clone()))
+        .collect::<Vec<_>>();
+    let mut backfill = Vec::new();
+    for row in status_rows {
+        if row.received_ms < first_unix_ms || row.received_ms > last_unix_ms {
+            continue;
+        }
+        if samples
+            .iter()
+            .any(|sample| (sample.unix_ms - row.received_ms).abs() < minimum_spacing_ms)
+        {
+            continue;
+        }
+        let phase = timeline
+            .iter()
+            .rev()
+            .find(|(unix_ms, _)| *unix_ms <= row.received_ms)
+            .or_else(|| timeline.first())
+            .map(|(_, phase)| phase.as_str())
+            .unwrap_or("pre");
+        let sample = collect_scene_sample_at(
+            collectors,
+            row.received_ms - started_unix_ms,
+            started_unix_ms,
+            phase,
+            target_ma,
+        );
+        if sample
+            .ups_status_cache_fresh
+            .as_ref()
+            .and_then(Value::as_bool)
+            != Some(false)
+        {
+            backfill.push(sample);
+        }
+    }
+    samples.extend(backfill);
+    samples.sort_by_key(|sample| sample.unix_ms);
+    samples.dedup_by_key(|sample| sample.unix_ms);
+}
+
+fn load_total_current_from_status(status: &Value) -> Option<i64> {
+    let voltage_mv = status.get("v_local_mv").and_then(Value::as_i64)?;
+    let power_mw = status.get("calc_p_mw").and_then(Value::as_i64)?;
+    (voltage_mv > 0).then(|| power_mw.saturating_mul(1_000) / voltage_mv)
 }
 
 fn adapter_sample_value(value: &Value, field: &str) -> Option<Value> {
@@ -3738,6 +3792,10 @@ fn json_frame_has_telemetry(value: &Value) -> bool {
             .pointer("/ports")
             .and_then(Value::as_array)
             .is_some_and(|ports| !ports.is_empty())
+        || ((value.pointer("/manual/voltage_mv").is_some()
+            && value.pointer("/runtime/output_enabled").is_some())
+            || (value.pointer("/payload/manual/voltage_mv").is_some()
+                && value.pointer("/payload/runtime/output_enabled").is_some()))
         || value
             .pointer("/ports/ports")
             .and_then(Value::as_array)
@@ -4229,7 +4287,7 @@ fn validate_suite_settings(
         .unwrap_or_else(|| json!({}));
     let expected = json!({
         "source_limited_vin_drop_pct": 1,
-        "source_limited_enter_delta_ma": 1_000,
+        "source_limited_enter_delta_ma": 2_500,
         "source_limited_exit_delta_ma": 0,
         "source_limited_required_samples": 2,
         "source_limited_recover_margin_mv": 400,
@@ -4375,10 +4433,6 @@ async fn render_scene_chart(
     ];
     let _ = run_cmd_output(cmd).await;
     Ok(())
-}
-
-fn as_i64(value: Option<&Value>) -> i64 {
-    value.and_then(Value::as_i64).unwrap_or(0)
 }
 
 fn round3(value: f64) -> f64 {
@@ -4543,8 +4597,6 @@ mod tests {
             diag_tps_total_iout_ma: Some(json!(3_900)),
             load_output_enabled: Some(json!(true)),
             load_v_local_mv: Some(json!(load_v_local_mv)),
-            load_i_local_ma: Some(json!(3_900)),
-            load_i_remote_ma: Some(json!(0)),
             load_i_total_ma: Some(json!(3_900)),
         }
     }
@@ -4573,13 +4625,21 @@ mod tests {
     }
 
     #[test]
-    fn loadlynx_stream_uses_status_snapshots_over_ipc() {
+    fn loadlynx_stream_uses_status_stream_over_ipc() {
         let cmd = load_stream_command(&bench(Some("/opt/loadlynx")), 40).unwrap();
         assert_eq!(cmd[0], "/opt/loadlynx");
         assert!(cmd.contains(&"--ipc".to_string()));
         assert!(cmd.contains(&"/tmp/load.sock".to_string()));
-        assert!(cmd.contains(&"status".to_string()));
-        assert!(!cmd.contains(&"status-stream".to_string()));
+        assert!(cmd.contains(&"status-stream".to_string()));
+        assert!(cmd.contains(&"--interval-ms".to_string()));
+        assert!(cmd.contains(&"200".to_string()));
+        assert!(cmd.contains(&"--count".to_string()));
+        assert!(cmd.contains(&"40".to_string()));
+    }
+
+    #[test]
+    fn loadlynx_preflight_stream_matches_formal_unbounded_collector() {
+        let cmd = preflight_load_stream_command(&bench(Some("/opt/loadlynx")), 40).unwrap();
         assert!(!cmd.contains(&"--count".to_string()));
     }
 
@@ -4597,7 +4657,8 @@ mod tests {
             assert!(cmd.contains(&"/tmp/isolapurr.sock".to_string()));
         }
         let stream = power_stream_command(&bench).unwrap();
-        assert!(stream.contains(&"telemetry".to_string()));
+        assert!(stream.contains(&"show".to_string()));
+        assert!(!stream.contains(&"telemetry".to_string()));
     }
 
     #[test]
@@ -4676,7 +4737,8 @@ mod tests {
                 "isolapurr",
                 "--json",
                 "power",
-                "telemetry",
+                "config",
+                "show",
                 "--url",
                 "http://127.0.0.1:30182",
             ]
@@ -4801,6 +4863,17 @@ mod tests {
     }
 
     #[test]
+    fn json_probe_accepts_isolapurr_power_config_snapshot() {
+        let frame = json!({
+            "received_at_ms": 1000,
+            "manual": {"voltage_mv": 12000, "tps_cdc_rise_mv": 300},
+            "runtime": {"output_enabled": false}
+        });
+        assert!(json_frame_has_telemetry(&frame));
+        assert!(json_frame_has_telemetry(&json!({"payload": frame})));
+    }
+
+    #[test]
     fn json_probe_accepts_ups_diag_snapshot_power_package() {
         let frame = json!({
             "sample_received_at_ms": 1000,
@@ -4866,7 +4939,7 @@ mod tests {
     }
 
     #[test]
-    fn source_limited_contract_forces_three_12v_scenes() {
+    fn source_limited_contract_forces_four_12v_scenes() {
         let run = RunArgs {
             bench: bench(Some("loadlynx")),
             suite_contract: SuiteContract::SourceLimited12v,
@@ -4905,10 +4978,17 @@ mod tests {
                 .iter()
                 .map(|report| report.scene_type)
                 .collect::<Vec<_>>(),
-            vec!["backup_only", "source_limited_online", "source_limited_cut"]
+            vec![
+                "backup_only",
+                "source_in_budget",
+                "source_limited_online",
+                "source_limited_cut",
+            ]
         );
         assert!(!plan.reports[1].include_backup);
-        assert!(plan.reports[2].include_backup);
+        assert_eq!(plan.reports[1].target_ma, 2_900);
+        assert!(!plan.reports[2].include_backup);
+        assert!(plan.reports[3].include_backup);
     }
 
     #[test]
@@ -4948,7 +5028,7 @@ mod tests {
         let settings = json!({
             "advanced_power": {
                 "source_limited_vin_drop_pct": 1,
-                "source_limited_enter_delta_ma": 1000,
+                "source_limited_enter_delta_ma": 2500,
                 "source_limited_exit_delta_ma": 0,
                 "source_limited_required_samples": 2,
                 "source_limited_recover_margin_mv": 400,
@@ -5030,6 +5110,78 @@ mod tests {
         assert_eq!(
             assertions.pointer("/source_limited/post_latch_min_load_mv"),
             Some(&json!(11_050))
+        );
+    }
+
+    #[test]
+    fn source_in_budget_assertions_require_online_non_backup_operation() {
+        let mut samples = vec![
+            scene_sample(0.0, "transition_load", "standby", "standby", None, 11_700),
+            scene_sample(0.2, "hold", "standby", "standby", None, 11_700),
+            scene_sample(0.4, "hold", "standby", "standby", None, 11_700),
+        ];
+        for sample in &mut samples {
+            sample.load_target_i_ma = 2_900;
+            sample.load_i_total_ma = Some(json!(2_900));
+            sample.tps_total_iout_ma = Some(json!(32));
+        }
+
+        let assertions =
+            evaluate_scene_assertions(SceneKind::SourceInBudget, OutputProfile::V12, &samples);
+        assert_eq!(assertions.get("passed"), Some(&json!(true)));
+        assert_eq!(
+            assertions.pointer("/in_budget_guard/backup_samples"),
+            Some(&json!(0))
+        );
+        assert_eq!(
+            assertions.pointer("/in_budget_guard/applied_samples"),
+            Some(&json!(3))
+        );
+    }
+
+    #[test]
+    fn source_in_budget_allows_non_backup_supplement_power() {
+        let mut sample = scene_sample(0.2, "hold", "supplement", "online", None, 11_700);
+        sample.load_target_i_ma = 2_900;
+        sample.load_i_total_ma = Some(json!(2_900));
+        sample.tps_total_iout_ma = Some(json!(500));
+        sample.out_a_vbus_mv = Some(json!(12_000));
+        sample.out_a_iout_ma = Some(json!(500));
+
+        let assertions =
+            evaluate_scene_assertions(SceneKind::SourceInBudget, OutputProfile::V12, &[sample]);
+        assert_eq!(assertions.get("passed"), Some(&json!(true)));
+        assert_eq!(
+            assertions.pointer("/hold_tps_power/maximum_mw"),
+            Some(&json!(6_000))
+        );
+    }
+
+    #[test]
+    fn source_in_budget_assertions_reject_any_backup_signal() {
+        let mut sample = scene_sample(0.2, "hold", "standby", "backup", None, 11_700);
+        sample.load_target_i_ma = 2_900;
+        sample.load_i_total_ma = Some(json!(2_900));
+
+        let assertions =
+            evaluate_scene_assertions(SceneKind::SourceInBudget, OutputProfile::V12, &[sample]);
+        assert_eq!(assertions.get("passed"), Some(&json!(false)));
+        assert!(assertions
+            .get("failures")
+            .and_then(Value::as_array)
+            .is_some_and(|failures| failures.contains(&json!("source_in_budget_entered_backup"))));
+    }
+
+    #[test]
+    fn load_total_current_uses_terminal_power_and_voltage() {
+        assert_eq!(
+            load_total_current_from_status(&json!({
+                "v_local_mv": 11_684,
+                "calc_p_mw": 45_567,
+                "i_local_ma": 1_949,
+                "i_remote_ma": 1_949,
+            })),
+            Some(3_899)
         );
     }
 
@@ -5169,7 +5321,7 @@ mod tests {
     }
 
     #[test]
-    fn source_limited_report_verifier_requires_three_reports() {
+    fn source_limited_report_verifier_requires_four_reports() {
         let temp = tempfile::tempdir().unwrap();
         let summary = temp.path().join("suite-summary.json");
         write_json_value(
@@ -5189,7 +5341,7 @@ mod tests {
             .and_then(Value::as_array)
             .is_some_and(|failures| failures.iter().any(|failure| {
                 failure.get("suite_failure") == Some(&json!("unexpected_report_count"))
-                    && failure.get("expected") == Some(&json!(3))
+                    && failure.get("expected") == Some(&json!(4))
             })));
     }
 
@@ -5455,8 +5607,6 @@ mod tests {
                     diag_tps_total_iout_ma: None,
                     load_output_enabled: None,
                     load_v_local_mv: None,
-                    load_i_local_ma: None,
-                    load_i_remote_ma: None,
                     load_i_total_ma: None,
                 })
                 .unwrap(),
@@ -5495,8 +5645,6 @@ mod tests {
                     diag_tps_total_iout_ma: None,
                     load_output_enabled: None,
                     load_v_local_mv: None,
-                    load_i_local_ma: None,
-                    load_i_remote_ma: None,
                     load_i_total_ma: None,
                 })
                 .unwrap(),
@@ -5535,8 +5683,6 @@ mod tests {
                     diag_tps_total_iout_ma: None,
                     load_output_enabled: None,
                     load_v_local_mv: None,
-                    load_i_local_ma: None,
-                    load_i_remote_ma: None,
                     load_i_total_ma: None,
                 })
                 .unwrap(),

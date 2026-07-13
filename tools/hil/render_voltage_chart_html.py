@@ -152,8 +152,6 @@ def load_rows(path: Path) -> list[dict]:
                 "out_a_iout_ma": raw.get("out_a_iout_ma"),
                 "out_b_iout_ma": raw.get("out_b_iout_ma"),
                 "load_output_enabled": raw.get("load_output_enabled"),
-                "load_i_local_ma": raw.get("load_i_local_ma"),
-                "load_i_remote_ma": raw.get("load_i_remote_ma"),
                 "load_i_total_ma": raw.get("load_i_total_ma"),
                 "load_status_generation": raw.get("load_status_generation"),
                 "load_status_age_s": raw.get("load_status_age_s"),
@@ -1212,7 +1210,7 @@ def render_html(
           <div>d_stage=${{nearest.diag_stage || "n/a"}} | d_target=${{fmtMv(nearest.diag_assist_target_vout_mv)}}</div>
           <div>vbase=${{fmtMv(nearest.diag_vin_baseline_mv)}} | vdrop=${{fmtMv(nearest.diag_vin_drop_mv)}} | d_tps=${{fmtMa(nearest.diag_tps_total_iout_ma)}}</div>
           <div style="margin-top:6px"><strong>Load</strong></div>
-          <div>target=${{fmtMa(nearest.target_ma)}} | local=${{fmtMa(nearest.load_i_local_ma)}} | remote=${{fmtMa(nearest.load_i_remote_ma)}} | total=${{fmtMa(nearest.load_i_total_ma)}}</div>
+          <div>target=${{fmtMa(nearest.target_ma)}} | actual=${{fmtMa(nearest.load_i_total_ma)}}</div>
           <div>age=${{typeof nearest.load_status_age_s === "number" ? nearest.load_status_age_s.toFixed(3) + "s" : "n/a"}}</div>
         `;
         tooltip.style.opacity = "1";

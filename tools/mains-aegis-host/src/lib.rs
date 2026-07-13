@@ -63,7 +63,8 @@ const NATIVE_CDC_RESPONSE_TIMEOUT_SECS: u64 = 8;
 const RECOVERY_RESPONSE_TIMEOUT_SECS: u64 = 75;
 const RECOVERY_POLL_INTERVAL_MS: u64 = 500;
 const RECOVERY_CDC_REQUEST_PREFIX: &str = "devd-rec-bms";
-const NATIVE_MONITOR_STATUS_INTERVAL_MS: u64 = 500;
+// Keep cached USB status comfortably fresher than the 750 ms HIL freshness gate.
+const NATIVE_MONITOR_STATUS_INTERVAL_MS: u64 = 200;
 const NATIVE_MONITOR_STATUS_RESPONSE_TIMEOUT_MS: u64 = 750;
 const NATIVE_MONITOR_COMMAND_TIMEOUT_MS: u64 = 750;
 const NATIVE_MONITOR_STOP_WAIT_MS: u64 = 1_000;
@@ -11013,6 +11014,11 @@ mod tests {
             next_status_at,
             next_status_at + Duration::from_millis(1)
         ));
+    }
+
+    #[test]
+    fn native_monitor_status_interval_matches_power_validation_sampling() {
+        assert_eq!(NATIVE_MONITOR_STATUS_INTERVAL_MS, 200);
     }
 
     #[test]
