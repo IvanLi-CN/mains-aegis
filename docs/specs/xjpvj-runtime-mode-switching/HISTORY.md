@@ -234,6 +234,22 @@
 
 ## 2026-07-13
 
+- 归档 12V source-limited 诊断反例
+  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0320Z/`：
+  - 前一轮修复后，`source_limited_online` 与 `source_limited_cut` 已恢复签核通过；
+  - 但 `backup_only / 1000mA` 在线 hold 被错误锁成 `backup_reason=source_limited`，
+    `hold_tps_power_max_mw=12607`，因此 scene 与 suite 只能作为诊断证据。
+- 修复 12V source-limited 假阳性：
+  - 纯 TPS-only 的 source-limited 锁存不再允许把一次瞬时高 `VIN IIN` 与后续低输入电流样本拼接成连续计数；
+  - 已锁存 `source_limited` 后，VIN cut 的 `dcin_present` 先掉窗口继续保持 `backup`，直到原因转为 `input_absent`。
+- 使用 12V build `c22bf968-dirty-d8c9ca3fa923b63b` 完成新的 12V 三场景最终签核：
+  - evidence:
+    `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0335Z/`
+  - suite verifier `signoff_valid=true`，三个 scene 均为 `valid_for_signoff`
+  - `12v-backup_only-1000ma`：`4.894Hz`，max gap `0.402s`，hold TPS 最大 `391mW`
+  - `12v-source_limited_online-3900ma`：`4.810Hz`，max gap `0.401s`，锁存后最低负载端电压 `11755mV`
+  - `12v-source_limited_cut-3900ma`：`5.025Hz`，max gap `0.401s`，VIN cut 后连续保持 backup 并转为 `input_absent`
+  - IsolaPurr 仍保持 manual `12000mV / 3000mA`，`tps_cdc_rise_mv=300` 在测试前后回读一致
 - 完成 19V 热备目标与 source-limited 联合调优：
   - `standby_drop_mv` 从 `1200` 恢复为 `800`，普通 VIN cut 切换期 LoadLynx 最低由
     `17754mV` 提高到 `18143mV`。

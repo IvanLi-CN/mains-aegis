@@ -174,12 +174,99 @@ def mv_to_v(value: object) -> float | None:
     return None
 
 
+def row_mains_present(row: dict) -> bool | None:
+    value = row.get("mains_present")
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def row_vin_vbus_mv(row: dict) -> int | float | None:
+    value = row.get("vin_vbus_mv")
+    if isinstance(value, (int, float)):
+        return value
+    return None
+
+
+def row_is_backup(row: dict) -> bool:
+    return row.get("mode") == "backup" or row.get("stage") == "backup"
+
+
+def normalized_span_phases(rows: list[dict]) -> list[str]:
+    phases = [str(row.get("phase") or "unknown") for row in rows]
+
+    try:
+        first_transition_idx = phases.index("transition_backup")
+    except ValueError:
+        return phases
+
+    hold_like_idx = None
+    for idx in range(first_transition_idx - 1, -1, -1):
+        if phases[idx] in {"hold", "transition_load", "backup_online"}:
+            hold_like_idx = idx
+            break
+
+    hold_mains_present = (
+        row_mains_present(rows[hold_like_idx]) if hold_like_idx is not None else None
+    )
+    hold_vin_vbus_mv = (
+        row_vin_vbus_mv(rows[hold_like_idx]) if hold_like_idx is not None else None
+    )
+
+    first_effect_idx = None
+    first_backup_idx = None
+    for idx in range(first_transition_idx, len(rows)):
+        if phases[idx] not in {"transition_backup", "backup"}:
+            continue
+        row = rows[idx]
+        mains_changed = (
+            hold_mains_present is not None
+            and row_mains_present(row) is not None
+            and row_mains_present(row) != hold_mains_present
+        )
+        vin_changed = (
+            hold_vin_vbus_mv is not None
+            and row_vin_vbus_mv(row) is not None
+            and abs(row_vin_vbus_mv(row) - hold_vin_vbus_mv) >= 200
+        )
+        if first_effect_idx is None and (
+            row_is_backup(row)
+            or row.get("backup_reason") == "input_absent"
+            or mains_changed
+            or vin_changed
+        ):
+            first_effect_idx = idx
+        if first_backup_idx is None and row_is_backup(row):
+            first_backup_idx = idx
+
+    if first_effect_idx is None:
+        return phases
+
+    for idx in range(first_transition_idx, first_effect_idx):
+        if phases[idx] == "transition_backup":
+            phases[idx] = "hold"
+
+    if first_backup_idx is None:
+        first_backup_idx = first_effect_idx + 1
+    backup_start_idx = (
+        first_effect_idx + 1 if first_backup_idx == first_effect_idx else first_backup_idx
+    )
+    for idx in range(backup_start_idx, len(phases)):
+        if phases[idx] == "transition_backup":
+            phases[idx] = "backup"
+
+    return phases
+
+
 def build_tag_spans(rows: list[dict]) -> list[dict]:
     spans: list[dict] = []
+    phases = normalized_span_phases(rows)
     current: dict | None = None
-    for row in rows:
-        phase = row.get("phase") or "unknown"
+    for idx, row in enumerate(rows):
+        phase = phases[idx]
         if current is None or current["phase"] != phase:
+            if current is not None:
+                current["end"] = row["t_s"]
             current = {
                 "phase": phase,
                 "start": row["t_s"],

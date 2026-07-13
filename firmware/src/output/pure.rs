@@ -1607,6 +1607,14 @@ pub(super) fn assist_power_stage_step(
     }
 
     if !input.dcin_assist_allowed {
+        if tracker.stage == AssistPowerStage::Backup
+            && tracker.backup_reason == Some(BackupReason::SourceLimited)
+        {
+            if input.tps_total_iout_fresh {
+                tracker.last_tps_total_iout_sample_seq = input.tps_total_iout_sample_seq;
+            }
+            return tracker.stage;
+        }
         tracker.stage = AssistPowerStage::Standby;
         tracker.backup_reason = None;
         tracker.reset_for_online();
@@ -1685,8 +1693,11 @@ pub(super) fn assist_power_stage_step(
                         || vin_drop_mv.saturating_add(SOURCE_LIMITED_VIN_DROP_TOLERANCE_MV)
                             >= threshold_mv)
         );
-    let source_limited_enter_ready = source_limited_fast_enter_ready
-        || matches!(
+    let source_limited_online_ready =
+        tracker.source_limited_online_streak >= input.source_limited_required_samples;
+    let source_limited_tps_enter_ready = (source_limited_online_current
+        || source_limited_online_ready)
+        && matches!(
             (
                 input.vin_vbus_mv,
                 input.vin_drop_mv,
@@ -1705,6 +1716,8 @@ pub(super) fn assist_power_stage_step(
                     || (source_limited_vin_drop_ready
                         && vin_iin_ma >= SOURCE_LIMITED_DCIN_ENTER_IIN_THRESHOLD_MA))
         );
+    let source_limited_enter_ready =
+        source_limited_fast_enter_ready || source_limited_tps_enter_ready;
     let source_limited_recover_ready = matches!(
         (
             input.vin_vbus_mv,
@@ -7324,6 +7337,40 @@ mod tests {
     }
 
     #[test]
+    fn assist_stage_keeps_source_limited_backup_while_dcin_presence_drops_before_mains_false() {
+        let mut tracker = AssistPowerStageTracker::default();
+        let mut limited = assist_stage_input(
+            Some(10_850),
+            Some(12_000),
+            Some(1_150),
+            Some(3_050),
+            Some(2_400),
+            1,
+        );
+        let _ = assist_power_stage_step(&mut tracker, limited);
+        limited.tps_total_iout_sample_seq = Some(2);
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, limited),
+            AssistPowerStage::Backup
+        );
+        assert_eq!(tracker.backup_reason, Some(BackupReason::SourceLimited));
+
+        let transient_cut = AssistPowerStageInput {
+            dcin_assist_allowed: false,
+            vin_vbus_mv: Some(3_872),
+            vin_iin_ma: Some(11),
+            tps_total_iout_ma: Some(3_960),
+            tps_total_iout_sample_seq: Some(3),
+            ..limited
+        };
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, transient_cut),
+            AssistPowerStage::Backup
+        );
+        assert_eq!(tracker.backup_reason, Some(BackupReason::SourceLimited));
+    }
+
+    #[test]
     fn assist_stage_enters_source_limited_backup_after_consecutive_limited_samples() {
         let mut tracker = AssistPowerStageTracker::default();
         let mut input = assist_stage_input(
@@ -7484,6 +7531,46 @@ mod tests {
                     ..input
                 }
             ),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(tracker.backup_reason, None);
+    }
+
+    #[test]
+    fn assist_stage_requires_sustained_online_current_before_tps_only_source_limited_latch() {
+        let mut tracker = AssistPowerStageTracker::default();
+        let input = AssistPowerStageInput {
+            source_limited_enter_iout_ma: 1_100,
+            source_limited_vin_drop_pct: 1,
+            rated_vout_mv: 12_000,
+            standby_target_vout_mv: 10_800,
+            current_assist_target_vout_mv: 10_800,
+            assist_low_target_vout_mv: 11_400,
+            ..assist_stage_input(
+                Some(11_904),
+                Some(12_024),
+                Some(120),
+                Some(2_571),
+                Some(36),
+                1,
+            )
+        };
+
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, input),
+            AssistPowerStage::Standby
+        );
+        assert_eq!(tracker.backup_reason, None);
+
+        let transient_followup = AssistPowerStageInput {
+            vin_vbus_mv: Some(12_048),
+            vin_iin_ma: Some(205),
+            tps_total_iout_ma: Some(1_124),
+            tps_total_iout_sample_seq: Some(2),
+            ..input
+        };
+        assert_eq!(
+            assist_power_stage_step(&mut tracker, transient_followup),
             AssistPowerStage::Standby
         );
         assert_eq!(tracker.backup_reason, None);

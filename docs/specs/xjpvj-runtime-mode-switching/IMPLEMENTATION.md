@@ -476,6 +476,47 @@ suite 或场景 failure：
   `0.406s` 锁存，锁存后最低负载端电压为 `11731mV`，VIN cut 后保持 backup 并转换为
   `input_absent`。
 
+### 12V false-latch diagnostic and final sign-off refresh
+
+在后续 12V 真机复测中，先归档了一份诊断 evidence：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0320Z/`
+
+这份 suite 使用 12V build `c22bf968-dirty-7a6332127043087a`。其中
+`12v-source_limited_online-3900ma` 与 `12v-source_limited_cut-3900ma` 已恢复为
+`valid_for_signoff`，证明前一轮修复已经消除了 VIN cut 过渡时掉回 `standby` 的问题。
+但 `12v-backup_only-1000ma` 仍为 `invalid_diagnostic_only`：普通 `1000mA` 在线 hold
+阶段被错误锁成 `backup_reason=source_limited`，导致 `hold_tps_power_max_mw=12607`，
+明显违反 `hold <= 2W TPS output` 合同。该证据保留为 source-limited 假阳性的正式反例。
+
+根因是 source-limited 进入判据允许把一次瞬时高 `vin_iin_ma` 与后续低输入电流的
+TPS-only 样本拼接成连续计数，从而在正常在线负载下误锁 `source_limited`。固件随后收紧为：
+
+- `fast-enter` 仍允许用同一窗口内的 `VIN drop + 高 VIN IIN` 直接快速接管；
+- 但纯 TPS-only 的 source-limited 进入，必须建立在当前样本仍为高 `VIN IIN` 或已经连续
+  观测到 source-limited 入口级别 `VIN IIN` 的在线历史之上；
+- 已锁存 `source_limited` 后，在 `dcin_present` 先掉、`mains_present` 尚未更新为 false 的
+  cut 过渡窗口内保持 `backup`，直到原因切换为 `input_absent`。
+
+应用该修复后的最终 12V 真机签核归档在：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0335Z/`
+
+本次 UPS build 为 `c22bf968-dirty-d8c9ca3fa923b63b`。IsolaPurr 仍保持 manual
+`12000mV / 3000mA`，并且 `tps_cdc_rise_mv=300` 在刷机前后、测试前后回读一致，未被
+runner 覆盖。suite verifier 为 `signoff_valid=true`，三个 scene 均为
+`valid_for_signoff`：
+
+- `12v-backup_only-1000ma`：`4.894Hz`，max gap `0.402s`；hold 维持
+  `mode=standby` / `backup_reason=null`，`hold_tps_power_max_mw=391`，VIN cut 后持续
+  `backup_reason=input_absent`。
+- `12v-source_limited_online-3900ma`：`4.810Hz`，max gap `0.401s`；VIN 在线期间锁存
+  `source_limited`，额定 `12000mV` 目标已观察到，锁存后最低负载端电压为 `11755mV`，
+  无低于 `11000mV` 的持续段。
+- `12v-source_limited_cut-3900ma`：`5.025Hz`，max gap `0.401s`；在线 source-limited
+  接管后保持 backup，VIN cut 后连续保持 `backup` 并切换为 `input_absent`；
+  `hold_tps_power_max_mw=348`，锁存后最低负载端电压为 `11755mV`。
+
 ### Source-limited 19V HIL sign-off
 
 独立 `source-limited-19v` 三场景合同已完成真机签核，完整 evidence 位于：

@@ -278,6 +278,29 @@ The final suite at
 passes the recomputed 2W hold gate. Its three hold maxima are `1089mW`, `1089mW`, and `1016mW`;
 the normal VIN-cut minimum is `18049mV`, and both overload post-latch minima are `18744mV`.
 
+The 12V follow-up exposed a second false-positive path. The diagnostic suite at
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0320Z/`
+showed that a normal `1000mA` online hold could still be mis-latched into
+`backup_reason=source_limited`, driving `12.607W` TPS output in what should
+have remained ordinary standby. The source-limited cut continuity bug was
+already fixed at that point; the remaining problem was the admission logic.
+
+Do not let a single transient high `VIN IIN` sample seed a later TPS-only
+source-limited latch. Fast enter may still react immediately when the current
+sample itself shows `VIN drop + high VIN IIN`, but a later low-current sample
+must not inherit that one spike and complete the consecutive counter by itself.
+TPS-only source-limited admission now requires either:
+
+- the current sample still meeting the source-limited `VIN IIN` threshold; or
+- a sustained online-current history that has already reached the same
+  threshold window.
+
+The verified 12V rerun at
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0335Z/`
+confirms the fix: `backup_only`, `source_limited_online`, and
+`source_limited_cut` are all `valid_for_signoff`, and the ordinary `1000mA`
+hold stays below the `2W` TPS gate with a maximum of `391mW`.
+
 ## Retained Diagnostic Evidence
 
 Keep complete rerun evidence with the implementation, even when a collection

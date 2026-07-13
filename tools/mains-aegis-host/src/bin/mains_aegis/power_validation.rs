@@ -570,7 +570,17 @@ async fn run_check(args: CheckArgs, context: PowerValidationArgs) -> anyhow::Res
         Duration::from_millis(args.bench.sample_interval_ms),
     )
     .await;
-    let load = run_adapter_probe(load_command, args.samples).await;
+    let load = match args.bench.load_adapter {
+        LoadAdapterKind::Loadlynx => {
+            run_polling_json_probe(
+                load_status_command(&args.bench)?,
+                args.samples,
+                Duration::from_millis(args.bench.sample_interval_ms),
+            )
+            .await
+        }
+        LoadAdapterKind::External => run_adapter_probe(load_command, args.samples).await,
+    };
     let ups_ok = ups_monitor.is_ok()
         && ups_status.as_ref().is_ok_and(|probe| probe.ok)
         && ups_diag_snapshot.as_ref().is_ok_and(|probe| probe.ok);
@@ -1776,20 +1786,7 @@ fn load_cc_command(
 
 fn load_stream_command(args: &BenchArgs, samples: usize) -> anyhow::Result<Vec<String>> {
     match args.load_adapter {
-        LoadAdapterKind::Loadlynx => load_cli_base(args).map(|mut cmd| {
-            cmd.extend([
-                "--json".to_string(),
-                "status-stream".to_string(),
-                "--device".to_string(),
-                args.load_device.clone(),
-                "--interval-ms".to_string(),
-                args.sample_interval_ms.to_string(),
-            ]);
-            if samples > 0 {
-                cmd.extend(["--count".to_string(), samples.to_string()]);
-            }
-            cmd
-        }),
+        LoadAdapterKind::Loadlynx => load_status_command(args),
         LoadAdapterKind::External => {
             let mut extra = vec![("--interval-ms", args.sample_interval_ms.to_string())];
             if samples > 0 {
@@ -1803,6 +1800,18 @@ fn load_stream_command(args: &BenchArgs, samples: usize) -> anyhow::Result<Vec<S
             )
         }
     }
+}
+
+fn load_status_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
+    load_cli_base(args).map(|mut cmd| {
+        cmd.extend([
+            "--json".to_string(),
+            "status".to_string(),
+            "--device".to_string(),
+            args.load_device.clone(),
+        ]);
+        cmd
+    })
 }
 
 fn load_cli_base(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
@@ -2221,6 +2230,24 @@ fn sample_is_source_limited(sample: &SceneSample) -> bool {
     sample_is_backup(sample) && sample_backup_reason(sample) == Some("source_limited")
 }
 
+fn sample_mains_present(sample: &SceneSample) -> Option<bool> {
+    sample
+        .mains_present
+        .as_ref()
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            sample
+                .diag_backup_reason
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(|reason| reason != "input_absent")
+        })
+}
+
+fn sample_vin_vbus_mv(sample: &SceneSample) -> Option<i64> {
+    sample_number(&sample.vin_vbus_mv)
+}
+
 fn sample_tps_output_power_mw(sample: &SceneSample) -> Option<i64> {
     let current_ma = sample_number(&sample.tps_total_iout_ma)?;
     let mut voltages = [None, None];
@@ -2235,6 +2262,7 @@ fn sample_tps_output_power_mw(sample: &SceneSample) -> Option<i64> {
 }
 
 fn classify_load_acceptance_phases(scene: SceneKind, samples: &mut [SceneSample]) {
+    classify_backup_transition_phases(scene, samples);
     if !scene.requires_source_limited() {
         return;
     }
@@ -2253,6 +2281,79 @@ fn classify_load_acceptance_phases(scene: SceneKind, samples: &mut [SceneSample]
         } else if transition_started {
             sample.phase = "transition_source_limited".to_string();
         }
+    }
+}
+
+fn classify_backup_transition_phases(scene: SceneKind, samples: &mut [SceneSample]) {
+    if !scene.include_backup() {
+        return;
+    }
+
+    let Some(first_transition_idx) = samples
+        .iter()
+        .position(|sample| sample.phase == "transition_backup")
+    else {
+        return;
+    };
+
+    let hold_like = if first_transition_idx > 0 {
+        samples[..first_transition_idx].iter().rev().find(|sample| {
+            matches!(
+                sample.phase.as_str(),
+                "hold" | "transition_load" | "backup_online"
+            )
+        })
+    } else {
+        None
+    };
+    let hold_mains_present = hold_like.and_then(sample_mains_present);
+    let hold_vin_vbus_mv = hold_like.and_then(sample_vin_vbus_mv);
+
+    let mut first_effect_idx = None;
+    let mut first_backup_idx = None;
+    for (idx, sample) in samples.iter().enumerate().skip(first_transition_idx) {
+        if sample.phase != "transition_backup" && sample.phase != "backup" {
+            continue;
+        }
+        let mains_changed = hold_mains_present
+            .zip(sample_mains_present(sample))
+            .is_some_and(|(hold, current)| current != hold);
+        let vin_changed = hold_vin_vbus_mv
+            .zip(sample_vin_vbus_mv(sample))
+            .is_some_and(|(hold, current)| (hold - current).abs() >= 200);
+        if first_effect_idx.is_none()
+            && (sample_is_backup(sample)
+                || sample_backup_reason(sample) == Some("input_absent")
+                || mains_changed
+                || vin_changed)
+        {
+            first_effect_idx = Some(idx);
+        }
+        if first_backup_idx.is_none() && sample_is_backup(sample) {
+            first_backup_idx = Some(idx);
+        }
+    }
+
+    let Some(first_effect_idx) = first_effect_idx else {
+        return;
+    };
+    for sample in &mut samples[first_transition_idx..first_effect_idx] {
+        if sample.phase == "transition_backup" {
+            sample.phase = "hold".to_string();
+        }
+    }
+
+    let first_backup_idx = first_backup_idx.unwrap_or(first_effect_idx + 1);
+    let backup_start_idx = if first_backup_idx == first_effect_idx {
+        first_effect_idx.saturating_add(1)
+    } else {
+        first_backup_idx
+    };
+    for sample in samples.iter_mut().skip(backup_start_idx) {
+        if sample.phase != "transition_backup" {
+            continue;
+        }
+        sample.phase = "backup".to_string();
     }
 }
 
@@ -2874,14 +2975,22 @@ async fn wait_for_ups_status_watch_ready(
 
 async fn spawn_load_collector(
     args: &RunArgs,
-    _interval: Duration,
+    interval: Duration,
 ) -> anyhow::Result<JsonlProcessCollector> {
     match args.bench.load_adapter {
-        LoadAdapterKind::External | LoadAdapterKind::Loadlynx => {
+        LoadAdapterKind::External => {
             JsonlProcessCollector::spawn(
                 "load",
                 load_stream_command(&args.bench, 0)?,
                 JsonFrameMode::Raw,
+            )
+            .await
+        }
+        LoadAdapterKind::Loadlynx => {
+            JsonlProcessCollector::spawn_polling(
+                "load",
+                load_status_command(&args.bench)?,
+                interval,
             )
             .await
         }
@@ -2974,12 +3083,11 @@ impl JsonlProcessCollector {
     }
 
     fn latest_before(&self, unix_ms: i64) -> Option<Value> {
-        self.rows
-            .lock()
-            .ok()?
-            .iter()
-            .filter(|row| row.received_ms <= unix_ms)
+        let rows = self.rows.lock().ok()?;
+        rows.iter()
+            .filter(|row| row.received_ms <= unix_ms && json_frame_has_telemetry(&row.value))
             .last()
+            .or_else(|| rows.iter().filter(|row| row.received_ms <= unix_ms).last())
             .map(|row| row.value.clone())
     }
 
@@ -3538,6 +3646,12 @@ fn frame_time_ms(frame: &AdapterFrame) -> Option<i64> {
         .sample
         .as_ref()
         .and_then(|sample| sample.timestamp_ms)
+        .or_else(|| {
+            frame
+                .raw
+                .get("status_sampled_at_ms")
+                .and_then(Value::as_i64)
+        })
         .or_else(|| frame.raw.get("received_at_ms").and_then(Value::as_i64))
         .or_else(|| frame.raw.get("timestamp_ms").and_then(Value::as_i64))
         .or_else(|| frame.raw.get("requested_at_ms").and_then(Value::as_i64))
@@ -3578,6 +3692,12 @@ fn json_frame_time_ms(value: &Value) -> Option<i64> {
         .or_else(|| value.get("received_at_ms").and_then(Value::as_i64))
         .or_else(|| value.get("sample_received_at_ms").and_then(Value::as_i64))
         .or_else(|| value.get("sampled_at_ms").and_then(Value::as_i64))
+        .or_else(|| value.get("status_sampled_at_ms").and_then(Value::as_i64))
+        .or_else(|| {
+            value
+                .pointer("/payload/status_sampled_at_ms")
+                .and_then(Value::as_i64)
+        })
         .or_else(|| value.get("timestamp_ms").and_then(Value::as_i64))
         .or_else(|| value.get("requested_at_ms").and_then(Value::as_i64))
 }
@@ -3634,6 +3754,10 @@ fn json_frame_has_telemetry(value: &Value) -> bool {
         || value.pointer("/payload/sample/current_ma").is_some()
         || value.pointer("/payload/sample/enabled").is_some()
         || value.pointer("/payload/status/v_local_mv").is_some()
+        || value.pointer("/status/v_local_mv").is_some()
+        || value.pointer("/status/calc_p_mw").is_some()
+        || value.pointer("/status/i_local_ma").is_some()
+        || value.pointer("/control/output_enabled").is_some()
 }
 
 fn json_frame_is_fresh(value: &Value) -> bool {
@@ -4449,14 +4573,14 @@ mod tests {
     }
 
     #[test]
-    fn loadlynx_stream_uses_status_stream_over_ipc() {
+    fn loadlynx_stream_uses_status_snapshots_over_ipc() {
         let cmd = load_stream_command(&bench(Some("/opt/loadlynx")), 40).unwrap();
         assert_eq!(cmd[0], "/opt/loadlynx");
         assert!(cmd.contains(&"--ipc".to_string()));
         assert!(cmd.contains(&"/tmp/load.sock".to_string()));
-        assert!(cmd.contains(&"status-stream".to_string()));
-        assert!(cmd.contains(&"--count".to_string()));
-        assert!(cmd.contains(&"40".to_string()));
+        assert!(cmd.contains(&"status".to_string()));
+        assert!(!cmd.contains(&"status-stream".to_string()));
+        assert!(!cmd.contains(&"--count".to_string()));
     }
 
     #[test]
@@ -4647,6 +4771,17 @@ mod tests {
         .unwrap();
         assert_eq!(frame_time_ms(&frame), Some(1030));
         assert!(frame_has_telemetry(&frame));
+    }
+
+    #[test]
+    fn json_probe_accepts_loadlynx_status_snapshot_shape() {
+        let frame = json!({
+            "status_sampled_at_ms": 1030,
+            "control": {"output_enabled": false},
+            "status": {"v_local_mv": 12000, "i_local_ma": 10, "calc_p_mw": 120}
+        });
+        assert_eq!(json_frame_time_ms(&frame), Some(1030));
+        assert!(json_frame_has_telemetry(&frame));
     }
 
     #[test]
@@ -4895,6 +5030,80 @@ mod tests {
         assert_eq!(
             assertions.pointer("/source_limited/post_latch_min_load_mv"),
             Some(&json!(11_050))
+        );
+    }
+
+    #[test]
+    fn backup_only_transition_starts_on_first_live_cut_effect() {
+        let mut samples = vec![
+            scene_sample(0.0, "hold", "standby", "standby", None, 18_320),
+            scene_sample(0.1, "transition_backup", "standby", "standby", None, 18_320),
+            scene_sample(0.2, "transition_backup", "standby", "standby", None, 18_320),
+            scene_sample(
+                0.3,
+                "transition_backup",
+                "backup",
+                "backup",
+                Some("input_absent"),
+                18_060,
+            ),
+            scene_sample(
+                0.4,
+                "transition_backup",
+                "backup",
+                "backup",
+                Some("input_absent"),
+                18_072,
+            ),
+            scene_sample(
+                0.5,
+                "transition_backup",
+                "backup",
+                "backup",
+                Some("input_absent"),
+                18_450,
+            ),
+            scene_sample(
+                0.6,
+                "backup",
+                "backup",
+                "backup",
+                Some("input_absent"),
+                18_980,
+            ),
+        ];
+        samples[0].vin_vbus_mv = Some(json!(19_000));
+        samples[0].mains_present = Some(json!(true));
+        samples[1].vin_vbus_mv = Some(json!(19_000));
+        samples[1].mains_present = Some(json!(true));
+        samples[2].vin_vbus_mv = Some(json!(19_000));
+        samples[2].mains_present = Some(json!(true));
+        samples[3].vin_vbus_mv = Some(json!(3_016));
+        samples[3].mains_present = Some(json!(true));
+        samples[4].vin_vbus_mv = Some(json!(3_016));
+        samples[4].mains_present = Some(json!(true));
+        samples[5].vin_vbus_mv = Some(json!(2_024));
+        samples[5].mains_present = Some(json!(false));
+        samples[6].vin_vbus_mv = Some(json!(2_024));
+        samples[6].mains_present = Some(json!(false));
+
+        classify_load_acceptance_phases(SceneKind::BackupOnly, &mut samples);
+
+        let phases = samples
+            .iter()
+            .map(|sample| sample.phase.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            phases,
+            vec![
+                "hold",
+                "hold",
+                "hold",
+                "transition_backup",
+                "backup",
+                "backup",
+                "backup",
+            ]
         );
     }
 
