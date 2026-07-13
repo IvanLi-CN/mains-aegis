@@ -94,18 +94,6 @@ Agent 接管真机验证时按以下顺序执行：
    - WiFi SSID/PSK set 或 clear 返回 ack/error；PSK 提交后不回显。
    - 断开 Web App 后，可以重新通过 devd 连接同一设备。
 
-## Decision Summary
-
-每次设备相关操作都在对话中给出：
-
-```text
-Operation type: read-only | state-changing | write
-Command: <exact command>
-Decision: allow | deny
-Rationale: <G0-G5 gate result>
-Next step: <next action>
-```
-
 ## Failure Handling
 
 - `E_RESOURCE_BUSY`：报告占用者，不自动抢占。

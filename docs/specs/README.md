@@ -55,3 +55,4 @@ Index 表格的 `Status` 仅允许使用：`active`、`superseded(#<id>)`、`arc
 | amc32 | WiFi / service discovery / read-only API foundation | active | `amc32-wifi-service-discovery-api-foundation/SPEC.md` | 2026-06-03 | `net_http` 与 `web_serial` 已成为默认主固件能力；“LAN 只读 API” 假设由 #k4vzn 继续演进 |
 | d8p4q | Front panel auto sleep | active | `d8p4q-front-panel-auto-sleep/SPEC.md` | 2026-04-27 | 测试版 `30s / 35s / 40s` 自动低亮、关背光、GC9307 sleep；硬件确认后恢复正式默认 `180s / 240s / 245s` |
 | 6xb4z | EEPROM storage layout | active | `6xb4z-eeprom-storage-layout/SPEC.md` | 2026-06-09 | 全局 EEPROM map、record 编码、CRC、默认回退与扩展规则的长期规范 |
+| 0003 | Mains Aegis device operation guardrails | active | `0003-device-operation-guardrails/SPEC.md` | 2026-07-13 | Agent 真机操作的安全边界、devd 路由和授权要求 |
