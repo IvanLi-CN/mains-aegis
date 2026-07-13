@@ -17,9 +17,8 @@ To avoid operating the wrong device in multi-device / multi-port environments, t
 - Required workflow: use the Mains Aegis devd path through the `mains-aegis` CLI lifecycle surface. In the default in-repo route, source-built `tools/mains-aegis-host` CLI/devd may be used for development, validation, diagnostics, and read/session-read checks. In the explicit end-user route, require released `mains-aegis` / `mains-aegis-devd` host tools on `PATH`.
 - `mains-aegis` may auto-start or reuse the singleton local IPC daemon for owner-visible CLI operations; `mains-aegis-devd` remains the packaged sibling/internal daemon binary and developer debug fallback. The devd path may scan/list serial candidates for owner-visible binding, but must not auto-switch or try alternate ports. Read/session-read operations are allowed by default in `$mains-aegis-devd-flow`: scan/list, connect/disconnect, identity/status/diag-snapshot, and monitor start/stop/log reading. Persistent binding changes, settings writes, reset, flash, and real host power actions require explicit owner authorization; mock/dry-run validation is allowed. `mains-aegis daemon serve` is developer/debug IPC-only; HTTP/Web access requires explicit `mains-aegis daemon http`.
 - `mains-aegis-devd` flash may invoke its internal `espflash` backend; Agents must not invoke `espflash` directly from the shell.
-- Decision summary required: for every device-related operation (including denials), output a minimal, copy-pastable decision summary: `Operation type` (`read-only` / `state-changing` / `write`), `Command`, `Decision` (`allow|deny`), `Rationale` (which gate G0–G5), and `Next step`.
 
-Gates (G0–G5) for the `Rationale` field:
+Gates (G0–G5):
 
 - G0 (no direct espflash): deny any direct `espflash` / `cargo espflash` / `cargo-espflash`.
 - G1 (no legacy mcu-agentd path): deny `mcu-agentd` hardware operations for Mains Aegis.
