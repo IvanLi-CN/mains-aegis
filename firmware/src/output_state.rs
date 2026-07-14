@@ -37,13 +37,41 @@ impl OutputGateReason {
 }
 
 pub const LOW_BATTERY_OUTPUT_RESTORE_RSOC_PCT: u16 = 20;
-pub const PRE_TPS_UNDERVOLTAGE_CUTOFF_MV: u16 = 10_000;
-pub const PRE_TPS_UNDERVOLTAGE_RECOVER_MV: u16 = 11_000;
 pub const PRE_TPS_UNDERVOLTAGE_REQUIRED_SAMPLES: u8 = 3;
+pub const PRE_TPS_UNDERVOLTAGE_12V_CUTOFF_MV: u16 = 11_300;
+pub const PRE_TPS_UNDERVOLTAGE_12V_RECOVER_MV: u16 = 11_500;
+pub const PRE_TPS_UNDERVOLTAGE_LEGACY_CUTOFF_MV: u16 = 10_000;
+pub const PRE_TPS_UNDERVOLTAGE_LEGACY_RECOVER_MV: u16 = 11_000;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputGateThresholds {
+    pub cutoff_mv: u16,
+    pub recover_mv: u16,
+    pub required_samples: u8,
+}
+
+impl InputGateThresholds {
+    pub const fn for_rated_vout(rated_vout_mv: u16) -> Self {
+        if rated_vout_mv <= 12_000 {
+            Self {
+                cutoff_mv: PRE_TPS_UNDERVOLTAGE_12V_CUTOFF_MV,
+                recover_mv: PRE_TPS_UNDERVOLTAGE_12V_RECOVER_MV,
+                required_samples: PRE_TPS_UNDERVOLTAGE_REQUIRED_SAMPLES,
+            }
+        } else {
+            Self {
+                cutoff_mv: PRE_TPS_UNDERVOLTAGE_LEGACY_CUTOFF_MV,
+                recover_mv: PRE_TPS_UNDERVOLTAGE_LEGACY_RECOVER_MV,
+                required_samples: PRE_TPS_UNDERVOLTAGE_REQUIRED_SAMPLES,
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InputGateTracker {
     pub cutoff: bool,
+    thresholds: InputGateThresholds,
     low_streak: u8,
     recover_streak: u8,
 }
@@ -57,8 +85,13 @@ pub enum InputGateAction {
 
 impl InputGateTracker {
     pub const fn new() -> Self {
+        Self::for_rated_vout(12_000)
+    }
+
+    pub const fn for_rated_vout(rated_vout_mv: u16) -> Self {
         Self {
             cutoff: false,
+            thresholds: InputGateThresholds::for_rated_vout(rated_vout_mv),
             low_streak: 0,
             recover_streak: 0,
         }
@@ -73,9 +106,9 @@ impl InputGateTracker {
 
         if self.cutoff {
             self.low_streak = 0;
-            if vin_mv > PRE_TPS_UNDERVOLTAGE_RECOVER_MV {
+            if vin_mv > self.thresholds.recover_mv {
                 self.recover_streak = self.recover_streak.saturating_add(1);
-                if self.recover_streak >= PRE_TPS_UNDERVOLTAGE_REQUIRED_SAMPLES {
+                if self.recover_streak >= self.thresholds.required_samples {
                     self.cutoff = false;
                     self.recover_streak = 0;
                     return InputGateAction::Enable;
@@ -87,9 +120,9 @@ impl InputGateTracker {
         }
 
         self.recover_streak = 0;
-        if vin_mv < PRE_TPS_UNDERVOLTAGE_CUTOFF_MV {
+        if vin_mv < self.thresholds.cutoff_mv {
             self.low_streak = self.low_streak.saturating_add(1);
-            if self.low_streak >= PRE_TPS_UNDERVOLTAGE_REQUIRED_SAMPLES {
+            if self.low_streak >= self.thresholds.required_samples {
                 self.cutoff = true;
                 self.low_streak = 0;
                 return InputGateAction::Cutoff;
@@ -114,6 +147,12 @@ impl InputGateTracker {
         } else {
             "none"
         }
+    }
+}
+
+impl Default for InputGateTracker {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -236,35 +275,69 @@ pub fn low_battery_output_hold_release_allowed(input: LowBatteryOutputHoldReleas
 mod tests {
     use super::{
         low_battery_output_hold_release_allowed, output_restore_pending_from_state,
-        output_state_gate_transition, EnabledOutputs, InputGateAction, InputGateTracker,
-        LowBatteryOutputHoldReleaseInput, OutputGateReason, OutputRuntimeState, OutputSelector,
+        output_state_gate_transition, EnabledOutputs, InputGateAction, InputGateThresholds,
+        InputGateTracker, LowBatteryOutputHoldReleaseInput, OutputGateReason, OutputRuntimeState,
+        OutputSelector,
     };
 
     #[test]
     fn input_gate_requires_three_consecutive_low_fresh_samples() {
         let mut tracker = InputGateTracker::new();
-        assert_eq!(tracker.step(Some(9_999)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_299)), InputGateAction::None);
         assert_eq!(tracker.step(None), InputGateAction::None);
-        assert_eq!(tracker.step(Some(9_500)), InputGateAction::None);
-        assert_eq!(tracker.step(Some(10_000)), InputGateAction::None);
-        assert_eq!(tracker.step(Some(9_900)), InputGateAction::None);
-        assert_eq!(tracker.step(Some(9_800)), InputGateAction::None);
-        assert_eq!(tracker.step(Some(9_700)), InputGateAction::Cutoff);
+        assert_eq!(tracker.step(Some(11_000)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_300)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_250)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_200)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_100)), InputGateAction::Cutoff);
         assert!(tracker.cutoff);
     }
 
     #[test]
-    fn input_gate_recovers_only_after_three_samples_above_11v() {
+    fn input_gate_recovers_only_after_three_samples_above_11v5_for_12v_profile() {
         let mut tracker = InputGateTracker::new();
-        for sample in [9_900, 9_800, 9_700] {
+        for sample in [11_200, 11_100, 11_000] {
             let _ = tracker.step(Some(sample));
         }
-        assert_eq!(tracker.step(Some(11_001)), InputGateAction::None);
-        assert_eq!(tracker.step(Some(11_000)), InputGateAction::None);
-        assert_eq!(tracker.step(Some(11_100)), InputGateAction::None);
-        assert_eq!(tracker.step(Some(11_200)), InputGateAction::None);
-        assert_eq!(tracker.step(Some(11_300)), InputGateAction::Enable);
+        assert_eq!(tracker.step(Some(11_501)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_500)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_520)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_540)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_560)), InputGateAction::Enable);
         assert!(!tracker.cutoff);
+    }
+
+    #[test]
+    fn input_gate_thresholds_follow_output_profile() {
+        assert_eq!(
+            InputGateThresholds::for_rated_vout(12_000),
+            InputGateThresholds {
+                cutoff_mv: 11_300,
+                recover_mv: 11_500,
+                required_samples: 3,
+            }
+        );
+        assert_eq!(
+            InputGateThresholds::for_rated_vout(19_000),
+            InputGateThresholds {
+                cutoff_mv: 10_000,
+                recover_mv: 11_000,
+                required_samples: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn input_gate_19v_profile_keeps_legacy_thresholds() {
+        let mut tracker = InputGateTracker::for_rated_vout(19_000);
+        assert_eq!(tracker.step(Some(10_100)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(9_950)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(9_900)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(9_800)), InputGateAction::Cutoff);
+        assert!(tracker.cutoff);
+        assert_eq!(tracker.step(Some(11_001)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_100)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_200)), InputGateAction::Enable);
     }
 
     fn low_battery_release_input() -> LowBatteryOutputHoldReleaseInput {

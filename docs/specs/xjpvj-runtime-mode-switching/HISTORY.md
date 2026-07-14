@@ -273,6 +273,17 @@
   最低负载电压均为 `11790mV`，cut 场景随后连续保持 Backup 并转为 `input_absent`。
 - MOS/网表修复前的 `source-limited-12v-62179e3c-final-r6-20260714T0010Z` 与旧
   assist_path 约 `10.5V` 长跌落继续保留为历史基线，不再代表当前硬件状态。
+- 12V 当前默认 standby 目标从 `10.8V` 收敛到 `11.3V`：
+  - `standby_drop_mv` 缺省值改为 `700`
+  - `DeviceSettingsSnapshot`、EEPROM 缺省初始化、reset advanced power、host 默认快照已统一到该值
+- 前级输入门改为按额定输出档位派生：
+  - `12V`：连续 3 个 fresh `pre_tps_vin_mv < 11.3V` 关断，连续 3 个 `> 11.5V` 恢复
+  - `19V`：继续维持连续 3 个 `<10V` 关断、连续 3 个 `>11V` 恢复
+- 本地验证已覆盖新默认值与输入门回差：
+  - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml`
+  - `cargo test --manifest-path tools/mains-aegis-host/Cargo.toml`
+- 现有 12V sign-off evidence 仍对应旧的 `standby_drop_mv=1200` 基线；新的
+  `11.3V standby + 11.3V/11.5V` 策略需要重新完成 12V 真机四场景复测后再替换归档报告。
 
 - 归档 12V source-limited 诊断反例
   `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0320Z/`：

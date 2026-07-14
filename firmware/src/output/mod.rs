@@ -1250,6 +1250,7 @@ where
 
 fn load_advanced_power_from_eeprom<I2C>(
     i2c: &mut I2C,
+    rated_vout_mv: u16,
 ) -> Result<AdvancedPowerStorageLoad, esp_hal::i2c::master::Error>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
@@ -1259,7 +1260,7 @@ where
             Some(superblock) => superblock,
             None => {
                 return Ok(AdvancedPowerStorageLoad::NeedsInit(
-                    AdvancedPowerSettingsSnapshot::defaults(),
+                    AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv),
                 ))
             }
         };
@@ -1273,24 +1274,27 @@ where
     if superblock.schema_version == EEPROM_SCHEMA_VERSION {
         Ok(match record {
             Some(record) => AdvancedPowerStorageLoad::Ready(record.settings),
-            None => AdvancedPowerStorageLoad::NeedsInit(AdvancedPowerSettingsSnapshot::defaults()),
+            None => AdvancedPowerStorageLoad::NeedsInit(
+                AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv),
+            ),
         })
     } else {
         Ok(AdvancedPowerStorageLoad::NeedsInit(
-            record
-                .map(|record| record.settings)
-                .unwrap_or_else(AdvancedPowerSettingsSnapshot::defaults),
+            record.map(|record| record.settings).unwrap_or_else(|| {
+                AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv)
+            }),
         ))
     }
 }
 
 fn load_or_init_advanced_power_settings<I2C>(
     i2c: &mut I2C,
+    rated_vout_mv: u16,
 ) -> (AdvancedPowerSettingsSnapshot, bool, bool)
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    match load_advanced_power_from_eeprom(i2c) {
+    match load_advanced_power_from_eeprom(i2c, rated_vout_mv) {
         Ok(AdvancedPowerStorageLoad::Ready(settings)) => (settings, true, false),
         Ok(AdvancedPowerStorageLoad::NeedsInit(settings)) => {
             let storage_ready = if let Err(err) = write_advanced_power_record(i2c, settings) {
@@ -1310,14 +1314,22 @@ where
                 found_version,
                 EEPROM_SCHEMA_VERSION
             );
-            (AdvancedPowerSettingsSnapshot::defaults(), false, true)
+            (
+                AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv),
+                false,
+                true,
+            )
         }
         Err(err) => {
             defmt::warn!(
                 "eeprom: read advanced_power failed err={}",
                 i2c_error_kind(err)
             );
-            (AdvancedPowerSettingsSnapshot::defaults(), false, false)
+            (
+                AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv),
+                false,
+                false,
+            )
         }
     }
 }
@@ -4333,7 +4345,7 @@ where
             advanced_power_settings,
             advanced_power_storage_ready,
             advanced_power_storage_incompatible,
-        ) = load_or_init_advanced_power_settings(&mut i2c);
+        ) = load_or_init_advanced_power_settings(&mut i2c, cfg.vout_mv);
         let (beeper_prefs, beeper_storage_ready) = load_or_init_beeper_prefs(&mut i2c);
         let pd_breadcrumb_next_seq = load_latest_pd_breadcrumb_record(&mut i2c)
             .ok()
@@ -4348,7 +4360,7 @@ where
             advanced_power_settings
                 .expand(cfg.vout_mv)
                 .unwrap_or_else(|_| {
-                    AdvancedPowerSettingsSnapshot::defaults()
+                    AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(cfg.vout_mv)
                         .expand(cfg.vout_mv)
                         .unwrap()
                 });
@@ -4548,7 +4560,7 @@ where
             output_protection: output_protection::ProtectionRuntime::new(cfg.ilimit_ma),
             fan: fan::Controller::new(cfg.fan_config),
             vin_sample_missing_streak: 0,
-            input_gate: output_state_logic::InputGateTracker::new(),
+            input_gate: output_state_logic::InputGateTracker::for_rated_vout(cfg.vout_mv),
             usb_pd_state: usb_pd::UsbPdPortState::default(),
             usb_pd_input_current_limit_ma: None,
             usb_pd_vindpm_mv: None,
@@ -6726,7 +6738,9 @@ where
     }
 
     pub fn reset_advanced_power_settings(&mut self) -> Result<(), AdvancedPowerApplyError> {
-        self.apply_advanced_power_settings(AdvancedPowerSettingsSnapshot::defaults())
+        self.apply_advanced_power_settings(AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(
+            self.cfg.vout_mv,
+        ))
     }
 
     pub fn request_manual_charge_action(&mut self, action: ManualChargeUiAction) {

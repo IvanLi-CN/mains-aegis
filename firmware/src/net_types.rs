@@ -203,7 +203,8 @@ pub const ADVANCED_POWER_ASSIST_ENTER_BASE_MA: i16 = 100;
 pub const ADVANCED_POWER_ASSIST_EXIT_BASE_MA: i16 = 50;
 pub const ADVANCED_POWER_RATED_ENTER_BASE_MA: i16 = 100;
 pub const ADVANCED_POWER_RATED_EXIT_BASE_MA: i16 = 50;
-pub const ADVANCED_POWER_DEFAULT_STANDBY_DROP_MV: u16 = 1_200;
+pub const ADVANCED_POWER_DEFAULT_STANDBY_DROP_MV: u16 = 700;
+pub const ADVANCED_POWER_DEFAULT_19V_STANDBY_DROP_MV: u16 = 1_200;
 pub const ADVANCED_POWER_DEFAULT_ASSIST_LOW_DROP_MV: u16 = 600;
 pub const ADVANCED_POWER_DEFAULT_ASSIST_ENTER_DELTA_MA: i16 = 0;
 pub const ADVANCED_POWER_DEFAULT_ASSIST_EXIT_DELTA_MA: i16 = 0;
@@ -268,6 +269,14 @@ pub const ADVANCED_POWER_SOURCE_LIMITED_RECOVER_MARGIN_MIN_MV: u16 = 0;
 pub const ADVANCED_POWER_SOURCE_LIMITED_RECOVER_MARGIN_MAX_MV: u16 = 1_500;
 pub const ADVANCED_POWER_SOURCE_LIMITED_RECOVER_MARGIN_STEP_MV: u16 = 20;
 
+pub const fn advanced_power_default_standby_drop_mv_for_rated_vout(rated_vout_mv: u16) -> u16 {
+    if rated_vout_mv <= 12_000 {
+        ADVANCED_POWER_DEFAULT_STANDBY_DROP_MV
+    } else {
+        ADVANCED_POWER_DEFAULT_19V_STANDBY_DROP_MV
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AdvancedPowerSettingsSnapshot {
     pub standby_drop_mv: u16,
@@ -290,8 +299,12 @@ pub struct AdvancedPowerSettingsSnapshot {
 
 impl AdvancedPowerSettingsSnapshot {
     pub const fn defaults() -> Self {
+        Self::defaults_for_rated_vout(12_000)
+    }
+
+    pub const fn defaults_for_rated_vout(rated_vout_mv: u16) -> Self {
         Self {
-            standby_drop_mv: ADVANCED_POWER_DEFAULT_STANDBY_DROP_MV,
+            standby_drop_mv: advanced_power_default_standby_drop_mv_for_rated_vout(rated_vout_mv),
             assist_low_drop_mv: ADVANCED_POWER_DEFAULT_ASSIST_LOW_DROP_MV,
             assist_enter_delta_ma: ADVANCED_POWER_DEFAULT_ASSIST_ENTER_DELTA_MA,
             assist_exit_delta_ma: ADVANCED_POWER_DEFAULT_ASSIST_EXIT_DELTA_MA,
@@ -421,7 +434,7 @@ impl AdvancedPowerCapabilitiesSnapshot {
         Self {
             rated_vout_mv,
             standby_drop_mv: AdvancedPowerU16CapabilitySnapshot {
-                default: ADVANCED_POWER_DEFAULT_STANDBY_DROP_MV,
+                default: advanced_power_default_standby_drop_mv_for_rated_vout(rated_vout_mv),
                 min: ADVANCED_POWER_STANDBY_DROP_MIN_MV,
                 max: ADVANCED_POWER_STANDBY_DROP_MAX_MV,
                 step: ADVANCED_POWER_STANDBY_DROP_STEP_MV,
@@ -838,7 +851,7 @@ impl DeviceSettingsSnapshot {
             wifi: WifiSettingsSnapshot::unconfigured(),
             log_level: "info",
             manual_charge: ManualChargeSettingsSnapshot::defaults(),
-            advanced_power: AdvancedPowerSettingsSnapshot::defaults(),
+            advanced_power: AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv),
             advanced_power_capabilities: AdvancedPowerCapabilitiesSnapshot::for_rated_vout(
                 rated_vout_mv,
             ),
@@ -1452,7 +1465,7 @@ mod tests {
 
     #[test]
     fn advanced_power_defaults_expand_against_rated_vout() {
-        let expanded = AdvancedPowerSettingsSnapshot::defaults()
+        let expanded = AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(19_000)
             .expand(19_000)
             .unwrap();
         assert_eq!(expanded.rated_vout_mv, 19_000);
@@ -1517,5 +1530,17 @@ mod tests {
         let settings = DeviceSettingsSnapshot::defaults_for_rated_vout(19_000);
         assert_eq!(settings.advanced_power_capabilities.rated_vout_mv, 19_000);
         assert_eq!(settings.advanced_power.standby_drop_mv, 1_200);
+    }
+
+    #[test]
+    fn settings_defaults_use_11v3_standby_for_12v_profile() {
+        let settings = DeviceSettingsSnapshot::defaults_for_rated_vout(12_000);
+        let expanded = settings.advanced_power.expand(12_000).unwrap();
+        assert_eq!(settings.advanced_power.standby_drop_mv, 700);
+        assert_eq!(expanded.standby_vout_mv, 11_300);
+        assert_eq!(
+            settings.advanced_power_capabilities.standby_drop_mv.default,
+            700
+        );
     }
 }

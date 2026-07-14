@@ -76,7 +76,12 @@ const DEFAULT_VOUT_MV: u16 = if cfg!(feature = "main-vout-19v") {
 } else {
     12_000
 };
-const DEFAULT_STANDBY_VOUT_MV: u16 = DEFAULT_VOUT_MV.saturating_sub(1_200);
+const DEFAULT_STANDBY_VOUT_MV: u16 =
+    DEFAULT_VOUT_MV.saturating_sub(if cfg!(feature = "main-vout-19v") {
+        1_200
+    } else {
+        700
+    });
 const DEFAULT_ASSIST_LOW_VOUT_MV: u16 = DEFAULT_VOUT_MV.saturating_sub(600);
 const DEFAULT_ILIMIT_MA: u16 = 3_500;
 const TELEMETRY_PERIOD: Duration = Duration::from_millis(500);

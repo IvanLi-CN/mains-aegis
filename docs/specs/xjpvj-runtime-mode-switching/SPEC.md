@@ -60,7 +60,10 @@
 ## 术语与真相源
 
 - `pre-TPS VIN truth source`: INA3221 CH3 对 `VIN_UNSAFE` 的采样，位于 TPS2490 输入 MOS 前级。owner-facing 规范字段为 `pre_tps_vin_mv`；`vin_vbus_mv` 只作为兼容旧客户端的同值别名。
-- `input gate`: MCU 通过 `UPS_IN_CE` 控制 TPS2490 `EN`。连续 3 个 fresh `pre_tps_vin_mv < 10000` 样本后关断输入并发布 `input_gate_state=cutoff`；连续 3 个 fresh `pre_tps_vin_mv > 11000` 样本后重新使能。10V 至 11V 为明确回差区，缺样会重置连续计数。
+- `input gate`: MCU 通过 `UPS_IN_CE` 控制 TPS2490 `EN`。门槛按额定输出档位派生：
+  - `12V` 档：连续 3 个 fresh `pre_tps_vin_mv < 11300` 样本后关断输入并发布 `input_gate_state=cutoff`；连续 3 个 fresh `pre_tps_vin_mv > 11500` 样本后重新使能。
+  - `19V` 档：连续 3 个 fresh `pre_tps_vin_mv < 10000` 样本后关断输入；连续 3 个 fresh `pre_tps_vin_mv > 11000` 样本后重新使能。
+  - 缺样会重置连续计数。
 - `聚合输入存在信号` (`aggregate input-present signal`): 当 VIN 连续缺样并超过 latch 容错窗口时，允许使用的降级布尔输入存在信号。当前实现可继续复用现有聚合布尔源，但文档不再把它笼统写成 charger `input_present`。
 - `TPS total output current`: owner-facing 聚合输出电流，来源为运行时 `tps_total_iout_ma`。
 - `fresh sample`: 在模式判定上下文中，指本轮相对于上一个已消费 sample_seq 的新 `tps_total_iout_ma` 样本。
@@ -122,9 +125,14 @@
 ### 2. 输入在线 / 离线判定
 
 - 若 `pre_tps_vin_mv` 有 fresh 电压样本：
-  - 连续 3 个样本 `< 10000mV` => MCU 关断 TPS2490 输入门，输入确认离线并进入 `backup_reason=input_absent`。
-  - 输入门已关断时，连续 3 个样本 `> 11000mV` => MCU 重新使能 TPS2490 输入门；随后由 power-good 与运行态判据确认在线。
-  - `10000mV..=11000mV` => 保持当前输入门状态，不跨越回差。
+  - `12V` 档：
+    - 连续 3 个样本 `< 11300mV` => MCU 关断 TPS2490 输入门，输入确认离线并进入 `backup_reason=input_absent`。
+    - 输入门已关断时，连续 3 个样本 `> 11500mV` => MCU 重新使能 TPS2490 输入门；随后由 power-good 与运行态判据确认在线。
+    - `11300mV..=11500mV` => 保持当前输入门状态，不跨越回差。
+  - `19V` 档：
+    - 连续 3 个样本 `< 10000mV` => MCU 关断 TPS2490 输入门，输入确认离线并进入 `backup_reason=input_absent`。
+    - 输入门已关断时，连续 3 个样本 `> 11000mV` => MCU 重新使能 TPS2490 输入门；随后由 power-good 与运行态判据确认在线。
+    - `10000mV..=11000mV` => 保持当前输入门状态，不跨越回差。
 - 若 `VIN` 只是瞬时缺样，且仍在现有 VIN latch 容错窗口内：
   - 保持最近一次已知 `VIN` 在线/离线状态。
 - 若 `VIN` 连续缺样并超出 latch 容错窗口：
@@ -278,8 +286,10 @@
 - Given `requested_outputs` 包含某路输出且 `active_outputs` 不包含该路，When 内部候选 mode 为
   `standby` 或 `supplement`，Then owner-facing `mode=blocked`。
 - Given 输入状态未知，When `TPS` 仍在输出，Then 模式保持上一确认态，不得仅因输出活跃直接进入 `BACKUP`。
-- Given 连续 3 个 fresh `pre_tps_vin_mv < 10000mV`，When 输入门判定更新，Then MCU 关断 TPS2490 输入，结果为 `BACKUP` 且 `backup_reason=input_absent`。
-- Given 输入门已关断，When 前级 VIN 位于 `10000mV..=11000mV`，Then 保持关断；只有连续 3 个 fresh `pre_tps_vin_mv > 11000mV` 才重新使能输入。
+- Given `12V` 档连续 3 个 fresh `pre_tps_vin_mv < 11300mV`，When 输入门判定更新，Then MCU 关断 TPS2490 输入，结果为 `BACKUP` 且 `backup_reason=input_absent`。
+- Given `12V` 档输入门已关断，When 前级 VIN 位于 `11300mV..=11500mV`，Then 保持关断；只有连续 3 个 fresh `pre_tps_vin_mv > 11500mV` 才重新使能输入。
+- Given `19V` 档连续 3 个 fresh `pre_tps_vin_mv < 10000mV`，When 输入门判定更新，Then MCU 关断 TPS2490 输入，结果为 `BACKUP` 且 `backup_reason=input_absent`。
+- Given `19V` 档输入门已关断，When 前级 VIN 位于 `10000mV..=11000mV`，Then 保持关断；只有连续 3 个 fresh `pre_tps_vin_mv > 11000mV` 才重新使能输入。
 - Given `VIN` 连续缺样超过窗口且 `aggregate input-present=false`，When 自动模式判定更新，Then 结果为 `BACKUP` 且 `backup_reason=input_absent`。
 - Given 已建立 DCIN `VIN baseline`，When `VIN <= 85% baseline` 且 `vin_iin_ma` 已低于 source-limited 入口门槛，Then 结果为 `BACKUP` 且 `backup_reason=input_absent`，即使 `mains_present` 尚未转为 false。
 - Given 输入仍在线、`TPS total output current` 超过 source-limited 进入门槛、`VIN` 低于合理工作电压或 `VIN drop + VIN input current` 显示上级限流，When 连续 fresh 样本满足，Then 结果为 `BACKUP` 且 `backup_reason=source_limited`，TPS 目标切到额定输出。

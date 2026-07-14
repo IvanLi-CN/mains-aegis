@@ -100,6 +100,13 @@ Never count the same TPS sample sequence twice. The fast input-handoff path may
 preboost at a lower TPS contribution only when the current fresh sample also
 shows low VIN and input current at the source-limited threshold.
 
+For 12V output, keep standby support voltage aligned with the soft input floor
+instead of leaving a wide gap:
+
+- `standby_drop_mv=700`, which yields `11.3V standby`
+- if instability remains, raise the soft input floor first; do not lower the
+  `11.3V` standby target as the first reaction
+
 ## Pre-TPS undervoltage gate
 
 Measure upstream voltage at INA3221 CH3 `VIN_UNSAFE`, before the TPS2490 input
@@ -108,10 +115,12 @@ measurement.
 
 Use an MCU-controlled hysteretic input gate:
 
-- three consecutive fresh samples below `10V`: drive TPS2490 `EN` off and
-  classify the takeover as `input_absent`;
-- while cut off, three consecutive fresh samples above `11V`: release the gate;
-- between 10V and 11V: retain the current gate state;
+- `12V` profile: three consecutive fresh samples below `11.3V` drive TPS2490
+  `EN` off and classify the takeover as `input_absent`; while cut off, three
+  consecutive fresh samples above `11.5V` release the gate;
+- `19V` profile: keep the legacy `10V` cutoff and `11V` recovery hysteresis
+  until a separate retune is proven;
+- while inside the hysteresis window, retain the current gate state;
 - any missing sample resets the consecutive-sample streak.
 
 This protects the UPS from a weak or collapsing upstream supply even though

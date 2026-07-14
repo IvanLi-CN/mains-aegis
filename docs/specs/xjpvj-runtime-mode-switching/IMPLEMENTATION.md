@@ -81,6 +81,12 @@
   - `assist_power_stage`
   - `assist_target_vout_mv`
   - `backup_reason`
+- 当前缺省值按额定输出档位派生：
+  - `12V`：`standby_drop_mv=700`，即 `11.3V standby target`
+  - `19V`：`standby_drop_mv=1200`，即 `17.8V standby target`
+- 当前前级输入门同样按档位派生：
+  - `12V`：连续 3 个 fresh `pre_tps_vin_mv < 11.3V` 关断，连续 3 个 `> 11.5V` 恢复
+  - `19V`：维持连续 3 个 `<10V` 关断、连续 3 个 `>11V` 恢复
 
 新增 source-limited 默认值优先保证检测延迟可控：
 
@@ -204,6 +210,11 @@
 这些旧方案报告没有 `source_limited_*` 字段，因为当时 `advanced_power`
 仍是 11 字段契约；读取旧 EEPROM/旧 settings 时当前实现会用默认
 source-limited 字段补齐。
+
+当前已归档的 12V sign-off evidence 仍然记录旧的 `standby_drop_mv=1200`
+基线，也就是 `10.8V standby target`。代码默认值已收敛到 `11.3V`
+standby 与 `11.3V / 11.5V` 输入门，但需要新的 12V 真机四场景复测后，
+才能替换现有 evidence 与指标结论。
 
 ### 旧方案 12V assist_path 3900mA 观察
 

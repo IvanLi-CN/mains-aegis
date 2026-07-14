@@ -9436,7 +9436,7 @@ fn default_settings() -> DeviceSettingsState {
             timer_h: 2,
         },
         advanced_power: AdvancedPowerSettings {
-            standby_drop_mv: 1200,
+            standby_drop_mv: 700,
             assist_low_drop_mv: 600,
             assist_enter_delta_ma: 0,
             assist_exit_delta_ma: 0,
@@ -9456,7 +9456,7 @@ fn default_settings() -> DeviceSettingsState {
         advanced_power_capabilities: AdvancedPowerCapabilities {
             rated_vout_mv: 12000,
             standby_drop_mv: AdvancedPowerFieldU16Capability {
-                default: 1200,
+                default: 700,
                 min: 0,
                 max: 3000,
                 step: 20,
@@ -11839,7 +11839,7 @@ mod tests {
 
         let settings = settings_state_from_api(&snapshot).unwrap();
 
-        assert_eq!(settings.advanced_power.standby_drop_mv, 1200);
+        assert_eq!(settings.advanced_power.standby_drop_mv, 700);
         assert_eq!(settings.advanced_power.assist_low_drop_mv, 600);
         assert_eq!(settings.advanced_power.assist_enter_delta_ma, 0);
         assert_eq!(settings.advanced_power.assist_exit_delta_ma, 0);
