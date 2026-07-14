@@ -105,6 +105,15 @@ pub struct RunArgs {
     /// Seconds to wait after a profile firmware flash before reading UPS identity again.
     #[arg(long, default_value_t = 12)]
     profile_flash_settle_s: u64,
+    /// Expected input UVLO cutoff for source-limited suite settings preflight.
+    #[arg(long)]
+    expected_input_uvlo_cutoff_mv: Option<u16>,
+    /// Expected input UVLO recovery threshold for source-limited suite settings preflight.
+    #[arg(long)]
+    expected_input_uvlo_recover_mv: Option<u16>,
+    /// Expected consecutive fresh samples required by the source-limited suite input UVLO preflight.
+    #[arg(long)]
+    expected_input_uvlo_required_samples: Option<u8>,
     /// Render chart HTML by invoking tools/hil/render_voltage_chart_html.py.
     #[arg(long, default_value = "tools/hil/render_voltage_chart_html.py")]
     render_chart: PathBuf,
@@ -297,6 +306,40 @@ impl OutputProfile {
 
     fn source_current_limit_ma(self) -> u32 {
         3_000
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourceLimitedUvloExpectation {
+    cutoff_mv: u16,
+    recover_mv: u16,
+    required_samples: u8,
+}
+
+impl Default for SourceLimitedUvloExpectation {
+    fn default() -> Self {
+        Self {
+            cutoff_mv: 11_300,
+            recover_mv: 11_500,
+            required_samples: 3,
+        }
+    }
+}
+
+impl SourceLimitedUvloExpectation {
+    fn from_run_args(args: &RunArgs) -> Self {
+        let defaults = Self::default();
+        Self {
+            cutoff_mv: args
+                .expected_input_uvlo_cutoff_mv
+                .unwrap_or(defaults.cutoff_mv),
+            recover_mv: args
+                .expected_input_uvlo_recover_mv
+                .unwrap_or(defaults.recover_mv),
+            required_samples: args
+                .expected_input_uvlo_required_samples
+                .unwrap_or(defaults.required_samples),
+        }
     }
 }
 
@@ -2917,6 +2960,7 @@ async fn ensure_profile_ready(
     suite_contract: SuiteContract,
     actions: &mut Vec<Value>,
 ) -> anyhow::Result<(Value, Value, Value)> {
+    let uvlo_expectation = SourceLimitedUvloExpectation::from_run_args(args);
     let mut identity = run_cmd_json_retry(
         ups_command(&args.bench, context, ["identity"]),
         "ups_identity",
@@ -2933,7 +2977,12 @@ async fn ensure_profile_ready(
     .await?;
     let mut profile_gate = validate_profile_gate(profile, &identity, &settings);
     if profile_gate.get("ok").and_then(Value::as_bool) == Some(true) {
-        validate_suite_settings(suite_contract, &settings, &mut profile_gate)?;
+        validate_suite_settings(
+            suite_contract,
+            &settings,
+            &mut profile_gate,
+            uvlo_expectation,
+        )?;
         return Ok((identity, settings, profile_gate));
     }
     if !args.allow_profile_flash {
@@ -3010,7 +3059,12 @@ async fn ensure_profile_ready(
     if profile_gate.get("ok").and_then(Value::as_bool) != Some(true) {
         bail!("UPS profile gate still failed after profile switch: {profile_gate}");
     }
-    validate_suite_settings(suite_contract, &settings, &mut profile_gate)?;
+    validate_suite_settings(
+        suite_contract,
+        &settings,
+        &mut profile_gate,
+        uvlo_expectation,
+    )?;
     Ok((identity, settings, profile_gate))
 }
 
@@ -4307,6 +4361,7 @@ fn validate_suite_settings(
     suite_contract: SuiteContract,
     settings: &Value,
     profile_gate: &mut Value,
+    uvlo_expectation: SourceLimitedUvloExpectation,
 ) -> anyhow::Result<()> {
     if !suite_contract.is_source_limited() {
         return Ok(());
@@ -4322,9 +4377,9 @@ fn validate_suite_settings(
         "source_limited_required_samples": 2,
         "source_limited_recover_margin_mv": 400,
         "vin_drop_threshold_pct": 4,
-        "input_uvlo_cutoff_mv": 11_300,
-        "input_uvlo_recover_mv": 11_500,
-        "input_uvlo_required_samples": 3,
+        "input_uvlo_cutoff_mv": uvlo_expectation.cutoff_mv,
+        "input_uvlo_recover_mv": uvlo_expectation.recover_mv,
+        "input_uvlo_required_samples": uvlo_expectation.required_samples,
     });
     let mut failures = Vec::new();
     for (key, expected_value) in expected.as_object().into_iter().flatten() {
@@ -4942,6 +4997,9 @@ mod tests {
             restore_s: 0.1,
             post_s: 0.1,
             profile_flash_settle_s: 12,
+            expected_input_uvlo_cutoff_mv: None,
+            expected_input_uvlo_recover_mv: None,
+            expected_input_uvlo_required_samples: None,
             render_chart: PathBuf::from("tools/hil/render_voltage_chart_html.py"),
         };
         let plan = build_suite_plan(
@@ -4990,6 +5048,9 @@ mod tests {
             restore_s: 0.1,
             post_s: 0.1,
             profile_flash_settle_s: 12,
+            expected_input_uvlo_cutoff_mv: None,
+            expected_input_uvlo_recover_mv: None,
+            expected_input_uvlo_required_samples: None,
             render_chart: PathBuf::from("tools/hil/render_voltage_chart_html.py"),
         };
         let plan = build_suite_plan(
@@ -5075,6 +5136,7 @@ mod tests {
             SuiteContract::SourceLimited12v,
             &settings,
             &mut profile_gate,
+            SourceLimitedUvloExpectation::default(),
         )
         .unwrap();
         assert_eq!(
@@ -5088,12 +5150,50 @@ mod tests {
             SuiteContract::SourceLimited12v,
             &mismatch,
             &mut mismatch_gate,
+            SourceLimitedUvloExpectation::default(),
         )
         .is_err());
         assert!(mismatch_gate
             .pointer("/source_limited_settings/failures")
             .and_then(Value::as_array)
             .is_some_and(|failures| !failures.is_empty()));
+    }
+
+    #[test]
+    fn source_limited_settings_preflight_accepts_uvlo_override() {
+        let mut profile_gate = json!({"ok": true});
+        let settings = json!({
+            "advanced_power": {
+                "source_limited_vin_drop_pct": 1,
+                "source_limited_enter_delta_ma": 2500,
+                "source_limited_exit_delta_ma": 0,
+                "source_limited_required_samples": 2,
+                "source_limited_recover_margin_mv": 400,
+                "vin_drop_threshold_pct": 4,
+                "input_uvlo_cutoff_mv": 11_400,
+                "input_uvlo_recover_mv": 11_600,
+                "input_uvlo_required_samples": 3,
+            }
+        });
+        validate_suite_settings(
+            SuiteContract::SourceLimited12v,
+            &settings,
+            &mut profile_gate,
+            SourceLimitedUvloExpectation {
+                cutoff_mv: 11_400,
+                recover_mv: 11_600,
+                required_samples: 3,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            profile_gate.pointer("/source_limited_settings/expected/input_uvlo_cutoff_mv"),
+            Some(&json!(11_400))
+        );
+        assert_eq!(
+            profile_gate.pointer("/source_limited_settings/expected/input_uvlo_recover_mv"),
+            Some(&json!(11_600))
+        );
     }
 
     #[test]
