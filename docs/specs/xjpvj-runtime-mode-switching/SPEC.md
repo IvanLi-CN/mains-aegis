@@ -174,7 +174,7 @@
 
 - `BACKUP` 的 owner-facing mode 不新增名字；对外仍是 `mode=backup`。
 - `backup_reason=input_absent` 的充分条件：
-  - 前级欠压门已按连续 3 个 `<10V` fresh 样本关断；或
+  - 前级欠压门已按当前 `advanced_power.input_uvlo_*` 配置确认关断；或
   - `VIN` 连续缺样超过 latch 窗口后，fallback `aggregate input-present=false`
   - 已建立 DCIN `VIN baseline` 后，`VIN <= 85% baseline` 且 `vin_iin_ma` 已低于 source-limited 入口门槛；该条件表示上级输入已实际失去供能能力，即使硬件的 presence 位尚未转为 false。
 - `backup_reason=source_limited` 的充分条件：
@@ -286,10 +286,8 @@
 - Given `requested_outputs` 包含某路输出且 `active_outputs` 不包含该路，When 内部候选 mode 为
   `standby` 或 `supplement`，Then owner-facing `mode=blocked`。
 - Given 输入状态未知，When `TPS` 仍在输出，Then 模式保持上一确认态，不得仅因输出活跃直接进入 `BACKUP`。
-- Given `12V` 档连续 3 个 fresh `pre_tps_vin_mv < 11300mV`，When 输入门判定更新，Then MCU 关断 TPS2490 输入，结果为 `BACKUP` 且 `backup_reason=input_absent`。
-- Given `12V` 档输入门已关断，When 前级 VIN 位于 `11300mV..=11500mV`，Then 保持关断；只有连续 3 个 fresh `pre_tps_vin_mv > 11500mV` 才重新使能输入。
-- Given `19V` 档连续 3 个 fresh `pre_tps_vin_mv < 10000mV`，When 输入门判定更新，Then MCU 关断 TPS2490 输入，结果为 `BACKUP` 且 `backup_reason=input_absent`。
-- Given `19V` 档输入门已关断，When 前级 VIN 位于 `10000mV..=11000mV`，Then 保持关断；只有连续 3 个 fresh `pre_tps_vin_mv > 11000mV` 才重新使能输入。
+- Given `pre_tps_vin_mv` 连续 `advanced_power.input_uvlo_required_samples` 个 fresh 样本低于 `advanced_power.input_uvlo_cutoff_mv`，When 输入门判定更新，Then MCU 关断 TPS2490 输入，结果为 `BACKUP` 且 `backup_reason=input_absent`。
+- Given 输入门已关断，When 前级 VIN 位于 `input_uvlo_cutoff_mv..=input_uvlo_recover_mv`，Then 保持关断；只有连续 `advanced_power.input_uvlo_required_samples` 个 fresh `pre_tps_vin_mv > input_uvlo_recover_mv` 才重新使能输入。
 - Given `VIN` 连续缺样超过窗口且 `aggregate input-present=false`，When 自动模式判定更新，Then 结果为 `BACKUP` 且 `backup_reason=input_absent`。
 - Given 已建立 DCIN `VIN baseline`，When `VIN <= 85% baseline` 且 `vin_iin_ma` 已低于 source-limited 入口门槛，Then 结果为 `BACKUP` 且 `backup_reason=input_absent`，即使 `mains_present` 尚未转为 false。
 - Given 输入仍在线、`TPS total output current` 超过 source-limited 进入门槛、`VIN` 低于合理工作电压或 `VIN drop + VIN input current` 显示上级限流，When 连续 fresh 样本满足，Then 结果为 `BACKUP` 且 `backup_reason=source_limited`，TPS 目标切到额定输出。

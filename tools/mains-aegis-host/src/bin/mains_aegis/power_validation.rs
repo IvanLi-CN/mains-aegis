@@ -4322,6 +4322,9 @@ fn validate_suite_settings(
         "source_limited_required_samples": 2,
         "source_limited_recover_margin_mv": 400,
         "vin_drop_threshold_pct": 4,
+        "input_uvlo_cutoff_mv": 11_300,
+        "input_uvlo_recover_mv": 11_500,
+        "input_uvlo_required_samples": 3,
     });
     let mut failures = Vec::new();
     for (key, expected_value) in expected.as_object().into_iter().flatten() {
@@ -5063,6 +5066,9 @@ mod tests {
                 "source_limited_required_samples": 2,
                 "source_limited_recover_margin_mv": 400,
                 "vin_drop_threshold_pct": 4,
+                "input_uvlo_cutoff_mv": 11_300,
+                "input_uvlo_recover_mv": 11_500,
+                "input_uvlo_required_samples": 3,
             }
         });
         validate_suite_settings(

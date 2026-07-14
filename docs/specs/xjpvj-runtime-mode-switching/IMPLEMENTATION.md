@@ -53,7 +53,7 @@
 
 ## 设置与持久化实现
 
-当前 `advanced_power` 契约已经是 16 字段：
+当前 `advanced_power` 契约已经是 19 字段：
 
 - `standby_drop_mv`
 - `assist_low_drop_mv`
@@ -66,6 +66,9 @@
 - `rated_exit_delta_ma`
 - `vin_drop_threshold_pct`
 - `required_samples`
+- `input_uvlo_cutoff_mv`
+- `input_uvlo_recover_mv`
+- `input_uvlo_required_samples`
 - `source_limited_vin_drop_pct`
 - `source_limited_enter_delta_ma`
 - `source_limited_exit_delta_ma`
@@ -75,7 +78,7 @@
 实现状态：
 
 - owner-facing 保存语义仍然是相对值或无量纲值
-- EEPROM 使用 `AdvancedPowerRecordV3`
+- EEPROM 使用 `AdvancedPowerRecordV4`
 - 继续兼容旧 `V1 / V2` 记录的默认值补齐读取
 - `status / diag-snapshot` 已暴露：
   - `assist_power_stage`
@@ -84,9 +87,13 @@
 - 当前缺省值按额定输出档位派生：
   - `12V`：`standby_drop_mv=700`，即 `11.3V standby target`
   - `19V`：`standby_drop_mv=1200`，即 `17.8V standby target`
-- 当前前级输入门同样按档位派生：
-  - `12V`：连续 3 个 fresh `pre_tps_vin_mv < 11.3V` 关断，连续 3 个 `> 11.5V` 恢复
-  - `19V`：维持连续 3 个 `<10V` 关断、连续 3 个 `>11V` 恢复
+- 当前前级输入门改为 EEPROM 持久化参数：
+  - `input_uvlo_cutoff_mv`
+  - `input_uvlo_recover_mv`
+  - `input_uvlo_required_samples`
+  - 缺省值仍按额定输出档位派生：
+    - `12V`：`11.3V / 11.5V / 3 samples`
+    - `19V`：`10V / 11V / 3 samples`
 
 新增 source-limited 默认值优先保证检测延迟可控：
 

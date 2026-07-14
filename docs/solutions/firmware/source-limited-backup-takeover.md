@@ -115,11 +115,12 @@ measurement.
 
 Use an MCU-controlled hysteretic input gate:
 
-- `12V` profile: three consecutive fresh samples below `11.3V` drive TPS2490
-  `EN` off and classify the takeover as `input_absent`; while cut off, three
-  consecutive fresh samples above `11.5V` release the gate;
-- `19V` profile: keep the legacy `10V` cutoff and `11V` recovery hysteresis
-  until a separate retune is proven;
+- store the gate in EEPROM-backed `advanced_power` fields:
+  `input_uvlo_cutoff_mv`, `input_uvlo_recover_mv`,
+  `input_uvlo_required_samples`;
+- keep profile defaults conservative:
+  - `12V`: `11.3V` cutoff, `11.5V` recover, `3` samples;
+  - `19V`: `10V` cutoff, `11V` recover, `3` samples;
 - while inside the hysteresis window, retain the current gate state;
 - any missing sample resets the consecutive-sample streak.
 

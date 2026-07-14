@@ -1,3 +1,5 @@
+use crate::net_types::AdvancedPowerExpandedSnapshot;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputSelector {
     OutA,
@@ -37,11 +39,6 @@ impl OutputGateReason {
 }
 
 pub const LOW_BATTERY_OUTPUT_RESTORE_RSOC_PCT: u16 = 20;
-pub const PRE_TPS_UNDERVOLTAGE_REQUIRED_SAMPLES: u8 = 3;
-pub const PRE_TPS_UNDERVOLTAGE_12V_CUTOFF_MV: u16 = 11_300;
-pub const PRE_TPS_UNDERVOLTAGE_12V_RECOVER_MV: u16 = 11_500;
-pub const PRE_TPS_UNDERVOLTAGE_LEGACY_CUTOFF_MV: u16 = 10_000;
-pub const PRE_TPS_UNDERVOLTAGE_LEGACY_RECOVER_MV: u16 = 11_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InputGateThresholds {
@@ -51,19 +48,11 @@ pub struct InputGateThresholds {
 }
 
 impl InputGateThresholds {
-    pub const fn for_rated_vout(rated_vout_mv: u16) -> Self {
-        if rated_vout_mv <= 12_000 {
-            Self {
-                cutoff_mv: PRE_TPS_UNDERVOLTAGE_12V_CUTOFF_MV,
-                recover_mv: PRE_TPS_UNDERVOLTAGE_12V_RECOVER_MV,
-                required_samples: PRE_TPS_UNDERVOLTAGE_REQUIRED_SAMPLES,
-            }
-        } else {
-            Self {
-                cutoff_mv: PRE_TPS_UNDERVOLTAGE_LEGACY_CUTOFF_MV,
-                recover_mv: PRE_TPS_UNDERVOLTAGE_LEGACY_RECOVER_MV,
-                required_samples: PRE_TPS_UNDERVOLTAGE_REQUIRED_SAMPLES,
-            }
+    pub const fn from_advanced_power(advanced_power: AdvancedPowerExpandedSnapshot) -> Self {
+        Self {
+            cutoff_mv: advanced_power.input_uvlo_cutoff_mv,
+            recover_mv: advanced_power.input_uvlo_recover_mv,
+            required_samples: advanced_power.input_uvlo_required_samples,
         }
     }
 }
@@ -84,17 +73,19 @@ pub enum InputGateAction {
 }
 
 impl InputGateTracker {
-    pub const fn new() -> Self {
-        Self::for_rated_vout(12_000)
-    }
-
-    pub const fn for_rated_vout(rated_vout_mv: u16) -> Self {
+    pub const fn new(thresholds: InputGateThresholds) -> Self {
         Self {
             cutoff: false,
-            thresholds: InputGateThresholds::for_rated_vout(rated_vout_mv),
+            thresholds,
             low_streak: 0,
             recover_streak: 0,
         }
+    }
+
+    pub fn update_thresholds(&mut self, thresholds: InputGateThresholds) {
+        self.thresholds = thresholds;
+        self.low_streak = 0;
+        self.recover_streak = 0;
     }
 
     pub fn step(&mut self, fresh_pre_tps_vin_mv: Option<u16>) -> InputGateAction {
@@ -152,7 +143,11 @@ impl InputGateTracker {
 
 impl Default for InputGateTracker {
     fn default() -> Self {
-        Self::new()
+        Self::new(InputGateThresholds {
+            cutoff_mv: 0,
+            recover_mv: 0,
+            required_samples: 1,
+        })
     }
 }
 
@@ -279,10 +274,15 @@ mod tests {
         InputGateTracker, LowBatteryOutputHoldReleaseInput, OutputGateReason, OutputRuntimeState,
         OutputSelector,
     };
+    use crate::net_types::AdvancedPowerExpandedSnapshot;
 
     #[test]
     fn input_gate_requires_three_consecutive_low_fresh_samples() {
-        let mut tracker = InputGateTracker::new();
+        let mut tracker = InputGateTracker::new(InputGateThresholds {
+            cutoff_mv: 11_300,
+            recover_mv: 11_500,
+            required_samples: 3,
+        });
         assert_eq!(tracker.step(Some(11_299)), InputGateAction::None);
         assert_eq!(tracker.step(None), InputGateAction::None);
         assert_eq!(tracker.step(Some(11_000)), InputGateAction::None);
@@ -295,7 +295,11 @@ mod tests {
 
     #[test]
     fn input_gate_recovers_only_after_three_samples_above_11v5_for_12v_profile() {
-        let mut tracker = InputGateTracker::new();
+        let mut tracker = InputGateTracker::new(InputGateThresholds {
+            cutoff_mv: 11_300,
+            recover_mv: 11_500,
+            required_samples: 3,
+        });
         for sample in [11_200, 11_100, 11_000] {
             let _ = tracker.step(Some(sample));
         }
@@ -308,20 +312,33 @@ mod tests {
     }
 
     #[test]
-    fn input_gate_thresholds_follow_output_profile() {
+    fn input_gate_thresholds_follow_advanced_power_snapshot() {
         assert_eq!(
-            InputGateThresholds::for_rated_vout(12_000),
+            InputGateThresholds::from_advanced_power(AdvancedPowerExpandedSnapshot {
+                rated_vout_mv: 12_000,
+                standby_vout_mv: 11_300,
+                assist_low_vout_mv: 11_400,
+                assist_enter_iout_ma: 100,
+                assist_exit_iout_ma: 50,
+                assist_required_samples: 2,
+                assist_ramp_step_mv: 100,
+                assist_ramp_interval_ms: 200,
+                rated_enter_iout_ma: 100,
+                rated_exit_iout_ma: 50,
+                vin_drop_threshold_pct: 4,
+                required_samples: 2,
+                input_uvlo_cutoff_mv: 11_300,
+                input_uvlo_recover_mv: 11_500,
+                input_uvlo_required_samples: 3,
+                source_limited_vin_drop_pct: 1,
+                source_limited_enter_iout_ma: 2_600,
+                source_limited_exit_iout_ma: 50,
+                source_limited_required_samples: 2,
+                source_limited_recover_margin_mv: 400,
+            }),
             InputGateThresholds {
                 cutoff_mv: 11_300,
                 recover_mv: 11_500,
-                required_samples: 3,
-            }
-        );
-        assert_eq!(
-            InputGateThresholds::for_rated_vout(19_000),
-            InputGateThresholds {
-                cutoff_mv: 10_000,
-                recover_mv: 11_000,
                 required_samples: 3,
             }
         );
@@ -329,7 +346,11 @@ mod tests {
 
     #[test]
     fn input_gate_19v_profile_keeps_legacy_thresholds() {
-        let mut tracker = InputGateTracker::for_rated_vout(19_000);
+        let mut tracker = InputGateTracker::new(InputGateThresholds {
+            cutoff_mv: 10_000,
+            recover_mv: 11_000,
+            required_samples: 3,
+        });
         assert_eq!(tracker.step(Some(10_100)), InputGateAction::None);
         assert_eq!(tracker.step(Some(9_950)), InputGateAction::None);
         assert_eq!(tracker.step(Some(9_900)), InputGateAction::None);
@@ -338,6 +359,27 @@ mod tests {
         assert_eq!(tracker.step(Some(11_001)), InputGateAction::None);
         assert_eq!(tracker.step(Some(11_100)), InputGateAction::None);
         assert_eq!(tracker.step(Some(11_200)), InputGateAction::Enable);
+    }
+
+    #[test]
+    fn input_gate_threshold_update_preserves_cutoff_state_but_clears_streaks() {
+        let mut tracker = InputGateTracker::new(InputGateThresholds {
+            cutoff_mv: 11_300,
+            recover_mv: 11_500,
+            required_samples: 3,
+        });
+        for sample in [11_200, 11_100, 11_000] {
+            let _ = tracker.step(Some(sample));
+        }
+        assert!(tracker.cutoff);
+        tracker.update_thresholds(InputGateThresholds {
+            cutoff_mv: 10_800,
+            recover_mv: 11_000,
+            required_samples: 2,
+        });
+        assert!(tracker.cutoff);
+        assert_eq!(tracker.step(Some(11_050)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_100)), InputGateAction::Enable);
     }
 
     fn low_battery_release_input() -> LowBatteryOutputHoldReleaseInput {

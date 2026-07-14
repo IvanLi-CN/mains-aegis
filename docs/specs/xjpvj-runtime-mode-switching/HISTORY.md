@@ -276,9 +276,12 @@
 - 12V 当前默认 standby 目标从 `10.8V` 收敛到 `11.3V`：
   - `standby_drop_mv` 缺省值改为 `700`
   - `DeviceSettingsSnapshot`、EEPROM 缺省初始化、reset advanced power、host 默认快照已统一到该值
-- 前级输入门改为按额定输出档位派生：
-  - `12V`：连续 3 个 fresh `pre_tps_vin_mv < 11.3V` 关断，连续 3 个 `> 11.5V` 恢复
-  - `19V`：继续维持连续 3 个 `<10V` 关断、连续 3 个 `>11V` 恢复
+- 前级输入门从固件硬编码迁移到 `advanced_power` EEPROM 参数：
+  - 新增 `input_uvlo_cutoff_mv / input_uvlo_recover_mv / input_uvlo_required_samples`
+  - EEPROM 记录升级到 `AdvancedPowerRecordV4`
+  - 缺省值仍按档位派生：
+    - `12V`：`11.3V / 11.5V / 3 samples`
+    - `19V`：`10V / 11V / 3 samples`
 - 本地验证已覆盖新默认值与输入门回差：
   - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml`
   - `cargo test --manifest-path tools/mains-aegis-host/Cargo.toml`

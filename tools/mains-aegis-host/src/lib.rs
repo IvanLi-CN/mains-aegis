@@ -638,6 +638,9 @@ struct AdvancedPowerSettings {
     rated_exit_delta_ma: i16,
     vin_drop_threshold_pct: u8,
     required_samples: u8,
+    input_uvlo_cutoff_mv: u16,
+    input_uvlo_recover_mv: u16,
+    input_uvlo_required_samples: u8,
     source_limited_vin_drop_pct: u8,
     source_limited_enter_delta_ma: i16,
     source_limited_exit_delta_ma: i16,
@@ -683,6 +686,12 @@ struct AdvancedPowerCapabilities {
     rated_exit_delta_ma: AdvancedPowerFieldI16Capability,
     vin_drop_threshold_pct: AdvancedPowerFieldU8Capability,
     required_samples: AdvancedPowerFieldU8Capability,
+    #[serde(default = "default_input_uvlo_cutoff_capability")]
+    input_uvlo_cutoff_mv: AdvancedPowerFieldU16Capability,
+    #[serde(default = "default_input_uvlo_recover_capability")]
+    input_uvlo_recover_mv: AdvancedPowerFieldU16Capability,
+    #[serde(default = "default_input_uvlo_required_samples_capability")]
+    input_uvlo_required_samples: AdvancedPowerFieldU8Capability,
     #[serde(default = "default_source_limited_vin_drop_capability")]
     source_limited_vin_drop_pct: AdvancedPowerFieldU8Capability,
     #[serde(default = "default_source_limited_enter_delta_capability")]
@@ -700,6 +709,33 @@ fn default_source_limited_vin_drop_capability() -> AdvancedPowerFieldU8Capabilit
         default: 4,
         min: 1,
         max: 12,
+        step: 1,
+    }
+}
+
+fn default_input_uvlo_cutoff_capability() -> AdvancedPowerFieldU16Capability {
+    AdvancedPowerFieldU16Capability {
+        default: 11_300,
+        min: 5_000,
+        max: 20_000,
+        step: 20,
+    }
+}
+
+fn default_input_uvlo_recover_capability() -> AdvancedPowerFieldU16Capability {
+    AdvancedPowerFieldU16Capability {
+        default: 11_500,
+        min: 5_000,
+        max: 20_000,
+        step: 20,
+    }
+}
+
+fn default_input_uvlo_required_samples_capability() -> AdvancedPowerFieldU8Capability {
+    AdvancedPowerFieldU8Capability {
+        default: 3,
+        min: 1,
+        max: 5,
         step: 1,
     }
 }
@@ -843,6 +879,9 @@ struct AdvancedPowerRequest {
     rated_exit_delta_ma: i16,
     vin_drop_threshold_pct: u8,
     required_samples: u8,
+    input_uvlo_cutoff_mv: u16,
+    input_uvlo_recover_mv: u16,
+    input_uvlo_required_samples: u8,
     source_limited_vin_drop_pct: u8,
     source_limited_enter_delta_ma: i16,
     source_limited_exit_delta_ma: i16,
@@ -2784,7 +2823,13 @@ fn parse_lan_http_json_response(
 }
 
 fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpError> {
-    let defaults = default_settings();
+    let advanced_power_capabilities = value.get("advanced_power_capabilities");
+    let rated_vout_mv = advanced_power_capabilities
+        .and_then(|snapshot| snapshot.get("rated_vout_mv"))
+        .and_then(Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+        .unwrap_or(12_000);
+    let defaults = default_settings_for_rated_vout(rated_vout_mv);
     let wifi = value.get("wifi").ok_or_else(|| {
         HttpError::retryable(
             "settings_snapshot_invalid",
@@ -2798,7 +2843,36 @@ fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpErr
         )
     })?;
     let advanced_power = value.get("advanced_power");
-    let advanced_power_capabilities = value.get("advanced_power_capabilities");
+    let mut parsed_advanced_power_capabilities = advanced_power_capabilities
+        .and_then(|snapshot| serde_json::from_value(snapshot.clone()).ok())
+        .unwrap_or_else(|| defaults.advanced_power_capabilities.clone());
+    if advanced_power_capabilities
+        .and_then(|snapshot| snapshot.get("input_uvlo_cutoff_mv"))
+        .is_none()
+    {
+        parsed_advanced_power_capabilities.input_uvlo_cutoff_mv = defaults
+            .advanced_power_capabilities
+            .input_uvlo_cutoff_mv
+            .clone();
+    }
+    if advanced_power_capabilities
+        .and_then(|snapshot| snapshot.get("input_uvlo_recover_mv"))
+        .is_none()
+    {
+        parsed_advanced_power_capabilities.input_uvlo_recover_mv = defaults
+            .advanced_power_capabilities
+            .input_uvlo_recover_mv
+            .clone();
+    }
+    if advanced_power_capabilities
+        .and_then(|snapshot| snapshot.get("input_uvlo_required_samples"))
+        .is_none()
+    {
+        parsed_advanced_power_capabilities.input_uvlo_required_samples = defaults
+            .advanced_power_capabilities
+            .input_uvlo_required_samples
+            .clone();
+    }
     Ok(DeviceSettingsState {
         wifi_configured: wifi.get("configured").and_then(Value::as_bool),
         wifi_ssid: wifi.get("ssid").and_then(Value::as_str).map(str::to_string),
@@ -2880,6 +2954,21 @@ fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpErr
                 .and_then(Value::as_u64)
                 .and_then(|value| u8::try_from(value).ok())
                 .unwrap_or(defaults.advanced_power.required_samples),
+            input_uvlo_cutoff_mv: advanced_power
+                .and_then(|snapshot| snapshot.get("input_uvlo_cutoff_mv"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.input_uvlo_cutoff_mv),
+            input_uvlo_recover_mv: advanced_power
+                .and_then(|snapshot| snapshot.get("input_uvlo_recover_mv"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.input_uvlo_recover_mv),
+            input_uvlo_required_samples: advanced_power
+                .and_then(|snapshot| snapshot.get("input_uvlo_required_samples"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .unwrap_or(defaults.advanced_power.input_uvlo_required_samples),
             source_limited_vin_drop_pct: advanced_power
                 .and_then(|snapshot| snapshot.get("source_limited_vin_drop_pct"))
                 .and_then(Value::as_u64)
@@ -2906,9 +2995,7 @@ fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpErr
                 .and_then(|value| u16::try_from(value).ok())
                 .unwrap_or(defaults.advanced_power.source_limited_recover_margin_mv),
         },
-        advanced_power_capabilities: advanced_power_capabilities
-            .and_then(|snapshot| serde_json::from_value(snapshot.clone()).ok())
-            .unwrap_or(defaults.advanced_power_capabilities),
+        advanced_power_capabilities: parsed_advanced_power_capabilities,
     })
 }
 
@@ -5110,6 +5197,9 @@ async fn set_advanced_power(
         rated_exit_delta_ma: input.rated_exit_delta_ma,
         vin_drop_threshold_pct: input.vin_drop_threshold_pct,
         required_samples: input.required_samples,
+        input_uvlo_cutoff_mv: input.input_uvlo_cutoff_mv,
+        input_uvlo_recover_mv: input.input_uvlo_recover_mv,
+        input_uvlo_required_samples: input.input_uvlo_required_samples,
         source_limited_vin_drop_pct: input.source_limited_vin_drop_pct,
         source_limited_enter_delta_ma: input.source_limited_enter_delta_ma,
         source_limited_exit_delta_ma: input.source_limited_exit_delta_ma,
@@ -5134,6 +5224,9 @@ async fn set_advanced_power(
                 "rated_exit_delta_ma": input.rated_exit_delta_ma,
                 "vin_drop_threshold_pct": input.vin_drop_threshold_pct,
                 "required_samples": input.required_samples,
+                "input_uvlo_cutoff_mv": input.input_uvlo_cutoff_mv,
+                "input_uvlo_recover_mv": input.input_uvlo_recover_mv,
+                "input_uvlo_required_samples": input.input_uvlo_required_samples,
                 "source_limited_vin_drop_pct": input.source_limited_vin_drop_pct,
                 "source_limited_enter_delta_ma": input.source_limited_enter_delta_ma,
                 "source_limited_exit_delta_ma": input.source_limited_exit_delta_ma,
@@ -5155,6 +5248,9 @@ async fn set_advanced_power(
             "rated_exit_delta_ma": input.rated_exit_delta_ma,
             "vin_drop_threshold_pct": input.vin_drop_threshold_pct,
             "required_samples": input.required_samples,
+            "input_uvlo_cutoff_mv": input.input_uvlo_cutoff_mv,
+            "input_uvlo_recover_mv": input.input_uvlo_recover_mv,
+            "input_uvlo_required_samples": input.input_uvlo_required_samples,
             "source_limited_vin_drop_pct": input.source_limited_vin_drop_pct,
             "source_limited_enter_delta_ma": input.source_limited_enter_delta_ma,
             "source_limited_exit_delta_ma": input.source_limited_exit_delta_ma,
@@ -5190,7 +5286,11 @@ async fn reset_advanced_power(
             "type": "request",
             "op": "reset_advanced_power"
         }),
-        |settings| settings.advanced_power = default_settings().advanced_power,
+        |settings| {
+            settings.advanced_power =
+                default_settings_for_rated_vout(settings.advanced_power_capabilities.rated_vout_mv)
+                    .advanced_power
+        },
         "advanced_power",
         "Advanced power settings reset through mains-aegis-devd",
     )
@@ -9426,6 +9526,21 @@ fn trace_entry_transport(entry: &SerialTraceEntry) -> &'static str {
 }
 
 fn default_settings() -> DeviceSettingsState {
+    default_settings_for_rated_vout(12_000)
+}
+
+fn default_settings_for_rated_vout(rated_vout_mv: u16) -> DeviceSettingsState {
+    let standby_drop_mv = if rated_vout_mv <= 12_000 { 700 } else { 1200 };
+    let input_uvlo_cutoff_mv = if rated_vout_mv <= 12_000 {
+        11_300
+    } else {
+        10_000
+    };
+    let input_uvlo_recover_mv = if rated_vout_mv <= 12_000 {
+        11_500
+    } else {
+        11_000
+    };
     DeviceSettingsState {
         wifi_configured: None,
         wifi_ssid: None,
@@ -9436,7 +9551,7 @@ fn default_settings() -> DeviceSettingsState {
             timer_h: 2,
         },
         advanced_power: AdvancedPowerSettings {
-            standby_drop_mv: 700,
+            standby_drop_mv,
             assist_low_drop_mv: 600,
             assist_enter_delta_ma: 0,
             assist_exit_delta_ma: 0,
@@ -9447,6 +9562,9 @@ fn default_settings() -> DeviceSettingsState {
             rated_exit_delta_ma: 0,
             vin_drop_threshold_pct: 4,
             required_samples: 2,
+            input_uvlo_cutoff_mv,
+            input_uvlo_recover_mv,
+            input_uvlo_required_samples: 3,
             source_limited_vin_drop_pct: 4,
             source_limited_enter_delta_ma: 1900,
             source_limited_exit_delta_ma: 0,
@@ -9454,9 +9572,9 @@ fn default_settings() -> DeviceSettingsState {
             source_limited_recover_margin_mv: 400,
         },
         advanced_power_capabilities: AdvancedPowerCapabilities {
-            rated_vout_mv: 12000,
+            rated_vout_mv,
             standby_drop_mv: AdvancedPowerFieldU16Capability {
-                default: 700,
+                default: standby_drop_mv,
                 min: 0,
                 max: 3000,
                 step: 20,
@@ -9517,6 +9635,24 @@ fn default_settings() -> DeviceSettingsState {
             },
             required_samples: AdvancedPowerFieldU8Capability {
                 default: 2,
+                min: 1,
+                max: 5,
+                step: 1,
+            },
+            input_uvlo_cutoff_mv: AdvancedPowerFieldU16Capability {
+                default: input_uvlo_cutoff_mv,
+                min: 5_000,
+                max: 20_000,
+                step: 20,
+            },
+            input_uvlo_recover_mv: AdvancedPowerFieldU16Capability {
+                default: input_uvlo_recover_mv,
+                min: 5_000,
+                max: 20_000,
+                step: 20,
+            },
+            input_uvlo_required_samples: AdvancedPowerFieldU8Capability {
+                default: 3,
                 min: 1,
                 max: 5,
                 step: 1,
