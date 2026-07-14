@@ -1386,13 +1386,7 @@ fn power_adapter_label(args: &BenchArgs) -> String {
 
 fn load_adapter_label(args: &BenchArgs) -> String {
     match args.load_adapter {
-        LoadAdapterKind::Loadlynx => {
-            if args.load_ipc.is_some() {
-                "Loadlynx:cli+ipc+usb".to_string()
-            } else {
-                "Loadlynx:cli+default".to_string()
-            }
-        }
+        LoadAdapterKind::Loadlynx => "Loadlynx:released-cli+saved-device".to_string(),
         LoadAdapterKind::External => match args.load_adapter_cmd.as_ref() {
             Some(cmd) => format!("External:{}", cmd.display()),
             None => "External".to_string(),
@@ -1844,11 +1838,10 @@ fn load_cli_base(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
         .load_cli
         .as_ref()
         .ok_or_else(|| anyhow!("LoadLynx adapter requires --load-cli or LOADLYNX_CLI"))?;
-    let mut cmd = vec![cli.to_string_lossy().to_string()];
-    if let Some(ipc) = &args.load_ipc {
-        cmd.extend(["--ipc".to_string(), ipc.clone()]);
-    }
-    Ok(cmd)
+    // Current released LoadLynx owns its devd lifecycle and no longer exposes a
+    // top-level --ipc option. Keep accepting the legacy runner argument so old
+    // bench scripts remain parseable, but never forward it to the child CLI.
+    Ok(vec![cli.to_string_lossy().to_string()])
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4625,11 +4618,11 @@ mod tests {
     }
 
     #[test]
-    fn loadlynx_stream_uses_status_stream_over_ipc() {
+    fn loadlynx_stream_uses_released_cli_without_legacy_ipc_flag() {
         let cmd = load_stream_command(&bench(Some("/opt/loadlynx")), 40).unwrap();
         assert_eq!(cmd[0], "/opt/loadlynx");
-        assert!(cmd.contains(&"--ipc".to_string()));
-        assert!(cmd.contains(&"/tmp/load.sock".to_string()));
+        assert!(!cmd.contains(&"--ipc".to_string()));
+        assert!(!cmd.contains(&"/tmp/load.sock".to_string()));
         assert!(cmd.contains(&"status-stream".to_string()));
         assert!(cmd.contains(&"--interval-ms".to_string()));
         assert!(cmd.contains(&"200".to_string()));
