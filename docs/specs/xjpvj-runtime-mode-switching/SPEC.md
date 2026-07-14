@@ -332,11 +332,11 @@
 ## Visual Evidence
 
 - source_type: real_hil_capture
-  evidence_scope: repaired-hardware 12V source-limited four-scene sign-off
-  report: `evidence/source-limited-12v-ce343924-uvlo-preboost-final-20260714T1206Z/suite-overview.html`
-  offline_snapshot: `evidence/source-limited-12v-ce343924-uvlo-preboost-final-20260714T1206Z/suite-overview.mhtml`
+  evidence_scope: 12V source-limited 100mV UVLO sweep with recommended candidate A sign-off
+  report: `evidence/source-limited-12v-93aadc61-uvlo-sweep-20260714T1636Z/suite-overview.html`
+  offline_snapshot: `evidence/source-limited-12v-93aadc61-uvlo-sweep-20260714T1636Z/suite-overview.mhtml`
   scenarios: `backup_only/1000mA`, `source_in_budget/2500mA`, `source_limited_online/3900mA`, `source_limited_cut/3900mA`
-  evidence_note: 四张嵌入图均已在浏览器真实渲染；suite verifier 为 `signoff_valid=true`，两个 3900mA 场景锁存后最低负载电压均为 `11790mV`。
+  evidence_note: 根目录是候选 A `11.3V / 11.5V` 的正式 sign-off suite；同目录 `comparison.json` 记录 B/C 两个 `100mV` 候选点，其中 B `11.4V / 11.6V` 在 `2500mA` 误判 Backup，C `11.5V / 11.7V` 虽通过但不优于 A 的更低 cutoff 规则。四张嵌入图已在浏览器真实渲染并导出 `.mhtml`。
 
 - source_type: firmware_preview
   evidence_scope: requested output blocked before Dashboard entry

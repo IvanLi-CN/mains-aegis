@@ -218,10 +218,10 @@
 仍是 11 字段契约；读取旧 EEPROM/旧 settings 时当前实现会用默认
 source-limited 字段补齐。
 
-当前已归档的 12V sign-off evidence 仍然记录旧的 `standby_drop_mv=1200`
-基线，也就是 `10.8V standby target`。代码默认值已收敛到 `11.3V`
-standby 与 `11.3V / 11.5V` 输入门，但需要新的 12V 真机四场景复测后，
-才能替换现有 evidence 与指标结论。
+12V 的 `11.3V standby + 11.3V / 11.5V input UVLO` 已在后续 `93aadc61`
+真机四场景复测中完成重新签核；当前默认值不再只是实现假设，而是有对应的
+12V sign-off evidence 支撑。`100mV` 步进搜索还额外保留了 `11.4V / 11.6V`
+与 `11.5V / 11.7V` 的同台架对照结果，用来说明“更高 cutoff 并不必然更优”。
 
 ### 旧方案 12V assist_path 3900mA 观察
 
@@ -795,3 +795,49 @@ scene 均为 `valid_for_signoff` 且无 acceptance failure：
 `source-limited-12v-62179e3c-final-r6-20260714T0010Z` 保留为 MOS/网表修复前的历史
 基线，不能用于评价修复后硬件的当前输入压降。旧 assist_path 约 `10.5V` 的长跌落同样
 保留为历史问题证据，而不是当前硬件能力结论。
+
+### 12V 100mV UVLO Sweep on 93aadc61
+
+在 `93aadc61-clean-eb2b310e1419a6cc` 上完成了新的 12V 四场景步进调优，归档目录：
+
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-93aadc61-uvlo-sweep-20260714T1636Z/`
+
+该目录根部保留推荐候选 A 的完整 suite；`suite-overview.mhtml` 是从浏览器导出的完整
+离线快照；`comparison.json` 则汇总三个 `100mV` 候选点。台架仍为 UPS
+`serial-04f3bb3f5367` / `mains-aegis-198840`、IsolaPurr `f293cc9c139e`
+(`12000mV / 3000mA`) 与 LoadLynx `loadlynx-d68638`。
+
+固定不变参数：
+
+- `standby_drop_mv=700`，即 `11.3V standby`
+- `input_uvlo_required_samples=3`
+- `source_limited_vin_drop_pct=1`
+- `source_limited_enter_delta_ma=2500`
+- `source_limited_exit_delta_ma=0`
+- `source_limited_required_samples=2`
+- `source_limited_recover_margin_mv=400`
+
+候选结果：
+
+- 候选 A `11.3V / 11.5V`：四场景全部 `signoff_valid=true`
+  - `source_in_budget / 2500mA`：无 Backup、无 offline 样本
+  - `source_limited_online / 3900mA`：`0.399s` 锁存，锁存后最低负载电压 `11790mV`
+  - `source_limited_cut / 3900mA`：同样维持 `11790mV`，VIN cut 后连续 Backup 并转为
+    `input_absent`
+- 候选 B `11.4V / 11.6V`：`source_in_budget / 2500mA` 误入 Backup，出现
+  `8` 个 Backup/Offline 样本，suite 只能算 `invalid_diagnostic_only`
+- 候选 C `11.5V / 11.7V`：四场景同样 `signoff_valid=true`
+  - `source_limited_online / 3900mA`：`0.400s` 锁存，锁存后最低负载电压同为 `11790mV`
+  - `source_limited_cut / 3900mA`：`0.598s` 锁存，VIN cut 后保持连续 Backup
+
+推荐仍为候选 A，而不是更高的 cutoff：
+
+- 它是通过点中 cutoff 最低的一组，符合“不过早切 Backup”的优先级
+- 与候选 C 相比，3900mA 两个场景的锁存后最低负载电压相同，均未出现 `<11V`
+  的连续低压段
+- 候选 B 的失败说明这个门限不是“越高越好”的单调问题；提高 `100mV` 可能把
+  `2500mA` 正常在线场景误判成 `input_absent` Backup
+
+这轮 sweep 也确认，相比旧 assist_path 历史 evidence 中约 `10.5V` 的长时间跌落，
+当前 `source-limited` 主动接管策略在推荐候选 A 上已经把 3900mA 场景的锁存后最低
+负载电压维持在 `11790mV`，改善成立。

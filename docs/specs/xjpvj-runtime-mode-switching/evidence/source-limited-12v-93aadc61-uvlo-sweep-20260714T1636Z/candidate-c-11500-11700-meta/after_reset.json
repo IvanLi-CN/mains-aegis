@@ -1,0 +1,24 @@
+{
+  "advanced_power": {
+    "assist_enter_delta_ma": 0,
+    "assist_exit_delta_ma": 0,
+    "assist_low_drop_mv": 600,
+    "assist_ramp_interval_ms": 200,
+    "assist_ramp_step_mv": 100,
+    "assist_required_samples": 2,
+    "input_uvlo_cutoff_mv": 11500,
+    "input_uvlo_recover_mv": 11700,
+    "input_uvlo_required_samples": 3,
+    "rated_enter_delta_ma": 0,
+    "rated_exit_delta_ma": 0,
+    "required_samples": 2,
+    "source_limited_enter_delta_ma": 2500,
+    "source_limited_exit_delta_ma": 0,
+    "source_limited_recover_margin_mv": 400,
+    "source_limited_required_samples": 2,
+    "source_limited_vin_drop_pct": 1,
+    "standby_drop_mv": 700,
+    "vin_drop_threshold_pct": 4
+  },
+  "build_id": "93aadc61-clean-eb2b310e1419a6cc"
+}

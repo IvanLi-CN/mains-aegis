@@ -369,6 +369,17 @@ The 3900mA online and cut scenes both held at least `11790mV` after latch; their
 entry delays were `0.601s` and `1.002s`, and the cut scene remained continuously
 in Backup before changing reason to `input_absent`.
 
+The subsequent `93aadc61` EEPROM-backed UVLO sweep is archived at
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-93aadc61-uvlo-sweep-20260714T1636Z/`.
+Candidate A (`11.3V / 11.5V`) and candidate C (`11.5V / 11.7V`) both passed the
+four-scene 12V contract, while candidate B (`11.4V / 11.6V`) falsely entered
+Backup during the `2500mA` in-budget scene. The practical rule is therefore:
+pick the lowest cutoff that still passes the full suite, not the highest cutoff
+that seems to hand off earlier in one overload scene. In this sweep, candidate A
+remained the recommendation because it matched candidate C's `11790mV`
+post-latch floor without increasing false positives or moving Backup earlier
+than necessary.
+
 The earlier 62179e3c report below remains the pre-repair baseline. Do not use
 its PCB voltage drop or 2900mA guard result as current hardware truth.
 

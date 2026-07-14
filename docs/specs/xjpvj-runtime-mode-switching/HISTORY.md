@@ -285,8 +285,17 @@
 - 本地验证已覆盖新默认值与输入门回差：
   - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml`
   - `cargo test --manifest-path tools/mains-aegis-host/Cargo.toml`
-- 现有 12V sign-off evidence 仍对应旧的 `standby_drop_mv=1200` 基线；新的
-  `11.3V standby + 11.3V/11.5V` 策略需要重新完成 12V 真机四场景复测后再替换归档报告。
+- 完成 `93aadc61-clean-eb2b310e1419a6cc` 的 12V `100mV` 步进复测，归档于
+  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-93aadc61-uvlo-sweep-20260714T1636Z/`：
+  - 根目录是推荐候选 A `11.3V / 11.5V` 的完整四场景 sign-off suite，浏览器导出的
+    `suite-overview.mhtml` 可离线保留四张图表
+  - `comparison.json` 记录 A/B/C 三个候选点；A 与 C 全部通过，B `11.4V / 11.6V`
+    在 `source_in_budget / 2500mA` 误判 Backup
+  - 因为 A 已满足“全部通过且 cutoff 最低”的选优规则，本轮记录为“实测确认当前默认值可接受”，
+    而不是新的默认值变更动作
+- 每个候选点都执行了 EEPROM 写入、回读与重启后回读；归档目录中的
+  `candidate-*-meta/after_write.json` 与 `after_reset.json` 保留了固件 build
+  `93aadc61-clean-eb2b310e1419a6cc` 的设置记忆证据。
 
 - 归档 12V source-limited 诊断反例
   `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0320Z/`：
