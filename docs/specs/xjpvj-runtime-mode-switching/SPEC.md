@@ -9,7 +9,7 @@
 ## 背景 / 问题陈述
 
 - 运行态 `STANDBY / ASSIST / BACKUP` 切换语义此前散落在 Dashboard、自检、音效与 charger policy 多份规格中，且代码仍保留了“TPS enable 即有输出”“`mains_present=None` 且输出开启即 `BACKUP`”等过时判据。
-- 现有主线实现已把 `DC5025 VIN >= 3V` 建立为 UI/音效的市电真相源，但 `ASSIST` 与 `BACKUP` 的进入条件、缺样保持策略、以及与 charger `LOAD/NOAC` token 的关系仍缺少统一 topic-level contract。
+- INA3221 CH3 的 `VIN_UNSAFE` 采样点位于 TPS2490 输入 MOS 前级。运行态以该前级电压为输入真相源，并由 MCU 主动控制 TPS2490 `EN`，但 `ASSIST` 与 `BACKUP` 的进入条件、缺样保持策略、以及与 charger `LOAD/NOAC` token 的关系仍需统一 topic-level contract。
 - 若继续让模式判定、charger token 和 owner-facing `status/diag-snapshot/trace` 各自演进，运行态会再次出现 UI、音效、主机工具与实际固件行为不一致的问题。
 
 ## 目标 / 非目标
@@ -59,7 +59,8 @@
 
 ## 术语与真相源
 
-- `VIN mains truth source`: `DC5025 VIN >= 3V`。只要有 fresh VIN 电压样本并跨过 `3V` 门槛，运行态模式必须优先使用该结果。
+- `pre-TPS VIN truth source`: INA3221 CH3 对 `VIN_UNSAFE` 的采样，位于 TPS2490 输入 MOS 前级。owner-facing 规范字段为 `pre_tps_vin_mv`；`vin_vbus_mv` 只作为兼容旧客户端的同值别名。
+- `input gate`: MCU 通过 `UPS_IN_CE` 控制 TPS2490 `EN`。连续 3 个 fresh `pre_tps_vin_mv < 10000` 样本后关断输入并发布 `input_gate_state=cutoff`；连续 3 个 fresh `pre_tps_vin_mv > 11000` 样本后重新使能。10V 至 11V 为明确回差区，缺样会重置连续计数。
 - `聚合输入存在信号` (`aggregate input-present signal`): 当 VIN 连续缺样并超过 latch 容错窗口时，允许使用的降级布尔输入存在信号。当前实现可继续复用现有聚合布尔源，但文档不再把它笼统写成 charger `input_present`。
 - `TPS total output current`: owner-facing 聚合输出电流，来源为运行时 `tps_total_iout_ma`。
 - `fresh sample`: 在模式判定上下文中，指本轮相对于上一个已消费 sample_seq 的新 `tps_total_iout_ma` 样本。
@@ -120,9 +121,10 @@
 
 ### 2. 输入在线 / 离线判定
 
-- 若 `VIN` 有 fresh 电压样本：
-  - `VIN >= 3V` => 输入确认在线。
-  - `VIN < 3V` => 输入确认离线。
+- 若 `pre_tps_vin_mv` 有 fresh 电压样本：
+  - 连续 3 个样本 `< 10000mV` => MCU 关断 TPS2490 输入门，输入确认离线并进入 `backup_reason=input_absent`。
+  - 输入门已关断时，连续 3 个样本 `> 11000mV` => MCU 重新使能 TPS2490 输入门；随后由 power-good 与运行态判据确认在线。
+  - `10000mV..=11000mV` => 保持当前输入门状态，不跨越回差。
 - 若 `VIN` 只是瞬时缺样，且仍在现有 VIN latch 容错窗口内：
   - 保持最近一次已知 `VIN` 在线/离线状态。
 - 若 `VIN` 连续缺样并超出 latch 容错窗口：
@@ -164,7 +166,7 @@
 
 - `BACKUP` 的 owner-facing mode 不新增名字；对外仍是 `mode=backup`。
 - `backup_reason=input_absent` 的充分条件：
-  - fresh `VIN < 3V`；或
+  - 前级欠压门已按连续 3 个 `<10V` fresh 样本关断；或
   - `VIN` 连续缺样超过 latch 窗口后，fallback `aggregate input-present=false`
   - 已建立 DCIN `VIN baseline` 后，`VIN <= 85% baseline` 且 `vin_iin_ma` 已低于 source-limited 入口门槛；该条件表示上级输入已实际失去供能能力，即使硬件的 presence 位尚未转为 false。
 - `backup_reason=source_limited` 的充分条件：
@@ -177,7 +179,7 @@
     - `vin_drop_mv` 超过 `source_limited_vin_drop_pct` 派生阈值，且 `vin_iin_ma` 已接近 DCIN 限流门槛；并且
   - 连续 `source_limited_required_samples` 个 fresh 样本满足。
 - `source_limited` 的本质是“上级输入已不能承担当前负载”的证据，不是“目标负载已经接近源电流限值”的保守猜测。
-- 当 formal/source-limited bench source 固定为 `rated_vout_mv / 3000mA` 时，在线负载目标 `<= 2900mA` 必须视为 in-budget guard band。若未同时满足上述 `source_limited` 充分条件中的 `VIN`/`vin_drop_mv`/`vin_iin_ma` 证据，MCU 不得发布 `mode=backup` 或 `backup_reason=source_limited`。
+- 当 formal/source-limited bench source 固定为 `rated_vout_mv / 3000mA` 时，当前 12V 合同使用 `2500mA` 作为能力内 guard。该场景不得发布 `mode=backup` 或 `backup_reason=source_limited`；历史 `2900mA` 报告保留为旧硬件状态下的证据，不再代表修复后台架的 current guard。
 - 若已连续观测到 DCIN 在线且 `vin_iin_ma` 达到 source-limited 入口门槛，随后
   在同一高载窗口内出现单个 `mains_present=false` 或 VIN 棕断样本，但尚未满足
   `input_absent` 的确认条件，则必须保留 `source_limited` 原因接管；不得让先到的
@@ -234,7 +236,10 @@
 - `status` 至少暴露：
   - `mode`
   - `input.mains_present`
-  - `input.vin_vbus_mv`
+  - `input.pre_tps_vin_mv`
+  - `input.input_gate_state`
+  - `input.input_gate_reason`
+  - `input.input_power_good`
   - `input.assist_power_stage`
   - `input.assist_target_vout_mv`
   - `input.backup_reason`
@@ -273,7 +278,8 @@
 - Given `requested_outputs` 包含某路输出且 `active_outputs` 不包含该路，When 内部候选 mode 为
   `standby` 或 `supplement`，Then owner-facing `mode=blocked`。
 - Given 输入状态未知，When `TPS` 仍在输出，Then 模式保持上一确认态，不得仅因输出活跃直接进入 `BACKUP`。
-- Given `VIN < 3V`，When 自动模式判定更新，Then 结果为 `BACKUP` 且 `backup_reason=input_absent`。
+- Given 连续 3 个 fresh `pre_tps_vin_mv < 10000mV`，When 输入门判定更新，Then MCU 关断 TPS2490 输入，结果为 `BACKUP` 且 `backup_reason=input_absent`。
+- Given 输入门已关断，When 前级 VIN 位于 `10000mV..=11000mV`，Then 保持关断；只有连续 3 个 fresh `pre_tps_vin_mv > 11000mV` 才重新使能输入。
 - Given `VIN` 连续缺样超过窗口且 `aggregate input-present=false`，When 自动模式判定更新，Then 结果为 `BACKUP` 且 `backup_reason=input_absent`。
 - Given 已建立 DCIN `VIN baseline`，When `VIN <= 85% baseline` 且 `vin_iin_ma` 已低于 source-limited 入口门槛，Then 结果为 `BACKUP` 且 `backup_reason=input_absent`，即使 `mains_present` 尚未转为 false。
 - Given 输入仍在线、`TPS total output current` 超过 source-limited 进入门槛、`VIN` 低于合理工作电压或 `VIN drop + VIN input current` 显示上级限流，When 连续 fresh 样本满足，Then 结果为 `BACKUP` 且 `backup_reason=source_limited`，TPS 目标切到额定输出。
@@ -282,7 +288,7 @@
 - Given `backup_reason=input_absent` 已锁存且不满足 `eu2b8` 的 USB-C 例外，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
 - Given `backup_reason=source_limited` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD` / source-limited backup notice。
 - Given `mode=backup`、`backup_reason=input_absent`、VIN 已确认无市电且 `eu2b8` 已以新鲜 `<2W` USB-C 输出样本放行，When 查看 mode，Then mode 仍为 `backup`，但 charger 可显示 `CHG500`；该例外不得把 mode 改写为 `standby`。
-- Given 执行 `--suite-contract source-limited-12v`，When Power Path Validation 生成执行计划，Then 必须只生成 `12V backup_only / 1000mA`、`12V source_in_budget / 2900mA`、`12V source_limited_online / 3900mA`、`12V source_limited_cut / 3900mA` 四个独立 scene；不得复用 dual-voltage 四场景的签核合同。
+- Given 执行 `--suite-contract source-limited-12v`，When Power Path Validation 生成执行计划，Then 必须只生成 `12V backup_only / 1000mA`、`12V source_in_budget / 2500mA`、`12V source_limited_online / 3900mA`、`12V source_limited_cut / 3900mA` 四个独立 scene；不得复用 dual-voltage 四场景的签核合同。
 - Given `source_limited_online` 的 `3900mA` 负载已下发，When hold phase 开始，Then UPS 必须在 `2s` 内发布 `mode=backup`、`assist_power_stage=backup`、`backup_reason=source_limited`，并观察到额定 `assist_target_vout_mv`。
 - Given `source_limited_online` 已锁存，When VIN 仍在线，Then LoadLynx 电压必须保持不低于 `11000mV`；锁存前的低于 `11000mV` 连续时间不得超过 `1s`。
 - Given `source_limited_cut` 尚未观察到 source-limited backup，When runner 到达 source-cut 边界，Then 必须跳过物理 VIN cut 并将 scene 标记为 diagnostic failure。
@@ -298,7 +304,7 @@
 - Given 19V VIN drop 与输入电流已接近 source-limited 门槛，When ADC 与线损误差使 drop 距百分比门槛不超过 `80mV`，Then MCU 可以将其视为 drop 条件满足；该容差不得绕过 `VIN IIN >= 2300mA`、TPS 输出负载或连续样本门槛。
 - Given 19V `backup_only / 1000mA` 正常在线，When VIN IIN 约为 `1100mA` 且 VIN drop 位于容差边缘，Then MCU 必须保持 `standby`，不得误锁存 `source_limited`。
 - Given 12V `backup_only / 1000mA` 正常在线，When 只出现一次瞬时高 `VIN IIN` 而后续 fresh 样本已回到低输入电流，Then MCU 必须保持 `standby`，不得用后续 TPS-only 样本补齐 `source_limited` 连续计数。
-- Given formal/source-limited bench source 固定为 `rated_vout_mv / 3000mA`，When `source_in_budget` 在线负载目标为 `2900mA` 且 VIN 始终在线，Then UPS 必须保持 non-backup（`standby` 或 `supplement` 允许，`backup_reason` 必须为 `null`）；任一 `mode=backup`、`assist_power_stage=backup` 或 `backup_reason=source_limited` 都是误判，必须阻断 scene 与 suite sign-off。
+- Given formal/source-limited bench source 固定为 `rated_vout_mv / 3000mA`，When `source_in_budget` 在线负载目标为 `2500mA` 且 VIN 始终在线，Then UPS 必须保持 non-backup（`standby` 或 `supplement` 允许，`backup_reason` 必须为 `null`）；任一 `mode=backup`、`assist_power_stage=backup` 或 `backup_reason=source_limited` 都是误判，必须阻断 scene 与 suite sign-off。
 - Given Power Path Validation 采集 LoadLynx 电流，When 写入 `timeseries.jsonl` 或渲染报告，Then 只允许记录单一 `load_i_total_ma` owner-facing 测量值；不得合成、展示或用 `local/remote` 分量作为验收依据。
 - Given 当前 topic 进入 `12V` Power Path Validation sign-off，When 判定任何边界、在线接管、切断或恢复结论，Then 必须同时满足 `docs/hil-runtime-mode-switching.md` 中定义的三设备实时数据、输出电压波动与 scene-complete gate。
 - Given 当前 topic 进入 formal dual-voltage suite，When 执行 `12V assist_path / 12V backup_only / 19V assist_path / 19V backup_only` 四场景，Then source profile、load target 与保护栏必须固定为 `12V|19V @ 3000mA`、`3900mA|1000mA`、`UVP=3000mV/OCP=4000mA/OPP=80000mW`，不得按口头约定漂移。
@@ -316,6 +322,13 @@
 - `firmware/src/output/pure.rs`
 
 ## Visual Evidence
+
+- source_type: real_hil_capture
+  evidence_scope: repaired-hardware 12V source-limited four-scene sign-off
+  report: `evidence/source-limited-12v-ce343924-uvlo-preboost-final-20260714T1206Z/suite-overview.html`
+  offline_snapshot: `evidence/source-limited-12v-ce343924-uvlo-preboost-final-20260714T1206Z/suite-overview.mhtml`
+  scenarios: `backup_only/1000mA`, `source_in_budget/2500mA`, `source_limited_online/3900mA`, `source_limited_cut/3900mA`
+  evidence_note: 四张嵌入图均已在浏览器真实渲染；suite verifier 为 `signoff_valid=true`，两个 3900mA 场景锁存后最低负载电压均为 `11790mV`。
 
 - source_type: firmware_preview
   evidence_scope: requested output blocked before Dashboard entry

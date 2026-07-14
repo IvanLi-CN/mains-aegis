@@ -19,7 +19,7 @@ const DEFAULT_WATCH_FRESHNESS_MS: u64 = 750;
 const MIN_FORMAL_SAMPLE_RATE_HZ: f64 = 2.0;
 const ENGINEERING_SAMPLE_RATE_HZ: f64 = 3.0;
 const MAX_SAMPLE_GAP_S: f64 = 0.5;
-const SOURCE_DISCONNECT_CONFIRM_ATTEMPTS: usize = 20;
+const SOURCE_DISCONNECT_CONFIRM_ATTEMPTS: usize = 50;
 const SOURCE_DISCONNECT_CONFIRM_INTERVAL_MS: u64 = 100;
 const UPS_ONLINE_RECOVER_ATTEMPTS: usize = 100;
 const UPS_ONLINE_RECOVER_INTERVAL_MS: u64 = 100;
@@ -330,7 +330,7 @@ impl SceneKind {
         match self {
             Self::AssistPath => 3_900,
             Self::BackupOnly => 1_000,
-            Self::SourceInBudget => 2_900,
+            Self::SourceInBudget => 2_500,
             Self::SourceLimitedOnline | Self::SourceLimitedCut => 3_900,
         }
     }
@@ -2679,13 +2679,15 @@ async fn ensure_source_disconnected(
         sleep(Duration::from_millis(SOURCE_DISCONNECT_CONFIRM_INTERVAL_MS)).await;
     }
     bail!(
-        "source disconnect gate failed for {label}: UPS still sees DCIN after {} attempts; source_mv={:?} mains_present={:?} source={:?} input_vbus_mv={:?} vin_vbus_mv={:?}",
+        "source disconnect gate failed for {label}: UPS still sees DCIN after {} attempts; source_mv={:?} mains_present={:?} source={:?} input_vbus_mv={:?} pre_tps_vin_mv={:?} input_gate_state={:?} input_gate_reason={:?}",
         SOURCE_DISCONNECT_CONFIRM_ATTEMPTS,
         last.source_mv,
         last.mains_present,
         last.input_source,
         last.input_vbus_mv,
-        last.vin_vbus_mv
+        last.vin_vbus_mv,
+        last.input_gate_state,
+        last.input_gate_reason
     );
 }
 
@@ -2735,7 +2737,9 @@ async fn ensure_source_disconnected_with_sampling(
                 "mains_present": last.mains_present,
                 "source": last.input_source,
                 "input_vbus_mv": last.input_vbus_mv,
-                "vin_vbus_mv": last.vin_vbus_mv,
+                "pre_tps_vin_mv": last.vin_vbus_mv,
+                "input_gate_state": last.input_gate_state,
+                "input_gate_reason": last.input_gate_reason,
                 "ups_still_live": last.ups_still_live,
             }
         }));
@@ -2745,13 +2749,15 @@ async fn ensure_source_disconnected_with_sampling(
         sleep(Duration::from_millis(SOURCE_DISCONNECT_CONFIRM_INTERVAL_MS)).await;
     }
     bail!(
-        "source disconnect gate failed for {label}: UPS still sees DCIN after {} attempts; source_mv={:?} mains_present={:?} source={:?} input_vbus_mv={:?} vin_vbus_mv={:?}",
+        "source disconnect gate failed for {label}: UPS still sees DCIN after {} attempts; source_mv={:?} mains_present={:?} source={:?} input_vbus_mv={:?} pre_tps_vin_mv={:?} input_gate_state={:?} input_gate_reason={:?}",
         SOURCE_DISCONNECT_CONFIRM_ATTEMPTS,
         last.source_mv,
         last.mains_present,
         last.input_source,
         last.input_vbus_mv,
-        last.vin_vbus_mv
+        last.vin_vbus_mv,
+        last.input_gate_state,
+        last.input_gate_reason
     );
 }
 
@@ -2762,6 +2768,8 @@ struct SourceDisconnectState {
     input_source: Option<String>,
     input_vbus_mv: Option<i64>,
     vin_vbus_mv: Option<i64>,
+    input_gate_state: Option<String>,
+    input_gate_reason: Option<String>,
     ups_still_live: bool,
 }
 
@@ -2783,9 +2791,21 @@ fn source_disconnect_state(power: &Value, status: &Value) -> SourceDisconnectSta
         .or_else(|| status.pointer("/input/input_vbus_mv"))
         .and_then(Value::as_i64);
     let vin_vbus_mv = status
-        .pointer("/sample/input/vin_vbus_mv")
+        .pointer("/sample/input/pre_tps_vin_mv")
+        .or_else(|| status.pointer("/input/pre_tps_vin_mv"))
+        .or_else(|| status.pointer("/sample/input/vin_vbus_mv"))
         .or_else(|| status.pointer("/input/vin_vbus_mv"))
         .and_then(Value::as_i64);
+    let input_gate_state = status
+        .pointer("/sample/input/input_gate_state")
+        .or_else(|| status.pointer("/input/input_gate_state"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let input_gate_reason = status
+        .pointer("/sample/input/input_gate_reason")
+        .or_else(|| status.pointer("/input/input_gate_reason"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
     let mode = status
         .pointer("/sample/mode")
         .or_else(|| status.pointer("/mode"))
@@ -2795,8 +2815,10 @@ fn source_disconnect_state(power: &Value, status: &Value) -> SourceDisconnectSta
         .or_else(|| status.pointer("/input/assist_power_stage"))
         .and_then(Value::as_str);
     let backup_truth = mode == Some("backup") || assist_power_stage == Some("backup");
+    let firmware_gate_cutoff = input_gate_state.as_deref() == Some("cutoff")
+        && input_gate_reason.as_deref() == Some("pre_tps_undervoltage");
     let dcin_cut_truth = mains_present == Some(false)
-        && vin_vbus_mv.is_some_and(|mv| mv <= UPS_INPUT_CUT_MAX_VIN_MV);
+        && (firmware_gate_cutoff || vin_vbus_mv.is_some_and(|mv| mv <= UPS_INPUT_CUT_MAX_VIN_MV));
     let ups_still_live = !(dcin_cut_truth && backup_truth);
     SourceDisconnectState {
         source_mv,
@@ -2804,6 +2826,8 @@ fn source_disconnect_state(power: &Value, status: &Value) -> SourceDisconnectSta
         input_source,
         input_vbus_mv,
         vin_vbus_mv,
+        input_gate_state,
+        input_gate_reason,
         ups_still_live,
     }
 }
@@ -2815,12 +2839,19 @@ async fn wait_for_ups_online_recovery(
 ) -> anyhow::Result<()> {
     let mut last_status = Value::Null;
     for attempt in 0..UPS_ONLINE_RECOVER_ATTEMPTS {
-        let status = run_cmd_json(
-            ups_status_fresh_command(&args.bench, context),
-            &format!("ups_online_recovery_{attempt}"),
-            actions,
-        )
-        .await?;
+        let name = format!("ups_online_recovery_{attempt}");
+        let cmd = ups_status_fresh_command(&args.bench, context);
+        let status = match run_cmd_output(cmd.clone()).await {
+            Ok(status) => {
+                actions.push(json!({name: {"cmd": cmd, "result": status}}));
+                status
+            }
+            Err(error) => {
+                actions.push(json!({name: {"cmd": cmd, "error": error.to_string()}}));
+                sleep(Duration::from_millis(UPS_ONLINE_RECOVER_INTERVAL_MS)).await;
+                continue;
+            }
+        };
         let mains_present = status
             .pointer("/sample/input/mains_present")
             .or_else(|| status.pointer("/input/mains_present"))
@@ -3361,7 +3392,12 @@ fn collect_scene_sample_at(
             .cloned()
             .or_else(|| runtime_output_enabled.map(Value::from))
             .or_else(|| adapter_sample_value(&power, "enabled")),
-        isolapurr_port_c_mv: source_output_mv.or_else(|| input.get("vin_vbus_mv").cloned()),
+        isolapurr_port_c_mv: source_output_mv.or_else(|| {
+            input
+                .get("pre_tps_vin_mv")
+                .cloned()
+                .or_else(|| input.get("vin_vbus_mv").cloned())
+        }),
         isolapurr_port_c_ma: port_telemetry
             .get("current_ma")
             .cloned()
@@ -3369,8 +3405,9 @@ fn collect_scene_sample_at(
         mains_present: input.get("mains_present").cloned(),
         assist_target_vout_mv: input.get("assist_target_vout_mv").cloned(),
         vin_vbus_mv: input
-            .get("vin_vbus_mv")
+            .get("pre_tps_vin_mv")
             .cloned()
+            .or_else(|| input.get("vin_vbus_mv").cloned())
             .or_else(|| input.get("input_vbus_mv").cloned()),
         vin_iin_ma: input
             .get("vin_iin_ma")
@@ -4979,7 +5016,7 @@ mod tests {
             ]
         );
         assert!(!plan.reports[1].include_backup);
-        assert_eq!(plan.reports[1].target_ma, 2_900);
+        assert_eq!(plan.reports[1].target_ma, 2_500);
         assert!(!plan.reports[2].include_backup);
         assert!(plan.reports[3].include_backup);
     }
@@ -5413,6 +5450,25 @@ mod tests {
         });
         let state = source_disconnect_state(&power, &low_vin_without_backup);
         assert!(state.ups_still_live);
+    }
+
+    #[test]
+    fn source_disconnect_gate_accepts_firmware_cutoff_with_pre_tps_residual_voltage() {
+        let power = json!({});
+        let status = json!({
+            "input": {
+                "mains_present": false,
+                "source": "usbc",
+                "pre_tps_vin_mv": 3624,
+                "vin_vbus_mv": 3624,
+                "input_gate_state": "cutoff",
+                "input_gate_reason": "pre_tps_undervoltage",
+                "assist_power_stage": "backup"
+            },
+            "mode": "backup"
+        });
+        let state = source_disconnect_state(&power, &status);
+        assert!(!state.ups_still_live);
     }
 
     #[test]

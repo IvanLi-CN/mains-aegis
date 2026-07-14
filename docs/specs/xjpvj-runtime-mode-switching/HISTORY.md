@@ -260,6 +260,19 @@
   过载压降的接管能力。
 - Power Path Validation 的 LoadLynx evidence 收敛为单一 `load_i_total_ma`，不再记录
   或展示错误的 `local/remote` 电流分量。
+- TPS2490 输入 MOS 与网表修复后重新确认 INA3221 CH3 位于输入 MOS 前级；固件字段收敛为
+  `pre_tps_vin_mv`，并保留 `vin_vbus_mv` 兼容别名。
+- 新增 MCU 输入欠压门：连续 3 个 fresh 前级 VIN 样本 `<10V` 关断 TPS2490 输入并进入
+  `input_absent` Backup；输入门关断后连续 3 个样本 `>11V` 才恢复。真机阶梯点
+  `9.544V / 10.576V / 11.552V` 验证了关断、回差与恢复。
+- 修复 source-limited stale sample 重复计数，并在首个候选样本立即预升压；第二个 fresh
+  样本以 UPS 持续承担至少 `500mA` 确认锁存，避免预升压恢复 VIN 后反复退出。
+- 修复后 12V 四场景最终 evidence 位于
+  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-ce343924-uvlo-preboost-final-20260714T1206Z/`。
+  verifier 返回 `signoff_valid=true`；2500mA guard 无 Backup，两个 3900mA 场景锁存后
+  最低负载电压均为 `11790mV`，cut 场景随后连续保持 Backup 并转为 `input_absent`。
+- MOS/网表修复前的 `source-limited-12v-62179e3c-final-r6-20260714T0010Z` 与旧
+  assist_path 约 `10.5V` 长跌落继续保留为历史基线，不再代表当前硬件状态。
 
 - 归档 12V source-limited 诊断反例
   `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0320Z/`：

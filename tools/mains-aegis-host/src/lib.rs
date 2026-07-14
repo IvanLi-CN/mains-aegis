@@ -825,6 +825,12 @@ struct ManualChargeRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct OutputBypassRequest {
+    enable: bool,
+    restore: bool,
+}
+
+#[derive(Debug, Deserialize)]
 struct AdvancedPowerRequest {
     standby_drop_mv: u16,
     assist_low_drop_mv: u16,
@@ -977,6 +983,10 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
         .route(
             "/api/v1/devices/{id}/recovery/bms-discharge-authorization",
             post(device_recover_bms_discharge_authorization),
+        )
+        .route(
+            "/api/v1/devices/{id}/output-bypass",
+            post(device_output_bypass),
         )
         .route("/api/v1/devices/{id}/connection", get(device_connection))
         .route(
@@ -1826,6 +1836,30 @@ async fn dispatch_ipc_request(
         "device.settings" => {
             let id = require_param(&params, "device_id")?;
             json_result(device_settings(State(state.clone()), Path(id)).await)
+        }
+        "device.output_bypass" => {
+            let id = require_param(&params, "device_id")?;
+            let enable = params
+                .get("enable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let restore = params
+                .get("restore")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if enable == restore {
+                return Err(anyhow::anyhow!(
+                    "output_bypass_command_invalid: specify exactly one of --enable or --restore"
+                ));
+            }
+            json_result(
+                device_output_bypass(
+                    State(state.clone()),
+                    Path(id),
+                    Json(OutputBypassRequest { enable, restore }),
+                )
+                .await,
+            )
         }
         "device.trace" => {
             let id = require_param(&params, "device_id")?;
@@ -4148,6 +4182,39 @@ async fn device_recover_bms_discharge_authorization(
     Ok(Json(result))
 }
 
+async fn device_output_bypass(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<OutputBypassRequest>,
+) -> Result<Json<Value>, HttpError> {
+    if input.enable == input.restore {
+        return Err(HttpError::non_retryable(
+            "output_bypass_command_invalid",
+            "specify exactly one of enable or restore",
+        ));
+    }
+    let target = resolve_settings_control_target(&state, Some(&id), None)?;
+    let op = if input.enable {
+        "enable_output_bypass"
+    } else {
+        "restore_output"
+    };
+    let result = send_settings_frame(
+        &state,
+        &target,
+        json!({"type":"request","op":op}),
+        |_| {},
+        "output_bypass",
+        if input.enable {
+            "UPS output bypass enabled"
+        } else {
+            "UPS output restored"
+        },
+    )
+    .await?;
+    Ok(Json(result))
+}
+
 fn recovery_lan_address_for_state_changing_write(
     explicit_lan_address: Option<String>,
     _cached_identity: Option<&Value>,
@@ -6374,7 +6441,11 @@ fn derive_diag_snapshot_from_status(status: &Value, source: &str) -> Value {
             "mains_present": input.get("mains_present").cloned().unwrap_or(Value::Null),
             "input_vbus_mv": input.get("input_vbus_mv").cloned().unwrap_or(Value::Null),
             "input_ibus_ma": input.get("input_ibus_ma").cloned().unwrap_or(Value::Null),
+            "pre_tps_vin_mv": input.get("pre_tps_vin_mv").cloned().or_else(|| input.get("vin_vbus_mv").cloned()).unwrap_or(Value::Null),
             "vin_vbus_mv": input.get("vin_vbus_mv").cloned().unwrap_or(Value::Null),
+            "input_gate_state": input.get("input_gate_state").cloned().unwrap_or(Value::Null),
+            "input_gate_reason": input.get("input_gate_reason").cloned().unwrap_or(Value::Null),
+            "input_power_good": input.get("input_power_good").cloned().unwrap_or(Value::Null),
             "vin_iin_ma": input.get("vin_iin_ma").cloned().unwrap_or(Value::Null),
             "tps_total_iout_ma": input.get("tps_total_iout_ma").cloned().unwrap_or(Value::Null),
             "tps_limit_threshold_ma": input.get("tps_limit_threshold_ma").cloned().unwrap_or(Value::Null),
@@ -6562,7 +6633,11 @@ fn maybe_record_power_event(
         "pressure_state": pressure_state,
         "pressure_reason": pressure_reason,
         "pressure_score_pct": pressure_score_pct,
+        "pre_tps_vin_mv": input.get("pre_tps_vin_mv").cloned().or_else(|| input.get("vin_vbus_mv").cloned()).unwrap_or(Value::Null),
         "vin_vbus_mv": input.get("vin_vbus_mv").cloned().unwrap_or(Value::Null),
+        "input_gate_state": input.get("input_gate_state").cloned().unwrap_or(Value::Null),
+        "input_gate_reason": input.get("input_gate_reason").cloned().unwrap_or(Value::Null),
+        "input_power_good": input.get("input_power_good").cloned().unwrap_or(Value::Null),
         "vin_baseline_mv": input.get("vin_baseline_mv").cloned().unwrap_or(Value::Null),
         "vin_drop_mv": input.get("vin_drop_mv").cloned().unwrap_or(Value::Null),
         "assist_power_stage": input.get("assist_power_stage").cloned().unwrap_or(Value::Null),

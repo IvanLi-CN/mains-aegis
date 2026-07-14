@@ -53,7 +53,7 @@ Expose the cause separately:
 
 For source-limited takeover, use only MCU-visible input/output signals:
 
-- `vin_vbus_mv`
+- `pre_tps_vin_mv` (`vin_vbus_mv` remains a compatibility alias)
 - `vin_drop_mv`
 - `vin_iin_ma`
 - `tps_total_iout_ma`
@@ -67,11 +67,15 @@ Enter source-limited backup when all of these hold:
 
 - DC input assist is allowed.
 - Input is still confirmed online.
-- `tps_total_iout_ma` exceeds the configured source-limited enter threshold.
+- TPS output is meaningful. The input-handoff path may start at `500mA`; the
+  normal TPS path still uses the configured source-limited enter threshold.
 - Either:
   - `VIN` is below `rated_vout_mv - source_limited_recover_margin_mv`; or
   - `vin_drop_mv` exceeds the source-limited drop threshold and `vin_iin_ma` is near the DC input current limit.
-- The condition holds for `source_limited_required_samples` fresh samples.
+- The first qualifying fresh sample immediately preboosts the TPS target to
+  rated output. A second fresh sample confirms takeover when TPS is still
+  carrying at least `500mA`; preboost-induced VIN recovery must not erase the
+  first sample's evidence.
 
 Exit source-limited backup only after hysteresis:
 
@@ -86,12 +90,33 @@ Use defaults that bound detection delay while retaining the fresh-telemetry
 guard:
 
 - `source_limited_vin_drop_pct=1`
-- `source_limited_enter_delta_ma=1000`
+- `source_limited_enter_delta_ma=2500`
 - `source_limited_exit_delta_ma=0`
 - `source_limited_required_samples=2`
 - `source_limited_recover_margin_mv=400`
 
-With the current rated enter base, the default source-limited enter threshold is `1100mA`. A fresh TPS sample still requires the full output-current and input-current evidence. When that aggregate TPS sample is stale, a fast path may use only `VIN baseline/drop` plus `vin_iin_ma` to lock takeover; it must never replace the normal fresh-sample path.
+With the current rated enter base, the default source-limited enter threshold is `2600mA`.
+Never count the same TPS sample sequence twice. The fast input-handoff path may
+preboost at a lower TPS contribution only when the current fresh sample also
+shows low VIN and input current at the source-limited threshold.
+
+## Pre-TPS undervoltage gate
+
+Measure upstream voltage at INA3221 CH3 `VIN_UNSAFE`, before the TPS2490 input
+MOS. Publish it as `pre_tps_vin_mv`; do not describe this value as a post-TPS
+measurement.
+
+Use an MCU-controlled hysteretic input gate:
+
+- three consecutive fresh samples below `10V`: drive TPS2490 `EN` off and
+  classify the takeover as `input_absent`;
+- while cut off, three consecutive fresh samples above `11V`: release the gate;
+- between 10V and 11V: retain the current gate state;
+- any missing sample resets the consecutive-sample streak.
+
+This protects the UPS from a weak or collapsing upstream supply even though
+the physical connector is still energized. TPS2490 power-good remains useful
+confirmation, but it is not a substitute for the pre-TPS ADC and MCU gate.
 
 ## Observability
 
@@ -126,7 +151,7 @@ become backup merely because TPS is enabled.
 For current HIL validation, prove four 12V cases separately:
 
 - normal load VIN cut: `12V / 3A source`, `1000mA load`, then cut VIN.
-- in-budget online guard: `12V / 3A source`, `2900mA load`, VIN remains online and Backup must not occur.
+- in-budget online guard: `12V / 3A source`, `2500mA load`, VIN remains online and Backup must not occur.
 - overload with VIN online: `12V / 3A source`, `3900mA load`, source-limited backup must occur.
 - overload then VIN cut: after source-limited backup at `3900mA`, cut VIN and remain in backup without a long deep sag.
 
@@ -142,7 +167,7 @@ physical source cut.
 It produces four reports:
 
 - `backup_only / 1000mA`: prove `input_absent` after a normal VIN cut.
-- `source_in_budget / 2900mA`: prove that a load within the 3A source budget
+- `source_in_budget / 2500mA`: prove that a load within the verified source budget
   remains non-backup while VIN stays online.
 - `source_limited_online / 3900mA`: prove `source_limited` while VIN remains
   online.
@@ -326,6 +351,16 @@ control regressions from telemetry-completeness regressions.
 ## Bench and Telemetry Lessons
 
 ## 12V Final Validation Pattern
+
+The repaired-hardware current result is archived at
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-ce343924-uvlo-preboost-final-20260714T1206Z/`.
+All four scenes are sign-off valid. The 2500mA guard produced no Backup samples.
+The 3900mA online and cut scenes both held at least `11790mV` after latch; their
+entry delays were `0.601s` and `1.002s`, and the cut scene remained continuously
+in Backup before changing reason to `input_absent`.
+
+The earlier 62179e3c report below remains the pre-repair baseline. Do not use
+its PCB voltage drop or 2900mA guard result as current hardware truth.
 
 The final 12V evidence is archived at
 `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-62179e3c-final-r6-20260714T0010Z/`.

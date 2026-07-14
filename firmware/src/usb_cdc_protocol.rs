@@ -53,6 +53,8 @@ pub enum UsbCdcRequest {
     SetManualChargePrefs(ManualChargePrefsCommand),
     SetAdvancedPower(AdvancedPowerSettingsSnapshot),
     ResetAdvancedPower,
+    EnableOutputBypass,
+    RestoreOutput,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -547,6 +549,8 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
             parse_advanced_power_settings(line)?,
         )),
         "reset_advanced_power" => Ok(UsbCdcRequest::ResetAdvancedPower),
+        "enable_output_bypass" => Ok(UsbCdcRequest::EnableOutputBypass),
+        "restore_output" => Ok(UsbCdcRequest::RestoreOutput),
         "output_enable" | "output_disable" | "clear_fault" | "start_charge" | "stop_charge" => {
             Err(UsbCdcProtocolError::UnsafeOperation)
         }
@@ -1083,7 +1087,11 @@ mod tests {
                 mains_present: Some(true),
                 input_vbus_mv: Some(12_340),
                 input_ibus_ma: Some(1_234),
+                pre_tps_vin_mv: Some(12_180),
                 vin_vbus_mv: Some(12_180),
+                input_gate_state: Some("enabled"),
+                input_gate_reason: Some("none"),
+                input_power_good: Some(true),
                 vin_iin_ma: Some(980),
                 tps_total_iout_ma: Some(128),
                 tps_limit_threshold_ma: Some(100),

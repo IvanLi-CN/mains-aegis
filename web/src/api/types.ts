@@ -79,7 +79,11 @@ export type UpsStatus = {
     mains_present: boolean;
     input_vbus_mv: number | null;
     input_ibus_ma: number | null;
+    pre_tps_vin_mv?: number | null;
     vin_vbus_mv: number | null;
+    input_gate_state?: "enabled" | "cutoff" | string | null;
+    input_gate_reason?: "none" | "pre_tps_undervoltage" | string | null;
+    input_power_good?: boolean | null;
     vin_iin_ma: number | null;
     tps_total_iout_ma?: number | null;
     tps_limit_threshold_ma?: number | null;

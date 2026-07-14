@@ -9,7 +9,7 @@
 - `BACKUP` 表示 UPS 已接管负载，进入原因由 `backup_reason` 区分：
   - `input_absent`
   - `source_limited`
-- `input_absent` 仍只允许在确认无输入时进入
+- `input_absent` 在前级 VIN 连续欠压并由 MCU 关断 TPS2490 输入门后进入；不要求连接器电压物理归零
 - `source_limited` 允许在 `VIN` 在线但上级电源限流/棕断时由 MCU 主动进入
 - owner-facing `mode` 跟随内部阶段映射：
   - `standby -> standby`
@@ -725,3 +725,55 @@ fresh 样本仍全部必需。
   `18744mV`，VIN cut 后持续 Backup 并转换为 `input_absent`。
 
 IsolaPurr `tps_cdc_rise_mv=300` 未被覆盖；最终 source 与 load 均关闭。
+## Runtime UPS output bypass
+
+The firmware provides a RAM-only `manual_bypass` output gate for controlled
+pass-through experiments. Enable it with
+`device <saved-id> output-bypass --enable` and return with `--restore`. Enable
+is refused unless VIN is stable; reboot clears the override. This control is
+separate from source-limited backup takeover and is not a production UPS mode.
+
+## 12V repaired-hardware revalidation
+
+TPS2490 输入 MOS 更换及网表修复后，INA3221 CH3 已确认采样 `VIN_UNSAFE`，位于
+TPS2490 输入 MOS 前级。固件 owner-facing 字段使用 `pre_tps_vin_mv`；旧
+`vin_vbus_mv` 暂时保留为兼容别名。MCU 通过 `UPS_IN_CE` 主动控制 TPS2490 `EN`：
+
+- 连续 3 个 fresh 前级 VIN 样本低于 `10000mV` 时关断输入，并进入
+  `backup_reason=input_absent`。
+- 输入门关断后，连续 3 个 fresh 样本高于 `11000mV` 才重新使能。
+- `10000mV..=11000mV` 为回差区；缺样重置连续计数。
+- 真机阶梯验证确认 `9.544V` 保持 cutoff/Backup、`10.576V` 不恢复、`11.552V`
+  恢复输入并回到 Standby。
+
+source-limited 入口还修复了两个采样时序问题：同一个 stale TPS 样本不得重复增加
+连续计数；首个有效限流候选立即把 TPS 目标预升到额定值，第二个 fresh 样本若仍确认
+UPS 承担至少 `500mA`，则锁存 `Backup/source_limited`。第二次确认不再要求 VIN 继续低于
+门槛，因为预升压本身会暂时恢复 VIN 和输入电流；否则控制器会在 Standby 与
+AssistRated 之间振荡。
+
+最终 12V evidence：
+
+`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-ce343924-uvlo-preboost-final-20260714T1206Z/`
+
+设备与设置快照：UPS `serial-04f3bb3f5367` / `mains-aegis-198840`，firmware build
+`ce343924-dirty-082fa5be3821a7e7`；IsolaPurr `f293cc9c139e`，manual
+`12000mV / 3000mA`；LoadLynx `loadlynx-d68638`。`source_in_budget` 根据修复后台架
+实测改为 `2500mA`，避免把接近 3A 源边界的正常 CC 环路波动当成产品能力内基准。
+
+`mains-aegis power-validation report --write-overview` 返回 `signoff_valid=true`，四个
+scene 均为 `valid_for_signoff` 且无 acceptance failure：
+
+- `backup_only / 1000mA`：`5.181Hz`，max gap `0.212s`，VIN cut 后持续 Backup 并观察到
+  `input_absent`。
+- `source_in_budget / 2500mA`：`5.051Hz`，max gap `0.208s`，76 个加载样本中 Backup、
+  offline 与 source-limited 均为 0。
+- `source_limited_online / 3900mA`：`0.601s` 锁存，锁存后最低负载电压 `11790mV`，
+  低于 `11000mV` 的持续时间为 0。
+- `source_limited_cut / 3900mA`：`1.002s` 锁存，锁存前低压最长 `0.402s`，锁存后
+  最低 `11790mV`；物理断源后 Backup 连续并转为 `input_absent`。
+
+旧 evidence
+`source-limited-12v-62179e3c-final-r6-20260714T0010Z` 保留为 MOS/网表修复前的历史
+基线，不能用于评价修复后硬件的当前输入压降。旧 assist_path 约 `10.5V` 的长跌落同样
+保留为历史问题证据，而不是当前硬件能力结论。

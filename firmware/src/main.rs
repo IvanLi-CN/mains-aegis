@@ -790,6 +790,21 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     i2c1_int.clear_interrupt();
     i2c1_int.listen(Event::FallingEdge);
 
+    // TPS2490 input hot-swap control. GPIO3 drives Q23: HIGH pulls TPS2490 EN low
+    // and cuts the input path; LOW releases EN to the hardware UVLO divider.
+    let mut ups_in_ce = Flex::new(peripherals.GPIO3);
+    ups_in_ce.apply_output_config(
+        &OutputConfig::default()
+            .with_drive_mode(DriveMode::PushPull)
+            .with_pull(Pull::Down),
+    );
+    ups_in_ce.set_low();
+    ups_in_ce.set_output_enable(true);
+    let ups_in_pg = Input::new(
+        peripherals.GPIO2,
+        InputConfig::default().with_pull(Pull::Up),
+    );
+
     // I2C2 interrupt/alert line (open-drain, active-low).
     let i2c2_int_cfg = InputConfig::default().with_pull(Pull::Up);
     let mut _i2c2_int = Input::new(peripherals.GPIO7, i2c2_int_cfg);
@@ -1528,6 +1543,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         i2c,
         i2c1_int,
         bms_btp_int_h,
+        ups_in_ce,
+        ups_in_pg,
         therm_kill,
         chg_ce,
         chg_ilim_hiz_brk,
@@ -2383,6 +2400,32 @@ fn handle_web_serial_frame<'d, I2C>(
                         write_web_serial_line(serial, frame.as_str());
                     }
                 }
+            }
+            UsbCdcRequest::EnableOutputBypass => {
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                match power.enable_output_bypass() {
+                    Ok(()) => {
+                        let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                        let _ = body.push_str(r#"{"output_bypass":"enabled"}"#);
+                        render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                    }
+                    Err(code) => render_error_json(
+                        &mut frame,
+                        Some(request_id.as_str()),
+                        code,
+                        "output bypass requires a stable VIN source",
+                        false,
+                    ),
+                }
+                write_web_serial_line(serial, frame.as_str());
+            }
+            UsbCdcRequest::RestoreOutput => {
+                power.restore_output();
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                let _ = body.push_str(r#"{"output_bypass":"restored"}"#);
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
             }
         },
         Ok(UsbCdcFrame::WifiConfig {

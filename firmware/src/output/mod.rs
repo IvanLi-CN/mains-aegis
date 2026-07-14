@@ -3618,6 +3618,8 @@ pub struct PowerManager<'d, I2C> {
     i2c: I2C,
     i2c1_int: Input<'d>,
     bms_btp_int_h: Input<'d>,
+    ups_in_ce: Flex<'d>,
+    ups_in_pg: Input<'d>,
     therm_kill: Flex<'d>,
     chg_ce: Flex<'d>,
     chg_ilim_hiz_brk: Flex<'d>,
@@ -3729,10 +3731,12 @@ pub struct PowerManager<'d, I2C> {
     bms_discharge_authorization_manual_recovery: Option<BmsDischargeAuthorizationManualRecovery>,
     output_state: OutputRuntimeState,
     recoverable_output_source: OutputGateReason,
+    output_bypass_active: bool,
     output_restore_after_bms_recovery: bool,
     output_protection: output_protection::ProtectionRuntime,
     fan: fan::Controller,
     vin_sample_missing_streak: u8,
+    input_gate: output_state_logic::InputGateTracker,
     usb_pd_state: usb_pd::UsbPdPortState,
     usb_pd_input_current_limit_ma: Option<u16>,
     usb_pd_vindpm_mv: Option<u16>,
@@ -4310,6 +4314,8 @@ where
         i2c: I2C,
         i2c1_int: Input<'d>,
         bms_btp_int_h: Input<'d>,
+        mut ups_in_ce: Flex<'d>,
+        ups_in_pg: Input<'d>,
         therm_kill: Flex<'d>,
         mut chg_ce: Flex<'d>,
         mut chg_ilim_hiz_brk: Flex<'d>,
@@ -4381,6 +4387,9 @@ where
             Some(initial_assist_target_vout_mv);
         initial_ui_snapshot.dashboard_detail.backup_reason =
             (initial_assist_stage == AssistPowerStage::Backup).then_some("input_absent");
+        initial_ui_snapshot.dashboard_detail.input_gate_state = Some("enabled");
+        initial_ui_snapshot.dashboard_detail.input_gate_reason = Some("none");
+        initial_ui_snapshot.dashboard_detail.input_power_good = Some(ups_in_pg.is_high());
         let bms_runtime_seen = bms_addr.is_some()
             || output_state.gate_reason == OutputGateReason::BmsNotReady
             || (cfg.charger_probe_ok
@@ -4389,11 +4398,14 @@ where
         // Fail-safe defaults.
         chg_ce.set_high();
         chg_ilim_hiz_brk.set_low();
+        ups_in_ce.set_low();
 
         Self {
             i2c,
             i2c1_int,
             bms_btp_int_h,
+            ups_in_ce,
+            ups_in_pg,
             therm_kill,
             chg_ce,
             chg_ilim_hiz_brk,
@@ -4531,10 +4543,12 @@ where
             bms_discharge_authorization_manual_recovery: None,
             output_state,
             recoverable_output_source,
+            output_bypass_active: false,
             output_restore_after_bms_recovery: false,
             output_protection: output_protection::ProtectionRuntime::new(cfg.ilimit_ma),
             fan: fan::Controller::new(cfg.fan_config),
             vin_sample_missing_streak: 0,
+            input_gate: output_state_logic::InputGateTracker::new(),
             usb_pd_state: usb_pd::UsbPdPortState::default(),
             usb_pd_input_current_limit_ma: None,
             usb_pd_vindpm_mv: None,
@@ -4692,6 +4706,48 @@ where
             out_b
         );
         self.recompute_ui_mode();
+    }
+
+    pub fn enable_output_bypass(&mut self) -> Result<(), &'static str> {
+        if self.current_mains_present() != Some(true) {
+            return Err("output_bypass_requires_vin");
+        }
+        if self.output_bypass_active {
+            return Ok(());
+        }
+        let recoverable = if self.output_state.active_outputs != EnabledOutputs::None {
+            self.output_state.active_outputs
+        } else {
+            self.output_state.requested_outputs
+        };
+        self.output_state.recoverable_outputs = recoverable;
+        self.output_state.requested_outputs = EnabledOutputs::None;
+        self.output_state.gate_reason = OutputGateReason::ManualBypass;
+        self.recoverable_output_source = OutputGateReason::ManualBypass;
+        self.output_bypass_active = true;
+        self.force_disable_outputs();
+        defmt::warn!(
+            "power: output bypass enabled recoverable_outputs={}",
+            recoverable.describe()
+        );
+        Ok(())
+    }
+
+    pub fn restore_output(&mut self) {
+        if !self.output_bypass_active {
+            return;
+        }
+        let restore = self.output_state.recoverable_outputs;
+        self.output_bypass_active = false;
+        self.output_state.requested_outputs = restore;
+        self.output_state.active_outputs = EnabledOutputs::None;
+        self.output_state.gate_reason = OutputGateReason::None;
+        self.recoverable_output_source = OutputGateReason::None;
+        defmt::info!(
+            "power: output bypass restored requested_outputs={}",
+            restore.describe()
+        );
+        self.reconcile_output_state();
     }
 
     fn maybe_log_charger_input_power_anomaly(
@@ -5077,10 +5133,14 @@ where
                 .input_source
                 .map(|source| dashboard_input_source_name(Some(source)))
                 .unwrap_or("unknown"),
-            mains_present: aggregated_input_present(&self.ui_snapshot),
+            mains_present: self.current_mains_present(),
             input_vbus_mv: self.ui_snapshot.input_vbus_mv,
             input_ibus_ma: self.ui_snapshot.input_ibus_ma,
+            pre_tps_vin_mv: self.ui_snapshot.vin_vbus_mv,
             vin_vbus_mv: self.ui_snapshot.vin_vbus_mv,
+            input_gate_state: self.ui_snapshot.dashboard_detail.input_gate_state,
+            input_gate_reason: self.ui_snapshot.dashboard_detail.input_gate_reason,
+            input_power_good: self.ui_snapshot.dashboard_detail.input_power_good,
             vin_iin_ma: self.ui_snapshot.vin_iin_ma,
             tps_total_iout_ma: self.ui_snapshot.dashboard_detail.input_tps_total_iout_ma,
             tps_limit_threshold_ma: self
@@ -9956,6 +10016,9 @@ where
     }
 
     fn current_mains_present(&self) -> Option<bool> {
+        if self.input_gate.cutoff {
+            return Some(false);
+        }
         stable_mains_present(
             self.ui_snapshot.vin_mains_present,
             self.ui_snapshot.vin_vbus_mv,
@@ -10150,6 +10213,9 @@ where
     }
 
     fn output_gate_reason_now(&mut self) -> OutputGateReason {
+        if self.output_bypass_active {
+            return OutputGateReason::ManualBypass;
+        }
         if self.therm_kill.is_low() {
             return OutputGateReason::ThermKill;
         }
@@ -10232,6 +10298,12 @@ where
     }
 
     fn reconcile_output_state(&mut self) {
+        if self.output_bypass_active {
+            if self.output_state.active_outputs != EnabledOutputs::None {
+                self.force_disable_outputs();
+            }
+            return;
+        }
         let gate_reason = self.output_gate_reason_now();
         if gate_reason != OutputGateReason::None {
             self.apply_output_gate(gate_reason);
@@ -10309,6 +10381,7 @@ where
             OutputGateReason::TpsFault => "output_restore_tps_fault",
             OutputGateReason::TpsConfigFailed => "output_restore_tps_config_failed",
             OutputGateReason::ActiveProtection => "output_restore_active_protection",
+            OutputGateReason::ManualBypass => "output_restore_manual_bypass",
             OutputGateReason::None => {
                 if self.current_output_restore_input_present() != Some(true) {
                     "output_restore_input_missing"
@@ -10471,11 +10544,7 @@ where
     }
 
     fn recompute_ui_mode(&mut self) {
-        let mains_present = stable_mains_present(
-            self.ui_snapshot.vin_mains_present,
-            self.ui_snapshot.vin_vbus_mv,
-            self.ui_snapshot.aggregate_input_present,
-        );
+        let mains_present = self.current_mains_present();
         let (tps_total_iout_ma, tps_total_iout_fresh, tps_total_iout_sample_seq) =
             self.tps_total_iout_sample();
         let online_mode = self.runtime_mode.update(mains_present);
@@ -11165,6 +11234,7 @@ where
             &mut self.ui_snapshot.vin_mains_present,
             &mut self.vin_sample_missing_streak,
         );
+        self.update_input_gate(None);
         self.recompute_ui_mode();
     }
 
@@ -11177,8 +11247,8 @@ where
                 let vbus_mv = match bus {
                     Ok(v) => {
                         self.ui_snapshot.vin_vbus_mv = u16::try_from(v).ok();
-                        self.ui_snapshot.vin_mains_present =
-                            mains_present_from_vin(self.ui_snapshot.vin_vbus_mv);
+                        self.update_input_gate(self.ui_snapshot.vin_vbus_mv);
+                        self.ui_snapshot.vin_mains_present = self.current_mains_present();
                         self.vin_sample_missing_streak = 0;
                         TelemetryValue::Value(v)
                     }
@@ -11190,6 +11260,7 @@ where
                             &mut self.ui_snapshot.vin_mains_present,
                             &mut self.vin_sample_missing_streak,
                         );
+                        self.update_input_gate(None);
                         TelemetryValue::Err(ina_error_kind(e))
                     }
                 };
@@ -11217,6 +11288,7 @@ where
                     &mut self.ui_snapshot.vin_mains_present,
                     &mut self.vin_sample_missing_streak,
                 );
+                self.update_input_gate(None);
                 defmt::info!(
                     "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
                     TelemetryValue::Err("ina_uninit"),
@@ -11231,7 +11303,35 @@ where
                 &mut self.ui_snapshot.vin_mains_present,
                 &mut self.vin_sample_missing_streak,
             );
+            self.update_input_gate(None);
         }
+    }
+
+    fn update_input_gate(&mut self, fresh_pre_tps_vin_mv: Option<u16>) {
+        use output_state_logic::InputGateAction;
+
+        match self.input_gate.step(fresh_pre_tps_vin_mv) {
+            InputGateAction::None => {}
+            InputGateAction::Cutoff => {
+                self.ups_in_ce.set_high();
+                self.ui_snapshot.vin_mains_present = Some(false);
+                self.ui_snapshot.dcin_present = Some(false);
+                defmt::warn!(
+                    "input_gate: cutoff reason=pre_tps_undervoltage pre_tps_vin_mv={=?}",
+                    fresh_pre_tps_vin_mv
+                );
+            }
+            InputGateAction::Enable => {
+                self.ups_in_ce.set_low();
+                defmt::info!(
+                    "input_gate: enabled reason=pre_tps_voltage_recovered pre_tps_vin_mv={=?}",
+                    fresh_pre_tps_vin_mv
+                );
+            }
+        }
+        self.ui_snapshot.dashboard_detail.input_gate_state = Some(self.input_gate.state_slug());
+        self.ui_snapshot.dashboard_detail.input_gate_reason = Some(self.input_gate.reason_slug());
+        self.ui_snapshot.dashboard_detail.input_power_good = Some(self.ups_in_pg.is_high());
     }
 
     fn maybe_print_telemetry(&mut self) -> bool {
@@ -11732,8 +11832,7 @@ where
             && ac1_present
             && charger_vbus_stat_allows_activation_charge(charger_vbus_stat);
         let usb_pd_charge_gate_ready = usb_pd_charge_gate_ready_raw || activation_bc12_charge_ready;
-        let backup_vin_mains_present = mains_present_from_vin(self.ui_snapshot.vin_vbus_mv)
-            .or(self.ui_snapshot.vin_mains_present);
+        let backup_vin_mains_present = self.current_mains_present();
         let backup_usb_charge_context = self.ui_snapshot.mode == UpsMode::Backup
             && backup_vin_mains_present == Some(false)
             && matches!(input_source, Some(DashboardInputSource::UsbC))
@@ -11741,16 +11840,20 @@ where
         let manual_loopback_override_for_policy = self.manual_charge_runtime.active
             && self.manual_charge_runtime.loopback_override
             && self.manual_charge_runtime.loopback_override_mode == Some(self.ui_snapshot.mode);
-        let requested_acdrv_path = match input_source {
-            Some(DashboardInputSource::DcIn) if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
-            Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
-                if ac1_present || vbus_present =>
-            {
-                bq25792::RequestedAcdrvPath::Ac1
+        let requested_acdrv_path = if self.input_gate.cutoff {
+            bq25792::RequestedAcdrvPath::Disabled
+        } else {
+            match input_source {
+                Some(DashboardInputSource::DcIn) if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
+                Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
+                    if ac1_present || vbus_present =>
+                {
+                    bq25792::RequestedAcdrvPath::Ac1
+                }
+                _ if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
+                _ if ac1_present || vbus_present => bq25792::RequestedAcdrvPath::Ac1,
+                _ => bq25792::RequestedAcdrvPath::Disabled,
             }
-            _ if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
-            _ if ac1_present || vbus_present => bq25792::RequestedAcdrvPath::Ac1,
-            _ => bq25792::RequestedAcdrvPath::Disabled,
         };
         let acdrv_state = match bq25792::set_acdrv_path(&mut self.i2c, requested_acdrv_path) {
             Ok(state) => state,

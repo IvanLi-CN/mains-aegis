@@ -323,7 +323,11 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     json_field_opt_bool(buf, "mains_present", status.mains_present, true);
     json_field_opt_u16(buf, "input_vbus_mv", status.input_vbus_mv, true);
     json_field_opt_i32(buf, "input_ibus_ma", status.input_ibus_ma, true);
+    json_field_opt_u16(buf, "pre_tps_vin_mv", status.pre_tps_vin_mv, true);
     json_field_opt_u16(buf, "vin_vbus_mv", status.vin_vbus_mv, true);
+    json_field_opt_str(buf, "input_gate_state", status.input_gate_state, true);
+    json_field_opt_str(buf, "input_gate_reason", status.input_gate_reason, true);
+    json_field_opt_bool(buf, "input_power_good", status.input_power_good, true);
     json_field_opt_i32(buf, "vin_iin_ma", status.vin_iin_ma, true);
     json_field_opt_i32(buf, "tps_total_iout_ma", status.tps_total_iout_ma, true);
     json_field_opt_i32(
@@ -482,7 +486,11 @@ pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: U
     json_field_opt_bool(buf, "mains_present", status.mains_present, true);
     json_field_opt_u16(buf, "input_vbus_mv", status.input_vbus_mv, true);
     json_field_opt_i32(buf, "input_ibus_ma", status.input_ibus_ma, true);
+    json_field_opt_u16(buf, "pre_tps_vin_mv", status.pre_tps_vin_mv, true);
     json_field_opt_u16(buf, "vin_vbus_mv", status.vin_vbus_mv, true);
+    json_field_opt_str(buf, "input_gate_state", status.input_gate_state, true);
+    json_field_opt_str(buf, "input_gate_reason", status.input_gate_reason, true);
+    json_field_opt_bool(buf, "input_power_good", status.input_power_good, true);
     json_field_opt_i32(buf, "vin_iin_ma", status.vin_iin_ma, true);
     json_field_opt_i32(buf, "tps_total_iout_ma", status.tps_total_iout_ma, true);
     json_field_opt_i32(
@@ -586,7 +594,11 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
     json_field_opt_bool(buf, "mains_present", diag.input.mains_present, true);
     json_field_opt_u16(buf, "input_vbus_mv", diag.input.input_vbus_mv, true);
     json_field_opt_i32(buf, "input_ibus_ma", diag.input.input_ibus_ma, true);
+    json_field_opt_u16(buf, "pre_tps_vin_mv", diag.input.pre_tps_vin_mv, true);
     json_field_opt_u16(buf, "vin_vbus_mv", diag.input.vin_vbus_mv, true);
+    json_field_opt_str(buf, "input_gate_state", diag.input.input_gate_state, true);
+    json_field_opt_str(buf, "input_gate_reason", diag.input.input_gate_reason, true);
+    json_field_opt_bool(buf, "input_power_good", diag.input.input_power_good, true);
     json_field_opt_i32(buf, "vin_iin_ma", diag.input.vin_iin_ma, true);
     json_field_opt_i32(buf, "tps_total_iout_ma", diag.input.tps_total_iout_ma, true);
     json_field_opt_i32(
@@ -1204,7 +1216,11 @@ fn render_diag_ina_payload<const N: usize>(buf: &mut String<N>, status: UpsStatu
     let _ = buf.push('{');
     json_field_opt_u16(buf, "input_vbus_mv", status.input_vbus_mv, true);
     json_field_opt_i32(buf, "input_ibus_ma", status.input_ibus_ma, true);
+    json_field_opt_u16(buf, "pre_tps_vin_mv", status.pre_tps_vin_mv, true);
     json_field_opt_u16(buf, "vin_vbus_mv", status.vin_vbus_mv, true);
+    json_field_opt_str(buf, "input_gate_state", status.input_gate_state, true);
+    json_field_opt_str(buf, "input_gate_reason", status.input_gate_reason, true);
+    json_field_opt_bool(buf, "input_power_good", status.input_power_good, true);
     json_field_opt_i32(buf, "vin_iin_ma", status.vin_iin_ma, true);
     json_field_opt_i32(buf, "tps_total_iout_ma", status.tps_total_iout_ma, false);
     let _ = buf.push('}');

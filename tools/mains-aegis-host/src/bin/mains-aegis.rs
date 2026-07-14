@@ -145,6 +145,12 @@ enum DeviceCommand {
         command: RecoveryCommand,
     },
     Settings,
+    OutputBypass {
+        #[arg(long, conflicts_with = "restore")]
+        enable: bool,
+        #[arg(long, conflicts_with = "enable")]
+        restore: bool,
+    },
     Trace(TraceArgs),
     Artifact {
         #[command(subcommand)]
@@ -833,6 +839,10 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
             ),
         },
         DeviceCommand::Settings => ("device.settings", json!({ "device_id": device_id })),
+        DeviceCommand::OutputBypass { enable, restore } => (
+            "device.output_bypass",
+            json!({ "device_id": device_id, "enable": enable, "restore": restore }),
+        ),
         DeviceCommand::Trace(args) => (
             "device.trace",
             json!({
