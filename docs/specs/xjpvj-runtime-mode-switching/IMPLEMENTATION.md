@@ -903,3 +903,40 @@ sign-off。
 
 本轮只把这组值作为“实测推荐参数”与 bench 当前 EEPROM 状态保留；仓库默认值仍保持现状，
 等待后续单独的默认值决策。
+
+### Final 19V Four-scene Sign-off on 6bc1a374
+
+在合同升级为四场景后，19V 的最终 sign-off evidence 归档于：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-four-scene-signoff-20260715T0455Z/`
+
+该 suite 使用 `source-limited-19v` 合同，最终 `signoff_valid=true`。由于台架采样链路在单次
+长跑中仍可能偶发 `sample_gap_above_0_5s` 或 `load_collector_error`，最终 suite 通过
+`power-validation compose` 组合四个同合同、同参数、同固件 build 的有效 raw scene：
+
+- `backup_only / 1000mA`：来自
+  `source-limited-19v-6bc1a374-four-scene-r2-20260715T0451Z/19v-backup_only-1000ma`
+- `source_in_budget / 2500mA`：来自
+  `source-limited-19v-6bc1a374-four-scene-r2-20260715T0451Z/19v-source_in_budget-2500ma`
+- `source_limited_online / 3900mA`：来自
+  `source-limited-19v-6bc1a374-four-scene-20260715T0442Z/19v-source_limited_online-3900ma`
+- `source_limited_cut / 3900mA`：来自
+  `source-limited-19v-6bc1a374-four-scene-r2-20260715T0451Z/19v-source_limited_cut-3900ma`
+
+四个 scene 的最终签核结果如下：
+
+- `backup_only / 1000mA`：`5.202Hz`，max gap `0.485s`；VIN cut 后持续保持 Backup，并确认
+  `backup_reason=input_absent`
+- `source_in_budget / 2500mA`：`5.067Hz`，max gap `0.423s`；`77` 个 hold 样本中 Backup、
+  offline 与 source-limited 均为 `0`
+- `source_limited_online / 3900mA`：`5.032Hz`，max gap `0.340s`；`0.400s` 锁存
+  `source_limited`，锁存前后都没有 `<18V` 持续段，锁存后最低负载电压 `18768mV`
+- `source_limited_cut / 3900mA`：`5.257Hz`，max gap `0.272s`；`0.456s` 锁存
+  `source_limited`，物理 cut VIN 后持续 Backup，并转为 `input_absent`
+
+两次完整四场景直跑也分别保留为诊断 evidence：
+
+- `source-limited-19v-6bc1a374-four-scene-20260715T0442Z/`：`backup_only` 因
+  `load_collector_error` 失效，其余三个 scene 有效
+- `source-limited-19v-6bc1a374-four-scene-r2-20260715T0451Z/`：`source_limited_online`
+  因 `0.718s` sample gap 失效，其余三个 scene 有效

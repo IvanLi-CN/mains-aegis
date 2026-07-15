@@ -9,6 +9,14 @@
 - 三个候选点都完成 EEPROM 写入、reset 后回读和旧三场景真机验证。
 - `source-limited-19v` 当前合同升级为四场景，新增 `source_in_budget / 2500mA`；因此这批
   sweep evidence 继续保留为参数筛选依据，但不再代表 19V 当前正式 sign-off。
+- 19V 四场景正式 sign-off 已补齐并归档为
+  `source-limited-19v-6bc1a374-four-scene-signoff-20260715T0455Z`：
+  - suite verifier 为 `signoff_valid=true`
+  - `backup_only`、`source_in_budget`、`source_limited_online`、`source_limited_cut`
+    四个 scene 均为 `valid_for_signoff`
+  - 最终 suite 由同合同、同参数、同固件 build 的有效 raw scene 组合而成：第一次全套 run
+    保留有效 `source_limited_online`，第二次全套 run 保留有效 `backup_only`、
+    `source_in_budget` 与 `source_limited_cut`
 - 推荐值收敛到候选 B：
   - `standby_drop_mv=900`
   - `input_uvlo_cutoff_mv=18200`
