@@ -247,6 +247,7 @@ impl SuiteContract {
             ],
             Self::SourceLimited19v => vec![
                 SceneKind::BackupOnly,
+                SceneKind::SourceInBudget,
                 SceneKind::SourceLimitedOnline,
                 SceneKind::SourceLimitedCut,
             ],
@@ -269,6 +270,7 @@ impl SuiteContract {
             ],
             Self::SourceLimited19v => vec![
                 ("19v", "backup_only"),
+                ("19v", "source_in_budget"),
                 ("19v", "source_limited_online"),
                 ("19v", "source_limited_cut"),
             ],
@@ -5128,7 +5130,7 @@ mod tests {
     }
 
     #[test]
-    fn source_limited_19v_contract_forces_three_19v_scenes() {
+    fn source_limited_19v_contract_forces_four_19v_scenes() {
         let contract = SuiteContract::SourceLimited19v;
         assert_eq!(
             contract.selected_profiles(&[OutputProfile::V12]),
@@ -5138,6 +5140,7 @@ mod tests {
             contract.selected_scenes(&[SceneKind::AssistPath]),
             vec![
                 SceneKind::BackupOnly,
+                SceneKind::SourceInBudget,
                 SceneKind::SourceLimitedOnline,
                 SceneKind::SourceLimitedCut,
             ]
@@ -5146,6 +5149,7 @@ mod tests {
             contract.expected_reports(),
             vec![
                 ("19v", "backup_only"),
+                ("19v", "source_in_budget"),
                 ("19v", "source_limited_online"),
                 ("19v", "source_limited_cut"),
             ]

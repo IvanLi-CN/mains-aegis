@@ -391,12 +391,17 @@ The repaired 19V path required a new sweep instead of blindly reusing the old
 - candidate C: `18.3V / 18.5V`
 
 All three candidates were written to EEPROM, read back immediately, reset, and
-read back again before running the three-scene `source-limited-19v` contract.
-The retained sign-off evidence is:
+read back again before running the then-current three-scene
+`source-limited-19v` contract. The retained sweep evidence is:
 
 - `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18100-20260715T0310Z/`
 - `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18200-20260715T0317Z/`
 - `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18300-r3-20260715T0332Z/`
+
+The contract now requires four scenes for both 12V and 19V, including
+`source_in_budget / 2500mA`. These three directories therefore remain useful
+for parameter comparison, but they no longer satisfy the current 19V sign-off
+contract by themselves.
 
 Candidate A passed, but still allowed a visible pre-latch low-voltage interval:
 `0.198s` in the online overload scene and `0.400s` in the overload-then-cut

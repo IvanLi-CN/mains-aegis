@@ -845,7 +845,7 @@ scene 均为 `valid_for_signoff` 且无 acceptance failure：
 ### 19V 100mV UVLO Sweep on 6bc1a374
 
 在 `6bc1a374-clean-eb2b310e1419a6cc` 的 `main-vout-19v` build 上，完成了新的 19V
-三场景 `100mV` 步进调优。证据目录：
+旧三场景 `100mV` 步进调优。证据目录：
 
 - `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18100-20260715T0310Z/`
 - `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18200-20260715T0317Z/`
@@ -871,17 +871,18 @@ sign-off。
 - `source_limited_recover_margin_mv=400`
 
 每个候选点都执行了完整 `advanced_power` EEPROM 写入、写后回读、UPS reset 后再次回读，
-然后跑完 `source-limited-19v` 三场景真机 suite。
+然后跑完当时的 `source-limited-19v` 旧三场景真机 suite。由于当前合同已升级为四场景，
+这些目录只保留为参数筛选与历史诊断证据，不能再当作 19V 当前正式 sign-off。
 
 候选结果：
 
-- 候选 A `18.1V / 18.3V`：三场景全部 `valid_for_signoff`
+- 候选 A `18.1V / 18.3V`：旧三场景全部 `valid_for_signoff`
   - `source_limited_online / 3900mA`：`0.599s` 锁存，锁存前 `<18V` 最长 `0.198s`
   - `source_limited_cut / 3900mA`：`1.001s` 锁存，锁存前 `<18V` 最长 `0.400s`
-- 候选 B `18.2V / 18.4V`：三场景全部 `valid_for_signoff`
+- 候选 B `18.2V / 18.4V`：旧三场景全部 `valid_for_signoff`
   - `source_limited_online / 3900mA`：`0.201s` 锁存，锁存前无 `<18V` 连续低压段
   - `source_limited_cut / 3900mA`：`0.599s` 锁存，锁存前无 `<18V` 连续低压段
-- 候选 C `18.3V / 18.5V`：最终 r3 三场景全部 `valid_for_signoff`
+- 候选 C `18.3V / 18.5V`：最终 r3 旧三场景全部 `valid_for_signoff`
   - `source_limited_online / 3900mA`：`0.999s` 锁存，锁存前无 `<18V` 连续低压段
   - `source_limited_cut / 3900mA`：`0.591s` 锁存，锁存前无 `<18V` 连续低压段
 

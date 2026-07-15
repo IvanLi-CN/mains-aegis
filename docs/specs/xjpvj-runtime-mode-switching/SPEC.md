@@ -301,7 +301,7 @@
 - Given `source_limited_online` 已锁存，When VIN 仍在线，Then LoadLynx 电压必须保持不低于 `11000mV`；锁存前的低于 `11000mV` 连续时间不得超过 `1s`。
 - Given `source_limited_cut` 尚未观察到 source-limited backup，When runner 到达 source-cut 边界，Then 必须跳过物理 VIN cut 并将 scene 标记为 diagnostic failure。
 - Given `source_limited_cut` 已观察到 source-limited backup，When runner 切断 VIN，Then `mode=backup` 与 `assist_power_stage=backup` 必须连续保持，且 `backup_reason` 必须转为 `input_absent`。
-- Given 执行 `--suite-contract source-limited-19v`，When Power Path Validation 生成执行计划，Then 必须只生成 `19V backup_only / 1000mA`、`19V source_limited_online / 3900mA`、`19V source_limited_cut / 3900mA` 三个独立 scene，且 source 固定为 `19000mV / 3000mA`。
+- Given 执行 `--suite-contract source-limited-19v`，When Power Path Validation 生成执行计划，Then 必须只生成 `19V backup_only / 1000mA`、`19V source_in_budget / 2500mA`、`19V source_limited_online / 3900mA`、`19V source_limited_cut / 3900mA` 四个独立 scene，且 source 固定为 `19000mV / 3000mA`。
 - Given Power Path Validation 将样本标记为 `hold`，When 该样本的 UPS VOUT 与 `tps_total_iout_ma` 均为 fresh，Then `tps_output_power_mw = tps_total_iout_ma * ups_vout_mv / 1000` 必须 `<=2000mW`；`ups_vout_mv` 使用 `out_a_vbus_mv` 与 `out_b_vbus_mv` 中所有已启用输出的算术平均值，任一 `hold` 样本超过 `2000mW` 都必须使 scene 失去 sign-off 资格，不设持续时间、样本数或平均值豁免。
 - Given `backup_only / 1000mA` 的 VIN 仍在线，When scene 处于 `hold`，Then `mode=standby`、`assist_power_stage=standby`、`backup_reason=null`，且 TPS 输出功率必须始终 `<=2000mW`；否则表明电池路径已在正常在线阶段承担负载，该 scene 必须标记为 `invalid_diagnostic_only`。
 - Given `source_limited_online` 或 `source_limited_cut` 的 3900mA 负载已生效，When 首个 fresh 样本显示 TPS 输出功率 `>2000mW`，Then 该样本及其后的接管窗口必须标记为 `transition_source_limited`，不得继续标记为 `hold`；MCU 锁存后阶段必须标记为 `backup_online`，直到 VIN cut 或负载撤销。

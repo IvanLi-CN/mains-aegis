@@ -6,7 +6,9 @@
   - 候选 A `18.1V / 18.3V`
   - 候选 B `18.2V / 18.4V`
   - 候选 C `18.3V / 18.5V`
-- 三个候选点都完成 EEPROM 写入、reset 后回读和真机三场景验证。
+- 三个候选点都完成 EEPROM 写入、reset 后回读和旧三场景真机验证。
+- `source-limited-19v` 当前合同升级为四场景，新增 `source_in_budget / 2500mA`；因此这批
+  sweep evidence 继续保留为参数筛选依据，但不再代表 19V 当前正式 sign-off。
 - 推荐值收敛到候选 B：
   - `standby_drop_mv=900`
   - `input_uvlo_cutoff_mv=18200`
