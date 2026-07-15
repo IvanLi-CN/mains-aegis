@@ -204,7 +204,7 @@ pub const ADVANCED_POWER_ASSIST_EXIT_BASE_MA: i16 = 50;
 pub const ADVANCED_POWER_RATED_ENTER_BASE_MA: i16 = 100;
 pub const ADVANCED_POWER_RATED_EXIT_BASE_MA: i16 = 50;
 pub const ADVANCED_POWER_DEFAULT_STANDBY_DROP_MV: u16 = 700;
-pub const ADVANCED_POWER_DEFAULT_19V_STANDBY_DROP_MV: u16 = 1_200;
+pub const ADVANCED_POWER_DEFAULT_19V_STANDBY_DROP_MV: u16 = 900;
 pub const ADVANCED_POWER_DEFAULT_ASSIST_LOW_DROP_MV: u16 = 600;
 pub const ADVANCED_POWER_DEFAULT_ASSIST_ENTER_DELTA_MA: i16 = 0;
 pub const ADVANCED_POWER_DEFAULT_ASSIST_EXIT_DELTA_MA: i16 = 0;
@@ -217,11 +217,12 @@ pub const ADVANCED_POWER_DEFAULT_VIN_DROP_THRESHOLD_PCT: u8 = 4;
 pub const ADVANCED_POWER_DEFAULT_REQUIRED_SAMPLES: u8 = 2;
 pub const ADVANCED_POWER_DEFAULT_12V_INPUT_UVLO_CUTOFF_MV: u16 = 11_300;
 pub const ADVANCED_POWER_DEFAULT_12V_INPUT_UVLO_RECOVER_MV: u16 = 11_500;
-pub const ADVANCED_POWER_DEFAULT_19V_INPUT_UVLO_CUTOFF_MV: u16 = 10_000;
-pub const ADVANCED_POWER_DEFAULT_19V_INPUT_UVLO_RECOVER_MV: u16 = 11_000;
+pub const ADVANCED_POWER_DEFAULT_19V_INPUT_UVLO_CUTOFF_MV: u16 = 18_200;
+pub const ADVANCED_POWER_DEFAULT_19V_INPUT_UVLO_RECOVER_MV: u16 = 18_400;
 pub const ADVANCED_POWER_DEFAULT_INPUT_UVLO_REQUIRED_SAMPLES: u8 = 3;
 pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_VIN_DROP_PCT: u8 = 1;
-pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_ENTER_DELTA_MA: i16 = 2_500;
+pub const ADVANCED_POWER_DEFAULT_12V_SOURCE_LIMITED_ENTER_DELTA_MA: i16 = 2_500;
+pub const ADVANCED_POWER_DEFAULT_19V_SOURCE_LIMITED_ENTER_DELTA_MA: i16 = 1_000;
 pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_EXIT_DELTA_MA: i16 = 0;
 pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_REQUIRED_SAMPLES: u8 = 2;
 pub const ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_RECOVER_MARGIN_MV: u16 = 400;
@@ -306,6 +307,16 @@ pub const fn advanced_power_default_input_uvlo_recover_mv_for_rated_vout(
     }
 }
 
+pub const fn advanced_power_default_source_limited_enter_delta_ma_for_rated_vout(
+    rated_vout_mv: u16,
+) -> i16 {
+    if rated_vout_mv <= 12_000 {
+        ADVANCED_POWER_DEFAULT_12V_SOURCE_LIMITED_ENTER_DELTA_MA
+    } else {
+        ADVANCED_POWER_DEFAULT_19V_SOURCE_LIMITED_ENTER_DELTA_MA
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AdvancedPowerSettingsSnapshot {
     pub standby_drop_mv: u16,
@@ -355,7 +366,8 @@ impl AdvancedPowerSettingsSnapshot {
             ),
             input_uvlo_required_samples: ADVANCED_POWER_DEFAULT_INPUT_UVLO_REQUIRED_SAMPLES,
             source_limited_vin_drop_pct: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_VIN_DROP_PCT,
-            source_limited_enter_delta_ma: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_ENTER_DELTA_MA,
+            source_limited_enter_delta_ma:
+                advanced_power_default_source_limited_enter_delta_ma_for_rated_vout(rated_vout_mv),
             source_limited_exit_delta_ma: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_EXIT_DELTA_MA,
             source_limited_required_samples: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_REQUIRED_SAMPLES,
             source_limited_recover_margin_mv:
@@ -572,7 +584,9 @@ impl AdvancedPowerCapabilitiesSnapshot {
                 step: ADVANCED_POWER_SOURCE_LIMITED_VIN_DROP_STEP_PCT,
             },
             source_limited_enter_delta_ma: AdvancedPowerI16CapabilitySnapshot {
-                default: ADVANCED_POWER_DEFAULT_SOURCE_LIMITED_ENTER_DELTA_MA,
+                default: advanced_power_default_source_limited_enter_delta_ma_for_rated_vout(
+                    rated_vout_mv,
+                ),
                 min: ADVANCED_POWER_SOURCE_LIMITED_ENTER_DELTA_MIN_MA,
                 max: ADVANCED_POWER_SOURCE_LIMITED_ENTER_DELTA_MAX_MA,
                 step: ADVANCED_POWER_SOURCE_LIMITED_ENTER_DELTA_STEP_MA,
@@ -1586,7 +1600,7 @@ mod tests {
             .expand(19_000)
             .unwrap();
         assert_eq!(expanded.rated_vout_mv, 19_000);
-        assert_eq!(expanded.standby_vout_mv, 17_800);
+        assert_eq!(expanded.standby_vout_mv, 18_100);
         assert_eq!(expanded.assist_low_vout_mv, 18_400);
         assert_eq!(expanded.assist_enter_iout_ma, 100);
         assert_eq!(expanded.assist_exit_iout_ma, 50);
@@ -1597,11 +1611,11 @@ mod tests {
         assert_eq!(expanded.rated_exit_iout_ma, 50);
         assert_eq!(expanded.vin_drop_threshold_pct, 4);
         assert_eq!(expanded.required_samples, 2);
-        assert_eq!(expanded.input_uvlo_cutoff_mv, 10_000);
-        assert_eq!(expanded.input_uvlo_recover_mv, 11_000);
+        assert_eq!(expanded.input_uvlo_cutoff_mv, 18_200);
+        assert_eq!(expanded.input_uvlo_recover_mv, 18_400);
         assert_eq!(expanded.input_uvlo_required_samples, 3);
         assert_eq!(expanded.source_limited_vin_drop_pct, 1);
-        assert_eq!(expanded.source_limited_enter_iout_ma, 2_600);
+        assert_eq!(expanded.source_limited_enter_iout_ma, 1_100);
         assert_eq!(expanded.source_limited_exit_iout_ma, 50);
         assert_eq!(expanded.source_limited_required_samples, 2);
         assert_eq!(expanded.source_limited_recover_margin_mv, 400);
@@ -1663,9 +1677,10 @@ mod tests {
     fn settings_defaults_can_follow_variant_rated_vout() {
         let settings = DeviceSettingsSnapshot::defaults_for_rated_vout(19_000);
         assert_eq!(settings.advanced_power_capabilities.rated_vout_mv, 19_000);
-        assert_eq!(settings.advanced_power.standby_drop_mv, 1_200);
-        assert_eq!(settings.advanced_power.input_uvlo_cutoff_mv, 10_000);
-        assert_eq!(settings.advanced_power.input_uvlo_recover_mv, 11_000);
+        assert_eq!(settings.advanced_power.standby_drop_mv, 900);
+        assert_eq!(settings.advanced_power.input_uvlo_cutoff_mv, 18_200);
+        assert_eq!(settings.advanced_power.input_uvlo_recover_mv, 18_400);
+        assert_eq!(settings.advanced_power.source_limited_enter_delta_ma, 1_000);
     }
 
     #[test]

@@ -901,8 +901,9 @@ sign-off。
 - `input_uvlo_required_samples=3`
 - `source_limited_enter_delta_ma=1000`
 
-本轮只把这组值作为“实测推荐参数”与 bench 当前 EEPROM 状态保留；仓库默认值仍保持现状，
-等待后续单独的默认值决策。
+这组值随后已提升为 19V 固件默认值。为避免当前 bench 设备继续以 EEPROM 同值覆盖“伪装默认值”，
+当前硬件 EEPROM 额外保留了一个最小偏移 override：`input_uvlo_cutoff_mv=18220`、
+`input_uvlo_recover_mv=18420`；其余字段保持与默认值一致。
 
 ### Final 19V Four-scene Sign-off on 6bc1a374
 

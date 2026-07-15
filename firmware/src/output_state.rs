@@ -345,20 +345,22 @@ mod tests {
     }
 
     #[test]
-    fn input_gate_19v_profile_keeps_legacy_thresholds() {
+    fn input_gate_19v_profile_uses_tuned_thresholds() {
         let mut tracker = InputGateTracker::new(InputGateThresholds {
-            cutoff_mv: 10_000,
-            recover_mv: 11_000,
+            cutoff_mv: 18_200,
+            recover_mv: 18_400,
             required_samples: 3,
         });
-        assert_eq!(tracker.step(Some(10_100)), InputGateAction::None);
-        assert_eq!(tracker.step(Some(9_950)), InputGateAction::None);
-        assert_eq!(tracker.step(Some(9_900)), InputGateAction::None);
-        assert_eq!(tracker.step(Some(9_800)), InputGateAction::Cutoff);
+        assert_eq!(tracker.step(Some(18_300)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_150)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_100)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_000)), InputGateAction::Cutoff);
         assert!(tracker.cutoff);
-        assert_eq!(tracker.step(Some(11_001)), InputGateAction::None);
-        assert_eq!(tracker.step(Some(11_100)), InputGateAction::None);
-        assert_eq!(tracker.step(Some(11_200)), InputGateAction::Enable);
+        assert_eq!(tracker.step(Some(18_250)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_400)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_420)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_450)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_480)), InputGateAction::Enable);
     }
 
     #[test]

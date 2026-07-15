@@ -2873,6 +2873,51 @@ fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpErr
             .input_uvlo_required_samples
             .clone();
     }
+    if advanced_power_capabilities
+        .and_then(|snapshot| snapshot.get("source_limited_vin_drop_pct"))
+        .is_none()
+    {
+        parsed_advanced_power_capabilities.source_limited_vin_drop_pct = defaults
+            .advanced_power_capabilities
+            .source_limited_vin_drop_pct
+            .clone();
+    }
+    if advanced_power_capabilities
+        .and_then(|snapshot| snapshot.get("source_limited_enter_delta_ma"))
+        .is_none()
+    {
+        parsed_advanced_power_capabilities.source_limited_enter_delta_ma = defaults
+            .advanced_power_capabilities
+            .source_limited_enter_delta_ma
+            .clone();
+    }
+    if advanced_power_capabilities
+        .and_then(|snapshot| snapshot.get("source_limited_exit_delta_ma"))
+        .is_none()
+    {
+        parsed_advanced_power_capabilities.source_limited_exit_delta_ma = defaults
+            .advanced_power_capabilities
+            .source_limited_exit_delta_ma
+            .clone();
+    }
+    if advanced_power_capabilities
+        .and_then(|snapshot| snapshot.get("source_limited_required_samples"))
+        .is_none()
+    {
+        parsed_advanced_power_capabilities.source_limited_required_samples = defaults
+            .advanced_power_capabilities
+            .source_limited_required_samples
+            .clone();
+    }
+    if advanced_power_capabilities
+        .and_then(|snapshot| snapshot.get("source_limited_recover_margin_mv"))
+        .is_none()
+    {
+        parsed_advanced_power_capabilities.source_limited_recover_margin_mv = defaults
+            .advanced_power_capabilities
+            .source_limited_recover_margin_mv
+            .clone();
+    }
     Ok(DeviceSettingsState {
         wifi_configured: wifi.get("configured").and_then(Value::as_bool),
         wifi_ssid: wifi.get("ssid").and_then(Value::as_str).map(str::to_string),
@@ -9530,16 +9575,21 @@ fn default_settings() -> DeviceSettingsState {
 }
 
 fn default_settings_for_rated_vout(rated_vout_mv: u16) -> DeviceSettingsState {
-    let standby_drop_mv = if rated_vout_mv <= 12_000 { 700 } else { 1200 };
+    let standby_drop_mv = if rated_vout_mv <= 12_000 { 700 } else { 900 };
     let input_uvlo_cutoff_mv = if rated_vout_mv <= 12_000 {
         11_300
     } else {
-        10_000
+        18_200
     };
     let input_uvlo_recover_mv = if rated_vout_mv <= 12_000 {
         11_500
     } else {
-        11_000
+        18_400
+    };
+    let source_limited_enter_delta_ma = if rated_vout_mv <= 12_000 {
+        2_500
+    } else {
+        1_000
     };
     DeviceSettingsState {
         wifi_configured: None,
@@ -9565,8 +9615,8 @@ fn default_settings_for_rated_vout(rated_vout_mv: u16) -> DeviceSettingsState {
             input_uvlo_cutoff_mv,
             input_uvlo_recover_mv,
             input_uvlo_required_samples: 3,
-            source_limited_vin_drop_pct: 4,
-            source_limited_enter_delta_ma: 1900,
+            source_limited_vin_drop_pct: 1,
+            source_limited_enter_delta_ma,
             source_limited_exit_delta_ma: 0,
             source_limited_required_samples: 2,
             source_limited_recover_margin_mv: 400,
@@ -9657,8 +9707,18 @@ fn default_settings_for_rated_vout(rated_vout_mv: u16) -> DeviceSettingsState {
                 max: 5,
                 step: 1,
             },
-            source_limited_vin_drop_pct: default_source_limited_vin_drop_capability(),
-            source_limited_enter_delta_ma: default_source_limited_enter_delta_capability(),
+            source_limited_vin_drop_pct: AdvancedPowerFieldU8Capability {
+                default: 1,
+                min: 1,
+                max: 12,
+                step: 1,
+            },
+            source_limited_enter_delta_ma: AdvancedPowerFieldI16Capability {
+                default: source_limited_enter_delta_ma,
+                min: -100,
+                max: 3000,
+                step: 50,
+            },
             source_limited_exit_delta_ma: default_source_limited_exit_delta_capability(),
             source_limited_required_samples: default_source_limited_required_samples_capability(),
             source_limited_recover_margin_mv: default_source_limited_recover_margin_capability(),
@@ -11907,7 +11967,7 @@ mod tests {
             },
             "advanced_power_capabilities": {
                 "rated_vout_mv": 19000,
-                "standby_drop_mv": {"default": 1200, "min": 0, "max": 3000, "step": 20},
+                "standby_drop_mv": {"default": 900, "min": 0, "max": 3000, "step": 20},
                 "assist_low_drop_mv": {"default": 600, "min": 0, "max": 3000, "step": 20},
                 "assist_enter_delta_ma": {"default": 0, "min": -100, "max": 1000, "step": 50},
                 "assist_exit_delta_ma": {"default": 0, "min": -50, "max": 1000, "step": 50},
@@ -11940,8 +12000,8 @@ mod tests {
         assert_eq!(settings.advanced_power.rated_exit_delta_ma, 50);
         assert_eq!(settings.advanced_power.vin_drop_threshold_pct, 5);
         assert_eq!(settings.advanced_power.required_samples, 3);
-        assert_eq!(settings.advanced_power.source_limited_vin_drop_pct, 4);
-        assert_eq!(settings.advanced_power.source_limited_enter_delta_ma, 1900);
+        assert_eq!(settings.advanced_power.source_limited_vin_drop_pct, 1);
+        assert_eq!(settings.advanced_power.source_limited_enter_delta_ma, 1000);
         assert_eq!(settings.advanced_power.source_limited_exit_delta_ma, 0);
         assert_eq!(settings.advanced_power.source_limited_required_samples, 2);
         assert_eq!(
@@ -11954,7 +12014,7 @@ mod tests {
                 .advanced_power_capabilities
                 .source_limited_enter_delta_ma
                 .default,
-            1900
+            1000
         );
         assert_eq!(
             settings
@@ -11986,8 +12046,8 @@ mod tests {
         assert_eq!(settings.advanced_power.rated_exit_delta_ma, 0);
         assert_eq!(settings.advanced_power.vin_drop_threshold_pct, 4);
         assert_eq!(settings.advanced_power.required_samples, 2);
-        assert_eq!(settings.advanced_power.source_limited_vin_drop_pct, 4);
-        assert_eq!(settings.advanced_power.source_limited_enter_delta_ma, 1900);
+        assert_eq!(settings.advanced_power.source_limited_vin_drop_pct, 1);
+        assert_eq!(settings.advanced_power.source_limited_enter_delta_ma, 2500);
         assert_eq!(settings.advanced_power.source_limited_exit_delta_ma, 0);
         assert_eq!(settings.advanced_power.source_limited_required_samples, 2);
         assert_eq!(

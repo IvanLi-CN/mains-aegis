@@ -337,8 +337,8 @@ impl SourceLimitedUvloExpectation {
                 required_samples: 3,
             },
             OutputProfile::V19 => Self {
-                cutoff_mv: 10_000,
-                recover_mv: 11_000,
+                cutoff_mv: 18_200,
+                recover_mv: 18_400,
                 required_samples: 3,
             },
         }
@@ -5256,8 +5256,8 @@ mod tests {
                 "source_limited_required_samples": 2,
                 "source_limited_recover_margin_mv": 400,
                 "vin_drop_threshold_pct": 4,
-                "input_uvlo_cutoff_mv": 10_000,
-                "input_uvlo_recover_mv": 11_000,
+                "input_uvlo_cutoff_mv": 18_200,
+                "input_uvlo_recover_mv": 18_400,
                 "input_uvlo_required_samples": 3,
             }
         });
@@ -5275,7 +5275,7 @@ mod tests {
         );
         assert_eq!(
             profile_gate.pointer("/source_limited_settings/expected/input_uvlo_cutoff_mv"),
-            Some(&json!(10_000))
+            Some(&json!(18_200))
         );
     }
 

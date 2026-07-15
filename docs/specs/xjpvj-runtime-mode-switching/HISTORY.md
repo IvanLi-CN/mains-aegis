@@ -23,6 +23,10 @@
   - `input_uvlo_recover_mv=18400`
   - `input_uvlo_required_samples=3`
   - `source_limited_enter_delta_ma=1000`
+- 上述 19V 推荐值已提升为固件默认值。
+- 当前 19V bench 设备为避免 EEPROM 与默认值完全同值，额外保存了最小偏移 override：
+  `input_uvlo_cutoff_mv=18220`、`input_uvlo_recover_mv=18420`；这保证后续核查时能区分
+  “固件默认值”与“设备 EEPROM 覆盖值”。
 - 选择 B 的原因：
   - 相比 A，它把 `3900mA` 在线过载锁存从 `0.599s` 缩短到 `0.201s`
   - 并消除了在线/切断两个过载场景锁存前的 `<18V` 连续低压段
