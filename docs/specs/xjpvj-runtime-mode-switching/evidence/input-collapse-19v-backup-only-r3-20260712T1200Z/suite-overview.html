@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mains Aegis Power Path Validation - input-collapse-19v-backup-only-r3-20260712T1200Z</title>
+  <style>
+    :root { color-scheme: light; --bg: #f5f7fa; --panel: #ffffff; --ink: #17202a; --muted: #5d6875; --line: #d7dee8; --ok: #2e7d46; --bad: #b54a42; --accent: #1769d2; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 20px; background: var(--bg); color: var(--ink); font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    h1 { margin: 0; font-size: 24px; line-height: 1.2; }
+    .subtitle { margin: 6px 0 16px; color: var(--muted); max-width: 110ch; font-size: 13px; line-height: 1.45; }
+    .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 1000px), 1fr)); }
+    .card { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: var(--panel); }
+    .card.valid { border-color: #9bd5ad; }
+    .card.invalid { border-color: #e5a19b; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 10px; }
+    h2 { margin: 0; font-size: 18px; }
+    span { border-radius: 999px; padding: 4px 9px; background: #eaf6ee; color: var(--ok); border: 1px solid #bee4c9; font-size: 12px; }
+    dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 14px; margin: 10px 0 0; font-size: 12px; }
+    dt { color: var(--muted); }
+    dd { margin: 0; overflow-wrap: anywhere; }
+    iframe { width: 100%; height: min(72vh, 760px); min-height: 560px; border: 1px solid var(--line); border-radius: 12px; background: white; display: block; }
+    @media (max-width: 900px) { dl { grid-template-columns: 110px 1fr; } iframe { height: 640px; } }
+  </style>
+</head>
+<body>
+  <h1>Mains Aegis Power Path Validation</h1>
+  <p class="subtitle">Suite input-collapse-19v-backup-only-r3-20260712T1200Z. Formal evidence uses the selected CLI adapter transports; UPS and LoadLynx use native IPC + USB for the explicitly selected bench, while the power-source adapter may use its stable CLI transport. The historical directory name may still contain <code>hil</code>.</p>
+  <main class="grid">
+<section class="card invalid">
+  <header>
+    <h2>19v / backup_only</h2>
+    <span>invalid</span>
+  </header>
+  <iframe src="19v-backup_only-1000ma/voltage-chart.html?embed=1" loading="lazy"></iframe>
+  <dl>
+    <dt>report</dt><dd><a href="19v-backup_only-1000ma/results.json">19v-backup_only-1000ma</a></dd>
+    <dt>sample rate</dt><dd>10.05 Hz</dd>
+    <dt>max gap</dt><dd>0.16 s</dd>
+    <dt>failures</dt><dd>[&quot;load_collector_error&quot;]</dd>
+  </dl>
+</section>
+
+  </main>
+</body>
+</html>

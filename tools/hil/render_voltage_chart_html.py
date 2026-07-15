@@ -131,6 +131,9 @@ def load_rows(path: Path) -> list[dict]:
                 "phase": phase,
                 "stage": raw.get("stage"),
                 "mode": raw.get("mode"),
+                "backup_reason": raw.get("backup_reason") or raw.get("diag_backup_reason"),
+                "charger_state": raw.get("charger_state"),
+                "charger_allow_charge": raw.get("charger_allow_charge"),
                 "target_ma": raw.get("load_target_i_ma"),
                 "port_c_enabled": raw.get("port_c_enabled"),
                 "mains_present": raw.get("mains_present"),
@@ -149,8 +152,6 @@ def load_rows(path: Path) -> list[dict]:
                 "out_a_iout_ma": raw.get("out_a_iout_ma"),
                 "out_b_iout_ma": raw.get("out_b_iout_ma"),
                 "load_output_enabled": raw.get("load_output_enabled"),
-                "load_i_local_ma": raw.get("load_i_local_ma"),
-                "load_i_remote_ma": raw.get("load_i_remote_ma"),
                 "load_i_total_ma": raw.get("load_i_total_ma"),
                 "load_status_generation": raw.get("load_status_generation"),
                 "load_status_age_s": raw.get("load_status_age_s"),
@@ -171,12 +172,99 @@ def mv_to_v(value: object) -> float | None:
     return None
 
 
+def row_mains_present(row: dict) -> bool | None:
+    value = row.get("mains_present")
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def row_vin_vbus_mv(row: dict) -> int | float | None:
+    value = row.get("vin_vbus_mv")
+    if isinstance(value, (int, float)):
+        return value
+    return None
+
+
+def row_is_backup(row: dict) -> bool:
+    return row.get("mode") == "backup" or row.get("stage") == "backup"
+
+
+def normalized_span_phases(rows: list[dict]) -> list[str]:
+    phases = [str(row.get("phase") or "unknown") for row in rows]
+
+    try:
+        first_transition_idx = phases.index("transition_backup")
+    except ValueError:
+        return phases
+
+    hold_like_idx = None
+    for idx in range(first_transition_idx - 1, -1, -1):
+        if phases[idx] in {"hold", "transition_load", "backup_online"}:
+            hold_like_idx = idx
+            break
+
+    hold_mains_present = (
+        row_mains_present(rows[hold_like_idx]) if hold_like_idx is not None else None
+    )
+    hold_vin_vbus_mv = (
+        row_vin_vbus_mv(rows[hold_like_idx]) if hold_like_idx is not None else None
+    )
+
+    first_effect_idx = None
+    first_backup_idx = None
+    for idx in range(first_transition_idx, len(rows)):
+        if phases[idx] not in {"transition_backup", "backup"}:
+            continue
+        row = rows[idx]
+        mains_changed = (
+            hold_mains_present is not None
+            and row_mains_present(row) is not None
+            and row_mains_present(row) != hold_mains_present
+        )
+        vin_changed = (
+            hold_vin_vbus_mv is not None
+            and row_vin_vbus_mv(row) is not None
+            and abs(row_vin_vbus_mv(row) - hold_vin_vbus_mv) >= 200
+        )
+        if first_effect_idx is None and (
+            row_is_backup(row)
+            or row.get("backup_reason") == "input_absent"
+            or mains_changed
+            or vin_changed
+        ):
+            first_effect_idx = idx
+        if first_backup_idx is None and row_is_backup(row):
+            first_backup_idx = idx
+
+    if first_effect_idx is None:
+        return phases
+
+    for idx in range(first_transition_idx, first_effect_idx):
+        if phases[idx] == "transition_backup":
+            phases[idx] = "hold"
+
+    if first_backup_idx is None:
+        first_backup_idx = first_effect_idx + 1
+    backup_start_idx = (
+        first_effect_idx + 1 if first_backup_idx == first_effect_idx else first_backup_idx
+    )
+    for idx in range(backup_start_idx, len(phases)):
+        if phases[idx] == "transition_backup":
+            phases[idx] = "backup"
+
+    return phases
+
+
 def build_tag_spans(rows: list[dict]) -> list[dict]:
     spans: list[dict] = []
+    phases = normalized_span_phases(rows)
     current: dict | None = None
-    for row in rows:
-        phase = row.get("phase") or "unknown"
+    for idx, row in enumerate(rows):
+        phase = phases[idx]
         if current is None or current["phase"] != phase:
+            if current is not None:
+                current["end"] = row["t_s"]
             current = {
                 "phase": phase,
                 "start": row["t_s"],
@@ -191,20 +279,32 @@ def build_tag_spans(rows: list[dict]) -> list[dict]:
 
 def build_stage_transitions(rows: list[dict]) -> list[dict]:
     transitions: list[dict] = []
-    last_stage = last_mode = None
+    last_stage = last_mode = last_reason = last_charger = None
     for row in rows:
         stage = row.get("stage")
         mode = row.get("mode")
-        if stage != last_stage or mode != last_mode:
+        reason = row.get("backup_reason")
+        charger = row.get("charger_state")
+        if (
+            stage != last_stage
+            or mode != last_mode
+            or reason != last_reason
+            or charger != last_charger
+        ):
             transitions.append(
                 {
                     "t_s": row["t_s"],
                     "stage": stage,
                     "mode": mode,
+                    "backup_reason": reason,
+                    "charger_state": charger,
+                    "charger_allow_charge": row.get("charger_allow_charge"),
                 }
             )
             last_stage = stage
             last_mode = mode
+            last_reason = reason
+            last_charger = charger
     return transitions
 
 
@@ -487,12 +587,13 @@ def render_html(
       background: #fff;
     }}
     .tooltip {{
-      position: absolute;
+      position: fixed;
       left: 0;
       top: 0;
       pointer-events: none;
       min-width: 320px;
-      max-width: 420px;
+      max-width: min(420px, calc(100vw - 24px));
+      max-height: calc(100vh - 24px);
       padding: 10px 12px;
       border-radius: 12px;
       background: rgba(19, 24, 32, 0.94);
@@ -503,8 +604,9 @@ def render_html(
       opacity: 0;
       transform: translate(-9999px, -9999px);
       transition: opacity 0.12s ease;
-      z-index: 10;
+      z-index: 2147483647;
       overflow-wrap: anywhere;
+      overflow-y: auto;
     }}
     .tooltip strong {{ color: #ffe594; }}
     .sidebar {{
@@ -649,6 +751,7 @@ def render_html(
 
     const svg = document.getElementById("chart");
     const tooltip = document.getElementById("tooltip");
+    document.body.appendChild(tooltip);
     const startRange = document.getElementById("startRange");
     const endRange = document.getElementById("endRange");
     const startValue = document.getElementById("startValue");
@@ -694,6 +797,162 @@ def render_html(
       return typeof value === "boolean" ? String(value) : "n/a";
     }}
 
+    function fmtToken(value) {{
+      return value == null || value === "" ? "n/a" : String(value);
+    }}
+
+    function escapeHtml(value) {{
+      return String(value).replace(/[&<>"']/g, ch => ({{
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }})[ch]);
+    }}
+
+    function phaseMeaning(phase) {{
+      switch (phase) {{
+        case "pre":
+          return "Idle baseline before the runner applies any load or input switching.";
+        case "transition_load":
+          return "Load-apply transient while the electronic load ramps toward the requested current with VIN still online.";
+        case "hold":
+          return "Main online hold window under the programmed load.";
+        case "transition_source_limited":
+          return "Handoff transient: TPS output has started participating, but source-limited backup is not fully latched yet.";
+        case "backup_online":
+          return "Source-limited backup is latched while VIN remains online, so UPS is actively supporting the load.";
+        case "transition_backup":
+          return "Backup handoff transient after input loss or an input-off decision, before backup fully settles.";
+        case "backup":
+          return "Stable backup window after UPS has taken over the load.";
+        case "restore":
+          return "Restore window while the load is handed back from backup to the online path.";
+        case "transition_unload":
+          return "Unload transient while the runner disables the electronic load and returns toward post-idle.";
+        case "post":
+          return "Post-idle window after the load has been removed.";
+        default:
+          return "Recorded scene phase window.";
+      }}
+    }}
+
+    function findActiveSpanIndex(targetT) {{
+      for (let index = 0; index < tagSpans.length; index += 1) {{
+        const span = tagSpans[index];
+        if (targetT >= span.start && targetT <= span.end) return index;
+      }}
+      let fallback = -1;
+      for (let index = 0; index < tagSpans.length; index += 1) {{
+        if (tagSpans[index].start <= targetT) fallback = index;
+      }}
+      return fallback;
+    }}
+
+    function findActiveTransitionIndex(targetT) {{
+      let activeIndex = -1;
+      for (let index = 0; index < stageTransitions.length; index += 1) {{
+        if (stageTransitions[index].t_s <= targetT) {{
+          activeIndex = index;
+        }} else {{
+          break;
+        }}
+      }}
+      return activeIndex;
+    }}
+
+    function transitionChangeSummary(previous, current) {{
+      if (!current) return [];
+      if (!previous) return [];
+      const changes = [];
+      const trackedFields = [
+        ["stage", "stage"],
+        ["mode", "mode"],
+        ["backup_reason", "backup_reason"],
+        ["charger_state", "charger"],
+      ];
+      for (const [field, label] of trackedFields) {{
+        if (current[field] !== previous[field]) {{
+          changes.push(`${{label}} ${{fmtToken(previous[field])}} -> ${{fmtToken(current[field])}}`);
+        }}
+      }}
+      if (current.charger_allow_charge !== previous.charger_allow_charge) {{
+        changes.push(
+          `allow_charge ${{fmtBool(previous.charger_allow_charge)}} -> ${{fmtBool(current.charger_allow_charge)}}`
+        );
+      }}
+      return changes;
+    }}
+
+    function transitionMeaning(previous, current) {{
+      if (!current) return "No state marker matched this sample.";
+      if (!previous) {{
+        return "Scene baseline state.";
+      }}
+      if (
+        current.backup_reason === "source_limited" &&
+        previous.backup_reason !== "source_limited"
+      ) {{
+        return "UPS latched source-limited backup: VIN is still online, but the upstream source can no longer carry the load.";
+      }}
+      if (
+        current.backup_reason === "input_absent" &&
+        previous.backup_reason !== "input_absent"
+      ) {{
+        return "UPS confirmed the input as absent/cut and switched the backup reason to input_absent.";
+      }}
+      if (current.stage === "backup" && previous.stage !== "backup") {{
+        return "Runtime stage changed to backup: UPS has taken over the load.";
+      }}
+      if (current.mode === "backup" && previous.mode !== "backup") {{
+        return "Published mode changed to backup.";
+      }}
+      if (current.charger_state !== previous.charger_state) {{
+        return `Charger state changed to ${{fmtToken(current.charger_state)}}.`;
+      }}
+      if (current.charger_allow_charge !== previous.charger_allow_charge) {{
+        return `Charge permission changed to ${{fmtBool(current.charger_allow_charge)}}.`;
+      }}
+      return "";
+    }}
+
+    function chartTagDetails(targetT) {{
+      const spanIndex = findActiveSpanIndex(targetT);
+      const transitionIndex = findActiveTransitionIndex(targetT);
+      const span = spanIndex >= 0 ? tagSpans[spanIndex] : null;
+      const transition = transitionIndex >= 0 ? stageTransitions[transitionIndex] : null;
+      const previousTransition = transitionIndex > 0 ? stageTransitions[transitionIndex - 1] : null;
+      const transitionWindowS = Math.max(0.35, Math.min(1.2, (state.end - state.start) * 0.03));
+      const showTransition = transition && Math.abs(targetT - transition.t_s) <= transitionWindowS;
+      const transitionMeaningText = transitionMeaning(previousTransition, transition);
+      const phaseHtml = span
+        ? `
+          <div><strong>P${{spanIndex + 1}}</strong> ${{escapeHtml(span.label)}}</div>
+          <div>${{escapeHtml(phaseMeaning(span.phase))}}</div>
+          <div>range=${{fmtT(span.start)}}..${{fmtT(span.end)}} | phase=${{escapeHtml(span.phase)}}</div>
+        `
+        : `
+          <div><strong>P*</strong></div>
+          <div>No phase span matched this sample.</div>
+        `;
+      const transitionChanges = transitionChangeSummary(previousTransition, transition);
+      const transitionHtml = !showTransition
+        ? ``
+        : `
+          <div style="margin-top:4px"><strong>S${{transitionIndex + 1}}</strong> ${{previousTransition ? "state change" : "initial state"}}</div>
+          ${{transitionMeaningText ? `<div>${{escapeHtml(transitionMeaningText)}}</div>` : ""}}
+          <div>t=${{fmtT(transition.t_s)}} | stage=${{escapeHtml(fmtToken(transition.stage))}} | mode=${{escapeHtml(fmtToken(transition.mode))}}</div>
+          <div>backup_reason=${{escapeHtml(fmtToken(transition.backup_reason))}} | charger=${{escapeHtml(fmtToken(transition.charger_state))}} | allow_charge=${{fmtBool(transition.charger_allow_charge)}}</div>
+          ${{transitionChanges.length ? `<div>${{escapeHtml(transitionChanges.join(" | "))}}</div>` : ""}}
+        `;
+      return `
+        <div style="margin-top:6px"><strong>Chart Tags</strong></div>
+        ${{phaseHtml}}
+        ${{transitionHtml}}
+      `;
+    }}
+
     function updateLegend() {{
       legend.innerHTML = "";
       for (const item of seriesConfig) {{
@@ -721,7 +980,12 @@ def render_html(
         const color = tagColors[span.phase] || "#f1f1f1";
         const transitions = stageTransitions
           .filter(item => item.t_s >= span.start && item.t_s <= span.end)
-          .map(item => `${{fmtT(item.t_s)}} ${{item.stage || item.mode || "unknown"}}`)
+          .map(item => {{
+            const state = item.stage || item.mode || "unknown";
+            const reason = item.backup_reason ? ` / ${{item.backup_reason}}` : "";
+            const charger = item.charger_state ? ` / ${{item.charger_state}}` : "";
+            return `${{fmtT(item.t_s)}} ${{state}}${{reason}}${{charger}}`;
+          }})
           .join(" · ");
         li.innerHTML = `<strong><span class="swatch" style="background:${{color}}"></span>P${{index + 1}}</strong> ${{span.label}}<br><span class="small">${{fmtT(span.start)}}..${{fmtT(span.end)}} | phase=${{span.phase}}${{transitions ? "<br>stage: " + transitions : ""}}</span>`;
         phaseMap.appendChild(li);
@@ -1075,6 +1339,7 @@ def render_html(
         for (const row of candidates) {{
           if (Math.abs(row.t_s - targetT) < Math.abs(nearest.t_s - targetT)) nearest = row;
         }}
+        const tagHelp = chartTagDetails(nearest.t_s);
         const cx = scaleX(nearest.t_s, left, width);
         cursor.setAttribute("x1", cx);
         cursor.setAttribute("x2", cx);
@@ -1092,6 +1357,7 @@ def render_html(
           <div><strong>${{fmtT(nearest.t_s)}}</strong></div>
           <div>phase=${{nearest.phase || "n/a"}} | stage=${{nearest.stage || "n/a"}} | mode=${{nearest.mode || "n/a"}}</div>
           <div>mains_present=${{fmtBool(nearest.mains_present)}} | load_enabled=${{fmtBool(nearest.load_output_enabled)}} | load_gen=${{nearest.load_status_generation ?? "n/a"}}</div>
+          ${{tagHelp}}
           <div style="margin-top:6px"><strong>Voltage traces</strong></div>
           ${{seriesLines}}
           <div style="margin-top:6px"><strong>UPS</strong></div>
@@ -1102,31 +1368,31 @@ def render_html(
           <div>d_stage=${{nearest.diag_stage || "n/a"}} | d_target=${{fmtMv(nearest.diag_assist_target_vout_mv)}}</div>
           <div>vbase=${{fmtMv(nearest.diag_vin_baseline_mv)}} | vdrop=${{fmtMv(nearest.diag_vin_drop_mv)}} | d_tps=${{fmtMa(nearest.diag_tps_total_iout_ma)}}</div>
           <div style="margin-top:6px"><strong>Load</strong></div>
-          <div>target=${{fmtMa(nearest.target_ma)}} | local=${{fmtMa(nearest.load_i_local_ma)}} | remote=${{fmtMa(nearest.load_i_remote_ma)}} | total=${{fmtMa(nearest.load_i_total_ma)}}</div>
+          <div>target=${{fmtMa(nearest.target_ma)}} | actual=${{fmtMa(nearest.load_i_total_ma)}}</div>
           <div>age=${{typeof nearest.load_status_age_s === "number" ? nearest.load_status_age_s.toFixed(3) + "s" : "n/a"}}</div>
         `;
         tooltip.style.opacity = "1";
         tooltip.style.transform = "translate(-9999px, -9999px)";
-        const wrapRect = svg.getBoundingClientRect();
         const tooltipRect = tooltip.getBoundingClientRect();
         const tooltipWidth = tooltipRect.width || 360;
         const tooltipHeight = tooltipRect.height || 260;
-        let tipX = event.clientX - wrapRect.left + 18;
-        if (tipX + tooltipWidth + 14 > wrapRect.width) {{
-          tipX = event.clientX - wrapRect.left - tooltipWidth - 18;
+        const margin = 12;
+        const offset = 18;
+        const viewportWidth = document.documentElement.clientWidth;
+        const viewportHeight = document.documentElement.clientHeight;
+        let tipX = event.clientX + offset;
+        if (tipX + tooltipWidth + margin > viewportWidth) {{
+          tipX = event.clientX - tooltipWidth - offset;
         }}
-        tipX = Math.max(14, Math.min(tipX, wrapRect.width - tooltipWidth - 14));
+        tipX = Math.max(margin, Math.min(tipX, viewportWidth - tooltipWidth - margin));
 
-        let tipY = event.clientY - wrapRect.top - tooltipHeight - 18;
-        if (tipY < 14) {{
-          tipY = event.clientY - wrapRect.top + 18;
+        let tipY = event.clientY + offset;
+        if (tipY + tooltipHeight + margin > viewportHeight) {{
+          tipY = event.clientY - tooltipHeight - offset;
         }}
-        if (tipY + tooltipHeight + 14 > wrapRect.height) {{
-          tipY = wrapRect.height - tooltipHeight - 14;
-        }}
-        tipY = Math.max(14, tipY);
+        tipY = Math.max(margin, Math.min(tipY, viewportHeight - tooltipHeight - margin));
 
-        tooltip.style.transform = `translate(${{tipX}}px, ${{tipY}}px)`;
+        tooltip.style.transform = `translate3d(${{tipX}}px, ${{tipY}}px, 0)`;
       }});
     }}
 

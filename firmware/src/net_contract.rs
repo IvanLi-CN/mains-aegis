@@ -195,68 +195,49 @@ pub fn render_settings_json<const N: usize>(
     let _ = buf.push_str("},\"advanced_power\":{");
     let _ = write!(
         buf,
-        "\"standby_drop_mv\":{},\"assist_low_drop_mv\":{},\"assist_enter_delta_ma\":{},\"assist_exit_delta_ma\":{},\"assist_required_samples\":{},\"assist_ramp_step_mv\":{},\"assist_ramp_interval_ms\":{},\"rated_enter_delta_ma\":{},\"rated_exit_delta_ma\":{},\"vin_drop_threshold_pct\":{},\"required_samples\":{}",
+        "\"standby_drop_mv\":{},\"input_uvlo_cutoff_mv\":{},\"input_uvlo_recover_mv\":{},\"input_uvlo_required_samples\":{},\"source_limited_enter_delta_ma\":{}",
         settings.advanced_power.standby_drop_mv,
-        settings.advanced_power.assist_low_drop_mv,
-        settings.advanced_power.assist_enter_delta_ma,
-        settings.advanced_power.assist_exit_delta_ma,
-        settings.advanced_power.assist_required_samples,
-        settings.advanced_power.assist_ramp_step_mv,
-        settings.advanced_power.assist_ramp_interval_ms,
-        settings.advanced_power.rated_enter_delta_ma,
-        settings.advanced_power.rated_exit_delta_ma,
-        settings.advanced_power.vin_drop_threshold_pct,
-        settings.advanced_power.required_samples,
+        settings.advanced_power.input_uvlo_cutoff_mv,
+        settings.advanced_power.input_uvlo_recover_mv,
+        settings.advanced_power.input_uvlo_required_samples,
+        settings.advanced_power.source_limited_enter_delta_ma,
     );
     let _ = buf.push_str("},\"advanced_power_capabilities\":{");
     let _ = write!(
         buf,
-        "\"rated_vout_mv\":{},\"standby_drop_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_low_drop_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_enter_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_exit_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_required_samples\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_ramp_step_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"assist_ramp_interval_ms\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"rated_enter_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"rated_exit_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"vin_drop_threshold_pct\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"required_samples\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}}",
+        "\"rated_vout_mv\":{},\"standby_drop_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"input_uvlo_cutoff_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"input_uvlo_recover_mv\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"input_uvlo_required_samples\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}},\"source_limited_enter_delta_ma\":{{\"default\":{},\"min\":{},\"max\":{},\"step\":{}}}",
         settings.advanced_power_capabilities.rated_vout_mv,
         settings.advanced_power_capabilities.standby_drop_mv.default,
         settings.advanced_power_capabilities.standby_drop_mv.min,
         settings.advanced_power_capabilities.standby_drop_mv.max,
         settings.advanced_power_capabilities.standby_drop_mv.step,
-        settings.advanced_power_capabilities.assist_low_drop_mv.default,
-        settings.advanced_power_capabilities.assist_low_drop_mv.min,
-        settings.advanced_power_capabilities.assist_low_drop_mv.max,
-        settings.advanced_power_capabilities.assist_low_drop_mv.step,
-        settings.advanced_power_capabilities.assist_enter_delta_ma.default,
-        settings.advanced_power_capabilities.assist_enter_delta_ma.min,
-        settings.advanced_power_capabilities.assist_enter_delta_ma.max,
-        settings.advanced_power_capabilities.assist_enter_delta_ma.step,
-        settings.advanced_power_capabilities.assist_exit_delta_ma.default,
-        settings.advanced_power_capabilities.assist_exit_delta_ma.min,
-        settings.advanced_power_capabilities.assist_exit_delta_ma.max,
-        settings.advanced_power_capabilities.assist_exit_delta_ma.step,
-        settings.advanced_power_capabilities.assist_required_samples.default,
-        settings.advanced_power_capabilities.assist_required_samples.min,
-        settings.advanced_power_capabilities.assist_required_samples.max,
-        settings.advanced_power_capabilities.assist_required_samples.step,
-        settings.advanced_power_capabilities.assist_ramp_step_mv.default,
-        settings.advanced_power_capabilities.assist_ramp_step_mv.min,
-        settings.advanced_power_capabilities.assist_ramp_step_mv.max,
-        settings.advanced_power_capabilities.assist_ramp_step_mv.step,
-        settings.advanced_power_capabilities.assist_ramp_interval_ms.default,
-        settings.advanced_power_capabilities.assist_ramp_interval_ms.min,
-        settings.advanced_power_capabilities.assist_ramp_interval_ms.max,
-        settings.advanced_power_capabilities.assist_ramp_interval_ms.step,
-        settings.advanced_power_capabilities.rated_enter_delta_ma.default,
-        settings.advanced_power_capabilities.rated_enter_delta_ma.min,
-        settings.advanced_power_capabilities.rated_enter_delta_ma.max,
-        settings.advanced_power_capabilities.rated_enter_delta_ma.step,
-        settings.advanced_power_capabilities.rated_exit_delta_ma.default,
-        settings.advanced_power_capabilities.rated_exit_delta_ma.min,
-        settings.advanced_power_capabilities.rated_exit_delta_ma.max,
-        settings.advanced_power_capabilities.rated_exit_delta_ma.step,
-        settings.advanced_power_capabilities.vin_drop_threshold_pct.default,
-        settings.advanced_power_capabilities.vin_drop_threshold_pct.min,
-        settings.advanced_power_capabilities.vin_drop_threshold_pct.max,
-        settings.advanced_power_capabilities.vin_drop_threshold_pct.step,
-        settings.advanced_power_capabilities.required_samples.default,
-        settings.advanced_power_capabilities.required_samples.min,
-        settings.advanced_power_capabilities.required_samples.max,
-        settings.advanced_power_capabilities.required_samples.step,
+        settings.advanced_power_capabilities.input_uvlo_cutoff_mv.default,
+        settings.advanced_power_capabilities.input_uvlo_cutoff_mv.min,
+        settings.advanced_power_capabilities.input_uvlo_cutoff_mv.max,
+        settings.advanced_power_capabilities.input_uvlo_cutoff_mv.step,
+        settings.advanced_power_capabilities.input_uvlo_recover_mv.default,
+        settings.advanced_power_capabilities.input_uvlo_recover_mv.min,
+        settings.advanced_power_capabilities.input_uvlo_recover_mv.max,
+        settings.advanced_power_capabilities.input_uvlo_recover_mv.step,
+        settings
+            .advanced_power_capabilities
+            .input_uvlo_required_samples
+            .default,
+        settings.advanced_power_capabilities.input_uvlo_required_samples.min,
+        settings.advanced_power_capabilities.input_uvlo_required_samples.max,
+        settings.advanced_power_capabilities.input_uvlo_required_samples.step,
+        settings.advanced_power_capabilities
+            .source_limited_enter_delta_ma
+            .default,
+        settings.advanced_power_capabilities
+            .source_limited_enter_delta_ma
+            .min,
+        settings.advanced_power_capabilities
+            .source_limited_enter_delta_ma
+            .max,
+        settings.advanced_power_capabilities
+            .source_limited_enter_delta_ma
+            .step,
     );
     let _ = buf.push_str("}}");
 }
@@ -270,7 +251,11 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     json_field_opt_bool(buf, "mains_present", status.mains_present, true);
     json_field_opt_u16(buf, "input_vbus_mv", status.input_vbus_mv, true);
     json_field_opt_i32(buf, "input_ibus_ma", status.input_ibus_ma, true);
+    json_field_opt_u16(buf, "pre_tps_vin_mv", status.pre_tps_vin_mv, true);
     json_field_opt_u16(buf, "vin_vbus_mv", status.vin_vbus_mv, true);
+    json_field_opt_str(buf, "input_gate_state", status.input_gate_state, true);
+    json_field_opt_str(buf, "input_gate_reason", status.input_gate_reason, true);
+    json_field_opt_bool(buf, "input_power_good", status.input_power_good, true);
     json_field_opt_i32(buf, "vin_iin_ma", status.vin_iin_ma, true);
     json_field_opt_i32(buf, "tps_total_iout_ma", status.tps_total_iout_ma, true);
     json_field_opt_i32(
@@ -290,6 +275,7 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     json_field_opt_u16(buf, "vin_baseline_mv", status.input_vin_baseline_mv, true);
     json_field_opt_u16(buf, "vin_drop_mv", status.input_vin_drop_mv, true);
     json_field_opt_str(buf, "assist_power_stage", status.assist_power_stage, true);
+    json_field_opt_str(buf, "backup_reason", status.backup_reason, true);
     json_field_opt_u16(
         buf,
         "assist_target_vout_mv",
@@ -428,7 +414,11 @@ pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: U
     json_field_opt_bool(buf, "mains_present", status.mains_present, true);
     json_field_opt_u16(buf, "input_vbus_mv", status.input_vbus_mv, true);
     json_field_opt_i32(buf, "input_ibus_ma", status.input_ibus_ma, true);
+    json_field_opt_u16(buf, "pre_tps_vin_mv", status.pre_tps_vin_mv, true);
     json_field_opt_u16(buf, "vin_vbus_mv", status.vin_vbus_mv, true);
+    json_field_opt_str(buf, "input_gate_state", status.input_gate_state, true);
+    json_field_opt_str(buf, "input_gate_reason", status.input_gate_reason, true);
+    json_field_opt_bool(buf, "input_power_good", status.input_power_good, true);
     json_field_opt_i32(buf, "vin_iin_ma", status.vin_iin_ma, true);
     json_field_opt_i32(buf, "tps_total_iout_ma", status.tps_total_iout_ma, true);
     json_field_opt_i32(
@@ -448,6 +438,7 @@ pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: U
     json_field_opt_u16(buf, "vin_baseline_mv", status.input_vin_baseline_mv, true);
     json_field_opt_u16(buf, "vin_drop_mv", status.input_vin_drop_mv, true);
     json_field_opt_str(buf, "assist_power_stage", status.assist_power_stage, true);
+    json_field_opt_str(buf, "backup_reason", status.backup_reason, true);
     json_field_opt_u16(
         buf,
         "assist_target_vout_mv",
@@ -531,7 +522,11 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
     json_field_opt_bool(buf, "mains_present", diag.input.mains_present, true);
     json_field_opt_u16(buf, "input_vbus_mv", diag.input.input_vbus_mv, true);
     json_field_opt_i32(buf, "input_ibus_ma", diag.input.input_ibus_ma, true);
+    json_field_opt_u16(buf, "pre_tps_vin_mv", diag.input.pre_tps_vin_mv, true);
     json_field_opt_u16(buf, "vin_vbus_mv", diag.input.vin_vbus_mv, true);
+    json_field_opt_str(buf, "input_gate_state", diag.input.input_gate_state, true);
+    json_field_opt_str(buf, "input_gate_reason", diag.input.input_gate_reason, true);
+    json_field_opt_bool(buf, "input_power_good", diag.input.input_power_good, true);
     json_field_opt_i32(buf, "vin_iin_ma", diag.input.vin_iin_ma, true);
     json_field_opt_i32(buf, "tps_total_iout_ma", diag.input.tps_total_iout_ma, true);
     json_field_opt_i32(
@@ -556,6 +551,7 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
         diag.input.assist_power_stage,
         true,
     );
+    json_field_opt_str(buf, "backup_reason", diag.input.backup_reason, true);
     json_field_opt_u16(
         buf,
         "assist_target_vout_mv",
@@ -1148,7 +1144,11 @@ fn render_diag_ina_payload<const N: usize>(buf: &mut String<N>, status: UpsStatu
     let _ = buf.push('{');
     json_field_opt_u16(buf, "input_vbus_mv", status.input_vbus_mv, true);
     json_field_opt_i32(buf, "input_ibus_ma", status.input_ibus_ma, true);
+    json_field_opt_u16(buf, "pre_tps_vin_mv", status.pre_tps_vin_mv, true);
     json_field_opt_u16(buf, "vin_vbus_mv", status.vin_vbus_mv, true);
+    json_field_opt_str(buf, "input_gate_state", status.input_gate_state, true);
+    json_field_opt_str(buf, "input_gate_reason", status.input_gate_reason, true);
+    json_field_opt_bool(buf, "input_power_good", status.input_power_good, true);
     json_field_opt_i32(buf, "vin_iin_ma", status.vin_iin_ma, true);
     json_field_opt_i32(buf, "tps_total_iout_ma", status.tps_total_iout_ma, false);
     let _ = buf.push('}');

@@ -1,79 +1,101 @@
 #[path = "build_support/wifi_env.rs"]
 mod wifi_env;
 
-use std::path::{Path, PathBuf};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
+
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct RuntimeModeProfilesFile {
+    capabilities: RuntimeModeCapabilities,
+    profiles: Vec<RuntimeModeProfile>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeModeCapabilities {
+    standby_drop_mv: U16Bounds,
+    input_uvlo_threshold_mv: U16Bounds,
+    input_uvlo_required_samples: U8Bounds,
+    source_limited_enter_delta_ma: I16Bounds,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeModeProfile {
+    id: String,
+    max_rated_vout_mv: u16,
+    defaults: RuntimeModeDefaults,
+    fixed_policy: RuntimeModeFixedPolicy,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeModeDefaults {
+    standby_drop_mv: u16,
+    input_uvlo_cutoff_mv: u16,
+    input_uvlo_recover_mv: u16,
+    input_uvlo_required_samples: u8,
+    source_limited_enter_delta_ma: i16,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeModeFixedPolicy {
+    assist_low_drop_mv: u16,
+    assist_enter_iout_ma: i32,
+    assist_exit_iout_ma: i32,
+    assist_required_samples: u8,
+    assist_ramp_step_mv: u16,
+    assist_ramp_interval_ms: u16,
+    rated_enter_iout_ma: i32,
+    rated_exit_iout_ma: i32,
+    vin_drop_threshold_pct: u16,
+    required_samples: u8,
+    source_limited_vin_drop_pct: u16,
+    source_limited_exit_iout_ma: i32,
+    source_limited_required_samples: u8,
+    source_limited_recover_margin_mv: u16,
+}
+
+#[derive(Debug, Deserialize)]
+struct U16Bounds {
+    min: u16,
+    max: u16,
+    step: u16,
+}
+
+#[derive(Debug, Deserialize)]
+struct U8Bounds {
+    min: u8,
+    max: u8,
+    step: u8,
+}
+
+#[derive(Debug, Deserialize)]
+struct I16Bounds {
+    min: i16,
+    max: i16,
+    step: i16,
+}
 
 fn main() {
-    // Embed build provenance for on-device log verification.
-    //
-    // This avoids guessing what was last flashed when iterating quickly on hardware bring-up.
-    // Keep it dependency-free (no vergen) and best-effort (do not fail builds if git isn't available).
-    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string());
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let profile = env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string());
     println!("cargo:rustc-env=FW_BUILD_PROFILE={}", profile);
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
 
-    // Re-run when firmware sources change so provenance always matches the artifact.
     emit_rerun_if_exists(&manifest_dir.join("build.rs"));
     emit_rerun_if_exists(&manifest_dir.join("Cargo.toml"));
     emit_rerun_for_dir(&manifest_dir.join("src"));
 
-    // Ensure the build script re-runs when the git revision changes, even if firmware sources
-    // didn't (e.g. commits touching only docs, or branch switches). Without this, Cargo can
-    // keep an old `FW_GIT_SHA` and defeat provenance logging.
-    //
-    // Use `git rev-parse --git-dir` to support worktrees and non-root working directories.
-    {
-        let git_dir = std::process::Command::new("git")
-            .current_dir(&manifest_dir)
-            .args(["rev-parse", "--git-dir"])
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-                } else {
-                    None
-                }
-            })
-            .filter(|s| !s.is_empty())
-            .map(std::path::PathBuf::from)
-            .map(|p| {
-                if p.is_absolute() {
-                    p
-                } else {
-                    manifest_dir.join(p)
-                }
-            });
-
-        if let Some(git_dir) = git_dir {
-            for rel in ["HEAD", "logs/HEAD", "packed-refs", "index"] {
-                let path = git_dir.join(rel);
-                emit_rerun_if_exists(&path);
-            }
+    if let Some(git_dir) = resolve_git_dir(&manifest_dir) {
+        for rel in ["HEAD", "logs/HEAD", "packed-refs", "index"] {
+            emit_rerun_if_exists(&git_dir.join(rel));
         }
     }
 
-    let git_sha = {
-        let mut cmd = std::process::Command::new("git");
-        cmd.current_dir(&manifest_dir);
-        cmd.args(["rev-parse", "--short", "HEAD"])
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-                } else {
-                    None
-                }
-            })
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "unknown".to_string())
-    };
+    let git_sha = git_rev_parse_short_head(&manifest_dir);
     println!("cargo:rustc-env=FW_GIT_SHA={}", git_sha);
-    let src_hash = source_hash(&manifest_dir);
-    let src_hash_hex = format!("{:016x}", src_hash);
+    let src_hash_hex = format!("{:016x}", source_hash(&manifest_dir));
     println!("cargo:rustc-env=FW_SRC_HASH={}", src_hash_hex);
     let git_dirty = git_dirty_state(&manifest_dir);
     println!("cargo:rustc-env=FW_GIT_DIRTY={}", git_dirty);
@@ -98,16 +120,147 @@ fn main() {
     }
     emit_wifi_env(repo_root.as_deref());
 
-    // Only apply embedded linker scripts when building for Xtensa.
-    //
-    // This keeps `cargo test --lib` usable on the host while still producing
-    // the correct link args for ESP32-S3 binaries.
-    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-    if arch == "xtensa" {
-        // ESP32-S3 (Xtensa) app linking uses the esp-hal-provided linker scripts.
-        println!("cargo:rustc-link-arg-bins=-Tlinkall.x");
+    let profiles_path = manifest_dir.join("../schemas/runtime_mode_profiles.json");
+    println!("cargo:rerun-if-changed={}", profiles_path.display());
 
-        // Required by defmt (see https://defmt.ferrous-systems.com/setup#linker-script).
+    let source = fs::read_to_string(&profiles_path).expect("read runtime_mode_profiles.json");
+    let profiles: RuntimeModeProfilesFile =
+        serde_json::from_str(&source).expect("parse runtime_mode_profiles.json");
+
+    let mut generated = String::new();
+    generated
+        .push_str("// @generated by firmware/build.rs from schemas/runtime_mode_profiles.json\n");
+    generated.push_str("pub const ADVANCED_POWER_CAPABILITY_BOUNDS: AdvancedPowerCapabilityBounds = AdvancedPowerCapabilityBounds {\n");
+    generated.push_str(&format!(
+        "    standby_drop_mv: AdvancedPowerU16CapabilityBounds {{ min: {}, max: {}, step: {} }},\n",
+        profiles.capabilities.standby_drop_mv.min,
+        profiles.capabilities.standby_drop_mv.max,
+        profiles.capabilities.standby_drop_mv.step
+    ));
+    generated.push_str(&format!(
+        "    input_uvlo_threshold_mv: AdvancedPowerU16CapabilityBounds {{ min: {}, max: {}, step: {} }},\n",
+        profiles.capabilities.input_uvlo_threshold_mv.min,
+        profiles.capabilities.input_uvlo_threshold_mv.max,
+        profiles.capabilities.input_uvlo_threshold_mv.step
+    ));
+    generated.push_str(&format!(
+        "    input_uvlo_required_samples: AdvancedPowerU8CapabilityBounds {{ min: {}, max: {}, step: {} }},\n",
+        profiles.capabilities.input_uvlo_required_samples.min,
+        profiles.capabilities.input_uvlo_required_samples.max,
+        profiles.capabilities.input_uvlo_required_samples.step
+    ));
+    generated.push_str(&format!(
+        "    source_limited_enter_delta_ma: AdvancedPowerI16CapabilityBounds {{ min: {}, max: {}, step: {} }},\n",
+        profiles.capabilities.source_limited_enter_delta_ma.min,
+        profiles.capabilities.source_limited_enter_delta_ma.max,
+        profiles.capabilities.source_limited_enter_delta_ma.step
+    ));
+    generated.push_str("};\n\n");
+
+    generated.push_str("pub const RUNTIME_MODE_PROFILES: [RuntimeModeProfileDefinition; ");
+    generated.push_str(&profiles.profiles.len().to_string());
+    generated.push_str("] = [\n");
+    for profile in &profiles.profiles {
+        generated.push_str("    RuntimeModeProfileDefinition {\n");
+        generated.push_str(&format!("        id: \"{}\",\n", profile.id));
+        generated.push_str(&format!(
+            "        max_rated_vout_mv: {},\n",
+            profile.max_rated_vout_mv
+        ));
+        generated.push_str("        defaults: AdvancedPowerSettingsSnapshot {\n");
+        generated.push_str(&format!(
+            "            standby_drop_mv: {},\n",
+            profile.defaults.standby_drop_mv
+        ));
+        generated.push_str(&format!(
+            "            input_uvlo_cutoff_mv: {},\n",
+            profile.defaults.input_uvlo_cutoff_mv
+        ));
+        generated.push_str(&format!(
+            "            input_uvlo_recover_mv: {},\n",
+            profile.defaults.input_uvlo_recover_mv
+        ));
+        generated.push_str(&format!(
+            "            input_uvlo_required_samples: {},\n",
+            profile.defaults.input_uvlo_required_samples
+        ));
+        generated.push_str(&format!(
+            "            source_limited_enter_delta_ma: {},\n",
+            profile.defaults.source_limited_enter_delta_ma
+        ));
+        generated.push_str("        },\n");
+        generated.push_str("        fixed_policy: RuntimeModeFixedPolicy {\n");
+        generated.push_str(&format!(
+            "            assist_low_drop_mv: {},\n",
+            profile.fixed_policy.assist_low_drop_mv
+        ));
+        generated.push_str(&format!(
+            "            assist_enter_iout_ma: {},\n",
+            profile.fixed_policy.assist_enter_iout_ma
+        ));
+        generated.push_str(&format!(
+            "            assist_exit_iout_ma: {},\n",
+            profile.fixed_policy.assist_exit_iout_ma
+        ));
+        generated.push_str(&format!(
+            "            assist_required_samples: {},\n",
+            profile.fixed_policy.assist_required_samples
+        ));
+        generated.push_str(&format!(
+            "            assist_ramp_step_mv: {},\n",
+            profile.fixed_policy.assist_ramp_step_mv
+        ));
+        generated.push_str(&format!(
+            "            assist_ramp_interval_ms: {},\n",
+            profile.fixed_policy.assist_ramp_interval_ms
+        ));
+        generated.push_str(&format!(
+            "            rated_enter_iout_ma: {},\n",
+            profile.fixed_policy.rated_enter_iout_ma
+        ));
+        generated.push_str(&format!(
+            "            rated_exit_iout_ma: {},\n",
+            profile.fixed_policy.rated_exit_iout_ma
+        ));
+        generated.push_str(&format!(
+            "            vin_drop_threshold_pct: {},\n",
+            profile.fixed_policy.vin_drop_threshold_pct
+        ));
+        generated.push_str(&format!(
+            "            required_samples: {},\n",
+            profile.fixed_policy.required_samples
+        ));
+        generated.push_str(&format!(
+            "            source_limited_vin_drop_pct: {},\n",
+            profile.fixed_policy.source_limited_vin_drop_pct
+        ));
+        generated.push_str(&format!(
+            "            source_limited_exit_iout_ma: {},\n",
+            profile.fixed_policy.source_limited_exit_iout_ma
+        ));
+        generated.push_str(&format!(
+            "            source_limited_required_samples: {},\n",
+            profile.fixed_policy.source_limited_required_samples
+        ));
+        generated.push_str(&format!(
+            "            source_limited_recover_margin_mv: {},\n",
+            profile.fixed_policy.source_limited_recover_margin_mv
+        ));
+        generated.push_str("        },\n");
+        generated.push_str("    },\n");
+    }
+    generated.push_str("];\n");
+
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    fs::write(
+        out_dir.join("runtime_mode_profiles_generated.rs"),
+        generated,
+    )
+    .expect("write runtime_mode_profiles_generated.rs");
+
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    if arch == "xtensa" {
+        println!("cargo:rustc-link-arg-bins=-Tlinkall.x");
         println!("cargo:rustc-link-arg-bins=-Tdefmt.x");
     }
 }
@@ -115,7 +268,7 @@ fn main() {
 fn enabled_features() -> Vec<&'static str> {
     FEATURE_ENV_CANDIDATES
         .iter()
-        .filter_map(|(env_key, feature)| std::env::var_os(env_key).map(|_| *feature))
+        .filter_map(|(env_key, feature)| env::var_os(env_key).map(|_| *feature))
         .collect()
 }
 
@@ -188,7 +341,7 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
     if !dir.is_dir() {
         return;
     }
-    let entries = match std::fs::read_dir(dir) {
+    let entries = match fs::read_dir(dir) {
         Ok(v) => v,
         Err(_) => return,
     };
@@ -203,6 +356,44 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+fn resolve_git_dir(manifest_dir: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .current_dir(manifest_dir)
+        .args(["rev-parse", "--git-dir"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let git_dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if git_dir.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(git_dir);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        manifest_dir.join(path)
+    })
+}
+
+fn git_rev_parse_short_head(manifest_dir: &Path) -> String {
+    std::process::Command::new("git")
+        .current_dir(manifest_dir)
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn source_hash(manifest_dir: &Path) -> u64 {
@@ -223,7 +414,7 @@ fn source_hash(manifest_dir: &Path) -> u64 {
         let rel = path.strip_prefix(manifest_dir).unwrap_or(&path);
         hash_bytes(&mut hash, rel.to_string_lossy().as_bytes());
         hash_bytes(&mut hash, &[0]);
-        if let Ok(content) = std::fs::read(&path) {
+        if let Ok(content) = fs::read(&path) {
             hash_bytes(&mut hash, &content);
         }
         hash_bytes(&mut hash, &[0xff]);

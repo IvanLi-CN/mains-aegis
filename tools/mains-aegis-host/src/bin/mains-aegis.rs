@@ -145,6 +145,12 @@ enum DeviceCommand {
         command: RecoveryCommand,
     },
     Settings,
+    OutputBypass {
+        #[arg(long, conflicts_with = "restore")]
+        enable: bool,
+        #[arg(long, conflicts_with = "enable")]
+        restore: bool,
+    },
     Trace(TraceArgs),
     Artifact {
         #[command(subcommand)]
@@ -328,16 +334,10 @@ enum SettingsCommand {
     },
     AdvancedPower {
         standby_drop_mv: u16,
-        assist_low_drop_mv: u16,
-        assist_enter_delta_ma: i16,
-        assist_exit_delta_ma: i16,
-        assist_required_samples: u8,
-        assist_ramp_step_mv: u16,
-        assist_ramp_interval_ms: u16,
-        rated_enter_delta_ma: i16,
-        rated_exit_delta_ma: i16,
-        vin_drop_threshold_pct: u8,
-        required_samples: u8,
+        input_uvlo_cutoff_mv: u16,
+        input_uvlo_recover_mv: u16,
+        input_uvlo_required_samples: u8,
+        source_limited_enter_delta_ma: i16,
         #[arg(long)]
         device_id: Option<String>,
         #[arg(long)]
@@ -828,6 +828,10 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
             ),
         },
         DeviceCommand::Settings => ("device.settings", json!({ "device_id": device_id })),
+        DeviceCommand::OutputBypass { enable, restore } => (
+            "device.output_bypass",
+            json!({ "device_id": device_id, "enable": enable, "restore": restore }),
+        ),
         DeviceCommand::Trace(args) => (
             "device.trace",
             json!({
@@ -1331,32 +1335,20 @@ fn settings_to_ipc(command: SettingsCommand) -> (&'static str, Value) {
         ),
         SettingsCommand::AdvancedPower {
             standby_drop_mv,
-            assist_low_drop_mv,
-            assist_enter_delta_ma,
-            assist_exit_delta_ma,
-            assist_required_samples,
-            assist_ramp_step_mv,
-            assist_ramp_interval_ms,
-            rated_enter_delta_ma,
-            rated_exit_delta_ma,
-            vin_drop_threshold_pct,
-            required_samples,
+            input_uvlo_cutoff_mv,
+            input_uvlo_recover_mv,
+            input_uvlo_required_samples,
+            source_limited_enter_delta_ma,
             device_id,
             lease_id,
         } => (
             "settings.advanced_power.set",
             json!({
                 "standby_drop_mv": standby_drop_mv,
-                "assist_low_drop_mv": assist_low_drop_mv,
-                "assist_enter_delta_ma": assist_enter_delta_ma,
-                "assist_exit_delta_ma": assist_exit_delta_ma,
-                "assist_required_samples": assist_required_samples,
-                "assist_ramp_step_mv": assist_ramp_step_mv,
-                "assist_ramp_interval_ms": assist_ramp_interval_ms,
-                "rated_enter_delta_ma": rated_enter_delta_ma,
-                "rated_exit_delta_ma": rated_exit_delta_ma,
-                "vin_drop_threshold_pct": vin_drop_threshold_pct,
-                "required_samples": required_samples,
+                "input_uvlo_cutoff_mv": input_uvlo_cutoff_mv,
+                "input_uvlo_recover_mv": input_uvlo_recover_mv,
+                "input_uvlo_required_samples": input_uvlo_required_samples,
+                "source_limited_enter_delta_ma": source_limited_enter_delta_ma,
                 "device_id": device_id,
                 "lease_id": lease_id,
             }),

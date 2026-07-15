@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Context};
 use chrono::Utc;
 use clap::{Args, Subcommand, ValueEnum};
+use mains_aegis_host::runtime_mode_tuning_defaults_for_rated_vout;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -11,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::time::{sleep, timeout, Duration, Instant};
+use tokio::time::{sleep, timeout, Duration, Instant, MissedTickBehavior};
 
 const DEFAULT_REPORT_ROOT: &str = "tools/hil/reports";
 const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 200;
@@ -19,8 +20,13 @@ const DEFAULT_WATCH_FRESHNESS_MS: u64 = 750;
 const MIN_FORMAL_SAMPLE_RATE_HZ: f64 = 2.0;
 const ENGINEERING_SAMPLE_RATE_HZ: f64 = 3.0;
 const MAX_SAMPLE_GAP_S: f64 = 0.5;
-const SOURCE_DISCONNECT_CONFIRM_ATTEMPTS: usize = 20;
+const SOURCE_DISCONNECT_CONFIRM_ATTEMPTS: usize = 50;
 const SOURCE_DISCONNECT_CONFIRM_INTERVAL_MS: u64 = 100;
+const UPS_ONLINE_RECOVER_ATTEMPTS: usize = 100;
+const UPS_ONLINE_RECOVER_INTERVAL_MS: u64 = 100;
+const SOURCE_LIMITED_ENTRY_MAX_S: f64 = 2.0;
+const SOURCE_LIMITED_LOAD_MARGIN_MV: i64 = 1_000;
+const SOURCE_LIMITED_MAX_LOW_VOLTAGE_S: f64 = 1.0;
 
 #[derive(Debug)]
 pub struct PowerValidationArgs {
@@ -55,6 +61,9 @@ pub struct CheckArgs {
 pub struct RunArgs {
     #[command(flatten)]
     bench: BenchArgs,
+    /// Validation suite contract. The default preserves the existing four-scene suite.
+    #[arg(long, value_enum, default_value_t = SuiteContract::Standard)]
+    suite_contract: SuiteContract,
     /// Output profiles to run.
     #[arg(long = "profile", value_enum, default_values_t = [OutputProfile::V12, OutputProfile::V19])]
     profiles: Vec<OutputProfile>,
@@ -97,6 +106,15 @@ pub struct RunArgs {
     /// Seconds to wait after a profile firmware flash before reading UPS identity again.
     #[arg(long, default_value_t = 12)]
     profile_flash_settle_s: u64,
+    /// Expected input UVLO cutoff for source-limited suite settings preflight.
+    #[arg(long)]
+    expected_input_uvlo_cutoff_mv: Option<u16>,
+    /// Expected input UVLO recovery threshold for source-limited suite settings preflight.
+    #[arg(long)]
+    expected_input_uvlo_recover_mv: Option<u16>,
+    /// Expected consecutive fresh samples required by the source-limited suite input UVLO preflight.
+    #[arg(long)]
+    expected_input_uvlo_required_samples: Option<u8>,
     /// Render chart HTML by invoking tools/hil/render_voltage_chart_html.py.
     #[arg(long, default_value = "tools/hil/render_voltage_chart_html.py")]
     render_chart: PathBuf,
@@ -113,6 +131,9 @@ pub struct ReportArgs {
 
 #[derive(Debug, Args)]
 pub struct ComposeArgs {
+    /// Validation suite contract used by the supplied scene reports.
+    #[arg(long, value_enum, default_value_t = SuiteContract::Standard)]
+    suite_contract: SuiteContract,
     /// Suite id to write into the generated suite-summary.json.
     #[arg(long)]
     suite_id: String,
@@ -182,6 +203,91 @@ pub enum OutputProfile {
     V19,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum SuiteContract {
+    #[value(name = "standard")]
+    Standard,
+    #[value(name = "source-limited-12v")]
+    #[serde(rename = "source_limited_12v")]
+    SourceLimited12v,
+    #[value(name = "source-limited-19v")]
+    #[serde(rename = "source_limited_19v")]
+    SourceLimited19v,
+}
+
+impl SuiteContract {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Standard => "standard",
+            Self::SourceLimited12v => "source_limited_12v",
+            Self::SourceLimited19v => "source_limited_19v",
+        }
+    }
+
+    fn is_source_limited(self) -> bool {
+        matches!(self, Self::SourceLimited12v | Self::SourceLimited19v)
+    }
+
+    fn selected_profiles(self, requested: &[OutputProfile]) -> Vec<OutputProfile> {
+        match self {
+            Self::Standard => requested.to_vec(),
+            Self::SourceLimited12v => vec![OutputProfile::V12],
+            Self::SourceLimited19v => vec![OutputProfile::V19],
+        }
+    }
+
+    fn selected_scenes(self, requested: &[SceneKind]) -> Vec<SceneKind> {
+        match self {
+            Self::Standard => requested.to_vec(),
+            Self::SourceLimited12v => vec![
+                SceneKind::BackupOnly,
+                SceneKind::SourceInBudget,
+                SceneKind::SourceLimitedOnline,
+                SceneKind::SourceLimitedCut,
+            ],
+            Self::SourceLimited19v => vec![
+                SceneKind::BackupOnly,
+                SceneKind::SourceInBudget,
+                SceneKind::SourceLimitedOnline,
+                SceneKind::SourceLimitedCut,
+            ],
+        }
+    }
+
+    fn expected_reports(self) -> Vec<(&'static str, &'static str)> {
+        match self {
+            Self::Standard => vec![
+                ("12v", "assist_path"),
+                ("12v", "backup_only"),
+                ("19v", "assist_path"),
+                ("19v", "backup_only"),
+            ],
+            Self::SourceLimited12v => vec![
+                ("12v", "backup_only"),
+                ("12v", "source_in_budget"),
+                ("12v", "source_limited_online"),
+                ("12v", "source_limited_cut"),
+            ],
+            Self::SourceLimited19v => vec![
+                ("19v", "backup_only"),
+                ("19v", "source_in_budget"),
+                ("19v", "source_limited_online"),
+                ("19v", "source_limited_cut"),
+            ],
+        }
+    }
+
+    fn from_summary(value: &Value) -> anyhow::Result<Self> {
+        match value.get("suite_contract").and_then(Value::as_str) {
+            None | Some("standard") => Ok(Self::Standard),
+            Some("source_limited_12v") => Ok(Self::SourceLimited12v),
+            Some("source_limited_19v") => Ok(Self::SourceLimited19v),
+            Some(other) => bail!("unknown suite contract in report: {other}"),
+        }
+    }
+}
+
 impl OutputProfile {
     fn key(self) -> &'static str {
         match self {
@@ -206,6 +312,55 @@ impl OutputProfile {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SourceLimitedUvloExpectation {
+    cutoff_mv: u16,
+    recover_mv: u16,
+    required_samples: u8,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SourceLimitedSettingsExpectation {
+    source_limited_enter_delta_ma: i16,
+}
+
+impl SourceLimitedUvloExpectation {
+    fn for_profile(profile: OutputProfile) -> Self {
+        let defaults = runtime_mode_tuning_defaults_for_rated_vout(profile.rated_vout_mv() as u16);
+        Self {
+            cutoff_mv: defaults.input_uvlo_cutoff_mv,
+            recover_mv: defaults.input_uvlo_recover_mv,
+            required_samples: defaults.input_uvlo_required_samples,
+        }
+    }
+
+    fn from_run_args(profile: OutputProfile, args: &RunArgs) -> Self {
+        let defaults = Self::for_profile(profile);
+        Self {
+            cutoff_mv: args
+                .expected_input_uvlo_cutoff_mv
+                .unwrap_or(defaults.cutoff_mv),
+            recover_mv: args
+                .expected_input_uvlo_recover_mv
+                .unwrap_or(defaults.recover_mv),
+            required_samples: args
+                .expected_input_uvlo_required_samples
+                .unwrap_or(defaults.required_samples),
+        }
+    }
+}
+
+impl SourceLimitedSettingsExpectation {
+    fn for_profile(profile: OutputProfile) -> Self {
+        Self {
+            source_limited_enter_delta_ma: runtime_mode_tuning_defaults_for_rated_vout(
+                profile.rated_vout_mv() as u16,
+            )
+            .source_limited_enter_delta_ma,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum SceneKind {
@@ -213,6 +368,12 @@ pub enum SceneKind {
     AssistPath,
     #[value(name = "backup-only")]
     BackupOnly,
+    #[value(name = "source-in-budget")]
+    SourceInBudget,
+    #[value(name = "source-limited-online")]
+    SourceLimitedOnline,
+    #[value(name = "source-limited-cut")]
+    SourceLimitedCut,
 }
 
 impl SceneKind {
@@ -220,6 +381,9 @@ impl SceneKind {
         match self {
             Self::AssistPath => "assist_path",
             Self::BackupOnly => "backup_only",
+            Self::SourceInBudget => "source_in_budget",
+            Self::SourceLimitedOnline => "source_limited_online",
+            Self::SourceLimitedCut => "source_limited_cut",
         }
     }
 
@@ -227,13 +391,32 @@ impl SceneKind {
         match self {
             Self::AssistPath => 3_900,
             Self::BackupOnly => 1_000,
+            Self::SourceInBudget => 2_500,
+            Self::SourceLimitedOnline | Self::SourceLimitedCut => 3_900,
         }
     }
 
     fn include_backup(self) -> bool {
         match self {
-            Self::AssistPath | Self::BackupOnly => true,
+            Self::AssistPath | Self::BackupOnly | Self::SourceLimitedCut => true,
+            Self::SourceInBudget | Self::SourceLimitedOnline => false,
         }
+    }
+
+    fn requires_source_limited(self) -> bool {
+        matches!(self, Self::SourceLimitedOnline | Self::SourceLimitedCut)
+    }
+
+    fn requires_non_backup_online(self) -> bool {
+        matches!(self, Self::SourceInBudget)
+    }
+
+    fn requires_input_absent_after_cut(self) -> bool {
+        matches!(self, Self::BackupOnly | Self::SourceLimitedCut)
+    }
+
+    fn requires_source_limited_before_cut(self) -> bool {
+        matches!(self, Self::SourceLimitedCut)
     }
 }
 
@@ -252,6 +435,7 @@ pub enum LoadAdapterKind {
 #[derive(Debug, Serialize)]
 struct SuitePlan {
     suite_id: String,
+    suite_contract: SuiteContract,
     created_at: String,
     transport: TransportPlan,
     thresholds: Thresholds,
@@ -360,6 +544,7 @@ struct SceneSample {
     phase: String,
     stage: Option<Value>,
     mode: Option<Value>,
+    backup_reason: Option<Value>,
     load_target_i_ma: u32,
     ups_status_cache_age_ms: Option<Value>,
     ups_status_cache_fresh: Option<Value>,
@@ -369,25 +554,30 @@ struct SceneSample {
     isolapurr_port_c_ma: Option<Value>,
     mains_present: Option<Value>,
     assist_target_vout_mv: Option<Value>,
-    vin_vbus_mv: Option<Value>,
+    #[serde(default, alias = "vin_vbus_mv")]
+    pre_tps_vin_mv: Option<Value>,
     vin_iin_ma: Option<Value>,
     tps_total_iout_ma: Option<Value>,
     battery_current_ma: Option<Value>,
+    charger_state: Option<Value>,
+    charger_allow_charge: Option<Value>,
     out_a_vbus_mv: Option<Value>,
     out_b_vbus_mv: Option<Value>,
     out_a_iout_ma: Option<Value>,
     out_b_iout_ma: Option<Value>,
     diag_stage: Option<Value>,
+    diag_backup_reason: Option<Value>,
+    diag_charger_notice: Option<Value>,
     diag_assist_target_vout_mv: Option<Value>,
     diag_vin_baseline_mv: Option<Value>,
     diag_vin_drop_mv: Option<Value>,
     diag_tps_total_iout_ma: Option<Value>,
     load_output_enabled: Option<Value>,
     load_v_local_mv: Option<Value>,
-    load_i_local_ma: Option<Value>,
-    load_i_remote_ma: Option<Value>,
     load_i_total_ma: Option<Value>,
 }
+
+const HOLD_TPS_POWER_MAX_MW: i64 = 2_000;
 
 #[derive(Debug, Serialize)]
 struct SceneSummary {
@@ -429,23 +619,37 @@ pub async fn run(
 }
 
 async fn run_check(args: CheckArgs, context: PowerValidationArgs) -> anyhow::Result<()> {
+    let ups_monitor =
+        run_cmd_output(ups_command(&args.bench, &context, ["monitor", "start"])).await;
+    let source_command = power_stream_command(&args.bench)?;
+    let load_command = preflight_load_stream_command(&args.bench, args.samples)?;
+    let ups_warmup = if ups_monitor.is_ok() {
+        wait_for_ups_watch_ready(&args.bench, &context, "check_warmup").await
+    } else {
+        Err(anyhow!("UPS monitor did not start"))
+    };
+    // Preflight isolates each device's cadence from host-side process contention.
     let ups_status = run_json_probe(
         ups_watch_command(&args.bench, &context, "status", args.samples),
         args.samples,
     )
     .await;
+    let ups_diag_snapshot = run_json_probe(
+        ups_watch_command(&args.bench, &context, "diag-snapshot", args.samples),
+        args.samples,
+    )
+    .await;
     let source = run_polling_json_probe(
-        power_stream_command(&args.bench)?,
+        source_command,
         args.samples,
         Duration::from_millis(args.bench.sample_interval_ms),
     )
     .await;
-    let load = run_adapter_probe(
-        load_stream_command(&args.bench, args.samples)?,
-        args.samples,
-    )
-    .await;
-    let ups_ok = ups_status.as_ref().is_ok_and(|probe| probe.ok);
+    let load = run_adapter_probe(load_command, args.samples).await;
+    let ups_ok = ups_monitor.is_ok()
+        && ups_warmup.as_ref().is_ok_and(|probe| probe.ok)
+        && ups_status.as_ref().is_ok_and(|probe| probe.ok)
+        && ups_diag_snapshot.as_ref().is_ok_and(|probe| probe.ok);
     let ok = ups_ok
         && source.as_ref().is_ok_and(|probe| probe.ok)
         && load.as_ref().is_ok_and(|probe| probe.ok);
@@ -454,13 +658,21 @@ async fn run_check(args: CheckArgs, context: PowerValidationArgs) -> anyhow::Res
         "ups": {
             "device_id": args.bench.ups_device,
             "ipc": context.ups_ipc,
+            "monitor": match ups_monitor {
+                Ok(value) => json!({"ok": true, "result": value}),
+                Err(error) => json!({"ok": false, "error": error.to_string()}),
+            },
+            "warmup": match ups_warmup {
+                Ok(probe) => json!(probe),
+                Err(error) => json!({"ok": false, "error": error.to_string()}),
+            },
             "status": match ups_status {
                 Ok(probe) => json!(probe),
                 Err(error) => json!({"ok": false, "error": error.to_string()}),
             },
-            "diag_snapshot": {
-                "ok": ups_ok,
-                "source": "status_derived",
+            "diag_snapshot": match ups_diag_snapshot {
+                Ok(probe) => json!(probe),
+                Err(error) => json!({"ok": false, "error": error.to_string()}),
             },
         },
         "power_source": {
@@ -511,9 +723,19 @@ async fn run_suite(args: RunArgs, context: PowerValidationArgs) -> anyhow::Resul
         return Ok(());
     }
     let mut reports = Vec::new();
-    for profile in args.profiles.iter().copied() {
-        for scene in args.scenes.iter().copied() {
-            reports.push(run_scene(&args, &context, &suite_dir, profile, scene).await?);
+    for profile in args.suite_contract.selected_profiles(&args.profiles) {
+        for scene in args.suite_contract.selected_scenes(&args.scenes) {
+            reports.push(
+                run_scene(
+                    &args,
+                    &context,
+                    &suite_dir,
+                    profile,
+                    scene,
+                    args.suite_contract,
+                )
+                .await?,
+            );
         }
     }
     let mut suite_value = serde_json::to_value(&plan)?;
@@ -570,18 +792,19 @@ fn verify_report(path: PathBuf, write_overview: bool) -> anyhow::Result<Value> {
         .filter(|report| report.get("signoff_valid").and_then(Value::as_bool) != Some(true))
         .cloned()
         .collect();
+    let suite_contract = SuiteContract::from_summary(&value)?;
     let mut suite_failures = Vec::new();
     let mut report_failures = Vec::new();
-    if reports.len() != 4 {
-        suite_failures
-            .push(json!({"suite_failure": "expected_four_reports", "actual": reports.len()}));
+    let expected_reports = suite_contract.expected_reports();
+    if reports.len() != expected_reports.len() {
+        suite_failures.push(json!({
+            "suite_failure": "unexpected_report_count",
+            "suite_contract": suite_contract.key(),
+            "expected": expected_reports.len(),
+            "actual": reports.len(),
+        }));
     }
-    for (profile, scene) in [
-        ("12v", "assist_path"),
-        ("12v", "backup_only"),
-        ("19v", "assist_path"),
-        ("19v", "backup_only"),
-    ] {
+    for (profile, scene) in expected_reports {
         let found = reports.iter().any(|report| {
             report.get("output_profile").and_then(Value::as_str) == Some(profile)
                 && report.get("scene_type").and_then(Value::as_str) == Some(scene)
@@ -591,7 +814,7 @@ fn verify_report(path: PathBuf, write_overview: bool) -> anyhow::Result<Value> {
         }
     }
     for report in &reports {
-        report_failures.extend(validate_scene_report(&summary_dir, report)?);
+        report_failures.extend(validate_scene_report(&summary_dir, report, suite_contract)?);
     }
     let overview_path = summary_dir.join("suite-overview.html");
     if write_overview {
@@ -610,6 +833,7 @@ fn verify_report(path: PathBuf, write_overview: bool) -> anyhow::Result<Value> {
         "suite_failures": suite_failures,
         "report_failures": report_failures,
         "suite_id": value.get("suite_id"),
+        "suite_contract": suite_contract.key(),
         "thresholds": value.get("thresholds"),
     }))
 }
@@ -623,6 +847,7 @@ async fn run_compose_report(args: ComposeArgs) -> anyhow::Result<()> {
     }
     let suite = json!({
         "suite_id": args.suite_id,
+        "suite_contract": args.suite_contract.key(),
         "created_at": Utc::now().to_rfc3339(),
         "transport": infer_suite_transport(&reports),
         "thresholds": {
@@ -687,6 +912,7 @@ fn compose_scene_report_entry(suite_dir: &Path, scene_dir: &Path) -> anyhow::Res
     let report_dir = path_relative_to(scene_dir, suite_dir);
     Ok(json!({
         "report_dir": report_dir,
+        "suite_contract": metadata.get("suite_contract").cloned().unwrap_or_else(|| json!("standard")),
         "output_profile": output_profile,
         "scene_type": scene_type,
         "target_ma": target_ma,
@@ -704,6 +930,7 @@ fn compose_scene_report_entry(suite_dir: &Path, scene_dir: &Path) -> anyhow::Res
         "failures": completeness.get("failures").cloned().unwrap_or_else(|| json!([])),
         "failed_acceptance_checks": acceptance.get("failed_acceptance_checks").cloned().unwrap_or_else(|| json!([])),
         "advanced_power": results.pointer("/settings_snapshot/advanced_power").cloned().unwrap_or_else(|| json!({})),
+        "scene_assertions": results.get("scene_assertions").cloned().unwrap_or(Value::Null),
         "transport": {
             "ups": metadata.get("ups_transport").cloned().unwrap_or(Value::Null),
             "power_source": metadata.get("power_transport").cloned().unwrap_or(Value::Null),
@@ -791,7 +1018,11 @@ fn infer_profiles(reports: &[Value]) -> Vec<Value> {
     by_profile.into_values().collect()
 }
 
-fn validate_scene_report(summary_dir: &Path, report: &Value) -> anyhow::Result<Vec<Value>> {
+fn validate_scene_report(
+    summary_dir: &Path,
+    report: &Value,
+    suite_contract: SuiteContract,
+) -> anyhow::Result<Vec<Value>> {
     let mut failures = Vec::new();
     let Some(report_dir_value) = report.get("report_dir").and_then(Value::as_str) else {
         failures.push(json!({"report_failure": "missing_report_dir", "report": report}));
@@ -857,6 +1088,28 @@ fn validate_scene_report(summary_dir: &Path, report: &Value) -> anyhow::Result<V
             "summary": report.get("target_ma"),
             "results": metadata.get("target_ma"),
         }));
+    }
+    if suite_contract.is_source_limited() {
+        if metadata.get("suite_contract").and_then(Value::as_str) != Some(suite_contract.key()) {
+            failures.push(json!({
+                "report_failure": "results_suite_contract_mismatch",
+                "report_dir": report_dir_value,
+                "expected": suite_contract.key(),
+                "results": metadata.get("suite_contract"),
+            }));
+        }
+        if results
+            .get("scene_assertions")
+            .and_then(|value| value.get("passed"))
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            failures.push(json!({
+                "report_failure": "source_limited_scene_assertions_failed",
+                "report_dir": report_dir_value,
+                "assertions": results.get("scene_assertions"),
+            }));
+        }
     }
 
     let completeness = results
@@ -988,6 +1241,20 @@ fn validate_scene_report(summary_dir: &Path, report: &Value) -> anyhow::Result<V
             &timeseries_summary,
             completeness,
         );
+        if suite_contract.is_source_limited()
+            && matches!(
+                expected_scene,
+                Some("source_limited_online" | "source_limited_cut")
+            )
+        {
+            let (_, hold_failures) = hold_power_assertions(&timeseries_samples);
+            for hold_failure in hold_failures {
+                failures.push(json!({
+                    "report_failure": hold_failure,
+                    "report_dir": report_dir_value,
+                }));
+            }
+        }
     }
     if !chart_path.exists() {
         failures.push(json!({
@@ -1081,8 +1348,9 @@ fn build_suite_plan(
         load_max_i_ma_total: 4_000,
         load_max_p_mw: 80_000,
     };
-    let profiles = args
-        .profiles
+    let selected_profiles = args.suite_contract.selected_profiles(&args.profiles);
+    let selected_scenes = args.suite_contract.selected_scenes(&args.scenes);
+    let profiles = selected_profiles
         .iter()
         .copied()
         .map(|profile| ProfilePlan {
@@ -1093,8 +1361,8 @@ fn build_suite_plan(
         })
         .collect::<Vec<_>>();
     let mut reports = Vec::new();
-    for profile in &args.profiles {
-        for scene in &args.scenes {
+    for profile in &selected_profiles {
+        for scene in &selected_scenes {
             let report_name = format!("{}-{}-{}ma", profile.key(), scene.key(), scene.target_ma());
             let report_dir = suite_dir.join(&report_name);
             reports.push(ScenePlan {
@@ -1114,6 +1382,7 @@ fn build_suite_plan(
     }
     Ok(SuitePlan {
         suite_id: suite_id.to_string(),
+        suite_contract: args.suite_contract,
         created_at: Utc::now().to_rfc3339(),
         transport: TransportPlan {
             ups: "mains-aegis CLI + native IPC + USB".to_string(),
@@ -1179,13 +1448,7 @@ fn power_adapter_label(args: &BenchArgs) -> String {
 
 fn load_adapter_label(args: &BenchArgs) -> String {
     match args.load_adapter {
-        LoadAdapterKind::Loadlynx => {
-            if args.load_ipc.is_some() {
-                "Loadlynx:cli+ipc+usb".to_string()
-            } else {
-                "Loadlynx:cli+default".to_string()
-            }
-        }
+        LoadAdapterKind::Loadlynx => "Loadlynx:released-cli+saved-device".to_string(),
         LoadAdapterKind::External => match args.load_adapter_cmd.as_ref() {
             Some(cmd) => format!("External:{}", cmd.display()),
             None => "External".to_string(),
@@ -1300,18 +1563,25 @@ fn power_capabilities_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
     }
 }
 
-fn power_disable_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
+fn power_config_show_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
     match args.power_adapter {
         PowerAdapterKind::Isolapurr => {
             let mut cmd = isolapurr_base(args);
             cmd.extend([
                 "power".to_string(),
-                "output".to_string(),
-                "auto".to_string(),
+                "config".to_string(),
+                "show".to_string(),
             ]);
             append_isolapurr_selector(&mut cmd, args);
             Ok(cmd)
         }
+        PowerAdapterKind::External => Ok(Vec::new()),
+    }
+}
+
+fn power_disable_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
+    match args.power_adapter {
+        PowerAdapterKind::Isolapurr => isolapurr_runtime_output_command(args, false),
         PowerAdapterKind::External => external_adapter_command(
             args.power_adapter_cmd.as_ref(),
             AdapterRole::PowerSource,
@@ -1328,13 +1598,11 @@ fn power_configure_off_command(
     match args.power_adapter {
         PowerAdapterKind::Isolapurr => {
             let mut cmd = isolapurr_base(args);
-            cmd.extend([
-                "power".to_string(),
-                "output".to_string(),
-                "manual".to_string(),
-            ]);
+            cmd.extend(["power".to_string(), "config".to_string(), "set".to_string()]);
             append_isolapurr_selector(&mut cmd, args);
             cmd.extend([
+                "--tps-mode".to_string(),
+                "manual".to_string(),
                 "--voltage-mv".to_string(),
                 profile.source_voltage_mv().to_string(),
                 "--current-limit-ma".to_string(),
@@ -1363,22 +1631,8 @@ fn power_configure_off_command(
 fn power_enable_command(args: &BenchArgs, profile: OutputProfile) -> anyhow::Result<Vec<String>> {
     match args.power_adapter {
         PowerAdapterKind::Isolapurr => {
-            let mut cmd = isolapurr_base(args);
-            cmd.extend([
-                "power".to_string(),
-                "output".to_string(),
-                "manual".to_string(),
-            ]);
-            append_isolapurr_selector(&mut cmd, args);
-            cmd.extend([
-                "--voltage-mv".to_string(),
-                profile.source_voltage_mv().to_string(),
-                "--current-limit-ma".to_string(),
-                profile.source_current_limit_ma().to_string(),
-                "--usb-c-path".to_string(),
-                "forced-on".to_string(),
-            ]);
-            Ok(cmd)
+            let _ = profile;
+            isolapurr_runtime_output_command(args, true)
         }
         PowerAdapterKind::External => external_adapter_command(
             args.power_adapter_cmd.as_ref(),
@@ -1420,7 +1674,11 @@ fn power_stream_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
     match args.power_adapter {
         PowerAdapterKind::Isolapurr => {
             let mut cmd = isolapurr_base(args);
-            cmd.push("ports".to_string());
+            cmd.extend([
+                "power".to_string(),
+                "config".to_string(),
+                "show".to_string(),
+            ]);
             append_isolapurr_selector(&mut cmd, args);
             Ok(cmd)
         }
@@ -1431,6 +1689,76 @@ fn power_stream_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
             &[("--interval-ms", args.sample_interval_ms.to_string())],
         ),
     }
+}
+
+async fn read_isolapurr_tps_cdc_rise_mv(
+    args: &BenchArgs,
+    actions: &mut Vec<Value>,
+    action_name: &str,
+) -> anyhow::Result<Option<Value>> {
+    if args.power_adapter != PowerAdapterKind::Isolapurr {
+        return Ok(None);
+    }
+    for attempt in 0..2 {
+        match run_cmd_json(power_config_show_command(args)?, action_name, actions).await {
+            Ok(config) => {
+                return config
+                    .pointer("/manual/tps_cdc_rise_mv")
+                    .cloned()
+                    .map(Some)
+                    .ok_or_else(|| {
+                        anyhow!("IsolaPurr power config does not expose manual.tps_cdc_rise_mv")
+                    });
+            }
+            Err(error) if attempt == 0 => {
+                actions.push(json!({
+                    "power_tps_cdc_rise_read_retry": {
+                        "action": action_name,
+                        "delay_ms": 500,
+                        "error": error.to_string(),
+                    }
+                }));
+                sleep(Duration::from_millis(500)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("two-attempt IsolaPurr config read loop always returns")
+}
+
+fn ensure_isolapurr_tps_cdc_rise_preserved(
+    before: Option<&Value>,
+    after: Option<&Value>,
+    actions: &mut Vec<Value>,
+) -> anyhow::Result<()> {
+    let preserved = before.is_some() && before == after;
+    actions.push(json!({
+        "power_tps_cdc_rise_guard": {
+            "before_mv": before,
+            "after_mv": after,
+            "preserved": preserved,
+        }
+    }));
+    if preserved {
+        Ok(())
+    } else {
+        bail!("IsolaPurr manual.tps_cdc_rise_mv changed or disappeared during power configuration")
+    }
+}
+
+fn isolapurr_runtime_output_command(
+    args: &BenchArgs,
+    enabled: bool,
+) -> anyhow::Result<Vec<String>> {
+    let mut cmd = isolapurr_base(args);
+    cmd.extend([
+        "power".to_string(),
+        "runtime".to_string(),
+        "output".to_string(),
+    ]);
+    append_isolapurr_selector(&mut cmd, args);
+    cmd.extend(["--enabled".to_string(), enabled.to_string()]);
+    Ok(cmd)
 }
 
 fn isolapurr_base(args: &BenchArgs) -> Vec<String> {
@@ -1560,8 +1888,11 @@ fn load_stream_command(args: &BenchArgs, samples: usize) -> anyhow::Result<Vec<S
     }
 }
 
-fn load_sample_command(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
-    load_stream_command(args, 1)
+fn preflight_load_stream_command(args: &BenchArgs, samples: usize) -> anyhow::Result<Vec<String>> {
+    // Match the formal collector: it owns termination after receiving the requested
+    // number of samples, so LoadLynx never enters its bounded-stream exit path.
+    let _ = samples;
+    load_stream_command(args, 0)
 }
 
 fn load_cli_base(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
@@ -1569,11 +1900,10 @@ fn load_cli_base(args: &BenchArgs) -> anyhow::Result<Vec<String>> {
         .load_cli
         .as_ref()
         .ok_or_else(|| anyhow!("LoadLynx adapter requires --load-cli or LOADLYNX_CLI"))?;
-    let mut cmd = vec![cli.to_string_lossy().to_string()];
-    if let Some(ipc) = &args.load_ipc {
-        cmd.extend(["--ipc".to_string(), ipc.clone()]);
-    }
-    Ok(cmd)
+    // Current released LoadLynx owns its devd lifecycle and no longer exposes a
+    // top-level --ipc option. Keep accepting the legacy runner argument so old
+    // bench scripts remain parseable, but never forward it to the child CLI.
+    Ok(vec![cli.to_string_lossy().to_string()])
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1618,8 +1948,9 @@ async fn run_scene(
     suite_dir: &Path,
     profile: OutputProfile,
     scene: SceneKind,
+    suite_contract: SuiteContract,
 ) -> anyhow::Result<Value> {
-    let result = run_scene_inner(args, context, suite_dir, profile, scene).await;
+    let result = run_scene_inner(args, context, suite_dir, profile, scene, suite_contract).await;
     let cleanup = cleanup_scene(args).await;
     match (result, cleanup) {
         (Ok(report), Ok(_)) => Ok(report),
@@ -1640,6 +1971,7 @@ async fn run_scene_inner(
     suite_dir: &Path,
     profile: OutputProfile,
     scene: SceneKind,
+    suite_contract: SuiteContract,
 ) -> anyhow::Result<Value> {
     let protection = LoadProtection {
         load_min_v_mv: 3_000,
@@ -1651,16 +1983,18 @@ async fn run_scene_inner(
     fs::create_dir_all(&report_dir)?;
     let mut actions = Vec::<Value>::new();
     let mut samples = Vec::<SceneSample>::new();
-    run_cmd_json(
+    run_cmd_json_retry(
         load_disable_command(&args.bench)?,
         "load_disable_before_scene",
         &mut actions,
+        3,
     )
     .await?;
-    run_cmd_json(
+    run_cmd_json_retry(
         power_disable_command(&args.bench)?,
         "power_disable_before_scene",
         &mut actions,
+        3,
     )
     .await?;
     ensure_source_disconnected(args, context, &mut actions, "before_scene").await?;
@@ -1673,27 +2007,47 @@ async fn run_scene_inner(
     .await?;
     wait_for_ups_status_watch_ready(args, context, "after_profile_switch").await?;
     let (_identity, settings, profile_gate) =
-        ensure_profile_ready(args, context, profile, &mut actions).await?;
+        ensure_profile_ready(args, context, profile, suite_contract, &mut actions).await?;
     actions.push(json!({"ups_profile_gate": profile_gate}));
-    run_cmd_json(
+    let tps_cdc_rise_before = read_isolapurr_tps_cdc_rise_mv(
+        &args.bench,
+        &mut actions,
+        "power_tps_cdc_rise_before_configure",
+    )
+    .await?;
+    run_cmd_json_retry(
         power_configure_off_command(&args.bench, profile)?,
         "power_configure_off",
         &mut actions,
+        3,
     )
     .await?;
-    run_cmd_json(
+    let tps_cdc_rise_after = read_isolapurr_tps_cdc_rise_mv(
+        &args.bench,
+        &mut actions,
+        "power_tps_cdc_rise_after_configure",
+    )
+    .await?;
+    ensure_isolapurr_tps_cdc_rise_preserved(
+        tps_cdc_rise_before.as_ref(),
+        tps_cdc_rise_after.as_ref(),
+        &mut actions,
+    )?;
+    run_cmd_json_retry(
         power_enable_command(&args.bench, profile)?,
         "power_enable",
         &mut actions,
+        3,
     )
     .await?;
-    run_cmd_json(
+    run_cmd_json_retry(
         power_port_enable_command(&args.bench, profile)?,
         "power_port_enable",
         &mut actions,
+        3,
     )
     .await?;
-    sleep(Duration::from_secs(1)).await;
+    wait_for_ups_online_recovery(args, context, &mut actions).await?;
 
     let mut collectors = start_scene_collectors(args, context).await?;
     let start = Instant::now();
@@ -1733,8 +2087,20 @@ async fn run_scene_inner(
         args.hold_s,
     )
     .await;
-    if scene.include_backup() {
-        run_cmd_json_with_sampling(
+    let source_limited_before_cut = samples
+        .iter()
+        .rev()
+        .find(|sample| matches!(sample.phase.as_str(), "transition_load" | "hold"))
+        .is_some_and(sample_is_source_limited);
+    let should_cut_source = scene.include_backup()
+        && (!scene.requires_source_limited_before_cut() || source_limited_before_cut);
+    if scene.requires_source_limited_before_cut() && !source_limited_before_cut {
+        actions.push(json!({
+            "power_cut_skipped": "source_limited_not_latched_before_cut",
+        }));
+    }
+    if should_cut_source {
+        run_cmd_json_with_sampling_retry(
             power_disable_command(&args.bench)?,
             "power_cut_for_backup",
             &mut actions,
@@ -1745,6 +2111,7 @@ async fn run_scene_inner(
             started_unix_ms,
             "transition_backup",
             scene.target_ma(),
+            3,
         )
         .await?;
         ensure_source_disconnected_with_sampling(
@@ -1771,7 +2138,7 @@ async fn run_scene_inner(
             args.backup_s,
         )
         .await;
-        run_cmd_json_with_sampling(
+        run_cmd_json_with_sampling_retry(
             power_enable_command(&args.bench, profile)?,
             "power_restore",
             &mut actions,
@@ -1782,9 +2149,10 @@ async fn run_scene_inner(
             started_unix_ms,
             "transition_restore",
             scene.target_ma(),
+            3,
         )
         .await?;
-        run_cmd_json_with_sampling(
+        run_cmd_json_with_sampling_retry(
             power_port_enable_command(&args.bench, profile)?,
             "power_port_enable_restore",
             &mut actions,
@@ -1795,6 +2163,7 @@ async fn run_scene_inner(
             started_unix_ms,
             "transition_restore",
             scene.target_ma(),
+            3,
         )
         .await?;
         collect_for(
@@ -1834,6 +2203,13 @@ async fn run_scene_inner(
     )
     .await;
     stop_collectors(&mut collectors).await;
+    backfill_scene_samples_from_ups(
+        &mut samples,
+        &collectors,
+        started_unix_ms,
+        scene.target_ma(),
+        (args.bench.sample_interval_ms as i64 / 2).max(1),
+    );
     let collector_diagnostics = collector_diagnostics(&collectors);
     let mut summary = summarize_scene(&samples);
     for (name, diag) in collector_diagnostics.as_object().into_iter().flatten() {
@@ -1845,6 +2221,17 @@ async fn run_scene_inner(
             summary.failures.push(format!("{name}_collector_error"));
         }
     }
+    classify_load_acceptance_phases(scene, &mut samples);
+    let scene_assertions = evaluate_scene_assertions(scene, profile, &samples);
+    for failure in scene_assertions
+        .get("failures")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        summary.failures.push(failure.to_string());
+    }
     summary.scene_complete = summary.failures.is_empty();
     let acceptance = json!({
         "signoff_valid": summary.scene_complete,
@@ -1854,6 +2241,7 @@ async fn run_scene_inner(
     });
     write_timeseries(&report_dir.join("timeseries.jsonl"), &samples)?;
     let metadata = json!({
+        "suite_contract": suite_contract.key(),
         "output_profile": profile.key(),
         "scene_type": scene.key(),
         "target_ma": scene.target_ma(),
@@ -1876,12 +2264,18 @@ async fn run_scene_inner(
         "actions": actions,
         "collector_diagnostics": collector_diagnostics,
         "settings_snapshot": settings,
+        "source_tps_cdc_rise_mv": {
+            "before_configure": tps_cdc_rise_before,
+            "after_configure": tps_cdc_rise_after,
+        },
+        "scene_assertions": scene_assertions,
         "samples": samples,
         "summary": {"all": {"completeness": summary, "acceptance": acceptance}},
     });
     write_json_value(&report_dir.join("results.json"), &results)?;
     let _ = render_scene_chart(args, &report_dir, profile, scene).await;
     Ok(json!({
+        "suite_contract": suite_contract.key(),
         "output_profile": profile.key(),
         "scene_type": scene.key(),
         "target_ma": scene.target_ma(),
@@ -1900,7 +2294,419 @@ async fn run_scene_inner(
         "effective_sample_rate_hz": summary.effective_sample_rate_hz,
         "max_sample_gap_s": summary.max_sample_gap_s,
         "advanced_power": advanced_power,
+        "scene_assertions": results.get("scene_assertions").cloned().unwrap_or(Value::Null),
     }))
+}
+
+fn sample_string(value: &Option<Value>) -> Option<&str> {
+    value.as_ref().and_then(Value::as_str)
+}
+
+fn sample_number(value: &Option<Value>) -> Option<i64> {
+    value.as_ref().and_then(Value::as_i64)
+}
+
+fn sample_backup_reason(sample: &SceneSample) -> Option<&str> {
+    sample_string(&sample.backup_reason).or_else(|| sample_string(&sample.diag_backup_reason))
+}
+
+fn sample_is_backup(sample: &SceneSample) -> bool {
+    sample_string(&sample.mode) == Some("backup")
+        && (sample_string(&sample.stage) == Some("backup")
+            || sample_string(&sample.diag_stage) == Some("backup"))
+}
+
+fn sample_has_backup_signal(sample: &SceneSample) -> bool {
+    sample_string(&sample.mode) == Some("backup")
+        || sample_string(&sample.stage) == Some("backup")
+        || sample_string(&sample.diag_stage) == Some("backup")
+}
+
+fn sample_is_source_limited(sample: &SceneSample) -> bool {
+    sample_is_backup(sample) && sample_backup_reason(sample) == Some("source_limited")
+}
+
+fn sample_mains_present(sample: &SceneSample) -> Option<bool> {
+    sample
+        .mains_present
+        .as_ref()
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            sample
+                .diag_backup_reason
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(|reason| reason != "input_absent")
+        })
+}
+
+fn sample_pre_tps_vin_mv(sample: &SceneSample) -> Option<i64> {
+    sample_number(&sample.pre_tps_vin_mv)
+}
+
+fn sample_tps_output_power_mw(sample: &SceneSample) -> Option<i64> {
+    let current_ma = sample_number(&sample.tps_total_iout_ma)?;
+    let mut voltages = [None, None];
+    voltages[0] = sample_number(&sample.out_a_vbus_mv);
+    voltages[1] = sample_number(&sample.out_b_vbus_mv);
+    let present = voltages.into_iter().flatten().collect::<Vec<_>>();
+    if present.is_empty() {
+        return None;
+    }
+    let average_mv = present.iter().sum::<i64>() / present.len() as i64;
+    Some(current_ma.saturating_mul(average_mv) / 1_000)
+}
+
+fn classify_load_acceptance_phases(scene: SceneKind, samples: &mut [SceneSample]) {
+    classify_backup_transition_phases(scene, samples);
+    if !scene.requires_source_limited() {
+        return;
+    }
+    let mut transition_started = false;
+    let mut backup_started = false;
+    for sample in samples.iter_mut().filter(|sample| is_load_phase(sample)) {
+        if sample_is_source_limited(sample) {
+            backup_started = true;
+        } else if sample_tps_output_power_mw(sample)
+            .is_some_and(|power_mw| power_mw > HOLD_TPS_POWER_MAX_MW)
+        {
+            transition_started = true;
+        }
+        if backup_started {
+            sample.phase = "backup_online".to_string();
+        } else if transition_started {
+            sample.phase = "transition_source_limited".to_string();
+        }
+    }
+}
+
+fn classify_backup_transition_phases(scene: SceneKind, samples: &mut [SceneSample]) {
+    if !scene.include_backup() {
+        return;
+    }
+
+    let Some(first_transition_idx) = samples
+        .iter()
+        .position(|sample| sample.phase == "transition_backup")
+    else {
+        return;
+    };
+
+    let hold_like = if first_transition_idx > 0 {
+        samples[..first_transition_idx].iter().rev().find(|sample| {
+            matches!(
+                sample.phase.as_str(),
+                "hold" | "transition_load" | "backup_online"
+            )
+        })
+    } else {
+        None
+    };
+    let hold_mains_present = hold_like.and_then(sample_mains_present);
+    let hold_pre_tps_vin_mv = hold_like.and_then(sample_pre_tps_vin_mv);
+
+    let mut first_effect_idx = None;
+    let mut first_backup_idx = None;
+    for (idx, sample) in samples.iter().enumerate().skip(first_transition_idx) {
+        if sample.phase != "transition_backup" && sample.phase != "backup" {
+            continue;
+        }
+        let mains_changed = hold_mains_present
+            .zip(sample_mains_present(sample))
+            .is_some_and(|(hold, current)| current != hold);
+        let vin_changed = hold_pre_tps_vin_mv
+            .zip(sample_pre_tps_vin_mv(sample))
+            .is_some_and(|(hold, current)| (hold - current).abs() >= 200);
+        if first_effect_idx.is_none()
+            && (sample_is_backup(sample)
+                || sample_backup_reason(sample) == Some("input_absent")
+                || mains_changed
+                || vin_changed)
+        {
+            first_effect_idx = Some(idx);
+        }
+        if first_backup_idx.is_none() && sample_is_backup(sample) {
+            first_backup_idx = Some(idx);
+        }
+    }
+
+    let Some(first_effect_idx) = first_effect_idx else {
+        return;
+    };
+    for sample in &mut samples[first_transition_idx..first_effect_idx] {
+        if sample.phase == "transition_backup" {
+            sample.phase = "hold".to_string();
+        }
+    }
+
+    let first_backup_idx = first_backup_idx.unwrap_or(first_effect_idx + 1);
+    let backup_start_idx = if first_backup_idx == first_effect_idx {
+        first_effect_idx.saturating_add(1)
+    } else {
+        first_backup_idx
+    };
+    for sample in samples.iter_mut().skip(backup_start_idx) {
+        if sample.phase != "transition_backup" {
+            continue;
+        }
+        sample.phase = "backup".to_string();
+    }
+}
+
+fn hold_power_assertions(samples: &[SceneSample]) -> (Value, Vec<String>) {
+    let hold = samples
+        .iter()
+        .filter(|sample| sample.phase == "hold")
+        .collect::<Vec<_>>();
+    let powers = hold
+        .iter()
+        .filter_map(|sample| sample_tps_output_power_mw(sample))
+        .collect::<Vec<_>>();
+    let missing = hold.len().saturating_sub(powers.len());
+    let over = powers
+        .iter()
+        .filter(|power_mw| **power_mw > HOLD_TPS_POWER_MAX_MW)
+        .count();
+    let mut failures = Vec::new();
+    if missing > 0 {
+        failures.push("hold_tps_power_missing".to_string());
+    }
+    if over > 0 {
+        failures.push("hold_tps_power_over_2w".to_string());
+    }
+    (
+        json!({
+            "maximum_mw": powers.iter().max(),
+            "over_2w_samples": over,
+            "missing_samples": missing,
+            "limit_mw": HOLD_TPS_POWER_MAX_MW,
+        }),
+        failures,
+    )
+}
+
+fn is_load_phase(sample: &SceneSample) -> bool {
+    matches!(
+        sample.phase.as_str(),
+        "transition_load" | "hold" | "transition_source_limited" | "backup_online"
+    )
+}
+
+fn sample_load_current_ma(sample: &SceneSample) -> Option<i64> {
+    sample_number(&sample.load_i_total_ma)
+}
+
+fn sample_load_is_applied(sample: &SceneSample) -> bool {
+    let minimum_current_ma = i64::from(sample.load_target_i_ma) * 80 / 100;
+    sample.load_output_enabled.as_ref().and_then(Value::as_bool) == Some(true)
+        && sample_load_current_ma(sample).is_some_and(|current_ma| current_ma >= minimum_current_ma)
+}
+
+fn source_limited_min_load_mv(profile: OutputProfile) -> i64 {
+    i64::from(profile.rated_vout_mv()) - SOURCE_LIMITED_LOAD_MARGIN_MV
+}
+
+fn longest_low_voltage_duration_s(samples: &[&SceneSample], min_load_mv: i64) -> Option<f64> {
+    let mut observed = false;
+    let mut low_start = None;
+    let mut low_end = None;
+    let mut longest = 0.0_f64;
+
+    for sample in samples {
+        let Some(voltage_mv) = sample_number(&sample.load_v_local_mv) else {
+            continue;
+        };
+        observed = true;
+        if voltage_mv < min_load_mv {
+            low_start.get_or_insert(sample.t_s);
+            low_end = Some(sample.t_s);
+        } else if let (Some(start), Some(end)) = (low_start.take(), low_end.take()) {
+            longest = longest.max(end - start);
+        }
+    }
+    if let (Some(start), Some(end)) = (low_start, low_end) {
+        longest = longest.max(end - start);
+    }
+    observed.then_some(round3(longest))
+}
+
+fn evaluate_scene_assertions(
+    scene: SceneKind,
+    profile: OutputProfile,
+    samples: &[SceneSample],
+) -> Value {
+    let (hold_tps_power, hold_power_failures) = hold_power_assertions(samples);
+    let mut failures = if scene.requires_source_limited() {
+        hold_power_failures
+    } else {
+        Vec::new()
+    };
+    let load_samples = samples
+        .iter()
+        .filter(|sample| is_load_phase(sample))
+        .collect::<Vec<_>>();
+    let source_limited_entry = load_samples
+        .iter()
+        .position(|sample| sample_is_source_limited(sample));
+    let source_limited = if scene.requires_source_limited() {
+        let Some(entry_index) = source_limited_entry else {
+            failures.push("source_limited_not_observed".to_string());
+            return json!({
+                "passed": false,
+                "failures": failures,
+                "source_limited": {
+                    "observed": false,
+                    "entry_delay_s": Value::Null,
+                    "post_latch_min_load_mv": Value::Null,
+                    "pre_latch_low_voltage_max_duration_s": Value::Null,
+                    "post_latch_low_voltage_max_duration_s": Value::Null,
+                },
+            });
+        };
+        let entry = load_samples[entry_index];
+        let load_start = load_samples
+            .iter()
+            .find(|sample| sample_load_is_applied(sample))
+            .map(|sample| sample.t_s)
+            .or_else(|| load_samples.first().map(|sample| sample.t_s))
+            .unwrap_or(entry.t_s);
+        let entry_delay_s = round3(entry.t_s - load_start);
+        if entry_delay_s > SOURCE_LIMITED_ENTRY_MAX_S {
+            failures.push("source_limited_entry_after_2s".to_string());
+        }
+        // UPS status and load telemetry are collected independently. The decision
+        // sample can still contain the load reading taken before target application.
+        let pre_latch = load_samples[..=entry_index].to_vec();
+        let post_latch = load_samples[(entry_index + 1)..].to_vec();
+        let post_latch_min_load_mv = post_latch
+            .iter()
+            .filter_map(|sample| sample_number(&sample.load_v_local_mv))
+            .min();
+        let min_load_mv = source_limited_min_load_mv(profile);
+        if post_latch_min_load_mv.is_none() {
+            failures.push("source_limited_post_latch_load_voltage_missing".to_string());
+        } else if post_latch_min_load_mv < Some(min_load_mv) {
+            failures.push("source_limited_post_latch_load_below_minimum".to_string());
+        }
+        let post_latch_low_voltage_max_duration_s =
+            longest_low_voltage_duration_s(&post_latch, min_load_mv);
+        if post_latch_low_voltage_max_duration_s
+            .is_some_and(|duration| duration > SOURCE_LIMITED_MAX_LOW_VOLTAGE_S)
+        {
+            failures.push("source_limited_post_latch_low_voltage_over_1s".to_string());
+        }
+        let pre_latch_low_voltage_max_duration_s =
+            longest_low_voltage_duration_s(&pre_latch, min_load_mv);
+        if pre_latch_low_voltage_max_duration_s
+            .is_some_and(|duration| duration > SOURCE_LIMITED_MAX_LOW_VOLTAGE_S)
+        {
+            failures.push("source_limited_pre_latch_low_voltage_over_1s".to_string());
+        }
+        let target_observed = post_latch.iter().any(|sample| {
+            sample_number(&sample.assist_target_vout_mv)
+                .or_else(|| sample_number(&sample.diag_assist_target_vout_mv))
+                == Some(profile.rated_vout_mv() as i64)
+        });
+        if !target_observed {
+            failures.push("source_limited_target_not_rated".to_string());
+        }
+        json!({
+            "observed": true,
+            "entry_t_s": entry.t_s,
+            "entry_delay_s": entry_delay_s,
+            "target_rated_observed": target_observed,
+            "minimum_load_mv": min_load_mv,
+            "post_latch_min_load_mv": post_latch_min_load_mv,
+            "pre_latch_low_voltage_max_duration_s": pre_latch_low_voltage_max_duration_s,
+            "post_latch_low_voltage_max_duration_s": post_latch_low_voltage_max_duration_s,
+        })
+    } else {
+        Value::Null
+    };
+
+    let in_budget_guard = if scene.requires_non_backup_online() {
+        let applied_samples = load_samples
+            .iter()
+            .copied()
+            .filter(|sample| sample_load_is_applied(sample))
+            .collect::<Vec<_>>();
+        let backup_samples = applied_samples
+            .iter()
+            .filter(|sample| sample_has_backup_signal(sample))
+            .count();
+        let source_limited_samples = applied_samples
+            .iter()
+            .filter(|sample| sample_backup_reason(sample) == Some("source_limited"))
+            .count();
+        let backup_reason_samples = applied_samples
+            .iter()
+            .filter(|sample| sample_backup_reason(sample).is_some())
+            .count();
+        let offline_samples = applied_samples
+            .iter()
+            .filter(|sample| sample_mains_present(sample) != Some(true))
+            .count();
+        if applied_samples.is_empty() {
+            failures.push("source_in_budget_load_not_observed".to_string());
+        }
+        if backup_samples > 0 || backup_reason_samples > 0 {
+            failures.push("source_in_budget_entered_backup".to_string());
+        }
+        if offline_samples > 0 {
+            failures.push("source_in_budget_mains_not_continuously_online".to_string());
+        }
+        json!({
+            "target_ma": scene.target_ma(),
+            "applied_samples": applied_samples.len(),
+            "backup_samples": backup_samples,
+            "source_limited_samples": source_limited_samples,
+            "backup_reason_samples": backup_reason_samples,
+            "offline_samples": offline_samples,
+        })
+    } else {
+        Value::Null
+    };
+
+    let backup_cut = if scene.requires_input_absent_after_cut() {
+        let backup_samples = samples
+            .iter()
+            .filter(|sample| matches!(sample.phase.as_str(), "transition_backup" | "backup"))
+            .collect::<Vec<_>>();
+        let input_absent_observed = backup_samples.iter().any(|sample| {
+            sample_is_backup(sample) && sample_backup_reason(sample) == Some("input_absent")
+        });
+        if !input_absent_observed {
+            failures.push("input_absent_not_observed_after_cut".to_string());
+        }
+        let stable_backup_samples = backup_samples
+            .iter()
+            .filter(|sample| sample.phase == "backup")
+            .collect::<Vec<_>>();
+        let backup_continuous = !stable_backup_samples.is_empty()
+            && stable_backup_samples
+                .iter()
+                .all(|sample| sample_is_backup(sample));
+        if !backup_continuous {
+            failures.push("backup_not_continuous_after_cut".to_string());
+        }
+        json!({
+            "input_absent_observed": input_absent_observed,
+            "backup_continuous": backup_continuous,
+        })
+    } else {
+        Value::Null
+    };
+
+    json!({
+        "passed": failures.is_empty(),
+        "failures": failures,
+        "hold_tps_power": hold_tps_power,
+        "transition_source_limited_started_at_s": samples.iter().find(|sample| sample.phase == "transition_source_limited").map(|sample| sample.t_s),
+        "backup_online_started_at_s": samples.iter().find(|sample| sample.phase == "backup_online").map(|sample| sample.t_s),
+        "in_budget_guard": in_budget_guard,
+        "source_limited": source_limited,
+        "backup_cut": backup_cut,
+    })
 }
 
 async fn ensure_source_disconnected(
@@ -1935,13 +2741,15 @@ async fn ensure_source_disconnected(
         sleep(Duration::from_millis(SOURCE_DISCONNECT_CONFIRM_INTERVAL_MS)).await;
     }
     bail!(
-        "source disconnect gate failed for {label}: UPS still sees DCIN after {} attempts; source_mv={:?} mains_present={:?} source={:?} input_vbus_mv={:?} vin_vbus_mv={:?}",
+        "source disconnect gate failed for {label}: UPS still sees DCIN after {} attempts; source_mv={:?} mains_present={:?} source={:?} input_vbus_mv={:?} pre_tps_vin_mv={:?} input_gate_state={:?} input_gate_reason={:?}",
         SOURCE_DISCONNECT_CONFIRM_ATTEMPTS,
         last.source_mv,
         last.mains_present,
         last.input_source,
         last.input_vbus_mv,
-        last.vin_vbus_mv
+        last.pre_tps_vin_mv,
+        last.input_gate_state,
+        last.input_gate_reason
     );
 }
 
@@ -1971,7 +2779,14 @@ async fn ensure_source_disconnected_with_sampling(
             .and_then(|collector| collector.latest_before(sample.unix_ms))
             .map(|value| unwrap_cli_result(Some(value)))
             .unwrap_or_else(|| json!({}));
-        samples.push(sample);
+        if sample
+            .ups_status_cache_fresh
+            .as_ref()
+            .and_then(Value::as_bool)
+            != Some(false)
+        {
+            samples.push(sample);
+        }
         let suffix = if attempt == 0 {
             String::new()
         } else {
@@ -1984,7 +2799,9 @@ async fn ensure_source_disconnected_with_sampling(
                 "mains_present": last.mains_present,
                 "source": last.input_source,
                 "input_vbus_mv": last.input_vbus_mv,
-                "vin_vbus_mv": last.vin_vbus_mv,
+                "pre_tps_vin_mv": last.pre_tps_vin_mv,
+                "input_gate_state": last.input_gate_state,
+                "input_gate_reason": last.input_gate_reason,
                 "ups_still_live": last.ups_still_live,
             }
         }));
@@ -1994,13 +2811,15 @@ async fn ensure_source_disconnected_with_sampling(
         sleep(Duration::from_millis(SOURCE_DISCONNECT_CONFIRM_INTERVAL_MS)).await;
     }
     bail!(
-        "source disconnect gate failed for {label}: UPS still sees DCIN after {} attempts; source_mv={:?} mains_present={:?} source={:?} input_vbus_mv={:?} vin_vbus_mv={:?}",
+        "source disconnect gate failed for {label}: UPS still sees DCIN after {} attempts; source_mv={:?} mains_present={:?} source={:?} input_vbus_mv={:?} pre_tps_vin_mv={:?} input_gate_state={:?} input_gate_reason={:?}",
         SOURCE_DISCONNECT_CONFIRM_ATTEMPTS,
         last.source_mv,
         last.mains_present,
         last.input_source,
         last.input_vbus_mv,
-        last.vin_vbus_mv
+        last.pre_tps_vin_mv,
+        last.input_gate_state,
+        last.input_gate_reason
     );
 }
 
@@ -2010,7 +2829,9 @@ struct SourceDisconnectState {
     mains_present: Option<bool>,
     input_source: Option<String>,
     input_vbus_mv: Option<i64>,
-    vin_vbus_mv: Option<i64>,
+    pre_tps_vin_mv: Option<i64>,
+    input_gate_state: Option<String>,
+    input_gate_reason: Option<String>,
     ups_still_live: bool,
 }
 
@@ -2031,10 +2852,22 @@ fn source_disconnect_state(power: &Value, status: &Value) -> SourceDisconnectSta
         .pointer("/sample/input/input_vbus_mv")
         .or_else(|| status.pointer("/input/input_vbus_mv"))
         .and_then(Value::as_i64);
-    let vin_vbus_mv = status
-        .pointer("/sample/input/vin_vbus_mv")
+    let pre_tps_vin_mv = status
+        .pointer("/sample/input/pre_tps_vin_mv")
+        .or_else(|| status.pointer("/input/pre_tps_vin_mv"))
+        .or_else(|| status.pointer("/sample/input/vin_vbus_mv"))
         .or_else(|| status.pointer("/input/vin_vbus_mv"))
         .and_then(Value::as_i64);
+    let input_gate_state = status
+        .pointer("/sample/input/input_gate_state")
+        .or_else(|| status.pointer("/input/input_gate_state"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let input_gate_reason = status
+        .pointer("/sample/input/input_gate_reason")
+        .or_else(|| status.pointer("/input/input_gate_reason"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
     let mode = status
         .pointer("/sample/mode")
         .or_else(|| status.pointer("/mode"))
@@ -2044,17 +2877,66 @@ fn source_disconnect_state(power: &Value, status: &Value) -> SourceDisconnectSta
         .or_else(|| status.pointer("/input/assist_power_stage"))
         .and_then(Value::as_str);
     let backup_truth = mode == Some("backup") || assist_power_stage == Some("backup");
+    let firmware_gate_cutoff = input_gate_state.as_deref() == Some("cutoff")
+        && input_gate_reason.as_deref() == Some("pre_tps_undervoltage");
     let dcin_cut_truth = mains_present == Some(false)
-        && vin_vbus_mv.is_some_and(|mv| mv <= UPS_INPUT_CUT_MAX_VIN_MV);
+        && (firmware_gate_cutoff
+            || pre_tps_vin_mv.is_some_and(|mv| mv <= UPS_INPUT_CUT_MAX_VIN_MV));
     let ups_still_live = !(dcin_cut_truth && backup_truth);
     SourceDisconnectState {
         source_mv,
         mains_present,
         input_source,
         input_vbus_mv,
-        vin_vbus_mv,
+        pre_tps_vin_mv,
+        input_gate_state,
+        input_gate_reason,
         ups_still_live,
     }
+}
+
+async fn wait_for_ups_online_recovery(
+    args: &RunArgs,
+    context: &PowerValidationArgs,
+    actions: &mut Vec<Value>,
+) -> anyhow::Result<()> {
+    let mut last_status = Value::Null;
+    for attempt in 0..UPS_ONLINE_RECOVER_ATTEMPTS {
+        let name = format!("ups_online_recovery_{attempt}");
+        let cmd = ups_status_fresh_command(&args.bench, context);
+        let status = match run_cmd_output(cmd.clone()).await {
+            Ok(status) => {
+                actions.push(json!({name: {"cmd": cmd, "result": status}}));
+                status
+            }
+            Err(error) => {
+                actions.push(json!({name: {"cmd": cmd, "error": error.to_string()}}));
+                sleep(Duration::from_millis(UPS_ONLINE_RECOVER_INTERVAL_MS)).await;
+                continue;
+            }
+        };
+        let mains_present = status
+            .pointer("/sample/input/mains_present")
+            .or_else(|| status.pointer("/input/mains_present"))
+            .and_then(Value::as_bool);
+        let mode = status
+            .pointer("/sample/mode")
+            .or_else(|| status.pointer("/mode"))
+            .and_then(Value::as_str);
+        let stage = status
+            .pointer("/sample/input/assist_power_stage")
+            .or_else(|| status.pointer("/input/assist_power_stage"))
+            .and_then(Value::as_str);
+        if mains_present == Some(true) && mode != Some("backup") && stage != Some("backup") {
+            return Ok(());
+        }
+        last_status = status;
+        sleep(Duration::from_millis(UPS_ONLINE_RECOVER_INTERVAL_MS)).await;
+    }
+    bail!(
+        "UPS did not recover to online standby before scene within {} ms: {last_status}",
+        UPS_ONLINE_RECOVER_ATTEMPTS * UPS_ONLINE_RECOVER_INTERVAL_MS as usize
+    );
 }
 
 fn ups_status_fresh_command(args: &BenchArgs, context: &PowerValidationArgs) -> Vec<String> {
@@ -2095,8 +2977,10 @@ async fn ensure_profile_ready(
     args: &RunArgs,
     context: &PowerValidationArgs,
     profile: OutputProfile,
+    suite_contract: SuiteContract,
     actions: &mut Vec<Value>,
 ) -> anyhow::Result<(Value, Value, Value)> {
+    let uvlo_expectation = SourceLimitedUvloExpectation::from_run_args(profile, args);
     let mut identity = run_cmd_json_retry(
         ups_command(&args.bench, context, ["identity"]),
         "ups_identity",
@@ -2113,6 +2997,13 @@ async fn ensure_profile_ready(
     .await?;
     let mut profile_gate = validate_profile_gate(profile, &identity, &settings);
     if profile_gate.get("ok").and_then(Value::as_bool) == Some(true) {
+        validate_suite_settings(
+            profile,
+            suite_contract,
+            &settings,
+            &mut profile_gate,
+            uvlo_expectation,
+        )?;
         return Ok((identity, settings, profile_gate));
     }
     if !args.allow_profile_flash {
@@ -2189,15 +3080,22 @@ async fn ensure_profile_ready(
     if profile_gate.get("ok").and_then(Value::as_bool) != Some(true) {
         bail!("UPS profile gate still failed after profile switch: {profile_gate}");
     }
+    validate_suite_settings(
+        profile,
+        suite_contract,
+        &settings,
+        &mut profile_gate,
+        uvlo_expectation,
+    )?;
     Ok((identity, settings, profile_gate))
 }
 
 async fn cleanup_scene(args: &RunArgs) -> anyhow::Result<()> {
     let mut errors = Vec::new();
-    if let Err(error) = run_cmd_output(load_disable_command(&args.bench)?).await {
+    if let Err(error) = run_cmd_output_retry(load_disable_command(&args.bench)?, 3).await {
         errors.push(format!("load_disable: {error}"));
     }
-    if let Err(error) = run_cmd_output(power_disable_command(&args.bench)?).await {
+    if let Err(error) = run_cmd_output_retry(power_disable_command(&args.bench)?, 3).await {
         errors.push(format!("power_disable: {error}"));
     }
     if errors.is_empty() {
@@ -2222,14 +3120,7 @@ async fn start_scene_collectors(
         )
         .await?,
     );
-    collectors.insert(
-        "load".to_string(),
-        spawn_load_collector(args, Duration::from_millis(args.bench.sample_interval_ms)).await?,
-    );
-    collectors.insert(
-        "power".to_string(),
-        spawn_power_collector(args, Duration::from_millis(args.bench.sample_interval_ms)).await?,
-    );
+    collectors.insert("load".to_string(), spawn_load_collector(args).await?);
     wait_for_ups_status_watch_ready(args, context, "collector_warmup").await?;
     Ok(collectors)
 }
@@ -2239,18 +3130,26 @@ async fn wait_for_ups_status_watch_ready(
     context: &PowerValidationArgs,
     label: &str,
 ) -> anyhow::Result<ProbeSummary> {
+    wait_for_ups_watch_ready(&args.bench, context, label).await
+}
+
+async fn wait_for_ups_watch_ready(
+    bench: &BenchArgs,
+    context: &PowerValidationArgs,
+    label: &str,
+) -> anyhow::Result<ProbeSummary> {
     let started = Instant::now();
     let deadline = started + Duration::from_secs(20);
     let mut last_probe = None;
     while Instant::now() < deadline {
-        let probe = run_json_probe(ups_watch_command(&args.bench, context, "status", 8), 8)
+        let probe = run_json_probe(ups_watch_command(bench, context, "status", 8), 8)
             .await
             .with_context(|| format!("probing UPS status watch {label}"))?;
         if probe.ok {
             return Ok(probe);
         }
         last_probe = Some(probe);
-        sleep(Duration::from_millis(args.bench.sample_interval_ms)).await;
+        sleep(Duration::from_millis(bench.sample_interval_ms)).await;
     }
     bail!(
         "UPS status watch did not become ready for {label} within {:?}: {:?}",
@@ -2259,52 +3158,13 @@ async fn wait_for_ups_status_watch_ready(
     );
 }
 
-async fn spawn_load_collector(
-    args: &RunArgs,
-    interval: Duration,
-) -> anyhow::Result<JsonlProcessCollector> {
-    match args.bench.load_adapter {
-        LoadAdapterKind::External => {
-            JsonlProcessCollector::spawn(
-                "load",
-                load_stream_command(&args.bench, 0)?,
-                JsonFrameMode::Raw,
-            )
-            .await
-        }
-        LoadAdapterKind::Loadlynx => {
-            JsonlProcessCollector::spawn_polling(
-                "load",
-                load_sample_command(&args.bench)?,
-                interval,
-            )
-            .await
-        }
-    }
-}
-
-async fn spawn_power_collector(
-    args: &RunArgs,
-    interval: Duration,
-) -> anyhow::Result<JsonlProcessCollector> {
-    match args.bench.power_adapter {
-        PowerAdapterKind::External => {
-            JsonlProcessCollector::spawn(
-                "power",
-                power_stream_command(&args.bench)?,
-                JsonFrameMode::Raw,
-            )
-            .await
-        }
-        PowerAdapterKind::Isolapurr => {
-            JsonlProcessCollector::spawn_polling(
-                "power",
-                power_stream_command(&args.bench)?,
-                interval,
-            )
-            .await
-        }
-    }
+async fn spawn_load_collector(args: &RunArgs) -> anyhow::Result<JsonlProcessCollector> {
+    JsonlProcessCollector::spawn(
+        "load",
+        load_stream_command(&args.bench, 0)?,
+        JsonFrameMode::Raw,
+    )
+    .await
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2336,45 +3196,12 @@ impl JsonlProcessCollector {
         })
     }
 
-    async fn spawn_polling(
-        name: &str,
-        cmd: Vec<String>,
-        interval: Duration,
-    ) -> anyhow::Result<Self> {
-        let child = Command::new("sh")
-            .arg("-c")
-            .arg("sleep 86400")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let rows = Arc::new(Mutex::new(Vec::new()));
-        let errors = Arc::new(Mutex::new(Vec::new()));
-        let stop_flag = Arc::new(AtomicBool::new(false));
-        spawn_poll_loop(
-            name.to_string(),
-            cmd.clone(),
-            interval,
-            rows.clone(),
-            errors.clone(),
-            stop_flag.clone(),
-        );
-        Ok(Self {
-            name: name.to_string(),
-            cmd,
-            rows,
-            errors,
-            child,
-            stop_flag: Some(stop_flag),
-        })
-    }
-
     fn latest_before(&self, unix_ms: i64) -> Option<Value> {
-        self.rows
-            .lock()
-            .ok()?
-            .iter()
-            .filter(|row| row.received_ms <= unix_ms)
+        let rows = self.rows.lock().ok()?;
+        rows.iter()
+            .filter(|row| row.received_ms <= unix_ms && json_frame_has_telemetry(&row.value))
             .last()
+            .or_else(|| rows.iter().filter(|row| row.received_ms <= unix_ms).last())
             .map(|row| row.value.clone())
     }
 
@@ -2436,36 +3263,6 @@ fn spawn_stderr_reader(
     });
 }
 
-fn spawn_poll_loop(
-    name: String,
-    cmd: Vec<String>,
-    interval: Duration,
-    rows: Arc<Mutex<Vec<RawFrame>>>,
-    errors: Arc<Mutex<Vec<String>>>,
-    stop_flag: Arc<AtomicBool>,
-) {
-    tokio::spawn(async move {
-        while !stop_flag.load(Ordering::Relaxed) {
-            match run_cmd_output(cmd.clone()).await {
-                Ok(value) => {
-                    let _ = rows.lock().map(|mut rows| {
-                        rows.push(RawFrame {
-                            received_ms: now_ms(),
-                            value,
-                        })
-                    });
-                }
-                Err(error) => {
-                    let _ = errors
-                        .lock()
-                        .map(|mut errors| errors.push(format!("{name}: {error}")));
-                }
-            }
-            sleep(interval).await;
-        }
-    });
-}
-
 async fn stop_collectors(collectors: &mut BTreeMap<String, JsonlProcessCollector>) {
     for collector in collectors.values_mut() {
         collector.stop().await;
@@ -2505,15 +3302,40 @@ async fn collect_for(
     duration_s: f64,
 ) {
     let deadline = Instant::now() + Duration::from_secs_f64(duration_s);
+    let mut ticker = tokio::time::interval(Duration::from_millis(args.bench.sample_interval_ms));
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Burst);
     while Instant::now() < deadline {
-        samples.push(collect_scene_sample(
+        ticker.tick().await;
+        if Instant::now() >= deadline {
+            break;
+        }
+        push_scene_sample_if_fresh(
+            samples,
             collectors,
             start,
             started_unix_ms,
             phase,
             target_ma,
-        ));
-        sleep(Duration::from_millis(args.bench.sample_interval_ms)).await;
+        );
+    }
+}
+
+fn push_scene_sample_if_fresh(
+    samples: &mut Vec<SceneSample>,
+    collectors: &BTreeMap<String, JsonlProcessCollector>,
+    start: Instant,
+    started_unix_ms: i64,
+    phase: &str,
+    target_ma: u32,
+) {
+    let sample = collect_scene_sample(collectors, start, started_unix_ms, phase, target_ma);
+    if sample
+        .ups_status_cache_fresh
+        .as_ref()
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        samples.push(sample);
     }
 }
 
@@ -2525,6 +3347,16 @@ fn collect_scene_sample(
     target_ma: u32,
 ) -> SceneSample {
     let elapsed_ms = start.elapsed().as_millis() as i64;
+    collect_scene_sample_at(collectors, elapsed_ms, started_unix_ms, phase, target_ma)
+}
+
+fn collect_scene_sample_at(
+    collectors: &BTreeMap<String, JsonlProcessCollector>,
+    elapsed_ms: i64,
+    started_unix_ms: i64,
+    phase: &str,
+    target_ma: u32,
+) -> SceneSample {
     let unix_ms = started_unix_ms + elapsed_ms;
     let status_frame = collectors
         .get("ups_status")
@@ -2545,11 +3377,7 @@ fn collect_scene_sample(
             .get("load")
             .and_then(|c| c.latest_before(unix_ms)),
     );
-    let power = unwrap_cli_result(
-        collectors
-            .get("power")
-            .and_then(|c| c.latest_before(unix_ms)),
-    );
+    let power = json!({});
     let input = status
         .pointer("/input")
         .cloned()
@@ -2571,6 +3399,14 @@ fn collect_scene_sample(
         .or_else(|| status.pointer("/input"))
         .cloned()
         .unwrap_or_else(|| json!({}));
+    let charger = status
+        .pointer("/charger")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let diag_charger = diag
+        .pointer("/charger")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let load_status = load
         .pointer("/payload/status")
         .or_else(|| load.pointer("/status"))
@@ -2590,15 +3426,39 @@ fn collect_scene_sample(
         .pointer("/state")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let load_i_total =
-        as_i64(load_status.get("i_local_ma")) + as_i64(load_status.get("i_remote_ma"));
+    let runtime_output_enabled = power
+        .pointer("/config/runtime/output_enabled")
+        .or_else(|| power.pointer("/runtime/output_enabled"))
+        .and_then(Value::as_bool)
+        .or_else(|| adapter_sample_value(&power, "enabled").and_then(|value| value.as_bool()));
+    let source_setpoint_mv = power
+        .pointer("/diagnostics/tps_setpoint/mv")
+        .cloned()
+        .or_else(|| power.pointer("/config/manual/voltage_mv").cloned())
+        .or_else(|| power.pointer("/manual/voltage_mv").cloned())
+        .or_else(|| adapter_sample_value(&power, "voltage_mv"));
+    let source_output_mv = match runtime_output_enabled {
+        Some(false) => Some(json!(0)),
+        Some(true) => port_telemetry
+            .get("voltage_mv")
+            .cloned()
+            .or_else(|| adapter_sample_value(&power, "voltage_mv"))
+            .or(source_setpoint_mv),
+        None => port_telemetry
+            .get("voltage_mv")
+            .cloned()
+            .or_else(|| adapter_sample_value(&power, "voltage_mv")),
+    };
     let adapter_load_current = adapter_sample_value(&load, "current_ma");
+    let measured_load_current = adapter_load_current
+        .or_else(|| load_total_current_from_status(&load_status).map(Value::from));
     SceneSample {
         t_s: round3(elapsed_ms as f64 / 1000.0),
         unix_ms,
         phase: phase.to_string(),
         stage: input.get("assist_power_stage").cloned(),
         mode: status.get("mode").cloned(),
+        backup_reason: input.get("backup_reason").cloned(),
         load_target_i_ma: target_ma,
         ups_status_cache_age_ms: status_meta.get("cache_age_ms").cloned(),
         ups_status_cache_fresh: status_meta.get("cache_fresh").cloned(),
@@ -2606,20 +3466,24 @@ fn collect_scene_sample(
         port_c_enabled: port_state
             .get("power_enabled")
             .cloned()
+            .or_else(|| runtime_output_enabled.map(Value::from))
             .or_else(|| adapter_sample_value(&power, "enabled")),
-        isolapurr_port_c_mv: port_telemetry
-            .get("voltage_mv")
-            .cloned()
-            .or_else(|| adapter_sample_value(&power, "voltage_mv")),
+        isolapurr_port_c_mv: source_output_mv.or_else(|| {
+            input
+                .get("pre_tps_vin_mv")
+                .cloned()
+                .or_else(|| input.get("vin_vbus_mv").cloned())
+        }),
         isolapurr_port_c_ma: port_telemetry
             .get("current_ma")
             .cloned()
             .or_else(|| adapter_sample_value(&power, "current_ma")),
         mains_present: input.get("mains_present").cloned(),
         assist_target_vout_mv: input.get("assist_target_vout_mv").cloned(),
-        vin_vbus_mv: input
-            .get("vin_vbus_mv")
+        pre_tps_vin_mv: input
+            .get("pre_tps_vin_mv")
             .cloned()
+            .or_else(|| input.get("vin_vbus_mv").cloned())
             .or_else(|| input.get("input_vbus_mv").cloned()),
         vin_iin_ma: input
             .get("vin_iin_ma")
@@ -2627,11 +3491,18 @@ fn collect_scene_sample(
             .or_else(|| input.get("input_ibus_ma").cloned()),
         tps_total_iout_ma: input.get("tps_total_iout_ma").cloned(),
         battery_current_ma: status.pointer("/battery/current_ma").cloned(),
+        charger_state: charger.get("state").cloned(),
+        charger_allow_charge: charger.get("allow_charge").cloned(),
         out_a_vbus_mv: out_a.get("vbus_mv").cloned(),
         out_b_vbus_mv: out_b.get("vbus_mv").cloned(),
         out_a_iout_ma: out_a.get("iout_ma").cloned(),
         out_b_iout_ma: out_b.get("iout_ma").cloned(),
         diag_stage: diag_input.get("assist_power_stage").cloned(),
+        diag_backup_reason: diag_input.get("backup_reason").cloned(),
+        diag_charger_notice: diag_charger
+            .pointer("/policy/notice")
+            .or_else(|| diag_charger.get("notice"))
+            .cloned(),
         diag_assist_target_vout_mv: diag_input.get("assist_target_vout_mv").cloned(),
         diag_vin_baseline_mv: diag_input.get("vin_baseline_mv").cloned(),
         diag_vin_drop_mv: diag_input.get("vin_drop_mv").cloned(),
@@ -2644,13 +3515,76 @@ fn collect_scene_sample(
             .get("v_local_mv")
             .cloned()
             .or_else(|| adapter_sample_value(&load, "voltage_mv")),
-        load_i_local_ma: load_status
-            .get("i_local_ma")
-            .cloned()
-            .or_else(|| adapter_load_current.clone()),
-        load_i_remote_ma: load_status.get("i_remote_ma").cloned(),
-        load_i_total_ma: adapter_load_current.or_else(|| Some(json!(load_i_total))),
+        load_i_total_ma: measured_load_current,
     }
+}
+
+fn backfill_scene_samples_from_ups(
+    samples: &mut Vec<SceneSample>,
+    collectors: &BTreeMap<String, JsonlProcessCollector>,
+    started_unix_ms: i64,
+    target_ma: u32,
+    minimum_spacing_ms: i64,
+) {
+    let Some(status_rows) = collectors
+        .get("ups_status")
+        .and_then(|collector| collector.rows.lock().ok().map(|rows| rows.clone()))
+    else {
+        return;
+    };
+    let Some(first_unix_ms) = samples.first().map(|sample| sample.unix_ms) else {
+        return;
+    };
+    let Some(last_unix_ms) = samples.last().map(|sample| sample.unix_ms) else {
+        return;
+    };
+    let timeline = samples
+        .iter()
+        .map(|sample| (sample.unix_ms, sample.phase.clone()))
+        .collect::<Vec<_>>();
+    let mut backfill = Vec::new();
+    for row in status_rows {
+        if row.received_ms < first_unix_ms || row.received_ms > last_unix_ms {
+            continue;
+        }
+        if samples
+            .iter()
+            .any(|sample| (sample.unix_ms - row.received_ms).abs() < minimum_spacing_ms)
+        {
+            continue;
+        }
+        let phase = timeline
+            .iter()
+            .rev()
+            .find(|(unix_ms, _)| *unix_ms <= row.received_ms)
+            .or_else(|| timeline.first())
+            .map(|(_, phase)| phase.as_str())
+            .unwrap_or("pre");
+        let sample = collect_scene_sample_at(
+            collectors,
+            row.received_ms - started_unix_ms,
+            started_unix_ms,
+            phase,
+            target_ma,
+        );
+        if sample
+            .ups_status_cache_fresh
+            .as_ref()
+            .and_then(Value::as_bool)
+            != Some(false)
+        {
+            backfill.push(sample);
+        }
+    }
+    samples.extend(backfill);
+    samples.sort_by_key(|sample| sample.unix_ms);
+    samples.dedup_by_key(|sample| sample.unix_ms);
+}
+
+fn load_total_current_from_status(status: &Value) -> Option<i64> {
+    let voltage_mv = status.get("v_local_mv").and_then(Value::as_i64)?;
+    let power_mw = status.get("calc_p_mw").and_then(Value::as_i64)?;
+    (voltage_mv > 0).then(|| power_mw.saturating_mul(1_000) / voltage_mv)
 }
 
 fn adapter_sample_value(value: &Value, field: &str) -> Option<Value> {
@@ -2742,12 +3676,13 @@ async fn run_polling_json_probe(
 ) -> anyhow::Result<ProbeSummary> {
     let mut rows = Vec::new();
     for _ in 0..samples {
-        let received_at_ms = now_ms();
+        let sample_started = Instant::now();
+        let payload = run_cmd_output(cmd.clone()).await?;
         rows.push(json!({
-            "received_at_ms": received_at_ms,
-            "payload": run_cmd_output(cmd.clone()).await?,
+            "received_at_ms": now_ms(),
+            "payload": payload,
         }));
-        sleep(interval).await;
+        sleep(interval.saturating_sub(sample_started.elapsed())).await;
     }
     let mut times = rows
         .iter()
@@ -2871,6 +3806,12 @@ fn frame_time_ms(frame: &AdapterFrame) -> Option<i64> {
         .sample
         .as_ref()
         .and_then(|sample| sample.timestamp_ms)
+        .or_else(|| {
+            frame
+                .raw
+                .get("status_sampled_at_ms")
+                .and_then(Value::as_i64)
+        })
         .or_else(|| frame.raw.get("received_at_ms").and_then(Value::as_i64))
         .or_else(|| frame.raw.get("timestamp_ms").and_then(Value::as_i64))
         .or_else(|| frame.raw.get("requested_at_ms").and_then(Value::as_i64))
@@ -2911,20 +3852,42 @@ fn json_frame_time_ms(value: &Value) -> Option<i64> {
         .or_else(|| value.get("received_at_ms").and_then(Value::as_i64))
         .or_else(|| value.get("sample_received_at_ms").and_then(Value::as_i64))
         .or_else(|| value.get("sampled_at_ms").and_then(Value::as_i64))
+        .or_else(|| value.get("status_sampled_at_ms").and_then(Value::as_i64))
+        .or_else(|| {
+            value
+                .pointer("/payload/status_sampled_at_ms")
+                .and_then(Value::as_i64)
+        })
         .or_else(|| value.get("timestamp_ms").and_then(Value::as_i64))
         .or_else(|| value.get("requested_at_ms").and_then(Value::as_i64))
 }
 
 fn json_frame_has_telemetry(value: &Value) -> bool {
-    value.pointer("/result/input/vin_vbus_mv").is_some()
+    value.pointer("/result/input/pre_tps_vin_mv").is_some()
+        || value.pointer("/result/input/vin_vbus_mv").is_some()
+        || value
+            .pointer("/result/sample/input/pre_tps_vin_mv")
+            .is_some()
         || value.pointer("/result/sample/input/vin_vbus_mv").is_some()
+        || value
+            .pointer("/result/sample/packages/derived.power/payload/input/pre_tps_vin_mv")
+            .is_some()
+        || value
+            .pointer("/result/sample/packages/derived.power/payload/input/vin_vbus_mv")
+            .is_some()
         || value.pointer("/result/input/mains_present").is_some()
         || value
             .pointer("/result/sample/input/mains_present")
             .is_some()
+        || value
+            .pointer("/result/sample/packages/derived.power/payload/input/mains_present")
+            .is_some()
         || value.pointer("/result/input/tps_total_iout_ma").is_some()
         || value
             .pointer("/result/sample/input/tps_total_iout_ma")
+            .is_some()
+        || value
+            .pointer("/result/sample/packages/derived.power/payload/input/tps_total_iout_ma")
             .is_some()
         || value.pointer("/result/output/out_a/vbus_mv").is_some()
         || value
@@ -2942,11 +3905,30 @@ fn json_frame_has_telemetry(value: &Value) -> bool {
             .pointer("/ports")
             .and_then(Value::as_array)
             .is_some_and(|ports| !ports.is_empty())
+        || ((value.pointer("/manual/voltage_mv").is_some()
+            && value.pointer("/runtime/output_enabled").is_some())
+            || (value.pointer("/payload/manual/voltage_mv").is_some()
+                && value.pointer("/payload/runtime/output_enabled").is_some()))
+        || value
+            .pointer("/ports/ports")
+            .and_then(Value::as_array)
+            .is_some_and(|ports| !ports.is_empty())
         || value
             .pointer("/payload/ports")
             .and_then(Value::as_array)
             .is_some_and(|ports| !ports.is_empty())
+        || value
+            .pointer("/payload/ports/ports")
+            .and_then(Value::as_array)
+            .is_some_and(|ports| !ports.is_empty())
+        || value.pointer("/payload/sample/voltage_mv").is_some()
+        || value.pointer("/payload/sample/current_ma").is_some()
+        || value.pointer("/payload/sample/enabled").is_some()
         || value.pointer("/payload/status/v_local_mv").is_some()
+        || value.pointer("/status/v_local_mv").is_some()
+        || value.pointer("/status/calc_p_mw").is_some()
+        || value.pointer("/status/i_local_ma").is_some()
+        || value.pointer("/control/output_enabled").is_some()
 }
 
 fn json_frame_is_fresh(value: &Value) -> bool {
@@ -3186,6 +4168,23 @@ async fn run_cmd_json_retry(
         .with_context(|| format!("running {name}"))
 }
 
+async fn run_cmd_output_retry(cmd: Vec<String>, attempts: usize) -> anyhow::Result<Value> {
+    let attempts = attempts.max(1);
+    let mut last_error = None;
+    for attempt in 1..=attempts {
+        match run_cmd_output(cmd.clone()).await {
+            Ok(result) => return Ok(result),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < attempts {
+                    sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow!("command retry failed without error")))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_cmd_json_with_sampling(
     cmd: Vec<String>,
@@ -3230,16 +4229,63 @@ async fn run_cmd_json_with_sampling(
                 return Ok(result);
             },
             _ = tick.tick() => {
-                samples.push(collect_scene_sample(
+                push_scene_sample_if_fresh(
+                    samples,
                     collectors,
                     start,
                     started_unix_ms,
                     phase,
                     target_ma,
-                ));
+                );
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_cmd_json_with_sampling_retry(
+    cmd: Vec<String>,
+    name: &str,
+    actions: &mut Vec<Value>,
+    args: &RunArgs,
+    collectors: &BTreeMap<String, JsonlProcessCollector>,
+    samples: &mut Vec<SceneSample>,
+    start: Instant,
+    started_unix_ms: i64,
+    phase: &str,
+    target_ma: u32,
+    attempts: usize,
+) -> anyhow::Result<Value> {
+    let attempts = attempts.max(1);
+    let mut last_error = None;
+    for attempt in 1..=attempts {
+        match run_cmd_json_with_sampling(
+            cmd.clone(),
+            name,
+            actions,
+            args,
+            collectors,
+            samples,
+            start,
+            started_unix_ms,
+            phase,
+            target_ma,
+        )
+        .await
+        {
+            Ok(result) => return Ok(result),
+            Err(error) => {
+                actions.push(
+                    json!({name: {"cmd": cmd, "attempt": attempt, "error": error.to_string()}}),
+                );
+                last_error = Some(error);
+                if attempt < attempts {
+                    sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow!("sampled command retry failed without error")))
 }
 
 async fn run_cmd_output(cmd: Vec<String>) -> anyhow::Result<Value> {
@@ -3340,6 +4386,46 @@ fn validate_profile_gate(profile: OutputProfile, identity: &Value, settings: &Va
     })
 }
 
+fn validate_suite_settings(
+    profile: OutputProfile,
+    suite_contract: SuiteContract,
+    settings: &Value,
+    profile_gate: &mut Value,
+    uvlo_expectation: SourceLimitedUvloExpectation,
+) -> anyhow::Result<()> {
+    if !suite_contract.is_source_limited() {
+        return Ok(());
+    }
+    let advanced_power = settings
+        .get("advanced_power")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let defaults = SourceLimitedSettingsExpectation::for_profile(profile);
+    let expected = json!({
+        "source_limited_enter_delta_ma": defaults.source_limited_enter_delta_ma,
+        "input_uvlo_cutoff_mv": uvlo_expectation.cutoff_mv,
+        "input_uvlo_recover_mv": uvlo_expectation.recover_mv,
+        "input_uvlo_required_samples": uvlo_expectation.required_samples,
+    });
+    let mut failures = Vec::new();
+    for (key, expected_value) in expected.as_object().into_iter().flatten() {
+        if advanced_power.get(key) != Some(expected_value) {
+            failures.push(format!("advanced_power_{key}_mismatch"));
+        }
+    }
+    let settings_gate = json!({
+        "ok": failures.is_empty(),
+        "failures": failures,
+        "expected": expected,
+        "actual": advanced_power,
+    });
+    profile_gate["source_limited_settings"] = settings_gate.clone();
+    if settings_gate.get("ok").and_then(Value::as_bool) != Some(true) {
+        bail!("source-limited settings preflight failed: {settings_gate}");
+    }
+    Ok(())
+}
+
 fn summarize_scene(samples: &[SceneSample]) -> SceneSummary {
     let mut failures = Vec::new();
     if samples.len() < 2 {
@@ -3405,7 +4491,7 @@ fn summarize_scene(samples: &[SceneSample]) -> SceneSummary {
     );
     required.insert(
         "ups_dcin_voltage".to_string(),
-        samples.iter().any(|sample| sample.vin_vbus_mv.is_some()),
+        samples.iter().any(|sample| sample.pre_tps_vin_mv.is_some()),
     );
     required.insert(
         "ups_output_voltage".to_string(),
@@ -3461,10 +4547,6 @@ async fn render_scene_chart(
     ];
     let _ = run_cmd_output(cmd).await;
     Ok(())
-}
-
-fn as_i64(value: Option<&Value>) -> i64 {
-    value.and_then(Value::as_i64).unwrap_or(0)
 }
 
 fn round3(value: f64) -> f64 {
@@ -3582,6 +4664,57 @@ mod tests {
         }
     }
 
+    fn scene_sample(
+        t_s: f64,
+        phase: &str,
+        stage: &str,
+        mode: &str,
+        backup_reason: Option<&str>,
+        load_v_local_mv: i64,
+    ) -> SceneSample {
+        SceneSample {
+            t_s,
+            unix_ms: (t_s * 1000.0) as i64,
+            phase: phase.to_string(),
+            stage: Some(json!(stage)),
+            mode: Some(json!(mode)),
+            backup_reason: backup_reason.map(|reason| json!(reason)),
+            load_target_i_ma: 3_900,
+            ups_status_cache_age_ms: Some(json!(20)),
+            ups_status_cache_fresh: Some(json!(true)),
+            ups_status_monitor_running: Some(json!(true)),
+            port_c_enabled: Some(json!(true)),
+            isolapurr_port_c_mv: Some(json!(12_000)),
+            isolapurr_port_c_ma: Some(json!(3_000)),
+            mains_present: Some(json!(backup_reason != Some("input_absent"))),
+            assist_target_vout_mv: Some(json!(12_000)),
+            pre_tps_vin_mv: Some(json!(11_800)),
+            vin_iin_ma: Some(json!(3_000)),
+            tps_total_iout_ma: Some(json!(3_900)),
+            battery_current_ma: Some(json!(-500)),
+            charger_state: Some(json!(if backup_reason == Some("input_absent") {
+                "NOAC"
+            } else {
+                "LOAD"
+            })),
+            charger_allow_charge: Some(json!(false)),
+            out_a_vbus_mv: Some(json!(12_000)),
+            out_b_vbus_mv: None,
+            out_a_iout_ma: Some(json!(3_900)),
+            out_b_iout_ma: None,
+            diag_stage: Some(json!(stage)),
+            diag_backup_reason: backup_reason.map(|reason| json!(reason)),
+            diag_charger_notice: None,
+            diag_assist_target_vout_mv: Some(json!(12_000)),
+            diag_vin_baseline_mv: Some(json!(12_000)),
+            diag_vin_drop_mv: Some(json!(200)),
+            diag_tps_total_iout_ma: Some(json!(3_900)),
+            load_output_enabled: Some(json!(true)),
+            load_v_local_mv: Some(json!(load_v_local_mv)),
+            load_i_total_ma: Some(json!(3_900)),
+        }
+    }
+
     #[test]
     fn ups_commands_propagate_no_auto_start() {
         let cmd = ups_status_fresh_command(
@@ -3606,14 +4739,22 @@ mod tests {
     }
 
     #[test]
-    fn loadlynx_stream_uses_status_stream_over_ipc() {
+    fn loadlynx_stream_uses_released_cli_without_legacy_ipc_flag() {
         let cmd = load_stream_command(&bench(Some("/opt/loadlynx")), 40).unwrap();
         assert_eq!(cmd[0], "/opt/loadlynx");
-        assert!(cmd.contains(&"--ipc".to_string()));
-        assert!(cmd.contains(&"/tmp/load.sock".to_string()));
+        assert!(!cmd.contains(&"--ipc".to_string()));
+        assert!(!cmd.contains(&"/tmp/load.sock".to_string()));
         assert!(cmd.contains(&"status-stream".to_string()));
+        assert!(cmd.contains(&"--interval-ms".to_string()));
+        assert!(cmd.contains(&"200".to_string()));
         assert!(cmd.contains(&"--count".to_string()));
         assert!(cmd.contains(&"40".to_string()));
+    }
+
+    #[test]
+    fn loadlynx_preflight_stream_matches_formal_unbounded_collector() {
+        let cmd = preflight_load_stream_command(&bench(Some("/opt/loadlynx")), 40).unwrap();
+        assert!(!cmd.contains(&"--count".to_string()));
     }
 
     #[test]
@@ -3621,6 +4762,7 @@ mod tests {
         let bench = bench(Some("loadlynx"));
         for cmd in [
             power_capabilities_command(&bench).unwrap(),
+            power_config_show_command(&bench).unwrap(),
             power_disable_command(&bench).unwrap(),
             power_stream_command(&bench).unwrap(),
         ] {
@@ -3628,6 +4770,30 @@ mod tests {
             assert!(cmd.contains(&"--ipc".to_string()));
             assert!(cmd.contains(&"/tmp/isolapurr.sock".to_string()));
         }
+        let stream = power_stream_command(&bench).unwrap();
+        assert!(stream.contains(&"show".to_string()));
+        assert!(!stream.contains(&"telemetry".to_string()));
+    }
+
+    #[test]
+    fn isolapurr_tps_cdc_rise_guard_requires_an_unchanged_value() {
+        let before = json!(300);
+        let changed_after = json!(0);
+        let mut actions = Vec::new();
+        ensure_isolapurr_tps_cdc_rise_preserved(Some(&before), Some(&before), &mut actions)
+            .unwrap();
+        assert_eq!(
+            actions[0].pointer("/power_tps_cdc_rise_guard/preserved"),
+            Some(&json!(true))
+        );
+
+        let mut actions = Vec::new();
+        assert!(ensure_isolapurr_tps_cdc_rise_preserved(
+            Some(&before),
+            Some(&changed_after),
+            &mut actions,
+        )
+        .is_err());
     }
 
     #[test]
@@ -3655,14 +4821,18 @@ mod tests {
         let disable = power_disable_command(&bench).unwrap();
         assert!(disable
             .windows(3)
-            .any(|pair| pair == ["power", "output", "auto"]));
-        assert!(!disable.contains(&"manual".to_string()));
+            .any(|pair| pair == ["power", "runtime", "output"]));
+        assert!(disable
+            .windows(2)
+            .any(|pair| pair == ["--enabled", "false"]));
 
         let configure = power_configure_off_command(&bench, OutputProfile::V19).unwrap();
         assert!(configure
             .windows(3)
-            .any(|pair| pair == ["power", "output", "manual"]));
-        assert!(!configure.contains(&"config".to_string()));
+            .any(|pair| pair == ["power", "config", "set"]));
+        assert!(configure
+            .windows(2)
+            .any(|pair| pair == ["--tps-mode", "manual"]));
         assert!(!configure.contains(&"--device-id".to_string()));
         assert!(configure
             .windows(2)
@@ -3671,16 +4841,8 @@ mod tests {
         let enable = power_port_enable_command(&bench, OutputProfile::V19).unwrap();
         assert!(enable
             .windows(3)
-            .any(|pair| pair == ["power", "output", "manual"]));
-        assert!(enable
-            .windows(2)
-            .any(|pair| pair == ["--voltage-mv", "19000"]));
-        assert!(enable
-            .windows(2)
-            .any(|pair| pair == ["--current-limit-ma", "3000"]));
-        assert!(enable
-            .windows(2)
-            .any(|pair| pair == ["--usb-c-path", "forced-on"]));
+            .any(|pair| pair == ["power", "runtime", "output"]));
+        assert!(enable.windows(2).any(|pair| pair == ["--enabled", "true"]));
 
         let stream = power_stream_command(&bench).unwrap();
         assert_eq!(
@@ -3688,7 +4850,9 @@ mod tests {
             vec![
                 "isolapurr",
                 "--json",
-                "ports",
+                "power",
+                "config",
+                "show",
                 "--url",
                 "http://127.0.0.1:30182",
             ]
@@ -3786,9 +4950,65 @@ mod tests {
     }
 
     #[test]
+    fn json_probe_accepts_loadlynx_status_snapshot_shape() {
+        let frame = json!({
+            "status_sampled_at_ms": 1030,
+            "control": {"output_enabled": false},
+            "status": {"v_local_mv": 12000, "i_local_ma": 10, "calc_p_mw": 120}
+        });
+        assert_eq!(json_frame_time_ms(&frame), Some(1030));
+        assert!(json_frame_has_telemetry(&frame));
+    }
+
+    #[test]
+    fn json_probe_accepts_isolapurr_nested_port_telemetry() {
+        let frame = json!({
+            "received_at_ms": 1000,
+            "payload": {
+                "ports": {
+                    "ports": [{
+                        "portId": "port_a",
+                        "telemetry": {"voltage_mv": 5013, "current_ma": 0}
+                    }]
+                }
+            }
+        });
+        assert!(json_frame_has_telemetry(&frame));
+    }
+
+    #[test]
+    fn json_probe_accepts_isolapurr_power_config_snapshot() {
+        let frame = json!({
+            "received_at_ms": 1000,
+            "manual": {"voltage_mv": 12000, "tps_cdc_rise_mv": 300},
+            "runtime": {"output_enabled": false}
+        });
+        assert!(json_frame_has_telemetry(&frame));
+        assert!(json_frame_has_telemetry(&json!({"payload": frame})));
+    }
+
+    #[test]
+    fn json_probe_accepts_ups_diag_snapshot_power_package() {
+        let frame = json!({
+            "sample_received_at_ms": 1000,
+            "result": {
+                "sample": {
+                    "packages": {
+                        "derived.power": {
+                            "payload": {"input": {"pre_tps_vin_mv": 12_000}}
+                        }
+                    }
+                }
+            }
+        });
+        assert!(json_frame_has_telemetry(&frame));
+    }
+
+    #[test]
     fn suite_plan_has_four_default_scenes() {
         let run = RunArgs {
             bench: bench(Some("loadlynx")),
+            suite_contract: SuiteContract::Standard,
             profiles: vec![OutputProfile::V12, OutputProfile::V19],
             scenes: vec![SceneKind::AssistPath, SceneKind::BackupOnly],
             report_root: PathBuf::from("reports"),
@@ -3803,6 +5023,9 @@ mod tests {
             restore_s: 0.1,
             post_s: 0.1,
             profile_flash_settle_s: 12,
+            expected_input_uvlo_cutoff_mv: None,
+            expected_input_uvlo_recover_mv: None,
+            expected_input_uvlo_required_samples: None,
             render_chart: PathBuf::from("tools/hil/render_voltage_chart_html.py"),
         };
         let plan = build_suite_plan(
@@ -3833,6 +5056,509 @@ mod tests {
     }
 
     #[test]
+    fn source_limited_contract_forces_four_12v_scenes() {
+        let run = RunArgs {
+            bench: bench(Some("loadlynx")),
+            suite_contract: SuiteContract::SourceLimited12v,
+            profiles: vec![OutputProfile::V19],
+            scenes: vec![SceneKind::AssistPath],
+            report_root: PathBuf::from("reports"),
+            suite_id: Some("suite".to_string()),
+            dry_run: true,
+            allow_profile_flash: false,
+            artifact_manifest_12v: None,
+            artifact_manifest_19v: None,
+            pre_s: 0.1,
+            hold_s: 0.1,
+            backup_s: 0.1,
+            restore_s: 0.1,
+            post_s: 0.1,
+            profile_flash_settle_s: 12,
+            expected_input_uvlo_cutoff_mv: None,
+            expected_input_uvlo_recover_mv: None,
+            expected_input_uvlo_required_samples: None,
+            render_chart: PathBuf::from("tools/hil/render_voltage_chart_html.py"),
+        };
+        let plan = build_suite_plan(
+            &run,
+            &PowerValidationArgs {
+                ups_ipc: "/tmp/ups.sock".to_string(),
+                no_auto_start: false,
+            },
+            "suite",
+            Path::new("reports/suite"),
+        )
+        .unwrap();
+
+        assert_eq!(plan.suite_contract, SuiteContract::SourceLimited12v);
+        assert_eq!(plan.profiles.len(), 1);
+        assert_eq!(plan.profiles[0].output_profile, "12v");
+        assert_eq!(
+            plan.reports
+                .iter()
+                .map(|report| report.scene_type)
+                .collect::<Vec<_>>(),
+            vec![
+                "backup_only",
+                "source_in_budget",
+                "source_limited_online",
+                "source_limited_cut",
+            ]
+        );
+        assert!(!plan.reports[1].include_backup);
+        assert_eq!(plan.reports[1].target_ma, 2_500);
+        assert!(!plan.reports[2].include_backup);
+        assert!(plan.reports[3].include_backup);
+    }
+
+    #[test]
+    fn source_limited_19v_contract_forces_four_19v_scenes() {
+        let contract = SuiteContract::SourceLimited19v;
+        assert_eq!(
+            contract.selected_profiles(&[OutputProfile::V12]),
+            vec![OutputProfile::V19]
+        );
+        assert_eq!(
+            contract.selected_scenes(&[SceneKind::AssistPath]),
+            vec![
+                SceneKind::BackupOnly,
+                SceneKind::SourceInBudget,
+                SceneKind::SourceLimitedOnline,
+                SceneKind::SourceLimitedCut,
+            ]
+        );
+        assert_eq!(
+            contract.expected_reports(),
+            vec![
+                ("19v", "backup_only"),
+                ("19v", "source_in_budget"),
+                ("19v", "source_limited_online"),
+                ("19v", "source_limited_cut"),
+            ]
+        );
+    }
+
+    #[test]
+    fn source_limited_load_floor_tracks_the_rated_output_profile() {
+        assert_eq!(source_limited_min_load_mv(OutputProfile::V12), 11_000);
+        assert_eq!(source_limited_min_load_mv(OutputProfile::V19), 18_000);
+    }
+
+    #[test]
+    fn source_limited_settings_preflight_requires_the_12v_bench_defaults() {
+        let mut profile_gate = json!({"ok": true});
+        let settings = json!({
+            "advanced_power": {
+                "source_limited_vin_drop_pct": 1,
+                "source_limited_enter_delta_ma": 2500,
+                "source_limited_exit_delta_ma": 0,
+                "source_limited_required_samples": 2,
+                "source_limited_recover_margin_mv": 400,
+                "vin_drop_threshold_pct": 4,
+                "input_uvlo_cutoff_mv": 11_300,
+                "input_uvlo_recover_mv": 11_500,
+                "input_uvlo_required_samples": 3,
+            }
+        });
+        validate_suite_settings(
+            OutputProfile::V12,
+            SuiteContract::SourceLimited12v,
+            &settings,
+            &mut profile_gate,
+            SourceLimitedUvloExpectation::for_profile(OutputProfile::V12),
+        )
+        .unwrap();
+        assert_eq!(
+            profile_gate.pointer("/source_limited_settings/ok"),
+            Some(&json!(true))
+        );
+
+        let mut mismatch_gate = json!({"ok": true});
+        let mismatch = json!({"advanced_power": {}});
+        assert!(validate_suite_settings(
+            OutputProfile::V12,
+            SuiteContract::SourceLimited12v,
+            &mismatch,
+            &mut mismatch_gate,
+            SourceLimitedUvloExpectation::for_profile(OutputProfile::V12),
+        )
+        .is_err());
+        assert!(mismatch_gate
+            .pointer("/source_limited_settings/failures")
+            .and_then(Value::as_array)
+            .is_some_and(|failures| !failures.is_empty()));
+    }
+
+    #[test]
+    fn source_limited_settings_preflight_accepts_uvlo_override() {
+        let mut profile_gate = json!({"ok": true});
+        let settings = json!({
+            "advanced_power": {
+                "source_limited_vin_drop_pct": 1,
+                "source_limited_enter_delta_ma": 2500,
+                "source_limited_exit_delta_ma": 0,
+                "source_limited_required_samples": 2,
+                "source_limited_recover_margin_mv": 400,
+                "vin_drop_threshold_pct": 4,
+                "input_uvlo_cutoff_mv": 11_400,
+                "input_uvlo_recover_mv": 11_600,
+                "input_uvlo_required_samples": 3,
+            }
+        });
+        validate_suite_settings(
+            OutputProfile::V12,
+            SuiteContract::SourceLimited12v,
+            &settings,
+            &mut profile_gate,
+            SourceLimitedUvloExpectation {
+                cutoff_mv: 11_400,
+                recover_mv: 11_600,
+                required_samples: 3,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            profile_gate.pointer("/source_limited_settings/expected/input_uvlo_cutoff_mv"),
+            Some(&json!(11_400))
+        );
+        assert_eq!(
+            profile_gate.pointer("/source_limited_settings/expected/input_uvlo_recover_mv"),
+            Some(&json!(11_600))
+        );
+    }
+
+    #[test]
+    fn source_limited_settings_preflight_requires_the_19v_bench_defaults() {
+        let mut profile_gate = json!({"ok": true});
+        let settings = json!({
+            "advanced_power": {
+                "source_limited_vin_drop_pct": 1,
+                "source_limited_enter_delta_ma": 1000,
+                "source_limited_exit_delta_ma": 0,
+                "source_limited_required_samples": 2,
+                "source_limited_recover_margin_mv": 400,
+                "vin_drop_threshold_pct": 4,
+                "input_uvlo_cutoff_mv": 18_200,
+                "input_uvlo_recover_mv": 18_400,
+                "input_uvlo_required_samples": 3,
+            }
+        });
+        validate_suite_settings(
+            OutputProfile::V19,
+            SuiteContract::SourceLimited19v,
+            &settings,
+            &mut profile_gate,
+            SourceLimitedUvloExpectation::for_profile(OutputProfile::V19),
+        )
+        .unwrap();
+        assert_eq!(
+            profile_gate.pointer("/source_limited_settings/expected/source_limited_enter_delta_ma"),
+            Some(&json!(1000))
+        );
+        assert_eq!(
+            profile_gate.pointer("/source_limited_settings/expected/input_uvlo_cutoff_mv"),
+            Some(&json!(18_200))
+        );
+    }
+
+    #[test]
+    fn source_limited_online_assertions_require_fast_rated_handoff_and_stable_load() {
+        let samples = vec![
+            scene_sample(
+                0.0,
+                "transition_load",
+                "assist_low",
+                "supplement",
+                None,
+                11_400,
+            ),
+            scene_sample(
+                0.2,
+                "hold",
+                "backup",
+                "backup",
+                Some("source_limited"),
+                11_100,
+            ),
+            scene_sample(
+                0.3,
+                "hold",
+                "backup",
+                "backup",
+                Some("source_limited"),
+                11_100,
+            ),
+            scene_sample(
+                0.4,
+                "hold",
+                "backup",
+                "backup",
+                Some("source_limited"),
+                11_050,
+            ),
+        ];
+
+        let mut samples = samples;
+        classify_load_acceptance_phases(SceneKind::SourceLimitedOnline, &mut samples);
+
+        let assertions =
+            evaluate_scene_assertions(SceneKind::SourceLimitedOnline, OutputProfile::V12, &samples);
+        assert_eq!(assertions.get("passed"), Some(&json!(true)));
+        assert_eq!(
+            assertions.pointer("/source_limited/entry_delay_s"),
+            Some(&json!(0.2))
+        );
+        assert_eq!(
+            assertions.pointer("/source_limited/post_latch_min_load_mv"),
+            Some(&json!(11_050))
+        );
+    }
+
+    #[test]
+    fn source_in_budget_assertions_require_online_non_backup_operation() {
+        let mut samples = vec![
+            scene_sample(0.0, "transition_load", "standby", "standby", None, 11_700),
+            scene_sample(0.2, "hold", "standby", "standby", None, 11_700),
+            scene_sample(0.4, "hold", "standby", "standby", None, 11_700),
+        ];
+        for sample in &mut samples {
+            sample.load_target_i_ma = 2_900;
+            sample.load_i_total_ma = Some(json!(2_900));
+            sample.tps_total_iout_ma = Some(json!(32));
+        }
+
+        let assertions =
+            evaluate_scene_assertions(SceneKind::SourceInBudget, OutputProfile::V12, &samples);
+        assert_eq!(assertions.get("passed"), Some(&json!(true)));
+        assert_eq!(
+            assertions.pointer("/in_budget_guard/backup_samples"),
+            Some(&json!(0))
+        );
+        assert_eq!(
+            assertions.pointer("/in_budget_guard/applied_samples"),
+            Some(&json!(3))
+        );
+    }
+
+    #[test]
+    fn source_in_budget_allows_non_backup_supplement_power() {
+        let mut sample = scene_sample(0.2, "hold", "supplement", "online", None, 11_700);
+        sample.load_target_i_ma = 2_900;
+        sample.load_i_total_ma = Some(json!(2_900));
+        sample.tps_total_iout_ma = Some(json!(500));
+        sample.out_a_vbus_mv = Some(json!(12_000));
+        sample.out_a_iout_ma = Some(json!(500));
+
+        let assertions =
+            evaluate_scene_assertions(SceneKind::SourceInBudget, OutputProfile::V12, &[sample]);
+        assert_eq!(assertions.get("passed"), Some(&json!(true)));
+        assert_eq!(
+            assertions.pointer("/hold_tps_power/maximum_mw"),
+            Some(&json!(6_000))
+        );
+    }
+
+    #[test]
+    fn source_in_budget_assertions_reject_any_backup_signal() {
+        let mut sample = scene_sample(0.2, "hold", "standby", "backup", None, 11_700);
+        sample.load_target_i_ma = 2_900;
+        sample.load_i_total_ma = Some(json!(2_900));
+
+        let assertions =
+            evaluate_scene_assertions(SceneKind::SourceInBudget, OutputProfile::V12, &[sample]);
+        assert_eq!(assertions.get("passed"), Some(&json!(false)));
+        assert!(assertions
+            .get("failures")
+            .and_then(Value::as_array)
+            .is_some_and(|failures| failures.contains(&json!("source_in_budget_entered_backup"))));
+    }
+
+    #[test]
+    fn load_total_current_uses_terminal_power_and_voltage() {
+        assert_eq!(
+            load_total_current_from_status(&json!({
+                "v_local_mv": 11_684,
+                "calc_p_mw": 45_567,
+                "i_local_ma": 1_949,
+                "i_remote_ma": 1_949,
+            })),
+            Some(3_899)
+        );
+    }
+
+    #[test]
+    fn backup_only_transition_starts_on_first_live_cut_effect() {
+        let mut samples = vec![
+            scene_sample(0.0, "hold", "standby", "standby", None, 18_320),
+            scene_sample(0.1, "transition_backup", "standby", "standby", None, 18_320),
+            scene_sample(0.2, "transition_backup", "standby", "standby", None, 18_320),
+            scene_sample(
+                0.3,
+                "transition_backup",
+                "backup",
+                "backup",
+                Some("input_absent"),
+                18_060,
+            ),
+            scene_sample(
+                0.4,
+                "transition_backup",
+                "backup",
+                "backup",
+                Some("input_absent"),
+                18_072,
+            ),
+            scene_sample(
+                0.5,
+                "transition_backup",
+                "backup",
+                "backup",
+                Some("input_absent"),
+                18_450,
+            ),
+            scene_sample(
+                0.6,
+                "backup",
+                "backup",
+                "backup",
+                Some("input_absent"),
+                18_980,
+            ),
+        ];
+        samples[0].pre_tps_vin_mv = Some(json!(19_000));
+        samples[0].mains_present = Some(json!(true));
+        samples[1].pre_tps_vin_mv = Some(json!(19_000));
+        samples[1].mains_present = Some(json!(true));
+        samples[2].pre_tps_vin_mv = Some(json!(19_000));
+        samples[2].mains_present = Some(json!(true));
+        samples[3].pre_tps_vin_mv = Some(json!(3_016));
+        samples[3].mains_present = Some(json!(true));
+        samples[4].pre_tps_vin_mv = Some(json!(3_016));
+        samples[4].mains_present = Some(json!(true));
+        samples[5].pre_tps_vin_mv = Some(json!(2_024));
+        samples[5].mains_present = Some(json!(false));
+        samples[6].pre_tps_vin_mv = Some(json!(2_024));
+        samples[6].mains_present = Some(json!(false));
+
+        classify_load_acceptance_phases(SceneKind::BackupOnly, &mut samples);
+
+        let phases = samples
+            .iter()
+            .map(|sample| sample.phase.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            phases,
+            vec![
+                "hold",
+                "hold",
+                "hold",
+                "transition_backup",
+                "backup",
+                "backup",
+                "backup",
+            ]
+        );
+    }
+
+    #[test]
+    fn source_limited_cut_assertions_require_input_absent_and_continuous_backup() {
+        let samples = vec![
+            scene_sample(
+                0.0,
+                "transition_load",
+                "assist_low",
+                "supplement",
+                None,
+                11_400,
+            ),
+            scene_sample(
+                0.2,
+                "hold",
+                "backup",
+                "backup",
+                Some("source_limited"),
+                11_100,
+            ),
+            scene_sample(
+                0.3,
+                "hold",
+                "backup",
+                "backup",
+                Some("source_limited"),
+                11_100,
+            ),
+            scene_sample(
+                0.4,
+                "transition_backup",
+                "backup",
+                "backup",
+                Some("source_limited"),
+                11_100,
+            ),
+            scene_sample(
+                0.6,
+                "backup",
+                "backup",
+                "backup",
+                Some("input_absent"),
+                11_050,
+            ),
+        ];
+
+        let mut samples = samples;
+        classify_load_acceptance_phases(SceneKind::SourceLimitedCut, &mut samples);
+
+        let assertions =
+            evaluate_scene_assertions(SceneKind::SourceLimitedCut, OutputProfile::V12, &samples);
+        assert_eq!(assertions.get("passed"), Some(&json!(true)));
+        assert_eq!(
+            assertions.pointer("/backup_cut/input_absent_observed"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            assertions.pointer("/backup_cut/backup_continuous"),
+            Some(&json!(true))
+        );
+    }
+
+    #[test]
+    fn source_limited_report_verifier_requires_four_reports() {
+        let temp = tempfile::tempdir().unwrap();
+        let summary = temp.path().join("suite-summary.json");
+        write_json_value(
+            &summary,
+            &json!({
+                "suite_id": "source-limited",
+                "suite_contract": "source_limited_12v",
+                "reports": [],
+            }),
+        )
+        .unwrap();
+
+        let verification = verify_report(summary, false).unwrap();
+        assert_eq!(verification.get("signoff_valid"), Some(&json!(false)));
+        assert!(verification
+            .get("suite_failures")
+            .and_then(Value::as_array)
+            .is_some_and(|failures| failures.iter().any(|failure| {
+                failure.get("suite_failure") == Some(&json!("unexpected_report_count"))
+                    && failure.get("expected") == Some(&json!(4))
+            })));
+    }
+
+    #[test]
+    fn source_limited_contract_serializes_with_verifier_key() {
+        assert_eq!(
+            serde_json::to_value(SuiteContract::SourceLimited12v).unwrap(),
+            json!("source_limited_12v")
+        );
+        assert_eq!(
+            serde_json::to_value(SuiteContract::SourceLimited19v).unwrap(),
+            json!("source_limited_19v")
+        );
+    }
+
+    #[test]
     fn backup_only_scene_contract_still_requires_backup_transition() {
         assert!(SceneKind::AssistPath.include_backup());
         assert!(SceneKind::BackupOnly.include_backup());
@@ -3845,7 +5571,7 @@ mod tests {
             "input": {
                 "mains_present": true,
                 "source": "battery",
-                "vin_vbus_mv": 0,
+                "pre_tps_vin_mv": 0,
                 "assist_power_stage": "backup"
             },
             "mode": "backup"
@@ -3857,7 +5583,7 @@ mod tests {
             "input": {
                 "mains_present": false,
                 "source": "battery",
-                "vin_vbus_mv": 2999,
+                "pre_tps_vin_mv": 2999,
                 "assist_power_stage": "backup"
             }
         });
@@ -3872,7 +5598,7 @@ mod tests {
             "input": {
                 "mains_present": false,
                 "source": "battery",
-                "vin_vbus_mv": 5100,
+                "pre_tps_vin_mv": 5100,
                 "assist_power_stage": "assist_low"
             },
             "mode": "supplement"
@@ -3888,13 +5614,32 @@ mod tests {
             "input": {
                 "mains_present": false,
                 "source": "battery",
-                "vin_vbus_mv": 2500,
+                "pre_tps_vin_mv": 2500,
                 "assist_power_stage": "assist_low"
             },
             "mode": "standby"
         });
         let state = source_disconnect_state(&power, &low_vin_without_backup);
         assert!(state.ups_still_live);
+    }
+
+    #[test]
+    fn source_disconnect_gate_accepts_firmware_cutoff_with_pre_tps_residual_voltage() {
+        let power = json!({});
+        let status = json!({
+            "input": {
+                "mains_present": false,
+                "source": "usbc",
+                "pre_tps_vin_mv": 3624,
+                "vin_vbus_mv": 3624,
+                "input_gate_state": "cutoff",
+                "input_gate_reason": "pre_tps_undervoltage",
+                "assist_power_stage": "backup"
+            },
+            "mode": "backup"
+        });
+        let state = source_disconnect_state(&power, &status);
+        assert!(!state.ups_still_live);
     }
 
     #[test]
@@ -4053,6 +5798,7 @@ mod tests {
                     phase: "hold".to_string(),
                     stage: None,
                     mode: None,
+                    backup_reason: None,
                     load_target_i_ma: 3900,
                     ups_status_cache_age_ms: None,
                     ups_status_cache_fresh: None,
@@ -4062,23 +5808,25 @@ mod tests {
                     isolapurr_port_c_ma: None,
                     mains_present: None,
                     assist_target_vout_mv: None,
-                    vin_vbus_mv: Some(json!(11800)),
+                    pre_tps_vin_mv: Some(json!(11800)),
                     vin_iin_ma: None,
                     tps_total_iout_ma: None,
                     battery_current_ma: None,
+                    charger_state: None,
+                    charger_allow_charge: None,
                     out_a_vbus_mv: Some(json!(10800)),
                     out_b_vbus_mv: None,
                     out_a_iout_ma: None,
                     out_b_iout_ma: None,
                     diag_stage: None,
+                    diag_backup_reason: None,
+                    diag_charger_notice: None,
                     diag_assist_target_vout_mv: None,
                     diag_vin_baseline_mv: None,
                     diag_vin_drop_mv: None,
                     diag_tps_total_iout_ma: None,
                     load_output_enabled: None,
                     load_v_local_mv: None,
-                    load_i_local_ma: None,
-                    load_i_remote_ma: None,
                     load_i_total_ma: None,
                 })
                 .unwrap(),
@@ -4088,6 +5836,7 @@ mod tests {
                     phase: "hold".to_string(),
                     stage: None,
                     mode: None,
+                    backup_reason: None,
                     load_target_i_ma: 3900,
                     ups_status_cache_age_ms: None,
                     ups_status_cache_fresh: None,
@@ -4097,23 +5846,25 @@ mod tests {
                     isolapurr_port_c_ma: None,
                     mains_present: None,
                     assist_target_vout_mv: None,
-                    vin_vbus_mv: Some(json!(11810)),
+                    pre_tps_vin_mv: Some(json!(11810)),
                     vin_iin_ma: None,
                     tps_total_iout_ma: None,
                     battery_current_ma: None,
+                    charger_state: None,
+                    charger_allow_charge: None,
                     out_a_vbus_mv: Some(json!(10810)),
                     out_b_vbus_mv: None,
                     out_a_iout_ma: None,
                     out_b_iout_ma: None,
                     diag_stage: None,
+                    diag_backup_reason: None,
+                    diag_charger_notice: None,
                     diag_assist_target_vout_mv: None,
                     diag_vin_baseline_mv: None,
                     diag_vin_drop_mv: None,
                     diag_tps_total_iout_ma: None,
                     load_output_enabled: None,
                     load_v_local_mv: None,
-                    load_i_local_ma: None,
-                    load_i_remote_ma: None,
                     load_i_total_ma: None,
                 })
                 .unwrap(),
@@ -4123,6 +5874,7 @@ mod tests {
                     phase: "hold".to_string(),
                     stage: None,
                     mode: None,
+                    backup_reason: None,
                     load_target_i_ma: 3900,
                     ups_status_cache_age_ms: None,
                     ups_status_cache_fresh: None,
@@ -4132,23 +5884,25 @@ mod tests {
                     isolapurr_port_c_ma: None,
                     mains_present: None,
                     assist_target_vout_mv: None,
-                    vin_vbus_mv: Some(json!(11820)),
+                    pre_tps_vin_mv: Some(json!(11820)),
                     vin_iin_ma: None,
                     tps_total_iout_ma: None,
                     battery_current_ma: None,
+                    charger_state: None,
+                    charger_allow_charge: None,
                     out_a_vbus_mv: Some(json!(10820)),
                     out_b_vbus_mv: None,
                     out_a_iout_ma: None,
                     out_b_iout_ma: None,
                     diag_stage: None,
+                    diag_backup_reason: None,
+                    diag_charger_notice: None,
                     diag_assist_target_vout_mv: None,
                     diag_vin_baseline_mv: None,
                     diag_vin_drop_mv: None,
                     diag_tps_total_iout_ma: None,
                     load_output_enabled: None,
                     load_v_local_mv: None,
-                    load_i_local_ma: None,
-                    load_i_remote_ma: None,
                     load_i_total_ma: None,
                 })
                 .unwrap(),
@@ -4166,7 +5920,7 @@ mod tests {
             "target_ma": 3900,
             "signoff_valid": true
         });
-        let failures = validate_scene_report(&suite_dir, &report).unwrap();
+        let failures = validate_scene_report(&suite_dir, &report, SuiteContract::Standard).unwrap();
         assert!(failures.iter().any(|failure| {
             failure.get("report_failure")
                 == Some(&json!("timeseries_missing_required_voltage_series"))

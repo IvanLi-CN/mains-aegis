@@ -8,6 +8,10 @@ import type {
   SerialTraceEntry,
   UpsStatus,
 } from "../api/types";
+import {
+  buildAdvancedPowerCapabilities,
+  buildAdvancedPowerDefaults,
+} from "../api/runtimeModeProfiles";
 
 type MockDefinition = {
   target: DeviceTarget;
@@ -102,6 +106,7 @@ function status(
       mains_present: mode !== "backup",
       input_vbus_mv: mode === "backup" ? 0 : 19240,
       input_ibus_ma: mode === "backup" ? 0 : 1180,
+      pre_tps_vin_mv: mode === "backup" ? 0 : 19240,
       vin_vbus_mv: mode === "backup" ? 0 : 19240,
       vin_iin_ma: mode === "backup" ? 0 : 1180,
       tps_total_iout_ma: mode === "backup" ? 0 : 42,
@@ -200,6 +205,7 @@ function powerStatusVariant(
       mains_present: true,
       input_vbus_mv: vinVbusMv,
       input_ibus_ma: pressureState === "limited" ? 3280 : pressureState === "cooldown" ? 3020 : 1260,
+      pre_tps_vin_mv: vinVbusMv,
       vin_vbus_mv: vinVbusMv,
       vin_iin_ma: pressureState === "limited" ? 3280 : pressureState === "cooldown" ? 3020 : 1260,
       tps_total_iout_ma: tpsTotalIoutMa,
@@ -915,6 +921,7 @@ export function makeMockUsbSerialRecord(targetOverride?: Partial<DeviceTarget>):
         pressure_state: "limited",
         pressure_reason: "tps_output_current",
         pressure_score_pct: 84,
+        pre_tps_vin_mv: 19160,
         vin_vbus_mv: 19160,
         vin_baseline_mv: 19480,
         tps_total_iout_ma: 128,
@@ -1174,33 +1181,8 @@ function defaultMockDeviceSettings(): DeviceSettings {
       speed: "ma_500",
       timer_h: 2,
     },
-    advanced_power: {
-      standby_drop_mv: 1200,
-      assist_low_drop_mv: 600,
-      assist_enter_delta_ma: 0,
-      assist_exit_delta_ma: 0,
-      assist_required_samples: 2,
-      assist_ramp_step_mv: 100,
-      assist_ramp_interval_ms: 200,
-      rated_enter_delta_ma: 0,
-      rated_exit_delta_ma: 0,
-      vin_drop_threshold_pct: 4,
-      required_samples: 2,
-    },
-    advanced_power_capabilities: {
-      rated_vout_mv: 12000,
-      standby_drop_mv: { default: 1200, min: 0, max: 3000, step: 20 },
-      assist_low_drop_mv: { default: 600, min: 0, max: 3000, step: 20 },
-      assist_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
-      assist_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
-      assist_required_samples: { default: 2, min: 1, max: 5, step: 1 },
-      assist_ramp_step_mv: { default: 100, min: 20, max: 1000, step: 20 },
-      assist_ramp_interval_ms: { default: 200, min: 100, max: 3000, step: 100 },
-      rated_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
-      rated_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
-      vin_drop_threshold_pct: { default: 4, min: 1, max: 12, step: 1 },
-      required_samples: { default: 2, min: 1, max: 5, step: 1 },
-    },
+    advanced_power: buildAdvancedPowerDefaults(12_000),
+    advanced_power_capabilities: buildAdvancedPowerCapabilities(12_000),
   };
 }
 

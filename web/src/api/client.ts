@@ -1,5 +1,9 @@
 import { getMockIdentity, getMockNetwork, getMockStatus } from "../fixtures/mockDevices";
 import { isDemoQueryEnabled } from "../demo/query";
+import {
+  buildAdvancedPowerCapabilities,
+  buildAdvancedPowerDefaults,
+} from "./runtimeModeProfiles";
 import type {
   AdvancedPowerSettings,
   AppRuntimeMode,
@@ -1093,6 +1097,7 @@ export const flashDevdDevice = (
   );
 
 function defaultMockSettings(ratedVoutMv = 12_000): DeviceSettings {
+  const advancedPower = buildAdvancedPowerDefaults(ratedVoutMv);
   return {
     wifi: {
       configured: false,
@@ -1104,33 +1109,8 @@ function defaultMockSettings(ratedVoutMv = 12_000): DeviceSettings {
       speed: "ma_500",
       timer_h: 2,
     },
-    advanced_power: {
-      standby_drop_mv: 1200,
-      assist_low_drop_mv: 600,
-      assist_enter_delta_ma: 0,
-      assist_exit_delta_ma: 0,
-      assist_required_samples: 2,
-      assist_ramp_step_mv: 100,
-      assist_ramp_interval_ms: 200,
-      rated_enter_delta_ma: 0,
-      rated_exit_delta_ma: 0,
-      vin_drop_threshold_pct: 4,
-      required_samples: 2,
-    },
-    advanced_power_capabilities: {
-      rated_vout_mv: ratedVoutMv,
-      standby_drop_mv: { default: 1200, min: 0, max: 3000, step: 20 },
-      assist_low_drop_mv: { default: 600, min: 0, max: 3000, step: 20 },
-      assist_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
-      assist_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
-      assist_required_samples: { default: 2, min: 1, max: 5, step: 1 },
-      assist_ramp_step_mv: { default: 100, min: 20, max: 1000, step: 20 },
-      assist_ramp_interval_ms: { default: 200, min: 100, max: 3000, step: 100 },
-      rated_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
-      rated_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
-      vin_drop_threshold_pct: { default: 4, min: 1, max: 12, step: 1 },
-      required_samples: { default: 2, min: 1, max: 5, step: 1 },
-    },
+    advanced_power: advancedPower,
+    advanced_power_capabilities: buildAdvancedPowerCapabilities(ratedVoutMv),
   };
 }
 
@@ -1156,46 +1136,22 @@ function updateMockAdvancedPower(baseUrl: string, body: unknown) {
         typeof next.standby_drop_mv === "number"
           ? next.standby_drop_mv
           : current.advanced_power.standby_drop_mv,
-      assist_low_drop_mv:
-        typeof next.assist_low_drop_mv === "number"
-          ? next.assist_low_drop_mv
-          : current.advanced_power.assist_low_drop_mv,
-      assist_enter_delta_ma:
-        typeof next.assist_enter_delta_ma === "number"
-          ? next.assist_enter_delta_ma
-          : current.advanced_power.assist_enter_delta_ma,
-      assist_exit_delta_ma:
-        typeof next.assist_exit_delta_ma === "number"
-          ? next.assist_exit_delta_ma
-          : current.advanced_power.assist_exit_delta_ma,
-      assist_required_samples:
-        typeof next.assist_required_samples === "number"
-          ? next.assist_required_samples
-          : current.advanced_power.assist_required_samples,
-      assist_ramp_step_mv:
-        typeof next.assist_ramp_step_mv === "number"
-          ? next.assist_ramp_step_mv
-          : current.advanced_power.assist_ramp_step_mv,
-      assist_ramp_interval_ms:
-        typeof next.assist_ramp_interval_ms === "number"
-          ? next.assist_ramp_interval_ms
-          : current.advanced_power.assist_ramp_interval_ms,
-      rated_enter_delta_ma:
-        typeof next.rated_enter_delta_ma === "number"
-          ? next.rated_enter_delta_ma
-          : current.advanced_power.rated_enter_delta_ma,
-      rated_exit_delta_ma:
-        typeof next.rated_exit_delta_ma === "number"
-          ? next.rated_exit_delta_ma
-          : current.advanced_power.rated_exit_delta_ma,
-      vin_drop_threshold_pct:
-        typeof next.vin_drop_threshold_pct === "number"
-          ? next.vin_drop_threshold_pct
-          : current.advanced_power.vin_drop_threshold_pct,
-      required_samples:
-        typeof next.required_samples === "number"
-          ? next.required_samples
-          : current.advanced_power.required_samples,
+      input_uvlo_cutoff_mv:
+        typeof next.input_uvlo_cutoff_mv === "number"
+          ? next.input_uvlo_cutoff_mv
+          : current.advanced_power.input_uvlo_cutoff_mv,
+      input_uvlo_recover_mv:
+        typeof next.input_uvlo_recover_mv === "number"
+          ? next.input_uvlo_recover_mv
+          : current.advanced_power.input_uvlo_recover_mv,
+      input_uvlo_required_samples:
+        typeof next.input_uvlo_required_samples === "number"
+          ? next.input_uvlo_required_samples
+          : current.advanced_power.input_uvlo_required_samples,
+      source_limited_enter_delta_ma:
+        typeof next.source_limited_enter_delta_ma === "number"
+          ? next.source_limited_enter_delta_ma
+          : current.advanced_power.source_limited_enter_delta_ma,
     },
   });
 }

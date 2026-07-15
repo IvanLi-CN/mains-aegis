@@ -68,12 +68,20 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
             .unwrap_or("unknown"),
         input_vbus_mv: snapshot.input_vbus_mv,
         input_ibus_ma: snapshot.input_ibus_ma,
-        mains_present: snapshot
-            .vin_vbus_mv
-            .map(|mv| mv >= 3_000)
-            .or(snapshot.vin_mains_present)
-            .or(snapshot.aggregate_input_present),
+        mains_present: if snapshot.dashboard_detail.input_gate_state == Some("cutoff") {
+            Some(false)
+        } else {
+            snapshot
+                .vin_vbus_mv
+                .map(|mv| mv >= 3_000)
+                .or(snapshot.vin_mains_present)
+                .or(snapshot.aggregate_input_present)
+        },
+        pre_tps_vin_mv: snapshot.vin_vbus_mv,
         vin_vbus_mv: snapshot.vin_vbus_mv,
+        input_gate_state: snapshot.dashboard_detail.input_gate_state,
+        input_gate_reason: snapshot.dashboard_detail.input_gate_reason,
+        input_power_good: snapshot.dashboard_detail.input_power_good,
         vin_iin_ma: snapshot.vin_iin_ma,
         tps_total_iout_ma: snapshot.dashboard_detail.input_tps_total_iout_ma,
         tps_limit_threshold_ma: snapshot.dashboard_detail.input_tps_limit_threshold_ma,
@@ -87,6 +95,7 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
         input_vin_drop_mv: snapshot.dashboard_detail.input_vin_drop_mv,
         assist_power_stage: snapshot.dashboard_detail.assist_power_stage,
         assist_target_vout_mv: snapshot.dashboard_detail.assist_target_vout_mv,
+        backup_reason: snapshot.dashboard_detail.backup_reason,
         charger_state: comm_state_slug(snapshot.bq25792),
         charger_allow_charge: snapshot.bq25792_allow_charge,
         charger_ichg_ma: snapshot.bq25792_ichg_ma,

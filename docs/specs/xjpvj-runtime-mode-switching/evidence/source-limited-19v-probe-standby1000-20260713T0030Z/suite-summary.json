@@ -1,0 +1,212 @@
+{
+  "created_at": "2026-07-12T16:29:49.435652+00:00",
+  "load_protection": {
+    "load_max_i_ma_total": 4000,
+    "load_max_p_mw": 80000,
+    "load_min_v_mv": 3000
+  },
+  "profiles": [
+    {
+      "output_profile": "19v",
+      "rated_vout_mv": 19000,
+      "source_current_limit_ma": 3000,
+      "source_voltage_mv": 19000
+    }
+  ],
+  "reports": [
+    {
+      "advanced_power": {
+        "assist_enter_delta_ma": 0,
+        "assist_exit_delta_ma": 0,
+        "assist_low_drop_mv": 600,
+        "assist_ramp_interval_ms": 200,
+        "assist_ramp_step_mv": 100,
+        "assist_required_samples": 2,
+        "rated_enter_delta_ma": 0,
+        "rated_exit_delta_ma": 0,
+        "required_samples": 2,
+        "source_limited_enter_delta_ma": 1000,
+        "source_limited_exit_delta_ma": 0,
+        "source_limited_recover_margin_mv": 400,
+        "source_limited_required_samples": 2,
+        "source_limited_vin_drop_pct": 1,
+        "standby_drop_mv": 1000,
+        "vin_drop_threshold_pct": 4
+      },
+      "effective_sample_rate_hz": 9.863,
+      "failed_acceptance_checks": [],
+      "failures": [],
+      "include_backup": true,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "load_min_v_mv": 3000,
+      "max_sample_gap_s": 0.401,
+      "output_profile": "19v",
+      "report_dir": "19v-backup_only-1000ma",
+      "run_validity": "valid_for_signoff",
+      "scene_assertions": {
+        "backup_cut": {
+          "backup_continuous": true,
+          "input_absent_observed": true
+        },
+        "backup_online_started_at_s": null,
+        "failures": [],
+        "hold_tps_power": {
+          "limit_mw": 2000,
+          "maximum_mw": 1083,
+          "missing_samples": 0,
+          "over_2w_samples": 0
+        },
+        "passed": true,
+        "source_limited": null,
+        "transition_source_limited_started_at_s": null
+      },
+      "scene_complete": true,
+      "scene_type": "backup_only",
+      "signoff_valid": true,
+      "source_current_limit_ma": 3000,
+      "source_voltage_mv": 19000,
+      "suite_contract": "source_limited_19v",
+      "target_ma": 1000
+    },
+    {
+      "advanced_power": {
+        "assist_enter_delta_ma": 0,
+        "assist_exit_delta_ma": 0,
+        "assist_low_drop_mv": 600,
+        "assist_ramp_interval_ms": 200,
+        "assist_ramp_step_mv": 100,
+        "assist_required_samples": 2,
+        "rated_enter_delta_ma": 0,
+        "rated_exit_delta_ma": 0,
+        "required_samples": 2,
+        "source_limited_enter_delta_ma": 1000,
+        "source_limited_exit_delta_ma": 0,
+        "source_limited_recover_margin_mv": 400,
+        "source_limited_required_samples": 2,
+        "source_limited_vin_drop_pct": 1,
+        "standby_drop_mv": 1000,
+        "vin_drop_threshold_pct": 4
+      },
+      "effective_sample_rate_hz": 9.755,
+      "failed_acceptance_checks": [],
+      "failures": [],
+      "include_backup": false,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "load_min_v_mv": 3000,
+      "max_sample_gap_s": 0.401,
+      "output_profile": "19v",
+      "report_dir": "19v-source_limited_online-3900ma",
+      "run_validity": "valid_for_signoff",
+      "scene_assertions": {
+        "backup_cut": null,
+        "backup_online_started_at_s": 8.935,
+        "failures": [],
+        "hold_tps_power": {
+          "limit_mw": 2000,
+          "maximum_mw": 1011,
+          "missing_samples": 0,
+          "over_2w_samples": 0
+        },
+        "passed": true,
+        "source_limited": {
+          "entry_delay_s": -0.5,
+          "entry_t_s": 8.935,
+          "minimum_load_mv": 18000,
+          "observed": true,
+          "post_latch_low_voltage_max_duration_s": 0.0,
+          "post_latch_min_load_mv": 18732,
+          "pre_latch_low_voltage_max_duration_s": 0.0,
+          "target_rated_observed": true
+        },
+        "transition_source_limited_started_at_s": null
+      },
+      "scene_complete": true,
+      "scene_type": "source_limited_online",
+      "signoff_valid": true,
+      "source_current_limit_ma": 3000,
+      "source_voltage_mv": 19000,
+      "suite_contract": "source_limited_19v",
+      "target_ma": 3900
+    },
+    {
+      "advanced_power": {
+        "assist_enter_delta_ma": 0,
+        "assist_exit_delta_ma": 0,
+        "assist_low_drop_mv": 600,
+        "assist_ramp_interval_ms": 200,
+        "assist_ramp_step_mv": 100,
+        "assist_required_samples": 2,
+        "rated_enter_delta_ma": 0,
+        "rated_exit_delta_ma": 0,
+        "required_samples": 2,
+        "source_limited_enter_delta_ma": 1000,
+        "source_limited_exit_delta_ma": 0,
+        "source_limited_recover_margin_mv": 400,
+        "source_limited_required_samples": 2,
+        "source_limited_vin_drop_pct": 1,
+        "standby_drop_mv": 1000,
+        "vin_drop_threshold_pct": 4
+      },
+      "effective_sample_rate_hz": 9.866,
+      "failed_acceptance_checks": [],
+      "failures": [],
+      "include_backup": true,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "load_min_v_mv": 3000,
+      "max_sample_gap_s": 0.5,
+      "output_profile": "19v",
+      "report_dir": "19v-source_limited_cut-3900ma",
+      "run_validity": "valid_for_signoff",
+      "scene_assertions": {
+        "backup_cut": {
+          "backup_continuous": true,
+          "input_absent_observed": true
+        },
+        "backup_online_started_at_s": 9.87,
+        "failures": [],
+        "hold_tps_power": {
+          "limit_mw": 2000,
+          "maximum_mw": 1083,
+          "missing_samples": 0,
+          "over_2w_samples": 0
+        },
+        "passed": true,
+        "source_limited": {
+          "entry_delay_s": 0.9,
+          "entry_t_s": 9.87,
+          "minimum_load_mv": 18000,
+          "observed": true,
+          "post_latch_low_voltage_max_duration_s": 0.0,
+          "post_latch_min_load_mv": 18732,
+          "pre_latch_low_voltage_max_duration_s": 0.305,
+          "target_rated_observed": true
+        },
+        "transition_source_limited_started_at_s": 9.369
+      },
+      "scene_complete": true,
+      "scene_type": "source_limited_cut",
+      "signoff_valid": true,
+      "source_current_limit_ma": 3000,
+      "source_voltage_mv": 19000,
+      "suite_contract": "source_limited_19v",
+      "target_ma": 3900
+    }
+  ],
+  "suite_contract": "source_limited_19v",
+  "suite_id": "source-limited-19v-probe-standby1000-20260713T0030Z",
+  "thresholds": {
+    "engineering_sample_rate_hz": 3.0,
+    "max_sample_gap_s": 0.5,
+    "minimum_sample_rate_hz": 2.0,
+    "sample_interval_ms": 100,
+    "ups_watch_freshness_ms": 750
+  },
+  "transport": {
+    "electronic_load": "Loadlynx:cli+ipc+usb",
+    "power_source": "Isolapurr:cli+ipc+usb",
+    "ups": "mains-aegis CLI + native IPC + USB"
+  }
+}

@@ -79,7 +79,11 @@ export type UpsStatus = {
     mains_present: boolean;
     input_vbus_mv: number | null;
     input_ibus_ma: number | null;
+    pre_tps_vin_mv?: number | null;
     vin_vbus_mv: number | null;
+    input_gate_state?: "enabled" | "cutoff" | string | null;
+    input_gate_reason?: "none" | "pre_tps_undervoltage" | string | null;
+    input_power_good?: boolean | null;
     vin_iin_ma: number | null;
     tps_total_iout_ma?: number | null;
     tps_limit_threshold_ma?: number | null;
@@ -236,16 +240,10 @@ export type DeviceSettings = {
   };
   advanced_power: {
     standby_drop_mv: number;
-    assist_low_drop_mv: number;
-    assist_enter_delta_ma: number;
-    assist_exit_delta_ma: number;
-    assist_required_samples: number;
-    assist_ramp_step_mv: number;
-    assist_ramp_interval_ms: number;
-    rated_enter_delta_ma: number;
-    rated_exit_delta_ma: number;
-    vin_drop_threshold_pct: number;
-    required_samples: number;
+    input_uvlo_cutoff_mv: number;
+    input_uvlo_recover_mv: number;
+    input_uvlo_required_samples: number;
+    source_limited_enter_delta_ma: number;
   };
   advanced_power_capabilities: {
     rated_vout_mv: number;
@@ -255,61 +253,25 @@ export type DeviceSettings = {
       max: number;
       step: number;
     };
-    assist_low_drop_mv: {
+    input_uvlo_cutoff_mv: {
       default: number;
       min: number;
       max: number;
       step: number;
     };
-    assist_enter_delta_ma: {
+    input_uvlo_recover_mv: {
       default: number;
       min: number;
       max: number;
       step: number;
     };
-    assist_exit_delta_ma: {
+    input_uvlo_required_samples: {
       default: number;
       min: number;
       max: number;
       step: number;
     };
-    assist_required_samples: {
-      default: number;
-      min: number;
-      max: number;
-      step: number;
-    };
-    assist_ramp_step_mv: {
-      default: number;
-      min: number;
-      max: number;
-      step: number;
-    };
-    assist_ramp_interval_ms: {
-      default: number;
-      min: number;
-      max: number;
-      step: number;
-    };
-    rated_enter_delta_ma: {
-      default: number;
-      min: number;
-      max: number;
-      step: number;
-    };
-    rated_exit_delta_ma: {
-      default: number;
-      min: number;
-      max: number;
-      step: number;
-    };
-    vin_drop_threshold_pct: {
-      default: number;
-      min: number;
-      max: number;
-      step: number;
-    };
-    required_samples: {
+    source_limited_enter_delta_ma: {
       default: number;
       min: number;
       max: number;

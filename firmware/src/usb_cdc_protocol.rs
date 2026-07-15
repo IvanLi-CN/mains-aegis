@@ -53,6 +53,8 @@ pub enum UsbCdcRequest {
     SetManualChargePrefs(ManualChargePrefsCommand),
     SetAdvancedPower(AdvancedPowerSettingsSnapshot),
     ResetAdvancedPower,
+    EnableOutputBypass,
+    RestoreOutput,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -547,6 +549,8 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
             parse_advanced_power_settings(line)?,
         )),
         "reset_advanced_power" => Ok(UsbCdcRequest::ResetAdvancedPower),
+        "enable_output_bypass" => Ok(UsbCdcRequest::EnableOutputBypass),
+        "restore_output" => Ok(UsbCdcRequest::RestoreOutput),
         "output_enable" | "output_disable" | "clear_fault" | "start_charge" | "stop_charge" => {
             Err(UsbCdcProtocolError::UnsafeOperation)
         }
@@ -665,25 +669,13 @@ fn parse_advanced_power_settings(
     let settings = AdvancedPowerSettingsSnapshot {
         standby_drop_mv: json_u16_field(line, "standby_drop_mv")?
             .ok_or(UsbCdcProtocolError::MissingField)?,
-        assist_low_drop_mv: json_u16_field(line, "assist_low_drop_mv")?
+        input_uvlo_cutoff_mv: json_u16_field(line, "input_uvlo_cutoff_mv")?
             .ok_or(UsbCdcProtocolError::MissingField)?,
-        assist_enter_delta_ma: json_i16_field(line, "assist_enter_delta_ma")?
+        input_uvlo_recover_mv: json_u16_field(line, "input_uvlo_recover_mv")?
             .ok_or(UsbCdcProtocolError::MissingField)?,
-        assist_exit_delta_ma: json_i16_field(line, "assist_exit_delta_ma")?
+        input_uvlo_required_samples: json_u8_field(line, "input_uvlo_required_samples")?
             .ok_or(UsbCdcProtocolError::MissingField)?,
-        assist_required_samples: json_u8_field(line, "assist_required_samples")?
-            .ok_or(UsbCdcProtocolError::MissingField)?,
-        assist_ramp_step_mv: json_u16_field(line, "assist_ramp_step_mv")?
-            .ok_or(UsbCdcProtocolError::MissingField)?,
-        assist_ramp_interval_ms: json_u16_field(line, "assist_ramp_interval_ms")?
-            .ok_or(UsbCdcProtocolError::MissingField)?,
-        rated_enter_delta_ma: json_i16_field(line, "rated_enter_delta_ma")?
-            .ok_or(UsbCdcProtocolError::MissingField)?,
-        rated_exit_delta_ma: json_i16_field(line, "rated_exit_delta_ma")?
-            .ok_or(UsbCdcProtocolError::MissingField)?,
-        vin_drop_threshold_pct: json_u8_field(line, "vin_drop_threshold_pct")?
-            .ok_or(UsbCdcProtocolError::MissingField)?,
-        required_samples: json_u8_field(line, "required_samples")?
+        source_limited_enter_delta_ma: json_i16_field(line, "source_limited_enter_delta_ma")?
             .ok_or(UsbCdcProtocolError::MissingField)?,
     };
     validate_advanced_power_settings(settings).map_err(advanced_power_validation_protocol_error)?;
@@ -1018,7 +1010,7 @@ mod tests {
     #[test]
     fn rejects_malformed_advanced_power_numbers_with_trailing_fraction() {
         let err = parse_http_advanced_power_request(
-            r#"{"standby_drop_mv":1200,"assist_low_drop_mv":600,"assist_enter_delta_ma":0,"assist_exit_delta_ma":0,"assist_required_samples":2.9,"assist_ramp_step_mv":100,"assist_ramp_interval_ms":200,"rated_enter_delta_ma":0,"rated_exit_delta_ma":0,"vin_drop_threshold_pct":4,"required_samples":2}"#,
+            r#"{"standby_drop_mv":1200,"input_uvlo_cutoff_mv":11300,"input_uvlo_recover_mv":11500,"input_uvlo_required_samples":3.9,"source_limited_enter_delta_ma":1900}"#,
         )
         .unwrap_err();
         assert_eq!(err, UsbCdcProtocolError::InvalidJson);
@@ -1027,10 +1019,31 @@ mod tests {
     #[test]
     fn rejects_malformed_advanced_power_numbers_with_trailing_garbage() {
         let err = parse_http_advanced_power_request(
-            r#"{"standby_drop_mv":1200abc,"assist_low_drop_mv":600,"assist_enter_delta_ma":0,"assist_exit_delta_ma":0,"assist_required_samples":2,"assist_ramp_step_mv":100,"assist_ramp_interval_ms":200,"rated_enter_delta_ma":0,"rated_exit_delta_ma":0,"vin_drop_threshold_pct":4,"required_samples":2}"#,
+            r#"{"standby_drop_mv":1200abc,"input_uvlo_cutoff_mv":11300,"input_uvlo_recover_mv":11500,"input_uvlo_required_samples":3,"source_limited_enter_delta_ma":1900}"#,
         )
         .unwrap_err();
         assert_eq!(err, UsbCdcProtocolError::InvalidJson);
+    }
+
+    #[test]
+    fn parses_advanced_power_request_with_source_limited_fields() {
+        let frame = parse_frame(
+            r#"{"type":"request","request_id":"req-adv","op":"set_advanced_power","standby_drop_mv":1200,"input_uvlo_cutoff_mv":11300,"input_uvlo_recover_mv":11500,"input_uvlo_required_samples":3,"source_limited_enter_delta_ma":1900}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            frame,
+            UsbCdcFrame::Request {
+                request_id: String::try_from("req-adv").unwrap(),
+                op: UsbCdcRequest::SetAdvancedPower(AdvancedPowerSettingsSnapshot {
+                    standby_drop_mv: 1200,
+                    input_uvlo_cutoff_mv: 11_300,
+                    input_uvlo_recover_mv: 11_500,
+                    input_uvlo_required_samples: 3,
+                    source_limited_enter_delta_ma: 1900,
+                }),
+            }
+        );
     }
 
     #[test]
@@ -1041,7 +1054,11 @@ mod tests {
                 mains_present: Some(true),
                 input_vbus_mv: Some(12_340),
                 input_ibus_ma: Some(1_234),
+                pre_tps_vin_mv: Some(12_180),
                 vin_vbus_mv: Some(12_180),
+                input_gate_state: Some("enabled"),
+                input_gate_reason: Some("none"),
+                input_power_good: Some(true),
                 vin_iin_ma: Some(980),
                 tps_total_iout_ma: Some(128),
                 tps_limit_threshold_ma: Some(100),
@@ -1052,6 +1069,7 @@ mod tests {
                 vin_drop_mv: Some(120),
                 assist_power_stage: Some("assist_rated"),
                 assist_target_vout_mv: Some(12_000),
+                backup_reason: None,
                 usb_pd_attached: false,
                 usb_pd_charge_ready: false,
                 usb_pd_vbus_present: Some(true),

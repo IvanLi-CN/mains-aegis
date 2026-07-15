@@ -38,6 +38,10 @@ import {
   type DevdSerialSession,
 } from "../api/client";
 import { subscribeStatusStream, type StatusStream } from "../api/statusStream";
+import {
+  buildAdvancedPowerCapabilities,
+  buildAdvancedPowerDefaults,
+} from "../api/runtimeModeProfiles";
 import type {
   AdvancedPowerSettings,
   DevdDevice,
@@ -3122,6 +3126,7 @@ type DeviceSettingsPatch = {
 };
 
 function defaultDeviceSettings(): DeviceSettings {
+  const ratedVoutMv = 12_000;
   return {
     wifi: {
       configured: false,
@@ -3133,33 +3138,8 @@ function defaultDeviceSettings(): DeviceSettings {
       speed: "ma_500",
       timer_h: 2,
     },
-    advanced_power: {
-      standby_drop_mv: 1200,
-      assist_low_drop_mv: 600,
-      assist_enter_delta_ma: 0,
-      assist_exit_delta_ma: 0,
-      assist_required_samples: 2,
-      assist_ramp_step_mv: 100,
-      assist_ramp_interval_ms: 200,
-      rated_enter_delta_ma: 0,
-      rated_exit_delta_ma: 0,
-      vin_drop_threshold_pct: 4,
-      required_samples: 2,
-    },
-    advanced_power_capabilities: {
-      rated_vout_mv: 12000,
-      standby_drop_mv: { default: 1200, min: 0, max: 3000, step: 20 },
-      assist_low_drop_mv: { default: 600, min: 0, max: 3000, step: 20 },
-      assist_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
-      assist_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
-      assist_required_samples: { default: 2, min: 1, max: 5, step: 1 },
-      assist_ramp_step_mv: { default: 100, min: 20, max: 1000, step: 20 },
-      assist_ramp_interval_ms: { default: 200, min: 100, max: 3000, step: 100 },
-      rated_enter_delta_ma: { default: 0, min: -100, max: 1000, step: 50 },
-      rated_exit_delta_ma: { default: 0, min: -50, max: 1000, step: 50 },
-      vin_drop_threshold_pct: { default: 4, min: 1, max: 12, step: 1 },
-      required_samples: { default: 2, min: 1, max: 5, step: 1 },
-    },
+    advanced_power: buildAdvancedPowerDefaults(ratedVoutMv),
+    advanced_power_capabilities: buildAdvancedPowerCapabilities(ratedVoutMv),
   };
 }
 

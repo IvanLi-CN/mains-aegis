@@ -1,0 +1,237 @@
+{
+  "build_id": "93aadc61-clean-eb2b310e1419a6cc",
+  "recommended_candidate": "A",
+  "recommended_cutoff_mv": 11300,
+  "recommended_recover_mv": 11500,
+  "root_suite_is_recommended_candidate_a": true,
+  "candidates": [
+    {
+      "candidate": "A",
+      "cutoff_mv": 11300,
+      "recover_mv": 11500,
+      "suite_id": "source-limited-12v-93aadc61-uvlo-a",
+      "suite_dir": ".",
+      "meta_dir": "candidate-a-meta",
+      "suite_signoff_valid": true,
+      "scene_results": [
+        {
+          "scene": "backup_only",
+          "run_validity": "valid_for_signoff",
+          "signoff_valid": true,
+          "scene_complete": true,
+          "effective_sample_rate_hz": 5.242,
+          "max_sample_gap_s": 0.203,
+          "failed_acceptance_checks": []
+        },
+        {
+          "scene": "source_in_budget",
+          "run_validity": "valid_for_signoff",
+          "signoff_valid": true,
+          "scene_complete": true,
+          "effective_sample_rate_hz": 5.029,
+          "max_sample_gap_s": 0.204,
+          "failed_acceptance_checks": [],
+          "in_budget_guard": {
+            "applied_samples": 76,
+            "backup_reason_samples": 0,
+            "backup_samples": 0,
+            "offline_samples": 0,
+            "source_limited_samples": 0,
+            "target_ma": 2500
+          }
+        },
+        {
+          "scene": "source_limited_online",
+          "run_validity": "valid_for_signoff",
+          "signoff_valid": true,
+          "scene_complete": true,
+          "effective_sample_rate_hz": 5.005,
+          "max_sample_gap_s": 0.203,
+          "failed_acceptance_checks": [],
+          "source_limited": {
+            "entry_delay_s": 0.399,
+            "entry_t_s": 9.784,
+            "minimum_load_mv": 11000,
+            "observed": true,
+            "post_latch_low_voltage_max_duration_s": 0.0,
+            "post_latch_min_load_mv": 11790,
+            "pre_latch_low_voltage_max_duration_s": 0.0,
+            "target_rated_observed": true
+          }
+        },
+        {
+          "scene": "source_limited_cut",
+          "run_validity": "valid_for_signoff",
+          "signoff_valid": true,
+          "scene_complete": true,
+          "effective_sample_rate_hz": 5.182,
+          "max_sample_gap_s": 0.203,
+          "failed_acceptance_checks": [],
+          "source_limited": {
+            "entry_delay_s": 0.0,
+            "entry_t_s": 9.56,
+            "minimum_load_mv": 11000,
+            "observed": true,
+            "post_latch_low_voltage_max_duration_s": 0.0,
+            "post_latch_min_load_mv": 11790,
+            "pre_latch_low_voltage_max_duration_s": 0.0,
+            "target_rated_observed": true
+          }
+        }
+      ]
+    },
+    {
+      "candidate": "B",
+      "cutoff_mv": 11400,
+      "recover_mv": 11600,
+      "suite_id": "source-limited-12v-93aadc61-uvlo-b",
+      "suite_dir": "candidate-b-11400-11600",
+      "meta_dir": "candidate-b-11400-11600-meta",
+      "suite_signoff_valid": false,
+      "scene_results": [
+        {
+          "scene": "backup_only",
+          "run_validity": "valid_for_signoff",
+          "signoff_valid": true,
+          "scene_complete": true,
+          "effective_sample_rate_hz": 5.157,
+          "max_sample_gap_s": 0.257,
+          "failed_acceptance_checks": []
+        },
+        {
+          "scene": "source_in_budget",
+          "run_validity": "invalid_diagnostic_only",
+          "signoff_valid": false,
+          "scene_complete": false,
+          "effective_sample_rate_hz": 5.01,
+          "max_sample_gap_s": 0.203,
+          "failed_acceptance_checks": [
+            "source_in_budget_entered_backup",
+            "source_in_budget_mains_not_continuously_online"
+          ],
+          "in_budget_guard": {
+            "applied_samples": 71,
+            "backup_reason_samples": 8,
+            "backup_samples": 8,
+            "offline_samples": 8,
+            "source_limited_samples": 0,
+            "target_ma": 2500
+          }
+        },
+        {
+          "scene": "source_limited_online",
+          "run_validity": "valid_for_signoff",
+          "signoff_valid": true,
+          "scene_complete": true,
+          "effective_sample_rate_hz": 5.035,
+          "max_sample_gap_s": 0.206,
+          "failed_acceptance_checks": [],
+          "source_limited": {
+            "entry_delay_s": 1.0,
+            "entry_t_s": 9.627,
+            "minimum_load_mv": 11000,
+            "observed": true,
+            "post_latch_low_voltage_max_duration_s": 0.0,
+            "post_latch_min_load_mv": 11790,
+            "pre_latch_low_voltage_max_duration_s": 0.0,
+            "target_rated_observed": true
+          }
+        },
+        {
+          "scene": "source_limited_cut",
+          "run_validity": "valid_for_signoff",
+          "signoff_valid": true,
+          "scene_complete": true,
+          "effective_sample_rate_hz": 5.22,
+          "max_sample_gap_s": 0.401,
+          "failed_acceptance_checks": [],
+          "source_limited": {
+            "entry_delay_s": 1.4,
+            "entry_t_s": 9.938,
+            "minimum_load_mv": 11000,
+            "observed": true,
+            "post_latch_low_voltage_max_duration_s": 0.0,
+            "post_latch_min_load_mv": 11790,
+            "pre_latch_low_voltage_max_duration_s": 0.0,
+            "target_rated_observed": true
+          }
+        }
+      ]
+    },
+    {
+      "candidate": "C",
+      "cutoff_mv": 11500,
+      "recover_mv": 11700,
+      "suite_id": "source-limited-12v-93aadc61-uvlo-c",
+      "suite_dir": "candidate-c-11500-11700",
+      "meta_dir": "candidate-c-11500-11700-meta",
+      "suite_signoff_valid": true,
+      "scene_results": [
+        {
+          "scene": "backup_only",
+          "run_validity": "valid_for_signoff",
+          "signoff_valid": true,
+          "scene_complete": true,
+          "effective_sample_rate_hz": 5.22,
+          "max_sample_gap_s": 0.208,
+          "failed_acceptance_checks": []
+        },
+        {
+          "scene": "source_in_budget",
+          "run_validity": "valid_for_signoff",
+          "signoff_valid": true,
+          "scene_complete": true,
+          "effective_sample_rate_hz": 5.021,
+          "max_sample_gap_s": 0.202,
+          "failed_acceptance_checks": [],
+          "in_budget_guard": {
+            "applied_samples": 78,
+            "backup_reason_samples": 0,
+            "backup_samples": 0,
+            "offline_samples": 0,
+            "source_limited_samples": 0,
+            "target_ma": 2500
+          }
+        },
+        {
+          "scene": "source_limited_online",
+          "run_validity": "valid_for_signoff",
+          "signoff_valid": true,
+          "scene_complete": true,
+          "effective_sample_rate_hz": 5.005,
+          "max_sample_gap_s": 0.204,
+          "failed_acceptance_checks": [],
+          "source_limited": {
+            "entry_delay_s": 0.4,
+            "entry_t_s": 9.205,
+            "minimum_load_mv": 11000,
+            "observed": true,
+            "post_latch_low_voltage_max_duration_s": 0.0,
+            "post_latch_min_load_mv": 11790,
+            "pre_latch_low_voltage_max_duration_s": 0.0,
+            "target_rated_observed": true
+          }
+        },
+        {
+          "scene": "source_limited_cut",
+          "run_validity": "valid_for_signoff",
+          "signoff_valid": true,
+          "scene_complete": true,
+          "effective_sample_rate_hz": 5.22,
+          "max_sample_gap_s": 0.214,
+          "failed_acceptance_checks": [],
+          "source_limited": {
+            "entry_delay_s": 0.598,
+            "entry_t_s": 9.621,
+            "minimum_load_mv": 11000,
+            "observed": true,
+            "post_latch_low_voltage_max_duration_s": 0.0,
+            "post_latch_min_load_mv": 11790,
+            "pre_latch_low_voltage_max_duration_s": 0.0,
+            "target_rated_observed": true
+          }
+        }
+      ]
+    }
+  ]
+}

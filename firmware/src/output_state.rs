@@ -1,3 +1,5 @@
+use crate::net_types::RuntimeModePolicySnapshot;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputSelector {
     OutA,
@@ -19,6 +21,7 @@ pub enum OutputGateReason {
     TpsFault,
     TpsConfigFailed,
     ActiveProtection,
+    ManualBypass,
 }
 
 impl OutputGateReason {
@@ -30,11 +33,123 @@ impl OutputGateReason {
             OutputGateReason::TpsFault => "tps_fault",
             OutputGateReason::TpsConfigFailed => "tps_config_failed",
             OutputGateReason::ActiveProtection => "active_protection",
+            OutputGateReason::ManualBypass => "manual_bypass",
         }
     }
 }
 
 pub const LOW_BATTERY_OUTPUT_RESTORE_RSOC_PCT: u16 = 20;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputGateThresholds {
+    pub cutoff_mv: u16,
+    pub recover_mv: u16,
+    pub required_samples: u8,
+}
+
+impl InputGateThresholds {
+    pub const fn from_runtime_policy(policy: RuntimeModePolicySnapshot) -> Self {
+        Self {
+            cutoff_mv: policy.tuning.input_uvlo_cutoff_mv,
+            recover_mv: policy.tuning.input_uvlo_recover_mv,
+            required_samples: policy.tuning.input_uvlo_required_samples,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputGateTracker {
+    pub cutoff: bool,
+    thresholds: InputGateThresholds,
+    low_streak: u8,
+    recover_streak: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InputGateAction {
+    None,
+    Cutoff,
+    Enable,
+}
+
+impl InputGateTracker {
+    pub const fn new(thresholds: InputGateThresholds) -> Self {
+        Self {
+            cutoff: false,
+            thresholds,
+            low_streak: 0,
+            recover_streak: 0,
+        }
+    }
+
+    pub fn update_thresholds(&mut self, thresholds: InputGateThresholds) {
+        self.thresholds = thresholds;
+        self.low_streak = 0;
+        self.recover_streak = 0;
+    }
+
+    pub fn step(&mut self, fresh_pre_tps_vin_mv: Option<u16>) -> InputGateAction {
+        let Some(vin_mv) = fresh_pre_tps_vin_mv else {
+            self.low_streak = 0;
+            self.recover_streak = 0;
+            return InputGateAction::None;
+        };
+
+        if self.cutoff {
+            self.low_streak = 0;
+            if vin_mv > self.thresholds.recover_mv {
+                self.recover_streak = self.recover_streak.saturating_add(1);
+                if self.recover_streak >= self.thresholds.required_samples {
+                    self.cutoff = false;
+                    self.recover_streak = 0;
+                    return InputGateAction::Enable;
+                }
+            } else {
+                self.recover_streak = 0;
+            }
+            return InputGateAction::None;
+        }
+
+        self.recover_streak = 0;
+        if vin_mv < self.thresholds.cutoff_mv {
+            self.low_streak = self.low_streak.saturating_add(1);
+            if self.low_streak >= self.thresholds.required_samples {
+                self.cutoff = true;
+                self.low_streak = 0;
+                return InputGateAction::Cutoff;
+            }
+        } else {
+            self.low_streak = 0;
+        }
+        InputGateAction::None
+    }
+
+    pub const fn state_slug(self) -> &'static str {
+        if self.cutoff {
+            "cutoff"
+        } else {
+            "enabled"
+        }
+    }
+
+    pub const fn reason_slug(self) -> &'static str {
+        if self.cutoff {
+            "pre_tps_undervoltage"
+        } else {
+            "none"
+        }
+    }
+}
+
+impl Default for InputGateTracker {
+    fn default() -> Self {
+        Self::new(InputGateThresholds {
+            cutoff_mv: 0,
+            recover_mv: 0,
+            required_samples: 1,
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutputRuntimeState {
@@ -155,9 +270,125 @@ pub fn low_battery_output_hold_release_allowed(input: LowBatteryOutputHoldReleas
 mod tests {
     use super::{
         low_battery_output_hold_release_allowed, output_restore_pending_from_state,
-        output_state_gate_transition, EnabledOutputs, LowBatteryOutputHoldReleaseInput,
-        OutputGateReason, OutputRuntimeState, OutputSelector,
+        output_state_gate_transition, EnabledOutputs, InputGateAction, InputGateThresholds,
+        InputGateTracker, LowBatteryOutputHoldReleaseInput, OutputGateReason, OutputRuntimeState,
+        OutputSelector,
     };
+    use crate::net_types::{
+        RuntimeModeFixedPolicy, RuntimeModePolicySnapshot, RuntimeModeTuningSnapshot,
+    };
+
+    #[test]
+    fn input_gate_requires_three_consecutive_low_fresh_samples() {
+        let mut tracker = InputGateTracker::new(InputGateThresholds {
+            cutoff_mv: 11_300,
+            recover_mv: 11_500,
+            required_samples: 3,
+        });
+        assert_eq!(tracker.step(Some(11_299)), InputGateAction::None);
+        assert_eq!(tracker.step(None), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_000)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_300)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_250)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_200)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_100)), InputGateAction::Cutoff);
+        assert!(tracker.cutoff);
+    }
+
+    #[test]
+    fn input_gate_recovers_only_after_three_samples_above_11v5_for_12v_profile() {
+        let mut tracker = InputGateTracker::new(InputGateThresholds {
+            cutoff_mv: 11_300,
+            recover_mv: 11_500,
+            required_samples: 3,
+        });
+        for sample in [11_200, 11_100, 11_000] {
+            let _ = tracker.step(Some(sample));
+        }
+        assert_eq!(tracker.step(Some(11_501)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_500)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_520)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_540)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_560)), InputGateAction::Enable);
+        assert!(!tracker.cutoff);
+    }
+
+    #[test]
+    fn input_gate_thresholds_follow_advanced_power_snapshot() {
+        assert_eq!(
+            InputGateThresholds::from_runtime_policy(RuntimeModePolicySnapshot {
+                rated_vout_mv: 12_000,
+                tuning: RuntimeModeTuningSnapshot {
+                    standby_vout_mv: 11_300,
+                    input_uvlo_cutoff_mv: 11_300,
+                    input_uvlo_recover_mv: 11_500,
+                    input_uvlo_required_samples: 3,
+                    source_limited_enter_iout_ma: 2_600,
+                },
+                fixed: RuntimeModeFixedPolicy {
+                    assist_low_drop_mv: 600,
+                    assist_enter_iout_ma: 100,
+                    assist_exit_iout_ma: 50,
+                    assist_required_samples: 2,
+                    assist_ramp_step_mv: 100,
+                    assist_ramp_interval_ms: 200,
+                    rated_enter_iout_ma: 100,
+                    rated_exit_iout_ma: 50,
+                    vin_drop_threshold_pct: 4,
+                    required_samples: 2,
+                    source_limited_vin_drop_pct: 1,
+                    source_limited_exit_iout_ma: 50,
+                    source_limited_required_samples: 2,
+                    source_limited_recover_margin_mv: 400,
+                },
+            }),
+            InputGateThresholds {
+                cutoff_mv: 11_300,
+                recover_mv: 11_500,
+                required_samples: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn input_gate_19v_profile_uses_tuned_thresholds() {
+        let mut tracker = InputGateTracker::new(InputGateThresholds {
+            cutoff_mv: 18_200,
+            recover_mv: 18_400,
+            required_samples: 3,
+        });
+        assert_eq!(tracker.step(Some(18_300)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_150)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_100)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_000)), InputGateAction::Cutoff);
+        assert!(tracker.cutoff);
+        assert_eq!(tracker.step(Some(18_250)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_400)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_420)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_450)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(18_480)), InputGateAction::Enable);
+    }
+
+    #[test]
+    fn input_gate_threshold_update_preserves_cutoff_state_but_clears_streaks() {
+        let mut tracker = InputGateTracker::new(InputGateThresholds {
+            cutoff_mv: 11_300,
+            recover_mv: 11_500,
+            required_samples: 3,
+        });
+        for sample in [11_200, 11_100, 11_000] {
+            let _ = tracker.step(Some(sample));
+        }
+        assert!(tracker.cutoff);
+        tracker.update_thresholds(InputGateThresholds {
+            cutoff_mv: 10_800,
+            recover_mv: 11_000,
+            required_samples: 2,
+        });
+        assert!(tracker.cutoff);
+        assert_eq!(tracker.step(Some(11_050)), InputGateAction::None);
+        assert_eq!(tracker.step(Some(11_100)), InputGateAction::Enable);
+    }
 
     fn low_battery_release_input() -> LowBatteryOutputHoldReleaseInput {
         LowBatteryOutputHoldReleaseInput {

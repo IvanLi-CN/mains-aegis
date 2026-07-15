@@ -1,0 +1,64 @@
+{
+  "capabilities": {
+    "standby_drop_mv": { "min": 0, "max": 3000, "step": 20 },
+    "input_uvlo_threshold_mv": { "min": 5000, "max": 20000, "step": 20 },
+    "input_uvlo_required_samples": { "min": 1, "max": 5, "step": 1 },
+    "source_limited_enter_delta_ma": { "min": -100, "max": 3000, "step": 50 }
+  },
+  "profiles": [
+    {
+      "id": "12v",
+      "max_rated_vout_mv": 12000,
+      "defaults": {
+        "standby_drop_mv": 700,
+        "input_uvlo_cutoff_mv": 11300,
+        "input_uvlo_recover_mv": 11500,
+        "input_uvlo_required_samples": 3,
+        "source_limited_enter_delta_ma": 2500
+      },
+      "fixed_policy": {
+        "assist_low_drop_mv": 600,
+        "assist_enter_iout_ma": 100,
+        "assist_exit_iout_ma": 50,
+        "assist_required_samples": 2,
+        "assist_ramp_step_mv": 100,
+        "assist_ramp_interval_ms": 200,
+        "rated_enter_iout_ma": 100,
+        "rated_exit_iout_ma": 50,
+        "vin_drop_threshold_pct": 4,
+        "required_samples": 2,
+        "source_limited_vin_drop_pct": 1,
+        "source_limited_exit_iout_ma": 50,
+        "source_limited_required_samples": 2,
+        "source_limited_recover_margin_mv": 400
+      }
+    },
+    {
+      "id": "19v",
+      "max_rated_vout_mv": 20000,
+      "defaults": {
+        "standby_drop_mv": 900,
+        "input_uvlo_cutoff_mv": 18200,
+        "input_uvlo_recover_mv": 18400,
+        "input_uvlo_required_samples": 3,
+        "source_limited_enter_delta_ma": 1000
+      },
+      "fixed_policy": {
+        "assist_low_drop_mv": 600,
+        "assist_enter_iout_ma": 100,
+        "assist_exit_iout_ma": 50,
+        "assist_required_samples": 2,
+        "assist_ramp_step_mv": 100,
+        "assist_ramp_interval_ms": 200,
+        "rated_enter_iout_ma": 100,
+        "rated_exit_iout_ma": 50,
+        "vin_drop_threshold_pct": 4,
+        "required_samples": 2,
+        "source_limited_vin_drop_pct": 1,
+        "source_limited_exit_iout_ma": 50,
+        "source_limited_required_samples": 2,
+        "source_limited_recover_margin_mv": 400
+      }
+    }
+  ]
+}

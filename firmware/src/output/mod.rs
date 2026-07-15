@@ -18,9 +18,9 @@ use esp_firmware::bq40z50;
 use esp_firmware::fan;
 use esp_firmware::ina3221;
 use esp_firmware::net_types::{
-    validate_advanced_power_settings, AdvancedPowerExpandedSnapshot, AdvancedPowerSettingsSnapshot,
-    AdvancedPowerValidationError, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot,
-    DerivedPowerInputSnapshot, DerivedPowerPolicySnapshot, DerivedPowerSnapshot,
+    validate_advanced_power_settings, AdvancedPowerSettingsSnapshot, AdvancedPowerValidationError,
+    DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerInputSnapshot,
+    DerivedPowerPolicySnapshot, DerivedPowerSnapshot, RuntimeModePolicySnapshot,
 };
 use esp_firmware::output_protection;
 use esp_firmware::output_retry::{self, TpsConfigRetryDecision};
@@ -192,7 +192,7 @@ const EEPROM_ADVANCED_POWER_OFFSET: u16 = 0x0200;
 const EEPROM_BEEPER_PREFS_MAGIC: [u8; 4] = *b"BEEP";
 const EEPROM_BEEPER_PREFS_RECORD_VERSION: u8 = 1;
 const EEPROM_ADVANCED_POWER_MAGIC: [u8; 4] = *b"ADVP";
-const EEPROM_ADVANCED_POWER_RECORD_VERSION: u8 = 2;
+const EEPROM_ADVANCED_POWER_RECORD_VERSION: u8 = 5;
 const EEPROM_WRITE_POLL_ATTEMPTS: usize = 32;
 const EEPROM_WRITE_POLL_GAP: Duration = Duration::from_millis(1);
 
@@ -379,72 +379,96 @@ impl BeeperPrefsRecordV1 {
 }
 
 #[derive(Clone, Copy)]
-struct AdvancedPowerRecordV1 {
+struct AdvancedPowerRecordV5 {
     settings: AdvancedPowerSettingsSnapshot,
 }
 
-impl AdvancedPowerRecordV1 {
+fn encode_u16_step_byte(value: u16, step: u16) -> u8 {
+    (value / step).min(u16::from(u8::MAX)) as u8
+}
+
+fn decode_u16_step_byte(value: u8, step: u16) -> u16 {
+    u16::from(value) * step
+}
+
+fn encode_i16_step_byte(value: i16, min: i16, step: i16) -> u8 {
+    let scaled = (i32::from(value) - i32::from(min)) / i32::from(step);
+    scaled.clamp(0, i32::from(u8::MAX)) as u8
+}
+
+fn decode_i16_step_byte(value: u8, min: i16, step: i16) -> i16 {
+    min + i16::from(value) * step
+}
+
+impl AdvancedPowerRecordV5 {
     fn encode(self) -> [u8; EEPROM_BLOCK_LEN] {
         let mut bytes = [0u8; EEPROM_BLOCK_LEN];
         bytes[0..4].copy_from_slice(&EEPROM_ADVANCED_POWER_MAGIC);
         bytes[4] = EEPROM_ADVANCED_POWER_RECORD_VERSION;
-        let standby_drop = self.settings.standby_drop_mv.to_le_bytes();
-        let assist_low_drop = self.settings.assist_low_drop_mv.to_le_bytes();
-        let assist_enter_delta = self.settings.assist_enter_delta_ma.to_le_bytes();
-        let assist_exit_delta = self.settings.assist_exit_delta_ma.to_le_bytes();
-        let rated_enter_delta = self.settings.rated_enter_delta_ma.to_le_bytes();
-        let rated_exit_delta = self.settings.rated_exit_delta_ma.to_le_bytes();
-        let assist_ramp_step = self.settings.assist_ramp_step_mv.to_le_bytes();
-        let assist_ramp_interval = self.settings.assist_ramp_interval_ms.to_le_bytes();
-        bytes[5..7].copy_from_slice(&standby_drop);
-        bytes[7..9].copy_from_slice(&assist_low_drop);
-        bytes[9..11].copy_from_slice(&assist_enter_delta);
-        bytes[11..13].copy_from_slice(&assist_exit_delta);
-        bytes[13] = self.settings.assist_required_samples;
-        bytes[14..16].copy_from_slice(&assist_ramp_step);
-        bytes[16..18].copy_from_slice(&assist_ramp_interval);
-        bytes[18..20].copy_from_slice(&rated_enter_delta);
-        bytes[20..22].copy_from_slice(&rated_exit_delta);
-        bytes[22] = self.settings.vin_drop_threshold_pct;
-        bytes[23] = self.settings.required_samples;
+        bytes[5] = encode_u16_step_byte(self.settings.standby_drop_mv, 20);
+        bytes[6] = self.settings.input_uvlo_required_samples;
+        bytes[7..9].copy_from_slice(&self.settings.input_uvlo_cutoff_mv.to_le_bytes());
+        bytes[9..11].copy_from_slice(&self.settings.input_uvlo_recover_mv.to_le_bytes());
+        bytes[11] = encode_i16_step_byte(self.settings.source_limited_enter_delta_ma, -100, 50);
         bytes[31] = storage_crc8(&bytes[..31]);
         bytes
     }
 
-    fn decode(bytes: [u8; EEPROM_BLOCK_LEN]) -> Option<Self> {
+    fn decode(
+        bytes: [u8; EEPROM_BLOCK_LEN],
+        _rated_vout_mv: u16,
+    ) -> Option<AdvancedPowerSettingsSnapshot> {
         if bytes[0..4] != EEPROM_ADVANCED_POWER_MAGIC {
             return None;
         }
         if bytes[31] != storage_crc8(&bytes[..31]) {
             return None;
         }
-        let settings = match bytes[4] {
-            1 => AdvancedPowerSettingsSnapshot {
-                standby_drop_mv: u16::from_le_bytes([bytes[5], bytes[6]]),
-                assist_low_drop_mv: u16::from_le_bytes([bytes[7], bytes[8]]),
-                rated_enter_delta_ma: i16::from_le_bytes([bytes[9], bytes[10]]),
-                rated_exit_delta_ma: i16::from_le_bytes([bytes[11], bytes[12]]),
-                vin_drop_threshold_pct: bytes[13],
-                required_samples: bytes[14],
-                ..AdvancedPowerSettingsSnapshot::defaults()
-            },
-            EEPROM_ADVANCED_POWER_RECORD_VERSION => AdvancedPowerSettingsSnapshot {
-                standby_drop_mv: u16::from_le_bytes([bytes[5], bytes[6]]),
-                assist_low_drop_mv: u16::from_le_bytes([bytes[7], bytes[8]]),
-                assist_enter_delta_ma: i16::from_le_bytes([bytes[9], bytes[10]]),
-                assist_exit_delta_ma: i16::from_le_bytes([bytes[11], bytes[12]]),
-                assist_required_samples: bytes[13],
-                assist_ramp_step_mv: u16::from_le_bytes([bytes[14], bytes[15]]),
-                assist_ramp_interval_ms: u16::from_le_bytes([bytes[16], bytes[17]]),
-                rated_enter_delta_ma: i16::from_le_bytes([bytes[18], bytes[19]]),
-                rated_exit_delta_ma: i16::from_le_bytes([bytes[20], bytes[21]]),
-                vin_drop_threshold_pct: bytes[22],
-                required_samples: bytes[23],
-            },
-            _ => return None,
+        if bytes[4] != EEPROM_ADVANCED_POWER_RECORD_VERSION {
+            return None;
+        }
+        let settings = AdvancedPowerSettingsSnapshot {
+            standby_drop_mv: decode_u16_step_byte(bytes[5], 20),
+            input_uvlo_required_samples: bytes[6],
+            input_uvlo_cutoff_mv: u16::from_le_bytes([bytes[7], bytes[8]]),
+            input_uvlo_recover_mv: u16::from_le_bytes([bytes[9], bytes[10]]),
+            source_limited_enter_delta_ma: decode_i16_step_byte(bytes[11], -100, 50),
         };
         validate_advanced_power_settings(settings).ok()?;
-        Some(Self { settings })
+        Some(settings)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        storage_crc8, AdvancedPowerRecordV5, AdvancedPowerSettingsSnapshot,
+        EEPROM_ADVANCED_POWER_MAGIC,
+    };
+
+    #[test]
+    fn advanced_power_v5_record_round_trips_minimal_settings() {
+        let settings = AdvancedPowerSettingsSnapshot {
+            standby_drop_mv: 700,
+            input_uvlo_cutoff_mv: 11_300,
+            input_uvlo_recover_mv: 11_500,
+            input_uvlo_required_samples: 3,
+            source_limited_enter_delta_ma: 2_500,
+        };
+
+        let decoded =
+            AdvancedPowerRecordV5::decode(AdvancedPowerRecordV5 { settings }.encode(), 12_000)
+                .unwrap();
+        assert_eq!(decoded, settings);
+    }
+
+    #[test]
+    fn advanced_power_old_record_versions_are_rejected() {
+        let mut bytes = [0u8; 32];
+        bytes[0..4].copy_from_slice(&EEPROM_ADVANCED_POWER_MAGIC);
+        bytes[4] = 4;
+        bytes[31] = storage_crc8(&bytes[..31]);
+        assert!(AdvancedPowerRecordV5::decode(bytes, 12_000).is_none());
     }
 }
 
@@ -1160,12 +1184,13 @@ where
     write_eeprom_block(
         i2c,
         EEPROM_ADVANCED_POWER_OFFSET,
-        AdvancedPowerRecordV1 { settings }.encode(),
+        AdvancedPowerRecordV5 { settings }.encode(),
     )
 }
 
 fn load_advanced_power_from_eeprom<I2C>(
     i2c: &mut I2C,
+    rated_vout_mv: u16,
 ) -> Result<AdvancedPowerStorageLoad, esp_hal::i2c::master::Error>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
@@ -1175,7 +1200,7 @@ where
             Some(superblock) => superblock,
             None => {
                 return Ok(AdvancedPowerStorageLoad::NeedsInit(
-                    AdvancedPowerSettingsSnapshot::defaults(),
+                    AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv),
                 ))
             }
         };
@@ -1184,29 +1209,30 @@ where
             superblock.schema_version,
         ));
     }
-    let record =
-        read_eeprom_block(i2c, EEPROM_ADVANCED_POWER_OFFSET).map(AdvancedPowerRecordV1::decode)?;
+    let record = read_eeprom_block(i2c, EEPROM_ADVANCED_POWER_OFFSET)
+        .map(|bytes| AdvancedPowerRecordV5::decode(bytes, rated_vout_mv))?;
     if superblock.schema_version == EEPROM_SCHEMA_VERSION {
         Ok(match record {
-            Some(record) => AdvancedPowerStorageLoad::Ready(record.settings),
-            None => AdvancedPowerStorageLoad::NeedsInit(AdvancedPowerSettingsSnapshot::defaults()),
+            Some(settings) => AdvancedPowerStorageLoad::Ready(settings),
+            None => AdvancedPowerStorageLoad::NeedsInit(
+                AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv),
+            ),
         })
     } else {
-        Ok(AdvancedPowerStorageLoad::NeedsInit(
-            record
-                .map(|record| record.settings)
-                .unwrap_or_else(AdvancedPowerSettingsSnapshot::defaults),
-        ))
+        Ok(AdvancedPowerStorageLoad::NeedsInit(record.unwrap_or_else(
+            || AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv),
+        )))
     }
 }
 
 fn load_or_init_advanced_power_settings<I2C>(
     i2c: &mut I2C,
+    rated_vout_mv: u16,
 ) -> (AdvancedPowerSettingsSnapshot, bool, bool)
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    match load_advanced_power_from_eeprom(i2c) {
+    match load_advanced_power_from_eeprom(i2c, rated_vout_mv) {
         Ok(AdvancedPowerStorageLoad::Ready(settings)) => (settings, true, false),
         Ok(AdvancedPowerStorageLoad::NeedsInit(settings)) => {
             let storage_ready = if let Err(err) = write_advanced_power_record(i2c, settings) {
@@ -1226,14 +1252,22 @@ where
                 found_version,
                 EEPROM_SCHEMA_VERSION
             );
-            (AdvancedPowerSettingsSnapshot::defaults(), false, true)
+            (
+                AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv),
+                false,
+                true,
+            )
         }
         Err(err) => {
             defmt::warn!(
                 "eeprom: read advanced_power failed err={}",
                 i2c_error_kind(err)
             );
-            (AdvancedPowerSettingsSnapshot::defaults(), false, false)
+            (
+                AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv),
+                false,
+                false,
+            )
         }
     }
 }
@@ -3534,6 +3568,8 @@ pub struct PowerManager<'d, I2C> {
     i2c: I2C,
     i2c1_int: Input<'d>,
     bms_btp_int_h: Input<'d>,
+    ups_in_ce: Flex<'d>,
+    ups_in_pg: Input<'d>,
     therm_kill: Flex<'d>,
     chg_ce: Flex<'d>,
     chg_ilim_hiz_brk: Flex<'d>,
@@ -3603,7 +3639,7 @@ pub struct PowerManager<'d, I2C> {
     backup_usb_charge_guard: BackupUsbChargeGuard,
     dcin_input_pressure: DcinInputPressureTracker,
     advanced_power_settings: AdvancedPowerSettingsSnapshot,
-    advanced_power_expanded: AdvancedPowerExpandedSnapshot,
+    runtime_mode_policy: RuntimeModePolicySnapshot,
     advanced_power_storage_ready: bool,
     advanced_power_storage_incompatible: bool,
     manual_charge_prefs: ManualChargePrefs,
@@ -3645,10 +3681,12 @@ pub struct PowerManager<'d, I2C> {
     bms_discharge_authorization_manual_recovery: Option<BmsDischargeAuthorizationManualRecovery>,
     output_state: OutputRuntimeState,
     recoverable_output_source: OutputGateReason,
+    output_bypass_active: bool,
     output_restore_after_bms_recovery: bool,
     output_protection: output_protection::ProtectionRuntime,
     fan: fan::Controller,
     vin_sample_missing_streak: u8,
+    input_gate: output_state_logic::InputGateTracker,
     usb_pd_state: usb_pd::UsbPdPortState,
     usb_pd_input_current_limit_ma: Option<u16>,
     usb_pd_vindpm_mv: Option<u16>,
@@ -4226,6 +4264,8 @@ where
         i2c: I2C,
         i2c1_int: Input<'d>,
         bms_btp_int_h: Input<'d>,
+        mut ups_in_ce: Flex<'d>,
+        ups_in_pg: Input<'d>,
         therm_kill: Flex<'d>,
         mut chg_ce: Flex<'d>,
         mut chg_ilim_hiz_brk: Flex<'d>,
@@ -4243,7 +4283,7 @@ where
             advanced_power_settings,
             advanced_power_storage_ready,
             advanced_power_storage_incompatible,
-        ) = load_or_init_advanced_power_settings(&mut i2c);
+        ) = load_or_init_advanced_power_settings(&mut i2c, cfg.vout_mv);
         let (beeper_prefs, beeper_storage_ready) = load_or_init_beeper_prefs(&mut i2c);
         let pd_breadcrumb_next_seq = load_latest_pd_breadcrumb_record(&mut i2c)
             .ok()
@@ -4254,17 +4294,16 @@ where
         initial_ui_snapshot.dashboard_detail.manual_charge.prefs = manual_charge_prefs;
         initial_ui_snapshot.dashboard_detail.manual_charge.runtime =
             ManualChargeRuntimeState::idle();
-        let advanced_power_expanded =
-            advanced_power_settings
-                .expand(cfg.vout_mv)
-                .unwrap_or_else(|_| {
-                    AdvancedPowerSettingsSnapshot::defaults()
-                        .expand(cfg.vout_mv)
-                        .unwrap()
-                });
+        let runtime_mode_policy = advanced_power_settings
+            .resolve_runtime_policy(cfg.vout_mv)
+            .unwrap_or_else(|_| {
+                AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(cfg.vout_mv)
+                    .resolve_runtime_policy(cfg.vout_mv)
+                    .unwrap()
+            });
         let mut cfg = cfg;
-        cfg.standby_vout_mv = advanced_power_expanded.standby_vout_mv;
-        cfg.assist_low_vout_mv = advanced_power_expanded.assist_low_vout_mv;
+        cfg.standby_vout_mv = runtime_mode_policy.standby_vout_mv();
+        cfg.assist_low_vout_mv = runtime_mode_policy.assist_low_vout_mv();
         let output_state = OutputRuntimeState::new(
             cfg.requested_outputs,
             cfg.active_outputs,
@@ -4295,6 +4334,11 @@ where
             Some(initial_assist_stage.as_str());
         initial_ui_snapshot.dashboard_detail.assist_target_vout_mv =
             Some(initial_assist_target_vout_mv);
+        initial_ui_snapshot.dashboard_detail.backup_reason =
+            (initial_assist_stage == AssistPowerStage::Backup).then_some("input_absent");
+        initial_ui_snapshot.dashboard_detail.input_gate_state = Some("enabled");
+        initial_ui_snapshot.dashboard_detail.input_gate_reason = Some("none");
+        initial_ui_snapshot.dashboard_detail.input_power_good = Some(ups_in_pg.is_high());
         let bms_runtime_seen = bms_addr.is_some()
             || output_state.gate_reason == OutputGateReason::BmsNotReady
             || (cfg.charger_probe_ok
@@ -4303,11 +4347,14 @@ where
         // Fail-safe defaults.
         chg_ce.set_high();
         chg_ilim_hiz_brk.set_low();
+        ups_in_ce.set_low();
 
         Self {
             i2c,
             i2c1_int,
             bms_btp_int_h,
+            ups_in_ce,
+            ups_in_pg,
             therm_kill,
             chg_ce,
             chg_ilim_hiz_brk,
@@ -4382,7 +4429,7 @@ where
             backup_usb_charge_guard: BackupUsbChargeGuard::default(),
             dcin_input_pressure: DcinInputPressureTracker::default(),
             advanced_power_settings,
-            advanced_power_expanded,
+            runtime_mode_policy,
             advanced_power_storage_ready,
             advanced_power_storage_incompatible,
             manual_charge_prefs,
@@ -4445,10 +4492,14 @@ where
             bms_discharge_authorization_manual_recovery: None,
             output_state,
             recoverable_output_source,
+            output_bypass_active: false,
             output_restore_after_bms_recovery: false,
             output_protection: output_protection::ProtectionRuntime::new(cfg.ilimit_ma),
             fan: fan::Controller::new(cfg.fan_config),
             vin_sample_missing_streak: 0,
+            input_gate: output_state_logic::InputGateTracker::new(
+                output_state_logic::InputGateThresholds::from_runtime_policy(runtime_mode_policy),
+            ),
             usb_pd_state: usb_pd::UsbPdPortState::default(),
             usb_pd_input_current_limit_ma: None,
             usb_pd_vindpm_mv: None,
@@ -4606,6 +4657,48 @@ where
             out_b
         );
         self.recompute_ui_mode();
+    }
+
+    pub fn enable_output_bypass(&mut self) -> Result<(), &'static str> {
+        if self.current_mains_present() != Some(true) {
+            return Err("output_bypass_requires_vin");
+        }
+        if self.output_bypass_active {
+            return Ok(());
+        }
+        let recoverable = if self.output_state.active_outputs != EnabledOutputs::None {
+            self.output_state.active_outputs
+        } else {
+            self.output_state.requested_outputs
+        };
+        self.output_state.recoverable_outputs = recoverable;
+        self.output_state.requested_outputs = EnabledOutputs::None;
+        self.output_state.gate_reason = OutputGateReason::ManualBypass;
+        self.recoverable_output_source = OutputGateReason::ManualBypass;
+        self.output_bypass_active = true;
+        self.force_disable_outputs();
+        defmt::warn!(
+            "power: output bypass enabled recoverable_outputs={}",
+            recoverable.describe()
+        );
+        Ok(())
+    }
+
+    pub fn restore_output(&mut self) {
+        if !self.output_bypass_active {
+            return;
+        }
+        let restore = self.output_state.recoverable_outputs;
+        self.output_bypass_active = false;
+        self.output_state.requested_outputs = restore;
+        self.output_state.active_outputs = EnabledOutputs::None;
+        self.output_state.gate_reason = OutputGateReason::None;
+        self.recoverable_output_source = OutputGateReason::None;
+        defmt::info!(
+            "power: output bypass restored requested_outputs={}",
+            restore.describe()
+        );
+        self.reconcile_output_state();
     }
 
     fn maybe_log_charger_input_power_anomaly(
@@ -4991,10 +5084,14 @@ where
                 .input_source
                 .map(|source| dashboard_input_source_name(Some(source)))
                 .unwrap_or("unknown"),
-            mains_present: aggregated_input_present(&self.ui_snapshot),
+            mains_present: self.current_mains_present(),
             input_vbus_mv: self.ui_snapshot.input_vbus_mv,
             input_ibus_ma: self.ui_snapshot.input_ibus_ma,
+            pre_tps_vin_mv: self.ui_snapshot.vin_vbus_mv,
             vin_vbus_mv: self.ui_snapshot.vin_vbus_mv,
+            input_gate_state: self.ui_snapshot.dashboard_detail.input_gate_state,
+            input_gate_reason: self.ui_snapshot.dashboard_detail.input_gate_reason,
+            input_power_good: self.ui_snapshot.dashboard_detail.input_power_good,
             vin_iin_ma: self.ui_snapshot.vin_iin_ma,
             tps_total_iout_ma: self.ui_snapshot.dashboard_detail.input_tps_total_iout_ma,
             tps_limit_threshold_ma: self
@@ -5012,6 +5109,7 @@ where
             vin_drop_mv: self.ui_snapshot.dashboard_detail.input_vin_drop_mv,
             assist_power_stage: self.ui_snapshot.dashboard_detail.assist_power_stage,
             assist_target_vout_mv: self.ui_snapshot.dashboard_detail.assist_target_vout_mv,
+            backup_reason: self.ui_snapshot.dashboard_detail.backup_reason,
             usb_pd_attached: usb_pd.attached,
             usb_pd_charge_ready: usb_pd.charge_ready,
             usb_pd_vbus_present: usb_pd.vbus_present,
@@ -6562,15 +6660,18 @@ where
         &mut self,
         settings: AdvancedPowerSettingsSnapshot,
     ) -> Result<(), AdvancedPowerApplyError> {
-        let expanded = settings
-            .expand(self.cfg.vout_mv)
+        let runtime_mode_policy = settings
+            .resolve_runtime_policy(self.cfg.vout_mv)
             .map_err(AdvancedPowerApplyError::Validation)?;
         self.persist_advanced_power_settings(settings)
             .map_err(AdvancedPowerApplyError::Storage)?;
         self.advanced_power_settings = settings;
-        self.advanced_power_expanded = expanded;
-        self.cfg.standby_vout_mv = expanded.standby_vout_mv;
-        self.cfg.assist_low_vout_mv = expanded.assist_low_vout_mv;
+        self.runtime_mode_policy = runtime_mode_policy;
+        self.cfg.standby_vout_mv = runtime_mode_policy.standby_vout_mv();
+        self.cfg.assist_low_vout_mv = runtime_mode_policy.assist_low_vout_mv();
+        self.input_gate.update_thresholds(
+            output_state_logic::InputGateThresholds::from_runtime_policy(runtime_mode_policy),
+        );
         // recompute_ui_mode() already re-evaluates the current assist stage and applies a
         // runtime REF-only VOUT trim when the effective target changes.
         // Avoid issuing a redundant second runtime write from here.
@@ -6579,7 +6680,9 @@ where
     }
 
     pub fn reset_advanced_power_settings(&mut self) -> Result<(), AdvancedPowerApplyError> {
-        self.apply_advanced_power_settings(AdvancedPowerSettingsSnapshot::defaults())
+        self.apply_advanced_power_settings(AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(
+            self.cfg.vout_mv,
+        ))
     }
 
     pub fn request_manual_charge_action(&mut self, action: ManualChargeUiAction) {
@@ -6782,18 +6885,12 @@ where
     ) -> Result<(), esp_hal::i2c::master::Error> {
         if self.advanced_power_storage_incompatible {
             defmt::warn!(
-                "eeprom: skip advanced_power save reason=schema_mismatch standby_drop_mv={=u16} assist_low_drop_mv={=u16} assist_enter_delta_ma={=i16} assist_exit_delta_ma={=i16} assist_required_samples={=u8} assist_ramp_step_mv={=u16} assist_ramp_interval_ms={=u16} rated_enter_delta_ma={=i16} rated_exit_delta_ma={=i16} vin_drop_threshold_pct={=u8} required_samples={=u8}",
+                "eeprom: skip advanced_power save reason=schema_mismatch standby_drop_mv={=u16} input_uvlo_cutoff_mv={=u16} input_uvlo_recover_mv={=u16} input_uvlo_required_samples={=u8} source_limited_enter_delta_ma={=i16}",
                 settings.standby_drop_mv,
-                settings.assist_low_drop_mv,
-                settings.assist_enter_delta_ma,
-                settings.assist_exit_delta_ma,
-                settings.assist_required_samples,
-                settings.assist_ramp_step_mv,
-                settings.assist_ramp_interval_ms,
-                settings.rated_enter_delta_ma,
-                settings.rated_exit_delta_ma,
-                settings.vin_drop_threshold_pct,
-                settings.required_samples
+                settings.input_uvlo_cutoff_mv,
+                settings.input_uvlo_recover_mv,
+                settings.input_uvlo_required_samples,
+                settings.source_limited_enter_delta_ma
             );
             return Ok(());
         }
@@ -6803,18 +6900,12 @@ where
         }
         self.advanced_power_storage_ready = true;
         defmt::info!(
-            "eeprom: advanced_power saved standby_drop_mv={=u16} assist_low_drop_mv={=u16} assist_enter_delta_ma={=i16} assist_exit_delta_ma={=i16} assist_required_samples={=u8} assist_ramp_step_mv={=u16} assist_ramp_interval_ms={=u16} rated_enter_delta_ma={=i16} rated_exit_delta_ma={=i16} vin_drop_threshold_pct={=u8} required_samples={=u8}",
+            "eeprom: advanced_power saved standby_drop_mv={=u16} input_uvlo_cutoff_mv={=u16} input_uvlo_recover_mv={=u16} input_uvlo_required_samples={=u8} source_limited_enter_delta_ma={=i16}",
             settings.standby_drop_mv,
-            settings.assist_low_drop_mv,
-            settings.assist_enter_delta_ma,
-            settings.assist_exit_delta_ma,
-            settings.assist_required_samples,
-            settings.assist_ramp_step_mv,
-            settings.assist_ramp_interval_ms,
-            settings.rated_enter_delta_ma,
-            settings.rated_exit_delta_ma,
-            settings.vin_drop_threshold_pct,
-            settings.required_samples
+            settings.input_uvlo_cutoff_mv,
+            settings.input_uvlo_recover_mv,
+            settings.input_uvlo_required_samples,
+            settings.source_limited_enter_delta_ma
         );
         Ok(())
     }
@@ -9869,6 +9960,9 @@ where
     }
 
     fn current_mains_present(&self) -> Option<bool> {
+        if self.input_gate.cutoff {
+            return Some(false);
+        }
         stable_mains_present(
             self.ui_snapshot.vin_mains_present,
             self.ui_snapshot.vin_vbus_mv,
@@ -9926,7 +10020,7 @@ where
                 mains_present,
                 input_source: self.ui_snapshot.dashboard_detail.input_source,
                 dcin_assist_allowed,
-                rated_vout_mv: self.advanced_power_expanded.rated_vout_mv,
+                rated_vout_mv: self.runtime_mode_policy.rated_vout_mv,
                 standby_target_vout_mv: self.cfg.standby_vout_mv,
                 current_assist_target_vout_mv: self.assist_target_ramp.current_vout_mv,
                 assist_low_target_vout_mv: self.cfg.assist_low_vout_mv,
@@ -9937,13 +10031,33 @@ where
                 tps_total_iout_ma,
                 tps_total_iout_fresh,
                 tps_total_iout_sample_seq,
-                assist_enter_iout_ma: self.advanced_power_expanded.assist_enter_iout_ma,
-                assist_exit_iout_ma: self.advanced_power_expanded.assist_exit_iout_ma,
-                assist_required_samples: self.advanced_power_expanded.assist_required_samples,
-                rated_enter_iout_ma: self.advanced_power_expanded.rated_enter_iout_ma,
-                rated_exit_iout_ma: self.advanced_power_expanded.rated_exit_iout_ma,
-                vin_drop_threshold_pct: self.advanced_power_expanded.vin_drop_threshold_pct,
-                required_samples: self.advanced_power_expanded.required_samples,
+                assist_enter_iout_ma: self.runtime_mode_policy.fixed.assist_enter_iout_ma,
+                assist_exit_iout_ma: self.runtime_mode_policy.fixed.assist_exit_iout_ma,
+                assist_required_samples: self.runtime_mode_policy.fixed.assist_required_samples,
+                rated_enter_iout_ma: self.runtime_mode_policy.fixed.rated_enter_iout_ma,
+                rated_exit_iout_ma: self.runtime_mode_policy.fixed.rated_exit_iout_ma,
+                vin_drop_threshold_pct: self.runtime_mode_policy.fixed.vin_drop_threshold_pct,
+                required_samples: self.runtime_mode_policy.fixed.required_samples,
+                source_limited_vin_drop_pct: self
+                    .runtime_mode_policy
+                    .fixed
+                    .source_limited_vin_drop_pct,
+                source_limited_enter_iout_ma: self
+                    .runtime_mode_policy
+                    .tuning
+                    .source_limited_enter_iout_ma,
+                source_limited_exit_iout_ma: self
+                    .runtime_mode_policy
+                    .fixed
+                    .source_limited_exit_iout_ma,
+                source_limited_required_samples: self
+                    .runtime_mode_policy
+                    .fixed
+                    .source_limited_required_samples,
+                source_limited_recover_margin_mv: self
+                    .runtime_mode_policy
+                    .fixed
+                    .source_limited_recover_margin_mv,
             },
         );
 
@@ -9976,14 +10090,14 @@ where
                     .last_step_at_ms
                     .map(|last| {
                         now_ms.saturating_sub(last)
-                            >= u64::from(self.advanced_power_expanded.assist_ramp_interval_ms)
+                            >= u64::from(self.runtime_mode_policy.fixed.assist_ramp_interval_ms)
                     })
                     .unwrap_or(true);
                 if can_step {
                     let next = self
                         .assist_target_ramp
                         .current_vout_mv
-                        .saturating_add(self.advanced_power_expanded.assist_ramp_step_mv)
+                        .saturating_add(self.runtime_mode_policy.fixed.assist_ramp_step_mv)
                         .min(target_vout_mv);
                     self.assist_target_ramp.current_vout_mv = next;
                     self.assist_target_ramp.last_step_at_ms = Some(now_ms);
@@ -9999,6 +10113,10 @@ where
         self.applied_assist_target_vout_mv = next_target_vout_mv;
         self.ui_snapshot.dashboard_detail.assist_power_stage = Some(next_stage.as_str());
         self.ui_snapshot.dashboard_detail.assist_target_vout_mv = Some(next_target_vout_mv);
+        self.ui_snapshot.dashboard_detail.backup_reason = self
+            .assist_power_stage
+            .backup_reason
+            .map(|reason| reason.as_str());
         changed
     }
 
@@ -10044,6 +10162,9 @@ where
     }
 
     fn output_gate_reason_now(&mut self) -> OutputGateReason {
+        if self.output_bypass_active {
+            return OutputGateReason::ManualBypass;
+        }
         if self.therm_kill.is_low() {
             return OutputGateReason::ThermKill;
         }
@@ -10126,6 +10247,12 @@ where
     }
 
     fn reconcile_output_state(&mut self) {
+        if self.output_bypass_active {
+            if self.output_state.active_outputs != EnabledOutputs::None {
+                self.force_disable_outputs();
+            }
+            return;
+        }
         let gate_reason = self.output_gate_reason_now();
         if gate_reason != OutputGateReason::None {
             self.apply_output_gate(gate_reason);
@@ -10141,6 +10268,32 @@ where
             );
             self.output_state =
                 output_state_gate_transition(self.output_state, OutputGateReason::None);
+        }
+
+        if output_admission_retry_needed(
+            self.output_state.requested_outputs,
+            self.output_state.active_outputs,
+            self.output_state.recoverable_outputs,
+            self.output_state.gate_reason,
+        ) && self.ina_ready
+            && self.ui_snapshot.tmp_a != SelfCheckCommState::Err
+            && self.ui_snapshot.tmp_b != SelfCheckCommState::Err
+        {
+            let restore = self.output_state.requested_outputs;
+            let now = Instant::now();
+            self.output_state.active_outputs = restore;
+            self.output_state.recoverable_outputs = restore;
+            self.recoverable_output_source = OutputGateReason::None;
+            if restore.is_enabled(OutputChannel::OutA) {
+                self.mark_tps_failed(OutputChannel::OutA, Some(now));
+            }
+            if restore.is_enabled(OutputChannel::OutB) {
+                self.mark_tps_failed(OutputChannel::OutB, Some(now));
+            }
+            defmt::info!(
+                "power: output admission retry requested_outputs={}",
+                restore.describe()
+            );
         }
     }
 
@@ -10177,6 +10330,7 @@ where
             OutputGateReason::TpsFault => "output_restore_tps_fault",
             OutputGateReason::TpsConfigFailed => "output_restore_tps_config_failed",
             OutputGateReason::ActiveProtection => "output_restore_active_protection",
+            OutputGateReason::ManualBypass => "output_restore_manual_bypass",
             OutputGateReason::None => {
                 if self.current_output_restore_input_present() != Some(true) {
                     "output_restore_input_missing"
@@ -10339,11 +10493,7 @@ where
     }
 
     fn recompute_ui_mode(&mut self) {
-        let mains_present = stable_mains_present(
-            self.ui_snapshot.vin_mains_present,
-            self.ui_snapshot.vin_vbus_mv,
-            self.ui_snapshot.aggregate_input_present,
-        );
+        let mains_present = self.current_mains_present();
         let (tps_total_iout_ma, tps_total_iout_fresh, tps_total_iout_sample_seq) =
             self.tps_total_iout_sample();
         let online_mode = self.runtime_mode.update(mains_present);
@@ -11033,6 +11183,7 @@ where
             &mut self.ui_snapshot.vin_mains_present,
             &mut self.vin_sample_missing_streak,
         );
+        self.update_input_gate(None);
         self.recompute_ui_mode();
     }
 
@@ -11045,8 +11196,8 @@ where
                 let vbus_mv = match bus {
                     Ok(v) => {
                         self.ui_snapshot.vin_vbus_mv = u16::try_from(v).ok();
-                        self.ui_snapshot.vin_mains_present =
-                            mains_present_from_vin(self.ui_snapshot.vin_vbus_mv);
+                        self.update_input_gate(self.ui_snapshot.vin_vbus_mv);
+                        self.ui_snapshot.vin_mains_present = self.current_mains_present();
                         self.vin_sample_missing_streak = 0;
                         TelemetryValue::Value(v)
                     }
@@ -11058,6 +11209,7 @@ where
                             &mut self.ui_snapshot.vin_mains_present,
                             &mut self.vin_sample_missing_streak,
                         );
+                        self.update_input_gate(None);
                         TelemetryValue::Err(ina_error_kind(e))
                     }
                 };
@@ -11085,6 +11237,7 @@ where
                     &mut self.ui_snapshot.vin_mains_present,
                     &mut self.vin_sample_missing_streak,
                 );
+                self.update_input_gate(None);
                 defmt::info!(
                     "telemetry ch=vin addr=0x40 vbus_mv={} current_ma={}",
                     TelemetryValue::Err("ina_uninit"),
@@ -11099,7 +11252,35 @@ where
                 &mut self.ui_snapshot.vin_mains_present,
                 &mut self.vin_sample_missing_streak,
             );
+            self.update_input_gate(None);
         }
+    }
+
+    fn update_input_gate(&mut self, fresh_pre_tps_vin_mv: Option<u16>) {
+        use output_state_logic::InputGateAction;
+
+        match self.input_gate.step(fresh_pre_tps_vin_mv) {
+            InputGateAction::None => {}
+            InputGateAction::Cutoff => {
+                self.ups_in_ce.set_high();
+                self.ui_snapshot.vin_mains_present = Some(false);
+                self.ui_snapshot.dcin_present = Some(false);
+                defmt::warn!(
+                    "input_gate: cutoff reason=pre_tps_undervoltage pre_tps_vin_mv={=?}",
+                    fresh_pre_tps_vin_mv
+                );
+            }
+            InputGateAction::Enable => {
+                self.ups_in_ce.set_low();
+                defmt::info!(
+                    "input_gate: enabled reason=pre_tps_voltage_recovered pre_tps_vin_mv={=?}",
+                    fresh_pre_tps_vin_mv
+                );
+            }
+        }
+        self.ui_snapshot.dashboard_detail.input_gate_state = Some(self.input_gate.state_slug());
+        self.ui_snapshot.dashboard_detail.input_gate_reason = Some(self.input_gate.reason_slug());
+        self.ui_snapshot.dashboard_detail.input_power_good = Some(self.ups_in_pg.is_high());
     }
 
     fn maybe_print_telemetry(&mut self) -> bool {
@@ -11600,8 +11781,7 @@ where
             && ac1_present
             && charger_vbus_stat_allows_activation_charge(charger_vbus_stat);
         let usb_pd_charge_gate_ready = usb_pd_charge_gate_ready_raw || activation_bc12_charge_ready;
-        let backup_vin_mains_present = mains_present_from_vin(self.ui_snapshot.vin_vbus_mv)
-            .or(self.ui_snapshot.vin_mains_present);
+        let backup_vin_mains_present = self.current_mains_present();
         let backup_usb_charge_context = self.ui_snapshot.mode == UpsMode::Backup
             && backup_vin_mains_present == Some(false)
             && matches!(input_source, Some(DashboardInputSource::UsbC))
@@ -11609,16 +11789,20 @@ where
         let manual_loopback_override_for_policy = self.manual_charge_runtime.active
             && self.manual_charge_runtime.loopback_override
             && self.manual_charge_runtime.loopback_override_mode == Some(self.ui_snapshot.mode);
-        let requested_acdrv_path = match input_source {
-            Some(DashboardInputSource::DcIn) if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
-            Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
-                if ac1_present || vbus_present =>
-            {
-                bq25792::RequestedAcdrvPath::Ac1
+        let requested_acdrv_path = if self.input_gate.cutoff {
+            bq25792::RequestedAcdrvPath::Disabled
+        } else {
+            match input_source {
+                Some(DashboardInputSource::DcIn) if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
+                Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
+                    if ac1_present || vbus_present =>
+                {
+                    bq25792::RequestedAcdrvPath::Ac1
+                }
+                _ if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
+                _ if ac1_present || vbus_present => bq25792::RequestedAcdrvPath::Ac1,
+                _ => bq25792::RequestedAcdrvPath::Disabled,
             }
-            _ if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
-            _ if ac1_present || vbus_present => bq25792::RequestedAcdrvPath::Ac1,
-            _ => bq25792::RequestedAcdrvPath::Disabled,
         };
         let acdrv_state = match bq25792::set_acdrv_path(&mut self.i2c, requested_acdrv_path) {
             Ok(state) => state,
@@ -11848,6 +12032,7 @@ where
         };
         let runtime_charge_override = runtime_charge_override_for_backup_usb_charger(
             self.ui_snapshot.mode,
+            self.ui_snapshot.dashboard_detail.backup_reason,
             force_allow_charge,
             auto_force_charge,
             backup_usb_charge_decision.allows_charge(),
@@ -11995,7 +12180,7 @@ where
                 vindpm,
                 iindpm,
             },
-            self.advanced_power_expanded.vin_drop_threshold_pct,
+            self.runtime_mode_policy.fixed.vin_drop_threshold_pct,
         );
         let mut effective_policy_target_ichg_ma = policy_target_ichg_ma;
         let mut policy_detail_status_text = dcin_charge_detail_status_text(
