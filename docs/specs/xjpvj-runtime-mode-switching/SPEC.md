@@ -4,7 +4,7 @@
 
 - Status: active
 - Created: 2026-06-16
-- Last: 2026-07-13
+- Last: 2026-07-15
 
 ## 背景 / 问题陈述
 
@@ -60,9 +60,19 @@
 ## 术语与真相源
 
 - `pre-TPS VIN truth source`: INA3221 CH3 对 `VIN_UNSAFE` 的采样，位于 TPS2490 输入 MOS 前级。owner-facing 规范字段为 `pre_tps_vin_mv`；`vin_vbus_mv` 只作为兼容旧客户端的同值别名。
+- `advanced_power owner-facing contract`: 当前 EEPROM / CLI / USB CDC / HTTP / Web 可读写并持久化的 `advanced_power` 字段只保留 5 个：
+  - `standby_drop_mv`
+  - `input_uvlo_cutoff_mv`
+  - `input_uvlo_recover_mv`
+  - `input_uvlo_required_samples`
+  - `source_limited_enter_delta_ma`
+  - 其余 `assist_*`、`rated_*`、`vin_drop_threshold_pct`、`required_samples`、`source_limited_vin_drop_pct`、`source_limited_exit_delta_ma`、`source_limited_required_samples` 与 `source_limited_recover_margin_mv` 收敛为固件内部算法常量，不再作为 owner-facing 持久化设置。
 - `input gate`: MCU 通过 `UPS_IN_CE` 控制 TPS2490 `EN`。门槛按额定输出档位派生：
-  - `12V` 档：连续 3 个 fresh `pre_tps_vin_mv < 11300` 样本后关断输入并发布 `input_gate_state=cutoff`；连续 3 个 fresh `pre_tps_vin_mv > 11500` 样本后重新使能。
-  - `19V` 档：连续 3 个 fresh `pre_tps_vin_mv < 10000` 样本后关断输入；连续 3 个 fresh `pre_tps_vin_mv > 11000` 样本后重新使能。
+  - 当前门槛由 `advanced_power.input_uvlo_cutoff_mv / input_uvlo_recover_mv / input_uvlo_required_samples` 决定。
+  - 当前默认值：
+    - `12V` 档：`11300 / 11500 / 3`
+    - `19V` 档：`18200 / 18400 / 3`
+  - 连续低于 cutoff 达到样本数后关断输入并发布 `input_gate_state=cutoff`；输入门已关断后，连续高于 recover 达到样本数才重新使能。
   - 缺样会重置连续计数。
 - `聚合输入存在信号` (`aggregate input-present signal`): 当 VIN 连续缺样并超过 latch 容错窗口时，允许使用的降级布尔输入存在信号。当前实现可继续复用现有聚合布尔源，但文档不再把它笼统写成 charger `input_present`。
 - `TPS total output current`: owner-facing 聚合输出电流，来源为运行时 `tps_total_iout_ma`。
@@ -125,14 +135,16 @@
 ### 2. 输入在线 / 离线判定
 
 - 若 `pre_tps_vin_mv` 有 fresh 电压样本：
-  - `12V` 档：
-    - 连续 3 个样本 `< 11300mV` => MCU 关断 TPS2490 输入门，输入确认离线并进入 `backup_reason=input_absent`。
-    - 输入门已关断时，连续 3 个样本 `> 11500mV` => MCU 重新使能 TPS2490 输入门；随后由 power-good 与运行态判据确认在线。
-    - `11300mV..=11500mV` => 保持当前输入门状态，不跨越回差。
-  - `19V` 档：
-    - 连续 3 个样本 `< 10000mV` => MCU 关断 TPS2490 输入门，输入确认离线并进入 `backup_reason=input_absent`。
-    - 输入门已关断时，连续 3 个样本 `> 11000mV` => MCU 重新使能 TPS2490 输入门；随后由 power-good 与运行态判据确认在线。
-    - `10000mV..=11000mV` => 保持当前输入门状态，不跨越回差。
+  - 当前 profile 默认值下：
+    - `12V` 档：
+      - 连续 3 个样本 `< 11300mV` => MCU 关断 TPS2490 输入门，输入确认离线并进入 `backup_reason=input_absent`。
+      - 输入门已关断时，连续 3 个样本 `> 11500mV` => MCU 重新使能 TPS2490 输入门；随后由 power-good 与运行态判据确认在线。
+      - `11300mV..=11500mV` => 保持当前输入门状态，不跨越回差。
+    - `19V` 档：
+      - 连续 3 个样本 `< 18200mV` => MCU 关断 TPS2490 输入门，输入确认离线并进入 `backup_reason=input_absent`。
+      - 输入门已关断时，连续 3 个样本 `> 18400mV` => MCU 重新使能 TPS2490 输入门；随后由 power-good 与运行态判据确认在线。
+      - `18200mV..=18400mV` => 保持当前输入门状态，不跨越回差。
+  - 若 owner 通过 `advanced_power.input_uvlo_*` 改写门槛，则运行时必须按持久化值执行同一套回差与连续样本规则。
 - 若 `VIN` 只是瞬时缺样，且仍在现有 VIN latch 容错窗口内：
   - 保持最近一次已知 `VIN` 在线/离线状态。
 - 若 `VIN` 连续缺样并超出 latch 容错窗口：

@@ -15,33 +15,21 @@ describe("mock advanced power reset", () => {
 
     await setDeviceAdvancedPower(baseUrl, {
       standby_drop_mv: 1400,
-      assist_low_drop_mv: 800,
-      assist_enter_delta_ma: 50,
-      assist_exit_delta_ma: 0,
-      assist_required_samples: 3,
-      assist_ramp_step_mv: 120,
-      assist_ramp_interval_ms: 300,
-      rated_enter_delta_ma: 100,
-      rated_exit_delta_ma: 50,
-      vin_drop_threshold_pct: 5,
-      required_samples: 3,
+      input_uvlo_cutoff_mv: 18300,
+      input_uvlo_recover_mv: 18500,
+      input_uvlo_required_samples: 3,
+      source_limited_enter_delta_ma: 1200,
     });
 
     await resetDeviceAdvancedPower(baseUrl);
 
     const after = await getSettings(baseUrl);
     expect(after.advanced_power).toEqual({
-      standby_drop_mv: 1200,
-      assist_low_drop_mv: 600,
-      assist_enter_delta_ma: 0,
-      assist_exit_delta_ma: 0,
-      assist_required_samples: 2,
-      assist_ramp_step_mv: 100,
-      assist_ramp_interval_ms: 200,
-      rated_enter_delta_ma: 0,
-      rated_exit_delta_ma: 0,
-      vin_drop_threshold_pct: 4,
-      required_samples: 2,
+      standby_drop_mv: 900,
+      input_uvlo_cutoff_mv: 18200,
+      input_uvlo_recover_mv: 18400,
+      input_uvlo_required_samples: 3,
+      source_limited_enter_delta_ma: 1000,
     });
     expect(after.advanced_power_capabilities.rated_vout_mv).toBe(19000);
   });
@@ -58,31 +46,19 @@ describe("mock advanced power reset", () => {
 
     await setDeviceAdvancedPower(baseUrl, {
       standby_drop_mv: 1550,
-      assist_low_drop_mv: 700,
-      assist_enter_delta_ma: 25,
-      assist_exit_delta_ma: 10,
-      assist_required_samples: 4,
-      assist_ramp_step_mv: 130,
-      assist_ramp_interval_ms: 310,
-      rated_enter_delta_ma: 110,
-      rated_exit_delta_ma: 60,
-      vin_drop_threshold_pct: 6,
-      required_samples: 5,
+      input_uvlo_cutoff_mv: 11400,
+      input_uvlo_recover_mv: 11600,
+      input_uvlo_required_samples: 4,
+      source_limited_enter_delta_ma: 2600,
     });
 
     const updated = await getSettings(baseUrl);
     expect(updated.advanced_power).toEqual({
       standby_drop_mv: 1550,
-      assist_low_drop_mv: 700,
-      assist_enter_delta_ma: 25,
-      assist_exit_delta_ma: 10,
-      assist_required_samples: 4,
-      assist_ramp_step_mv: 130,
-      assist_ramp_interval_ms: 310,
-      rated_enter_delta_ma: 110,
-      rated_exit_delta_ma: 60,
-      vin_drop_threshold_pct: 6,
-      required_samples: 5,
+      input_uvlo_cutoff_mv: 11400,
+      input_uvlo_recover_mv: 11600,
+      input_uvlo_required_samples: 4,
+      source_limited_enter_delta_ma: 2600,
     });
 
     if (originalWindow === undefined) {

@@ -27,6 +27,20 @@
 - 当前 19V bench 设备为避免 EEPROM 与默认值完全同值，额外保存了最小偏移 override：
   `input_uvlo_cutoff_mv=18220`、`input_uvlo_recover_mv=18420`；这保证后续核查时能区分
   “固件默认值”与“设备 EEPROM 覆盖值”。
+- `advanced_power` 设置面开始收敛：
+  - owner-facing / EEPROM 持久化字段从此前的大而全设置面缩减为 5 个：
+    - `standby_drop_mv`
+    - `input_uvlo_cutoff_mv`
+    - `input_uvlo_recover_mv`
+    - `input_uvlo_required_samples`
+    - `source_limited_enter_delta_ma`
+  - 其余 `assist_*`、`rated_*`、`vin_drop_threshold_pct`、`required_samples`、
+    `source_limited_vin_drop_pct`、`source_limited_exit_delta_ma`、
+    `source_limited_required_samples` 与 `source_limited_recover_margin_mv`
+    收敛为固件内部算法常量，不再进入 CLI / Web / EEPROM 可调面。
+  - EEPROM 记录升级到 `AdvancedPowerRecordV5`。
+  - 旧 `advanced_power` EEPROM 记录不再做读取兼容；旧设备记录会按当前 profile
+    默认值重建，而不是在读取路径里做补字段迁就。
 - 选择 B 的原因：
   - 相比 A，它把 `3900mA` 在线过载锁存从 `0.599s` 缩短到 `0.201s`
   - 并消除了在线/切断两个过载场景锁存前的 `<18V` 连续低压段

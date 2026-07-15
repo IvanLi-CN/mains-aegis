@@ -192,7 +192,7 @@ const EEPROM_ADVANCED_POWER_OFFSET: u16 = 0x0200;
 const EEPROM_BEEPER_PREFS_MAGIC: [u8; 4] = *b"BEEP";
 const EEPROM_BEEPER_PREFS_RECORD_VERSION: u8 = 1;
 const EEPROM_ADVANCED_POWER_MAGIC: [u8; 4] = *b"ADVP";
-const EEPROM_ADVANCED_POWER_RECORD_VERSION: u8 = 4;
+const EEPROM_ADVANCED_POWER_RECORD_VERSION: u8 = 5;
 const EEPROM_WRITE_POLL_ATTEMPTS: usize = 32;
 const EEPROM_WRITE_POLL_GAP: Duration = Duration::from_millis(1);
 
@@ -379,7 +379,7 @@ impl BeeperPrefsRecordV1 {
 }
 
 #[derive(Clone, Copy)]
-struct AdvancedPowerRecordV1 {
+struct AdvancedPowerRecordV5 {
     settings: AdvancedPowerSettingsSnapshot,
 }
 
@@ -400,37 +400,23 @@ fn decode_i16_step_byte(value: u8, min: i16, step: i16) -> i16 {
     min + i16::from(value) * step
 }
 
-impl AdvancedPowerRecordV1 {
+impl AdvancedPowerRecordV5 {
     fn encode(self) -> [u8; EEPROM_BLOCK_LEN] {
         let mut bytes = [0u8; EEPROM_BLOCK_LEN];
         bytes[0..4].copy_from_slice(&EEPROM_ADVANCED_POWER_MAGIC);
         bytes[4] = EEPROM_ADVANCED_POWER_RECORD_VERSION;
         bytes[5] = encode_u16_step_byte(self.settings.standby_drop_mv, 20);
-        bytes[6] = encode_u16_step_byte(self.settings.assist_low_drop_mv, 20);
-        bytes[7] = encode_i16_step_byte(self.settings.assist_enter_delta_ma, -100, 50);
-        bytes[8] = encode_i16_step_byte(self.settings.assist_exit_delta_ma, -50, 50);
-        bytes[9] = self.settings.assist_required_samples;
-        bytes[10] = encode_u16_step_byte(self.settings.assist_ramp_step_mv, 20);
-        bytes[11] = encode_u16_step_byte(self.settings.assist_ramp_interval_ms, 100);
-        bytes[12] = encode_i16_step_byte(self.settings.rated_enter_delta_ma, -100, 50);
-        bytes[13] = encode_i16_step_byte(self.settings.rated_exit_delta_ma, -50, 50);
-        bytes[14] = self.settings.vin_drop_threshold_pct;
-        bytes[15] = self.settings.required_samples;
-        bytes[16] = self.settings.input_uvlo_required_samples;
-        bytes[17..19].copy_from_slice(&self.settings.input_uvlo_cutoff_mv.to_le_bytes());
-        bytes[19..21].copy_from_slice(&self.settings.input_uvlo_recover_mv.to_le_bytes());
-        bytes[21] = self.settings.source_limited_vin_drop_pct;
-        bytes[22] = encode_i16_step_byte(self.settings.source_limited_enter_delta_ma, -100, 50);
-        bytes[23] = encode_i16_step_byte(self.settings.source_limited_exit_delta_ma, -50, 50);
-        bytes[24] = self.settings.source_limited_required_samples;
-        bytes[25] = encode_u16_step_byte(self.settings.source_limited_recover_margin_mv, 20);
+        bytes[6] = self.settings.input_uvlo_required_samples;
+        bytes[7..9].copy_from_slice(&self.settings.input_uvlo_cutoff_mv.to_le_bytes());
+        bytes[9..11].copy_from_slice(&self.settings.input_uvlo_recover_mv.to_le_bytes());
+        bytes[11] = encode_i16_step_byte(self.settings.source_limited_enter_delta_ma, -100, 50);
         bytes[31] = storage_crc8(&bytes[..31]);
         bytes
     }
 
     fn decode(
         bytes: [u8; EEPROM_BLOCK_LEN],
-        rated_vout_mv: u16,
+        _rated_vout_mv: u16,
     ) -> Option<AdvancedPowerSettingsSnapshot> {
         if bytes[0..4] != EEPROM_ADVANCED_POWER_MAGIC {
             return None;
@@ -438,72 +424,15 @@ impl AdvancedPowerRecordV1 {
         if bytes[31] != storage_crc8(&bytes[..31]) {
             return None;
         }
-        let defaults = AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv);
-        let settings = match bytes[4] {
-            1 => AdvancedPowerSettingsSnapshot {
-                standby_drop_mv: u16::from_le_bytes([bytes[5], bytes[6]]),
-                assist_low_drop_mv: u16::from_le_bytes([bytes[7], bytes[8]]),
-                rated_enter_delta_ma: i16::from_le_bytes([bytes[9], bytes[10]]),
-                rated_exit_delta_ma: i16::from_le_bytes([bytes[11], bytes[12]]),
-                vin_drop_threshold_pct: bytes[13],
-                required_samples: bytes[14],
-                ..defaults
-            },
-            2 => AdvancedPowerSettingsSnapshot {
-                standby_drop_mv: u16::from_le_bytes([bytes[5], bytes[6]]),
-                assist_low_drop_mv: u16::from_le_bytes([bytes[7], bytes[8]]),
-                assist_enter_delta_ma: i16::from_le_bytes([bytes[9], bytes[10]]),
-                assist_exit_delta_ma: i16::from_le_bytes([bytes[11], bytes[12]]),
-                assist_required_samples: bytes[13],
-                assist_ramp_step_mv: u16::from_le_bytes([bytes[14], bytes[15]]),
-                assist_ramp_interval_ms: u16::from_le_bytes([bytes[16], bytes[17]]),
-                rated_enter_delta_ma: i16::from_le_bytes([bytes[18], bytes[19]]),
-                rated_exit_delta_ma: i16::from_le_bytes([bytes[20], bytes[21]]),
-                vin_drop_threshold_pct: bytes[22],
-                required_samples: bytes[23],
-                ..defaults
-            },
-            3 => AdvancedPowerSettingsSnapshot {
-                standby_drop_mv: u16::from_le_bytes([bytes[5], bytes[6]]),
-                assist_low_drop_mv: u16::from_le_bytes([bytes[7], bytes[8]]),
-                assist_enter_delta_ma: i16::from_le_bytes([bytes[9], bytes[10]]),
-                assist_exit_delta_ma: i16::from_le_bytes([bytes[11], bytes[12]]),
-                assist_required_samples: bytes[13],
-                assist_ramp_step_mv: u16::from_le_bytes([bytes[14], bytes[15]]),
-                assist_ramp_interval_ms: u16::from_le_bytes([bytes[16], bytes[17]]),
-                rated_enter_delta_ma: i16::from_le_bytes([bytes[18], bytes[19]]),
-                rated_exit_delta_ma: i16::from_le_bytes([bytes[20], bytes[21]]),
-                vin_drop_threshold_pct: bytes[22],
-                required_samples: bytes[23],
-                source_limited_vin_drop_pct: bytes[24],
-                source_limited_enter_delta_ma: i16::from_le_bytes([bytes[25], bytes[26]]),
-                source_limited_exit_delta_ma: i16::from_le_bytes([bytes[27], bytes[28]]),
-                source_limited_required_samples: bytes[29],
-                source_limited_recover_margin_mv: u16::from(bytes[30]) * 20,
-                ..defaults
-            },
-            EEPROM_ADVANCED_POWER_RECORD_VERSION => AdvancedPowerSettingsSnapshot {
-                standby_drop_mv: decode_u16_step_byte(bytes[5], 20),
-                assist_low_drop_mv: decode_u16_step_byte(bytes[6], 20),
-                assist_enter_delta_ma: decode_i16_step_byte(bytes[7], -100, 50),
-                assist_exit_delta_ma: decode_i16_step_byte(bytes[8], -50, 50),
-                assist_required_samples: bytes[9],
-                assist_ramp_step_mv: decode_u16_step_byte(bytes[10], 20),
-                assist_ramp_interval_ms: decode_u16_step_byte(bytes[11], 100),
-                rated_enter_delta_ma: decode_i16_step_byte(bytes[12], -100, 50),
-                rated_exit_delta_ma: decode_i16_step_byte(bytes[13], -50, 50),
-                vin_drop_threshold_pct: bytes[14],
-                required_samples: bytes[15],
-                input_uvlo_required_samples: bytes[16],
-                input_uvlo_cutoff_mv: u16::from_le_bytes([bytes[17], bytes[18]]),
-                input_uvlo_recover_mv: u16::from_le_bytes([bytes[19], bytes[20]]),
-                source_limited_vin_drop_pct: bytes[21],
-                source_limited_enter_delta_ma: decode_i16_step_byte(bytes[22], -100, 50),
-                source_limited_exit_delta_ma: decode_i16_step_byte(bytes[23], -50, 50),
-                source_limited_required_samples: bytes[24],
-                source_limited_recover_margin_mv: decode_u16_step_byte(bytes[25], 20),
-            },
-            _ => return None,
+        if bytes[4] != EEPROM_ADVANCED_POWER_RECORD_VERSION {
+            return None;
+        }
+        let settings = AdvancedPowerSettingsSnapshot {
+            standby_drop_mv: decode_u16_step_byte(bytes[5], 20),
+            input_uvlo_required_samples: bytes[6],
+            input_uvlo_cutoff_mv: u16::from_le_bytes([bytes[7], bytes[8]]),
+            input_uvlo_recover_mv: u16::from_le_bytes([bytes[9], bytes[10]]),
+            source_limited_enter_delta_ma: decode_i16_step_byte(bytes[11], -100, 50),
         };
         validate_advanced_power_settings(settings).ok()?;
         Some(settings)
@@ -513,116 +442,33 @@ impl AdvancedPowerRecordV1 {
 #[cfg(test)]
 mod tests {
     use super::{
-        storage_crc8, AdvancedPowerRecordV1, AdvancedPowerSettingsSnapshot,
+        storage_crc8, AdvancedPowerRecordV5, AdvancedPowerSettingsSnapshot,
         EEPROM_ADVANCED_POWER_MAGIC,
     };
 
     #[test]
-    fn advanced_power_v2_record_loads_with_source_limited_defaults() {
-        let mut bytes = [0u8; 32];
-        bytes[0..4].copy_from_slice(&EEPROM_ADVANCED_POWER_MAGIC);
-        bytes[4] = 2;
-        bytes[5..7].copy_from_slice(&1_400u16.to_le_bytes());
-        bytes[7..9].copy_from_slice(&800u16.to_le_bytes());
-        bytes[9..11].copy_from_slice(&50i16.to_le_bytes());
-        bytes[11..13].copy_from_slice(&0i16.to_le_bytes());
-        bytes[13] = 3;
-        bytes[14..16].copy_from_slice(&120u16.to_le_bytes());
-        bytes[16..18].copy_from_slice(&300u16.to_le_bytes());
-        bytes[18..20].copy_from_slice(&100i16.to_le_bytes());
-        bytes[20..22].copy_from_slice(&50i16.to_le_bytes());
-        bytes[22] = 5;
-        bytes[23] = 3;
-        bytes[31] = storage_crc8(&bytes[..31]);
-
-        let decoded = AdvancedPowerRecordV1::decode(bytes, 12_000).unwrap();
-        assert_eq!(decoded.standby_drop_mv, 1_400);
-        assert_eq!(decoded.assist_low_drop_mv, 800);
-        assert_eq!(decoded.source_limited_vin_drop_pct, 1);
-        assert_eq!(decoded.source_limited_enter_delta_ma, 1_000);
-        assert_eq!(decoded.source_limited_exit_delta_ma, 0);
-        assert_eq!(decoded.source_limited_required_samples, 2);
-        assert_eq!(decoded.source_limited_recover_margin_mv, 400);
-        assert_eq!(
-            decoded.expand(12_000).unwrap().source_limited_enter_iout_ma,
-            1_100
-        );
-        assert_eq!(
-            decoded,
-            AdvancedPowerSettingsSnapshot {
-                standby_drop_mv: 1_400,
-                assist_low_drop_mv: 800,
-                assist_enter_delta_ma: 50,
-                assist_exit_delta_ma: 0,
-                assist_required_samples: 3,
-                assist_ramp_step_mv: 120,
-                assist_ramp_interval_ms: 300,
-                rated_enter_delta_ma: 100,
-                rated_exit_delta_ma: 50,
-                vin_drop_threshold_pct: 5,
-                required_samples: 3,
-                ..AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(12_000)
-            }
-        );
-    }
-
-    #[test]
-    fn advanced_power_v3_record_loads_profile_specific_input_uvlo_defaults() {
-        let mut bytes = [0u8; 32];
-        bytes[0..4].copy_from_slice(&EEPROM_ADVANCED_POWER_MAGIC);
-        bytes[4] = 3;
-        bytes[5..7].copy_from_slice(&1_200u16.to_le_bytes());
-        bytes[7..9].copy_from_slice(&600u16.to_le_bytes());
-        bytes[9..11].copy_from_slice(&0i16.to_le_bytes());
-        bytes[11..13].copy_from_slice(&0i16.to_le_bytes());
-        bytes[13] = 2;
-        bytes[14..16].copy_from_slice(&100u16.to_le_bytes());
-        bytes[16..18].copy_from_slice(&200u16.to_le_bytes());
-        bytes[18..20].copy_from_slice(&0i16.to_le_bytes());
-        bytes[20..22].copy_from_slice(&0i16.to_le_bytes());
-        bytes[22] = 4;
-        bytes[23] = 2;
-        bytes[24] = 1;
-        bytes[25..27].copy_from_slice(&2_500i16.to_le_bytes());
-        bytes[27..29].copy_from_slice(&0i16.to_le_bytes());
-        bytes[29] = 2;
-        bytes[30] = 20;
-        bytes[31] = storage_crc8(&bytes[..31]);
-
-        let decoded = AdvancedPowerRecordV1::decode(bytes, 19_000).unwrap();
-        assert_eq!(decoded.input_uvlo_cutoff_mv, 10_000);
-        assert_eq!(decoded.input_uvlo_recover_mv, 11_000);
-        assert_eq!(decoded.input_uvlo_required_samples, 3);
-    }
-
-    #[test]
-    fn advanced_power_v4_record_round_trips_input_uvlo_settings() {
+    fn advanced_power_v5_record_round_trips_minimal_settings() {
         let settings = AdvancedPowerSettingsSnapshot {
             standby_drop_mv: 700,
-            assist_low_drop_mv: 600,
-            assist_enter_delta_ma: 0,
-            assist_exit_delta_ma: 0,
-            assist_required_samples: 2,
-            assist_ramp_step_mv: 100,
-            assist_ramp_interval_ms: 200,
-            rated_enter_delta_ma: 0,
-            rated_exit_delta_ma: 0,
-            vin_drop_threshold_pct: 4,
-            required_samples: 2,
             input_uvlo_cutoff_mv: 11_300,
             input_uvlo_recover_mv: 11_500,
             input_uvlo_required_samples: 3,
-            source_limited_vin_drop_pct: 1,
             source_limited_enter_delta_ma: 2_500,
-            source_limited_exit_delta_ma: 0,
-            source_limited_required_samples: 2,
-            source_limited_recover_margin_mv: 400,
         };
 
         let decoded =
-            AdvancedPowerRecordV1::decode(AdvancedPowerRecordV1 { settings }.encode(), 12_000)
+            AdvancedPowerRecordV5::decode(AdvancedPowerRecordV5 { settings }.encode(), 12_000)
                 .unwrap();
         assert_eq!(decoded, settings);
+    }
+
+    #[test]
+    fn advanced_power_old_record_versions_are_rejected() {
+        let mut bytes = [0u8; 32];
+        bytes[0..4].copy_from_slice(&EEPROM_ADVANCED_POWER_MAGIC);
+        bytes[4] = 4;
+        bytes[31] = storage_crc8(&bytes[..31]);
+        assert!(AdvancedPowerRecordV5::decode(bytes, 12_000).is_none());
     }
 }
 
@@ -1338,7 +1184,7 @@ where
     write_eeprom_block(
         i2c,
         EEPROM_ADVANCED_POWER_OFFSET,
-        AdvancedPowerRecordV1 { settings }.encode(),
+        AdvancedPowerRecordV5 { settings }.encode(),
     )
 }
 
@@ -1364,7 +1210,7 @@ where
         ));
     }
     let record = read_eeprom_block(i2c, EEPROM_ADVANCED_POWER_OFFSET)
-        .map(|bytes| AdvancedPowerRecordV1::decode(bytes, rated_vout_mv))?;
+        .map(|bytes| AdvancedPowerRecordV5::decode(bytes, rated_vout_mv))?;
     if superblock.schema_version == EEPROM_SCHEMA_VERSION {
         Ok(match record {
             Some(settings) => AdvancedPowerStorageLoad::Ready(settings),
@@ -7042,26 +6888,12 @@ where
     ) -> Result<(), esp_hal::i2c::master::Error> {
         if self.advanced_power_storage_incompatible {
             defmt::warn!(
-                "eeprom: skip advanced_power save reason=schema_mismatch standby_drop_mv={=u16} assist_low_drop_mv={=u16} assist_enter_delta_ma={=i16} assist_exit_delta_ma={=i16} assist_required_samples={=u8} assist_ramp_step_mv={=u16} assist_ramp_interval_ms={=u16} rated_enter_delta_ma={=i16} rated_exit_delta_ma={=i16} vin_drop_threshold_pct={=u8} required_samples={=u8} input_uvlo_cutoff_mv={=u16} input_uvlo_recover_mv={=u16} input_uvlo_required_samples={=u8} source_limited_vin_drop_pct={=u8} source_limited_enter_delta_ma={=i16} source_limited_exit_delta_ma={=i16} source_limited_required_samples={=u8} source_limited_recover_margin_mv={=u16}",
+                "eeprom: skip advanced_power save reason=schema_mismatch standby_drop_mv={=u16} input_uvlo_cutoff_mv={=u16} input_uvlo_recover_mv={=u16} input_uvlo_required_samples={=u8} source_limited_enter_delta_ma={=i16}",
                 settings.standby_drop_mv,
-                settings.assist_low_drop_mv,
-                settings.assist_enter_delta_ma,
-                settings.assist_exit_delta_ma,
-                settings.assist_required_samples,
-                settings.assist_ramp_step_mv,
-                settings.assist_ramp_interval_ms,
-                settings.rated_enter_delta_ma,
-                settings.rated_exit_delta_ma,
-                settings.vin_drop_threshold_pct,
-                settings.required_samples,
                 settings.input_uvlo_cutoff_mv,
                 settings.input_uvlo_recover_mv,
                 settings.input_uvlo_required_samples,
-                settings.source_limited_vin_drop_pct,
-                settings.source_limited_enter_delta_ma,
-                settings.source_limited_exit_delta_ma,
-                settings.source_limited_required_samples,
-                settings.source_limited_recover_margin_mv
+                settings.source_limited_enter_delta_ma
             );
             return Ok(());
         }
@@ -7071,26 +6903,12 @@ where
         }
         self.advanced_power_storage_ready = true;
         defmt::info!(
-            "eeprom: advanced_power saved standby_drop_mv={=u16} assist_low_drop_mv={=u16} assist_enter_delta_ma={=i16} assist_exit_delta_ma={=i16} assist_required_samples={=u8} assist_ramp_step_mv={=u16} assist_ramp_interval_ms={=u16} rated_enter_delta_ma={=i16} rated_exit_delta_ma={=i16} vin_drop_threshold_pct={=u8} required_samples={=u8} input_uvlo_cutoff_mv={=u16} input_uvlo_recover_mv={=u16} input_uvlo_required_samples={=u8} source_limited_vin_drop_pct={=u8} source_limited_enter_delta_ma={=i16} source_limited_exit_delta_ma={=i16} source_limited_required_samples={=u8} source_limited_recover_margin_mv={=u16}",
+            "eeprom: advanced_power saved standby_drop_mv={=u16} input_uvlo_cutoff_mv={=u16} input_uvlo_recover_mv={=u16} input_uvlo_required_samples={=u8} source_limited_enter_delta_ma={=i16}",
             settings.standby_drop_mv,
-            settings.assist_low_drop_mv,
-            settings.assist_enter_delta_ma,
-            settings.assist_exit_delta_ma,
-            settings.assist_required_samples,
-            settings.assist_ramp_step_mv,
-            settings.assist_ramp_interval_ms,
-            settings.rated_enter_delta_ma,
-            settings.rated_exit_delta_ma,
-            settings.vin_drop_threshold_pct,
-            settings.required_samples,
             settings.input_uvlo_cutoff_mv,
             settings.input_uvlo_recover_mv,
             settings.input_uvlo_required_samples,
-            settings.source_limited_vin_drop_pct,
-            settings.source_limited_enter_delta_ma,
-            settings.source_limited_exit_delta_ma,
-            settings.source_limited_required_samples,
-            settings.source_limited_recover_margin_mv
+            settings.source_limited_enter_delta_ma
         );
         Ok(())
     }

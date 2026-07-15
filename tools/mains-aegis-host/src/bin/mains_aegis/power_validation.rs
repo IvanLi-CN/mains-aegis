@@ -320,12 +320,7 @@ struct SourceLimitedUvloExpectation {
 
 #[derive(Debug, Clone, Copy)]
 struct SourceLimitedSettingsExpectation {
-    source_limited_vin_drop_pct: u8,
     source_limited_enter_delta_ma: i16,
-    source_limited_exit_delta_ma: i16,
-    source_limited_required_samples: u8,
-    source_limited_recover_margin_mv: u16,
-    vin_drop_threshold_pct: u8,
 }
 
 impl SourceLimitedUvloExpectation {
@@ -364,20 +359,10 @@ impl SourceLimitedSettingsExpectation {
     fn for_profile(profile: OutputProfile) -> Self {
         match profile {
             OutputProfile::V12 => Self {
-                source_limited_vin_drop_pct: 1,
                 source_limited_enter_delta_ma: 2_500,
-                source_limited_exit_delta_ma: 0,
-                source_limited_required_samples: 2,
-                source_limited_recover_margin_mv: 400,
-                vin_drop_threshold_pct: 4,
             },
             OutputProfile::V19 => Self {
-                source_limited_vin_drop_pct: 1,
                 source_limited_enter_delta_ma: 1_000,
-                source_limited_exit_delta_ma: 0,
-                source_limited_required_samples: 2,
-                source_limited_recover_margin_mv: 400,
-                vin_drop_threshold_pct: 4,
             },
         }
     }
@@ -4415,12 +4400,7 @@ fn validate_suite_settings(
         .unwrap_or_else(|| json!({}));
     let defaults = SourceLimitedSettingsExpectation::for_profile(profile);
     let expected = json!({
-        "source_limited_vin_drop_pct": defaults.source_limited_vin_drop_pct,
         "source_limited_enter_delta_ma": defaults.source_limited_enter_delta_ma,
-        "source_limited_exit_delta_ma": defaults.source_limited_exit_delta_ma,
-        "source_limited_required_samples": defaults.source_limited_required_samples,
-        "source_limited_recover_margin_mv": defaults.source_limited_recover_margin_mv,
-        "vin_drop_threshold_pct": defaults.vin_drop_threshold_pct,
         "input_uvlo_cutoff_mv": uvlo_expectation.cutoff_mv,
         "input_uvlo_recover_mv": uvlo_expectation.recover_mv,
         "input_uvlo_required_samples": uvlo_expectation.required_samples,

@@ -4289,9 +4289,8 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
           <form className="settings-form" onSubmit={onAdvancedPowerSubmit}>
             <div className="settings-copy">
               <p className="field-help">
-                Adjust staged assist/takeover behavior with relative offsets only.
-                The controls below stay relative to the rated hardware output, so
-                12V and 19V UPS units do not get mixed up.
+                Tune the persisted thresholds that materially affect standby
+                output, input UVLO, and source-limited backup takeover.
               </p>
               <div className="secret-note capability-note">
                 <CircleHelp size={15} />
@@ -4327,132 +4326,56 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
               }
             />
             <AdvancedPowerField
-              label="Assist low drop"
-              hint="Low assist target before rated takeover. Must stay at or below standby drop."
+              label="Input UVLO cutoff"
+              hint="Pre-TPS VIN below this level for the required sample count is treated as input absent, and MCU forces backup."
               suffix="mV"
-              value={advancedPower.assist_low_drop_mv}
-              capability={settings?.advanced_power_capabilities.assist_low_drop_mv}
+              value={advancedPower.input_uvlo_cutoff_mv}
+              capability={settings?.advanced_power_capabilities.input_uvlo_cutoff_mv}
               onChange={(value) =>
                 setAdvancedPowerDraft((current) => ({
                   ...current,
-                  assist_low_drop_mv: value,
+                  input_uvlo_cutoff_mv: value,
                 }))
               }
             />
             <AdvancedPowerField
-              label="Assist enter delta"
-              hint="How much extra TPS current must appear before low assist is allowed to start. Larger values delay assist_low."
-              suffix="mA"
-              value={advancedPower.assist_enter_delta_ma}
-              capability={settings?.advanced_power_capabilities.assist_enter_delta_ma}
-              onChange={(value) =>
-                setAdvancedPowerDraft((current) => ({
-                  ...current,
-                  assist_enter_delta_ma: value,
-                }))
-              }
-            />
-            <AdvancedPowerField
-              label="Assist exit delta"
-              hint="How low TPS current must fall before low assist can return to standby. Lower values make standby return stricter."
-              suffix="mA"
-              value={advancedPower.assist_exit_delta_ma}
-              capability={settings?.advanced_power_capabilities.assist_exit_delta_ma}
-              onChange={(value) =>
-                setAdvancedPowerDraft((current) => ({
-                  ...current,
-                  assist_exit_delta_ma: value,
-                }))
-              }
-            />
-            <AdvancedPowerField
-              label="Assist samples"
-              hint="How many fresh samples must agree before low assist enters or exits."
-              suffix="samples"
-              value={advancedPower.assist_required_samples}
-              capability={settings?.advanced_power_capabilities.assist_required_samples}
-              onChange={(value) =>
-                setAdvancedPowerDraft((current) => ({
-                  ...current,
-                  assist_required_samples: value,
-                }))
-              }
-            />
-            <AdvancedPowerField
-              label="Assist ramp step"
-              hint="How much the TPS target rises on each low-assist ramp step."
+              label="Input UVLO recover"
+              hint="Pre-TPS VIN must recover above this level for the required sample count before MCU re-enables the input gate."
               suffix="mV"
-              value={advancedPower.assist_ramp_step_mv}
-              capability={settings?.advanced_power_capabilities.assist_ramp_step_mv}
+              value={advancedPower.input_uvlo_recover_mv}
+              capability={settings?.advanced_power_capabilities.input_uvlo_recover_mv}
               onChange={(value) =>
                 setAdvancedPowerDraft((current) => ({
                   ...current,
-                  assist_ramp_step_mv: value,
+                  input_uvlo_recover_mv: value,
                 }))
               }
             />
             <AdvancedPowerField
-              label="Assist ramp interval"
-              hint="Time between low-assist ramp steps. Larger values make handoff gentler but slower."
-              suffix="ms"
-              value={advancedPower.assist_ramp_interval_ms}
-              capability={settings?.advanced_power_capabilities.assist_ramp_interval_ms}
-              onChange={(value) =>
-                setAdvancedPowerDraft((current) => ({
-                  ...current,
-                  assist_ramp_interval_ms: value,
-                }))
-              }
-            />
-            <AdvancedPowerField
-              label="Rated enter delta"
-              hint="Current delta added to the rated takeover enter threshold."
-              suffix="mA"
-              value={advancedPower.rated_enter_delta_ma}
-              capability={settings?.advanced_power_capabilities.rated_enter_delta_ma}
-              onChange={(value) =>
-                setAdvancedPowerDraft((current) => ({
-                  ...current,
-                  rated_enter_delta_ma: value,
-                }))
-              }
-            />
-            <AdvancedPowerField
-              label="Rated exit delta"
-              hint="Current delta added to the rated takeover exit threshold."
-              suffix="mA"
-              value={advancedPower.rated_exit_delta_ma}
-              capability={settings?.advanced_power_capabilities.rated_exit_delta_ma}
-              onChange={(value) =>
-                setAdvancedPowerDraft((current) => ({
-                  ...current,
-                  rated_exit_delta_ma: value,
-                }))
-              }
-            />
-            <AdvancedPowerField
-              label="VIN drop threshold"
-              hint="Percent drop from the observed VIN baseline required before rated takeover can assert."
-              suffix="%"
-              value={advancedPower.vin_drop_threshold_pct}
-              capability={settings?.advanced_power_capabilities.vin_drop_threshold_pct}
-              onChange={(value) =>
-                setAdvancedPowerDraft((current) => ({
-                  ...current,
-                  vin_drop_threshold_pct: value,
-                }))
-              }
-            />
-            <AdvancedPowerField
-              label="Required samples"
-              hint="How many fresh samples must agree before entering rated takeover."
+              label="Input UVLO samples"
+              hint="How many consecutive fresh samples the UVLO cutoff and recover decisions require."
               suffix="samples"
-              value={advancedPower.required_samples}
-              capability={settings?.advanced_power_capabilities.required_samples}
+              value={advancedPower.input_uvlo_required_samples}
+              capability={settings?.advanced_power_capabilities.input_uvlo_required_samples}
               onChange={(value) =>
                 setAdvancedPowerDraft((current) => ({
                   ...current,
-                  required_samples: value,
+                  input_uvlo_required_samples: value,
+                }))
+              }
+            />
+            <AdvancedPowerField
+              label="Source-limited enter delta"
+              hint="How much extra TPS current must appear before MCU treats an online source as overloaded and takes over in backup mode."
+              suffix="mA"
+              value={advancedPower.source_limited_enter_delta_ma}
+              capability={
+                settings?.advanced_power_capabilities.source_limited_enter_delta_ma
+              }
+              onChange={(value) =>
+                setAdvancedPowerDraft((current) => ({
+                  ...current,
+                  source_limited_enter_delta_ma: value,
                 }))
               }
             />
@@ -4507,17 +4430,11 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
 
 function defaultAdvancedPowerSettings(): AdvancedPowerSettings {
   return {
-    standby_drop_mv: 1200,
-    assist_low_drop_mv: 600,
-    assist_enter_delta_ma: 0,
-    assist_exit_delta_ma: 0,
-    assist_required_samples: 2,
-    assist_ramp_step_mv: 100,
-    assist_ramp_interval_ms: 200,
-    rated_enter_delta_ma: 0,
-    rated_exit_delta_ma: 0,
-    vin_drop_threshold_pct: 4,
-    required_samples: 2,
+    standby_drop_mv: 700,
+    input_uvlo_cutoff_mv: 11300,
+    input_uvlo_recover_mv: 11500,
+    input_uvlo_required_samples: 3,
+    source_limited_enter_delta_ma: 2500,
   };
 }
 

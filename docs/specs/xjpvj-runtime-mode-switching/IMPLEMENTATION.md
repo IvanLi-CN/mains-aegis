@@ -53,57 +53,45 @@
 
 ## 设置与持久化实现
 
-当前 `advanced_power` 契约已经是 19 字段：
+当前 `advanced_power` owner-facing / EEPROM 持久化契约已经收敛为 5 字段：
 
 - `standby_drop_mv`
-- `assist_low_drop_mv`
-- `assist_enter_delta_ma`
-- `assist_exit_delta_ma`
-- `assist_required_samples`
-- `assist_ramp_step_mv`
-- `assist_ramp_interval_ms`
-- `rated_enter_delta_ma`
-- `rated_exit_delta_ma`
-- `vin_drop_threshold_pct`
-- `required_samples`
 - `input_uvlo_cutoff_mv`
 - `input_uvlo_recover_mv`
 - `input_uvlo_required_samples`
-- `source_limited_vin_drop_pct`
 - `source_limited_enter_delta_ma`
-- `source_limited_exit_delta_ma`
-- `source_limited_required_samples`
-- `source_limited_recover_margin_mv`
 
 实现状态：
 
 - owner-facing 保存语义仍然是相对值或无量纲值
-- EEPROM 使用 `AdvancedPowerRecordV4`
-- 继续兼容旧 `V1 / V2` 记录的默认值补齐读取
+- EEPROM 使用 `AdvancedPowerRecordV5`
+- 不再保留旧 `advanced_power` EEPROM 记录的读取兼容；旧记录会被视为未初始化，并按当前 profile 默认值重建
+- CLI / USB CDC / HTTP JSON / Web form / capabilities 已全部对齐到同一 5 字段最小面
 - `status / diag-snapshot` 已暴露：
   - `assist_power_stage`
   - `assist_target_vout_mv`
   - `backup_reason`
 - 当前缺省值按额定输出档位派生：
   - `12V`：`standby_drop_mv=700`，即 `11.3V standby target`
-  - `19V`：`standby_drop_mv=1200`，即 `17.8V standby target`
+  - `19V`：`standby_drop_mv=900`，即 `18.1V standby target`
 - 当前前级输入门改为 EEPROM 持久化参数：
   - `input_uvlo_cutoff_mv`
   - `input_uvlo_recover_mv`
   - `input_uvlo_required_samples`
   - 缺省值仍按额定输出档位派生：
     - `12V`：`11.3V / 11.5V / 3 samples`
-    - `19V`：`10V / 11V / 3 samples`
+    - `19V`：`18.2V / 18.4V / 3 samples`
+- 当前 source-limited 进入门槛按 profile 默认值派生：
+  - `12V`：`source_limited_enter_delta_ma=2500`
+  - `19V`：`source_limited_enter_delta_ma=1000`
+- 其余 `assist_*`、`rated_*`、`vin_drop_threshold_pct`、`required_samples`、`source_limited_vin_drop_pct`、`source_limited_exit_delta_ma`、`source_limited_required_samples` 与 `source_limited_recover_margin_mv` 已收敛为固件内部算法常量；运行时仍然使用它们，但它们不再属于 owner-facing 设置面。
 
-新增 source-limited 默认值优先保证检测延迟可控：
+因此默认 source-limited 进入电流门槛为：
 
-- `source_limited_vin_drop_pct=1`
-- `source_limited_enter_delta_ma=2500`
-- `source_limited_exit_delta_ma=0`
-- `source_limited_required_samples=2`
-- `source_limited_recover_margin_mv=400`
+- `12V`：`rated_enter_base 100mA + 2500mA = 2600mA`
+- `19V`：`rated_enter_base 100mA + 1000mA = 1100mA`
 
-因此默认 source-limited 进入电流门槛为 `rated_enter_base 100mA + 2500mA = 2600mA`。fresh TPS 样本仍走完整 `VIN drop + TPS output + input current` 判据；只有 TPS 聚合输出样本滞后时，才允许基于 `VIN baseline/drop + vin_iin_ma` 快速锁存，避免上级限流时等待滞后遥测而延长负载端跌落。该门槛在 12V/3A 台架上为 `2900mA` in-budget 场景保留 guard band，同时仍能在 `3900mA` 负载下观测到足够的 TPS 补充电流后锁存。
+fresh TPS 样本仍走完整 `VIN drop + TPS output + input current` 判据；只有 TPS 聚合输出样本滞后时，才允许基于 `VIN baseline/drop + vin_iin_ma` 快速锁存，避免上级限流时等待滞后遥测而延长负载端跌落。
 
 当前规范还新增了一条负向 guard：
 
@@ -215,8 +203,8 @@
 - `required_samples=2`
 
 这些旧方案报告没有 `source_limited_*` 字段，因为当时 `advanced_power`
-仍是 11 字段契约；读取旧 EEPROM/旧 settings 时当前实现会用默认
-source-limited 字段补齐。
+仍是较早的历史契约。它们只作为历史 evidence 保留，不再代表当前
+EEPROM / owner-facing 设置格式。
 
 12V 的 `11.3V standby + 11.3V / 11.5V input UVLO` 已在后续 `93aadc61`
 真机四场景复测中完成重新签核；当前默认值不再只是实现假设，而是有对应的
