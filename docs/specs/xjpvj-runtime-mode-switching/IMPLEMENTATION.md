@@ -841,3 +841,64 @@ scene 均为 `valid_for_signoff` 且无 acceptance failure：
 这轮 sweep 也确认，相比旧 assist_path 历史 evidence 中约 `10.5V` 的长时间跌落，
 当前 `source-limited` 主动接管策略在推荐候选 A 上已经把 3900mA 场景的锁存后最低
 负载电压维持在 `11790mV`，改善成立。
+
+### 19V 100mV UVLO Sweep on 6bc1a374
+
+在 `6bc1a374-clean-eb2b310e1419a6cc` 的 `main-vout-19v` build 上，完成了新的 19V
+三场景 `100mV` 步进调优。证据目录：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18100-20260715T0310Z/`
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18200-20260715T0317Z/`
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18300-r3-20260715T0332Z/`
+
+同一候选 `18.3V / 18.5V` 的首次重跑
+`source-limited-19v-6bc1a374-uvlo18300-r2-20260715T0327Z/` 保留为诊断证据：参数行为
+本身通过，但采集链路出现 `load_collector_error` 与 `0.902s` sample gap，因此不能用作
+sign-off。
+
+更早的 `source-limited-19v-6bc1a374-uvlo18300-20260715T0323Z/` 只包含
+`backup_only` scene：runner 在第二个 scene 启动前遇到 IsolaPurr `power_enable` 串口超时，
+因此它同样只保留为台架失败证据。
+
+本轮固定不变参数：
+
+- `standby_drop_mv=900`，即 `18.1V standby`
+- `input_uvlo_required_samples=3`
+- `source_limited_vin_drop_pct=1`
+- `source_limited_enter_delta_ma=1000`
+- `source_limited_exit_delta_ma=0`
+- `source_limited_required_samples=2`
+- `source_limited_recover_margin_mv=400`
+
+每个候选点都执行了完整 `advanced_power` EEPROM 写入、写后回读、UPS reset 后再次回读，
+然后跑完 `source-limited-19v` 三场景真机 suite。
+
+候选结果：
+
+- 候选 A `18.1V / 18.3V`：三场景全部 `valid_for_signoff`
+  - `source_limited_online / 3900mA`：`0.599s` 锁存，锁存前 `<18V` 最长 `0.198s`
+  - `source_limited_cut / 3900mA`：`1.001s` 锁存，锁存前 `<18V` 最长 `0.400s`
+- 候选 B `18.2V / 18.4V`：三场景全部 `valid_for_signoff`
+  - `source_limited_online / 3900mA`：`0.201s` 锁存，锁存前无 `<18V` 连续低压段
+  - `source_limited_cut / 3900mA`：`0.599s` 锁存，锁存前无 `<18V` 连续低压段
+- 候选 C `18.3V / 18.5V`：最终 r3 三场景全部 `valid_for_signoff`
+  - `source_limited_online / 3900mA`：`0.999s` 锁存，锁存前无 `<18V` 连续低压段
+  - `source_limited_cut / 3900mA`：`0.591s` 锁存，锁存前无 `<18V` 连续低压段
+
+三个通过点的锁存后最低负载电压相同，均为 `18768mV`；差异主要体现在锁存前的低压段与
+接管时延。推荐候选 B，而不是 cutoff 更低的候选 A 或更高的候选 C：
+
+- 相比 A，B 把在线过载锁存从 `0.599s` 缩短到 `0.201s`
+- 相比 A，B 消除了两个 3900mA scene 在锁存前的 `<18V` 连续低压段
+- 相比 C，B 没有再把在线过载锁存拖慢到接近 `1s`
+
+因此当前 19V 实测推荐参数为：
+
+- `standby_drop_mv=900`
+- `input_uvlo_cutoff_mv=18200`
+- `input_uvlo_recover_mv=18400`
+- `input_uvlo_required_samples=3`
+- `source_limited_enter_delta_ma=1000`
+
+本轮只把这组值作为“实测推荐参数”与 bench 当前 EEPROM 状态保留；仓库默认值仍保持现状，
+等待后续单独的默认值决策。

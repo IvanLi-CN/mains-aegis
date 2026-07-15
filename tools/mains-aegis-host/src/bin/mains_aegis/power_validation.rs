@@ -316,19 +316,34 @@ struct SourceLimitedUvloExpectation {
     required_samples: u8,
 }
 
-impl Default for SourceLimitedUvloExpectation {
-    fn default() -> Self {
-        Self {
-            cutoff_mv: 11_300,
-            recover_mv: 11_500,
-            required_samples: 3,
-        }
-    }
+#[derive(Debug, Clone, Copy)]
+struct SourceLimitedSettingsExpectation {
+    source_limited_vin_drop_pct: u8,
+    source_limited_enter_delta_ma: i16,
+    source_limited_exit_delta_ma: i16,
+    source_limited_required_samples: u8,
+    source_limited_recover_margin_mv: u16,
+    vin_drop_threshold_pct: u8,
 }
 
 impl SourceLimitedUvloExpectation {
-    fn from_run_args(args: &RunArgs) -> Self {
-        let defaults = Self::default();
+    fn for_profile(profile: OutputProfile) -> Self {
+        match profile {
+            OutputProfile::V12 => Self {
+                cutoff_mv: 11_300,
+                recover_mv: 11_500,
+                required_samples: 3,
+            },
+            OutputProfile::V19 => Self {
+                cutoff_mv: 10_000,
+                recover_mv: 11_000,
+                required_samples: 3,
+            },
+        }
+    }
+
+    fn from_run_args(profile: OutputProfile, args: &RunArgs) -> Self {
+        let defaults = Self::for_profile(profile);
         Self {
             cutoff_mv: args
                 .expected_input_uvlo_cutoff_mv
@@ -339,6 +354,29 @@ impl SourceLimitedUvloExpectation {
             required_samples: args
                 .expected_input_uvlo_required_samples
                 .unwrap_or(defaults.required_samples),
+        }
+    }
+}
+
+impl SourceLimitedSettingsExpectation {
+    fn for_profile(profile: OutputProfile) -> Self {
+        match profile {
+            OutputProfile::V12 => Self {
+                source_limited_vin_drop_pct: 1,
+                source_limited_enter_delta_ma: 2_500,
+                source_limited_exit_delta_ma: 0,
+                source_limited_required_samples: 2,
+                source_limited_recover_margin_mv: 400,
+                vin_drop_threshold_pct: 4,
+            },
+            OutputProfile::V19 => Self {
+                source_limited_vin_drop_pct: 1,
+                source_limited_enter_delta_ma: 1_000,
+                source_limited_exit_delta_ma: 0,
+                source_limited_required_samples: 2,
+                source_limited_recover_margin_mv: 400,
+                vin_drop_threshold_pct: 4,
+            },
         }
     }
 }
@@ -2960,7 +2998,7 @@ async fn ensure_profile_ready(
     suite_contract: SuiteContract,
     actions: &mut Vec<Value>,
 ) -> anyhow::Result<(Value, Value, Value)> {
-    let uvlo_expectation = SourceLimitedUvloExpectation::from_run_args(args);
+    let uvlo_expectation = SourceLimitedUvloExpectation::from_run_args(profile, args);
     let mut identity = run_cmd_json_retry(
         ups_command(&args.bench, context, ["identity"]),
         "ups_identity",
@@ -2978,6 +3016,7 @@ async fn ensure_profile_ready(
     let mut profile_gate = validate_profile_gate(profile, &identity, &settings);
     if profile_gate.get("ok").and_then(Value::as_bool) == Some(true) {
         validate_suite_settings(
+            profile,
             suite_contract,
             &settings,
             &mut profile_gate,
@@ -3060,6 +3099,7 @@ async fn ensure_profile_ready(
         bail!("UPS profile gate still failed after profile switch: {profile_gate}");
     }
     validate_suite_settings(
+        profile,
         suite_contract,
         &settings,
         &mut profile_gate,
@@ -4358,6 +4398,7 @@ fn validate_profile_gate(profile: OutputProfile, identity: &Value, settings: &Va
 }
 
 fn validate_suite_settings(
+    profile: OutputProfile,
     suite_contract: SuiteContract,
     settings: &Value,
     profile_gate: &mut Value,
@@ -4370,13 +4411,14 @@ fn validate_suite_settings(
         .get("advanced_power")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    let defaults = SourceLimitedSettingsExpectation::for_profile(profile);
     let expected = json!({
-        "source_limited_vin_drop_pct": 1,
-        "source_limited_enter_delta_ma": 2_500,
-        "source_limited_exit_delta_ma": 0,
-        "source_limited_required_samples": 2,
-        "source_limited_recover_margin_mv": 400,
-        "vin_drop_threshold_pct": 4,
+        "source_limited_vin_drop_pct": defaults.source_limited_vin_drop_pct,
+        "source_limited_enter_delta_ma": defaults.source_limited_enter_delta_ma,
+        "source_limited_exit_delta_ma": defaults.source_limited_exit_delta_ma,
+        "source_limited_required_samples": defaults.source_limited_required_samples,
+        "source_limited_recover_margin_mv": defaults.source_limited_recover_margin_mv,
+        "vin_drop_threshold_pct": defaults.vin_drop_threshold_pct,
         "input_uvlo_cutoff_mv": uvlo_expectation.cutoff_mv,
         "input_uvlo_recover_mv": uvlo_expectation.recover_mv,
         "input_uvlo_required_samples": uvlo_expectation.required_samples,
@@ -5117,7 +5159,7 @@ mod tests {
     }
 
     #[test]
-    fn source_limited_settings_preflight_requires_the_bench_defaults() {
+    fn source_limited_settings_preflight_requires_the_12v_bench_defaults() {
         let mut profile_gate = json!({"ok": true});
         let settings = json!({
             "advanced_power": {
@@ -5133,10 +5175,11 @@ mod tests {
             }
         });
         validate_suite_settings(
+            OutputProfile::V12,
             SuiteContract::SourceLimited12v,
             &settings,
             &mut profile_gate,
-            SourceLimitedUvloExpectation::default(),
+            SourceLimitedUvloExpectation::for_profile(OutputProfile::V12),
         )
         .unwrap();
         assert_eq!(
@@ -5147,10 +5190,11 @@ mod tests {
         let mut mismatch_gate = json!({"ok": true});
         let mismatch = json!({"advanced_power": {}});
         assert!(validate_suite_settings(
+            OutputProfile::V12,
             SuiteContract::SourceLimited12v,
             &mismatch,
             &mut mismatch_gate,
-            SourceLimitedUvloExpectation::default(),
+            SourceLimitedUvloExpectation::for_profile(OutputProfile::V12),
         )
         .is_err());
         assert!(mismatch_gate
@@ -5176,6 +5220,7 @@ mod tests {
             }
         });
         validate_suite_settings(
+            OutputProfile::V12,
             SuiteContract::SourceLimited12v,
             &settings,
             &mut profile_gate,
@@ -5193,6 +5238,40 @@ mod tests {
         assert_eq!(
             profile_gate.pointer("/source_limited_settings/expected/input_uvlo_recover_mv"),
             Some(&json!(11_600))
+        );
+    }
+
+    #[test]
+    fn source_limited_settings_preflight_requires_the_19v_bench_defaults() {
+        let mut profile_gate = json!({"ok": true});
+        let settings = json!({
+            "advanced_power": {
+                "source_limited_vin_drop_pct": 1,
+                "source_limited_enter_delta_ma": 1000,
+                "source_limited_exit_delta_ma": 0,
+                "source_limited_required_samples": 2,
+                "source_limited_recover_margin_mv": 400,
+                "vin_drop_threshold_pct": 4,
+                "input_uvlo_cutoff_mv": 10_000,
+                "input_uvlo_recover_mv": 11_000,
+                "input_uvlo_required_samples": 3,
+            }
+        });
+        validate_suite_settings(
+            OutputProfile::V19,
+            SuiteContract::SourceLimited19v,
+            &settings,
+            &mut profile_gate,
+            SourceLimitedUvloExpectation::for_profile(OutputProfile::V19),
+        )
+        .unwrap();
+        assert_eq!(
+            profile_gate.pointer("/source_limited_settings/expected/source_limited_enter_delta_ma"),
+            Some(&json!(1000))
+        );
+        assert_eq!(
+            profile_gate.pointer("/source_limited_settings/expected/input_uvlo_cutoff_mv"),
+            Some(&json!(10_000))
         );
     }
 

@@ -380,6 +380,57 @@ remained the recommendation because it matched candidate C's `11790mV`
 post-latch floor without increasing false positives or moving Backup earlier
 than necessary.
 
+## 19V EEPROM UVLO Sweep Pattern
+
+The repaired 19V path required a new sweep instead of blindly reusing the old
+`10V / 11V` software UVLO defaults. With `standby_drop_mv=900` fixed at an
+`18.1V` standby target, the retained sweep used:
+
+- candidate A: `18.1V / 18.3V`
+- candidate B: `18.2V / 18.4V`
+- candidate C: `18.3V / 18.5V`
+
+All three candidates were written to EEPROM, read back immediately, reset, and
+read back again before running the three-scene `source-limited-19v` contract.
+The retained sign-off evidence is:
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18100-20260715T0310Z/`
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18200-20260715T0317Z/`
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18300-r3-20260715T0332Z/`
+
+Candidate A passed, but still allowed a visible pre-latch low-voltage interval:
+`0.198s` in the online overload scene and `0.400s` in the overload-then-cut
+scene. Candidate C also passed, but its online overload entry slowed back down
+to `0.999s` even though it removed pre-latch low-voltage time. Candidate B was
+the balanced point:
+
+- online overload latch in `0.201s`
+- overload-then-cut latch in `0.599s`
+- no pre-latch interval below the 19V `18000mV` floor
+- same `18768mV` post-latch floor as the other passing points
+
+The practical 19V rule is therefore different from the 12V rule:
+
+- do not always prefer the lowest passing cutoff when it still leaves a visible
+  pre-latch low-voltage interval;
+- do not keep raising cutoff once the post-latch floor has stopped improving
+  and online takeover begins to slow down again.
+
+For this repaired 19V bench, the retained recommendation is:
+
+- `standby_drop_mv=900`
+- `input_uvlo_cutoff_mv=18200`
+- `input_uvlo_recover_mv=18400`
+- `input_uvlo_required_samples=3`
+- `source_limited_enter_delta_ma=1000`
+
+The earlier `source-limited-19v-6bc1a374-uvlo18300-r2-20260715T0327Z/` rerun is
+retained as diagnostic-only evidence because the parameter behavior passed but
+collection failed with `load_collector_error` and a `0.902s` sample gap. Keep
+that distinction explicit: telemetry failures must not be rewritten as control
+failures, and control passes must not be promoted to sign-off when the
+collection contract was broken.
+
 The earlier 62179e3c report below remains the pre-repair baseline. Do not use
 its PCB voltage drop or 2900mA guard result as current hardware truth.
 

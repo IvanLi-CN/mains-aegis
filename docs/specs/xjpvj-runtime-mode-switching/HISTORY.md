@@ -1,5 +1,35 @@
 # 历史记录（#xjpvj）
 
+## 2026-07-15
+
+- 19V `100mV` 步进 UVLO sweep 完成：
+  - 候选 A `18.1V / 18.3V`
+  - 候选 B `18.2V / 18.4V`
+  - 候选 C `18.3V / 18.5V`
+- 三个候选点都完成 EEPROM 写入、reset 后回读和真机三场景验证。
+- 推荐值收敛到候选 B：
+  - `standby_drop_mv=900`
+  - `input_uvlo_cutoff_mv=18200`
+  - `input_uvlo_recover_mv=18400`
+  - `input_uvlo_required_samples=3`
+  - `source_limited_enter_delta_ma=1000`
+- 选择 B 的原因：
+  - 相比 A，它把 `3900mA` 在线过载锁存从 `0.599s` 缩短到 `0.201s`
+  - 并消除了在线/切断两个过载场景锁存前的 `<18V` 连续低压段
+  - 相比 C，它没有把在线过载锁存拖慢到接近 `1s`
+- 新证据归档：
+  - `source-limited-19v-6bc1a374-uvlo18100-20260715T0310Z`
+  - `source-limited-19v-6bc1a374-uvlo18200-20260715T0317Z`
+  - `source-limited-19v-6bc1a374-uvlo18300-r3-20260715T0332Z`
+- `source-limited-19v-6bc1a374-uvlo18300-20260715T0323Z` 保留为不完整诊断 evidence：
+  runner 在第二个 scene 启动前遇到 IsolaPurr `power_enable` 串口超时。
+- `source-limited-19v-6bc1a374-uvlo18300-r2-20260715T0327Z` 保留为诊断 evidence：
+  `backup_only` 出现 `load_collector_error`，`source_limited_online` 出现
+  `0.902s` sample gap，因此不能作为 sign-off。
+- Power Path Validation 的 source-limited settings preflight 改为按 profile 校验：
+  12V 继续要求 `2500mA` enter delta，19V 改为要求 `1000mA` enter delta 和对应 19V
+  UVLO 预期值，避免把 12V bench 默认值误套到 19V sweep。
+
 ## USB Backup controlled charge exception
 
 - `BACKUP` 的 VIN/运行态定义保持不变。
