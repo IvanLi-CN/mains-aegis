@@ -1,5 +1,9 @@
 import { getMockIdentity, getMockNetwork, getMockStatus } from "../fixtures/mockDevices";
 import { isDemoQueryEnabled } from "../demo/query";
+import {
+  buildAdvancedPowerCapabilities,
+  buildAdvancedPowerDefaults,
+} from "./runtimeModeProfiles";
 import type {
   AdvancedPowerSettings,
   AppRuntimeMode,
@@ -1093,6 +1097,7 @@ export const flashDevdDevice = (
   );
 
 function defaultMockSettings(ratedVoutMv = 12_000): DeviceSettings {
+  const advancedPower = buildAdvancedPowerDefaults(ratedVoutMv);
   return {
     wifi: {
       configured: false,
@@ -1104,41 +1109,8 @@ function defaultMockSettings(ratedVoutMv = 12_000): DeviceSettings {
       speed: "ma_500",
       timer_h: 2,
     },
-    advanced_power: {
-      standby_drop_mv: ratedVoutMv <= 12_000 ? 700 : 900,
-      input_uvlo_cutoff_mv: ratedVoutMv <= 12_000 ? 11_300 : 18_200,
-      input_uvlo_recover_mv: ratedVoutMv <= 12_000 ? 11_500 : 18_400,
-      input_uvlo_required_samples: 3,
-      source_limited_enter_delta_ma: ratedVoutMv <= 12_000 ? 2_500 : 1_000,
-    },
-    advanced_power_capabilities: {
-      rated_vout_mv: ratedVoutMv,
-      standby_drop_mv: {
-        default: ratedVoutMv <= 12_000 ? 700 : 900,
-        min: 0,
-        max: 3000,
-        step: 20,
-      },
-      input_uvlo_cutoff_mv: {
-        default: ratedVoutMv <= 12_000 ? 11_300 : 18_200,
-        min: 5000,
-        max: 20000,
-        step: 20,
-      },
-      input_uvlo_recover_mv: {
-        default: ratedVoutMv <= 12_000 ? 11_500 : 18_400,
-        min: 5000,
-        max: 20000,
-        step: 20,
-      },
-      input_uvlo_required_samples: { default: 3, min: 1, max: 5, step: 1 },
-      source_limited_enter_delta_ma: {
-        default: ratedVoutMv <= 12_000 ? 2_500 : 1_000,
-        min: -100,
-        max: 3000,
-        step: 50,
-      },
-    },
+    advanced_power: advancedPower,
+    advanced_power_capabilities: buildAdvancedPowerCapabilities(ratedVoutMv),
   };
 }
 

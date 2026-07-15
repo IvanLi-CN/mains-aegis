@@ -470,3 +470,53 @@ sags and misleading reason transitions.
 - UPS and load collectors are asynchronous. Treat the source-limited decision
   sample as pre-latch status evidence and begin post-latch voltage acceptance
   on the subsequent aligned sample.
+
+## Converge Defaults Through One Profile Schema
+
+Once both 12V and 19V tuning are signed off, do not keep duplicating default
+values across firmware, host snapshots, mock devices, and the Web client.
+Promote them into one checked-in schema and generate the firmware tables from
+that file at build time.
+
+In this repo the converged source of truth is:
+
+- `schemas/runtime_mode_profiles.json`
+
+Keep only the owner-facing adjustable fields in EEPROM-backed settings:
+
+- `standby_drop_mv`
+- `input_uvlo_cutoff_mv`
+- `input_uvlo_recover_mv`
+- `input_uvlo_required_samples`
+- `source_limited_enter_delta_ma`
+
+Treat assist/rated/source-limited fixed policy as per-profile implementation
+constants unless there is a proven owner need to tune them on hardware. This
+reduces duplicated defaults without losing the ability to retune the high-value
+handoff gates.
+
+## Do Not Sign Off In-Budget Scenes While Charging
+
+`source_in_budget / 2500mA` is only a valid guard scene when the battery is no
+longer charging. If charge current is still present, the scene can show an
+artificial voltage dip even though the source itself remains in budget.
+
+The practical acceptance rule is simple:
+
+- reject any in-budget scene where `charger_allow_charge=true` during hold
+- reject any in-budget scene where battery charge current is non-zero during
+  hold
+- rerun the scene after the battery reaches a non-charging steady state, then
+  replace only that scene inside the final four-scene suite if the rest of the
+  suite is already valid
+
+The retained c8bd8130 final evidence follows that rule:
+
+- 12V final suite:
+  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c8bd8130-rerun-20260715T0838Z/`
+- 19V final suite:
+  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-c8bd8130-r2-20260715T0817Z/`
+
+For the 19V rerun that replaced the polluted in-budget scene, hold samples had
+`charger_allow_charge=false` and `battery_current_ma=0` throughout. Keep that
+kind of explicit proof in the report, not just in chat.

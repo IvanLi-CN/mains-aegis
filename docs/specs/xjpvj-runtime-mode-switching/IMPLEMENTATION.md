@@ -929,3 +929,57 @@ sign-off。
   `load_collector_error` 失效，其余三个 scene 有效
 - `source-limited-19v-6bc1a374-four-scene-r2-20260715T0451Z/`：`source_limited_online`
   因 `0.718s` sample gap 失效，其余三个 scene 有效
+
+### Runtime Mode Profile Convergence on c8bd8130
+
+当前 12V / 19V 的 runtime-mode 默认值与 owner-facing 可调能力，已收敛到单一 schema：
+
+- `schemas/runtime_mode_profiles.json`
+
+该 schema 同时定义：
+
+- 每个输出档位的默认 `advanced_power` 参数
+- owner-facing 可调字段的 bounds / step
+- 不再暴露给 owner 的固定策略常量
+
+当前实装方式：
+
+- firmware `build.rs` 在编译期把 schema 生成为固件 profile 表与 capability bounds
+- host / Web 读取同一份 schema，保证设置面、mock 数据和固件默认值口径一致
+- EEPROM 继续只记 owner-facing 的可调字段；assist/rated/source-limited 的固定策略仍按
+  档位固化，不再散落在多处默认快照里重复维护
+
+当前 schema 默认值为：
+
+- `12V`: `standby_drop_mv=700`、`input_uvlo_cutoff_mv=11300`、
+  `input_uvlo_recover_mv=11500`、`input_uvlo_required_samples=3`、
+  `source_limited_enter_delta_ma=2500`
+- `19V`: `standby_drop_mv=900`、`input_uvlo_cutoff_mv=18200`、
+  `input_uvlo_recover_mv=18400`、`input_uvlo_required_samples=3`、
+  `source_limited_enter_delta_ma=1000`
+
+### Final c8bd8130 Evidence Refresh
+
+在默认值与 profile surface 收敛后，补齐并归档了当前 `c8bd8130` 版 bench 的最终 evidence。
+
+12V 当前最终 suite 位于：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c8bd8130-rerun-20260715T0838Z/`
+
+该 suite 维持四场景合同，最终 `signoff_valid=true`。其中
+`source_in_budget / 2500mA` 已使用电池充满后的 rerun scene 替换旧的充电污染样本；替换后
+hold 窗口内无 Backup 样本，也不再出现因充电叠加导致的异常下陷。
+
+19V 当前最终 suite 位于：
+
+- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-c8bd8130-r2-20260715T0817Z/`
+
+该 suite 同样满足四场景 `source-limited-19v` 合同，最终 `signoff_valid=true`。其中
+`source_in_budget / 2500mA` scene 已替换为充电结束后的 clean rerun：
+
+- hold 窗口 `charger_allow_charge=false`
+- hold 窗口 `battery_current_ma=0`
+- `77` 个 hold 样本中 Backup / offline / source-limited 全为 `0`
+
+因此，`c8bd8130` 当前保留的 12V / 19V evidence 已不再包含“正常在线负载场景被充电状态污染”
+这一干扰因素，可作为当前默认参数与模式切换策略的最终对照证据。

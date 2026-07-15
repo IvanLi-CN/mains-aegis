@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Context};
 use chrono::Utc;
 use clap::{Args, Subcommand, ValueEnum};
+use mains_aegis_host::runtime_mode_tuning_defaults_for_rated_vout;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -325,17 +326,11 @@ struct SourceLimitedSettingsExpectation {
 
 impl SourceLimitedUvloExpectation {
     fn for_profile(profile: OutputProfile) -> Self {
-        match profile {
-            OutputProfile::V12 => Self {
-                cutoff_mv: 11_300,
-                recover_mv: 11_500,
-                required_samples: 3,
-            },
-            OutputProfile::V19 => Self {
-                cutoff_mv: 18_200,
-                recover_mv: 18_400,
-                required_samples: 3,
-            },
+        let defaults = runtime_mode_tuning_defaults_for_rated_vout(profile.rated_vout_mv() as u16);
+        Self {
+            cutoff_mv: defaults.input_uvlo_cutoff_mv,
+            recover_mv: defaults.input_uvlo_recover_mv,
+            required_samples: defaults.input_uvlo_required_samples,
         }
     }
 
@@ -357,13 +352,11 @@ impl SourceLimitedUvloExpectation {
 
 impl SourceLimitedSettingsExpectation {
     fn for_profile(profile: OutputProfile) -> Self {
-        match profile {
-            OutputProfile::V12 => Self {
-                source_limited_enter_delta_ma: 2_500,
-            },
-            OutputProfile::V19 => Self {
-                source_limited_enter_delta_ma: 1_000,
-            },
+        Self {
+            source_limited_enter_delta_ma: runtime_mode_tuning_defaults_for_rated_vout(
+                profile.rated_vout_mv() as u16,
+            )
+            .source_limited_enter_delta_ma,
         }
     }
 }
@@ -561,7 +554,8 @@ struct SceneSample {
     isolapurr_port_c_ma: Option<Value>,
     mains_present: Option<Value>,
     assist_target_vout_mv: Option<Value>,
-    vin_vbus_mv: Option<Value>,
+    #[serde(default, alias = "vin_vbus_mv")]
+    pre_tps_vin_mv: Option<Value>,
     vin_iin_ma: Option<Value>,
     tps_total_iout_ma: Option<Value>,
     battery_current_ma: Option<Value>,
@@ -2346,8 +2340,8 @@ fn sample_mains_present(sample: &SceneSample) -> Option<bool> {
         })
 }
 
-fn sample_vin_vbus_mv(sample: &SceneSample) -> Option<i64> {
-    sample_number(&sample.vin_vbus_mv)
+fn sample_pre_tps_vin_mv(sample: &SceneSample) -> Option<i64> {
+    sample_number(&sample.pre_tps_vin_mv)
 }
 
 fn sample_tps_output_power_mw(sample: &SceneSample) -> Option<i64> {
@@ -2409,7 +2403,7 @@ fn classify_backup_transition_phases(scene: SceneKind, samples: &mut [SceneSampl
         None
     };
     let hold_mains_present = hold_like.and_then(sample_mains_present);
-    let hold_vin_vbus_mv = hold_like.and_then(sample_vin_vbus_mv);
+    let hold_pre_tps_vin_mv = hold_like.and_then(sample_pre_tps_vin_mv);
 
     let mut first_effect_idx = None;
     let mut first_backup_idx = None;
@@ -2420,8 +2414,8 @@ fn classify_backup_transition_phases(scene: SceneKind, samples: &mut [SceneSampl
         let mains_changed = hold_mains_present
             .zip(sample_mains_present(sample))
             .is_some_and(|(hold, current)| current != hold);
-        let vin_changed = hold_vin_vbus_mv
-            .zip(sample_vin_vbus_mv(sample))
+        let vin_changed = hold_pre_tps_vin_mv
+            .zip(sample_pre_tps_vin_mv(sample))
             .is_some_and(|(hold, current)| (hold - current).abs() >= 200);
         if first_effect_idx.is_none()
             && (sample_is_backup(sample)
@@ -2753,7 +2747,7 @@ async fn ensure_source_disconnected(
         last.mains_present,
         last.input_source,
         last.input_vbus_mv,
-        last.vin_vbus_mv,
+        last.pre_tps_vin_mv,
         last.input_gate_state,
         last.input_gate_reason
     );
@@ -2805,7 +2799,7 @@ async fn ensure_source_disconnected_with_sampling(
                 "mains_present": last.mains_present,
                 "source": last.input_source,
                 "input_vbus_mv": last.input_vbus_mv,
-                "pre_tps_vin_mv": last.vin_vbus_mv,
+                "pre_tps_vin_mv": last.pre_tps_vin_mv,
                 "input_gate_state": last.input_gate_state,
                 "input_gate_reason": last.input_gate_reason,
                 "ups_still_live": last.ups_still_live,
@@ -2823,7 +2817,7 @@ async fn ensure_source_disconnected_with_sampling(
         last.mains_present,
         last.input_source,
         last.input_vbus_mv,
-        last.vin_vbus_mv,
+        last.pre_tps_vin_mv,
         last.input_gate_state,
         last.input_gate_reason
     );
@@ -2835,7 +2829,7 @@ struct SourceDisconnectState {
     mains_present: Option<bool>,
     input_source: Option<String>,
     input_vbus_mv: Option<i64>,
-    vin_vbus_mv: Option<i64>,
+    pre_tps_vin_mv: Option<i64>,
     input_gate_state: Option<String>,
     input_gate_reason: Option<String>,
     ups_still_live: bool,
@@ -2858,7 +2852,7 @@ fn source_disconnect_state(power: &Value, status: &Value) -> SourceDisconnectSta
         .pointer("/sample/input/input_vbus_mv")
         .or_else(|| status.pointer("/input/input_vbus_mv"))
         .and_then(Value::as_i64);
-    let vin_vbus_mv = status
+    let pre_tps_vin_mv = status
         .pointer("/sample/input/pre_tps_vin_mv")
         .or_else(|| status.pointer("/input/pre_tps_vin_mv"))
         .or_else(|| status.pointer("/sample/input/vin_vbus_mv"))
@@ -2886,14 +2880,15 @@ fn source_disconnect_state(power: &Value, status: &Value) -> SourceDisconnectSta
     let firmware_gate_cutoff = input_gate_state.as_deref() == Some("cutoff")
         && input_gate_reason.as_deref() == Some("pre_tps_undervoltage");
     let dcin_cut_truth = mains_present == Some(false)
-        && (firmware_gate_cutoff || vin_vbus_mv.is_some_and(|mv| mv <= UPS_INPUT_CUT_MAX_VIN_MV));
+        && (firmware_gate_cutoff
+            || pre_tps_vin_mv.is_some_and(|mv| mv <= UPS_INPUT_CUT_MAX_VIN_MV));
     let ups_still_live = !(dcin_cut_truth && backup_truth);
     SourceDisconnectState {
         source_mv,
         mains_present,
         input_source,
         input_vbus_mv,
-        vin_vbus_mv,
+        pre_tps_vin_mv,
         input_gate_state,
         input_gate_reason,
         ups_still_live,
@@ -3485,7 +3480,7 @@ fn collect_scene_sample_at(
             .or_else(|| adapter_sample_value(&power, "current_ma")),
         mains_present: input.get("mains_present").cloned(),
         assist_target_vout_mv: input.get("assist_target_vout_mv").cloned(),
-        vin_vbus_mv: input
+        pre_tps_vin_mv: input
             .get("pre_tps_vin_mv")
             .cloned()
             .or_else(|| input.get("vin_vbus_mv").cloned())
@@ -3868,8 +3863,15 @@ fn json_frame_time_ms(value: &Value) -> Option<i64> {
 }
 
 fn json_frame_has_telemetry(value: &Value) -> bool {
-    value.pointer("/result/input/vin_vbus_mv").is_some()
+    value.pointer("/result/input/pre_tps_vin_mv").is_some()
+        || value.pointer("/result/input/vin_vbus_mv").is_some()
+        || value
+            .pointer("/result/sample/input/pre_tps_vin_mv")
+            .is_some()
         || value.pointer("/result/sample/input/vin_vbus_mv").is_some()
+        || value
+            .pointer("/result/sample/packages/derived.power/payload/input/pre_tps_vin_mv")
+            .is_some()
         || value
             .pointer("/result/sample/packages/derived.power/payload/input/vin_vbus_mv")
             .is_some()
@@ -4489,7 +4491,7 @@ fn summarize_scene(samples: &[SceneSample]) -> SceneSummary {
     );
     required.insert(
         "ups_dcin_voltage".to_string(),
-        samples.iter().any(|sample| sample.vin_vbus_mv.is_some()),
+        samples.iter().any(|sample| sample.pre_tps_vin_mv.is_some()),
     );
     required.insert(
         "ups_output_voltage".to_string(),
@@ -4686,7 +4688,7 @@ mod tests {
             isolapurr_port_c_ma: Some(json!(3_000)),
             mains_present: Some(json!(backup_reason != Some("input_absent"))),
             assist_target_vout_mv: Some(json!(12_000)),
-            vin_vbus_mv: Some(json!(11_800)),
+            pre_tps_vin_mv: Some(json!(11_800)),
             vin_iin_ma: Some(json!(3_000)),
             tps_total_iout_ma: Some(json!(3_900)),
             battery_current_ma: Some(json!(-500)),
@@ -4993,7 +4995,7 @@ mod tests {
                 "sample": {
                     "packages": {
                         "derived.power": {
-                            "payload": {"input": {"vin_vbus_mv": 12_000}}
+                            "payload": {"input": {"pre_tps_vin_mv": 12_000}}
                         }
                     }
                 }
@@ -5423,19 +5425,19 @@ mod tests {
                 18_980,
             ),
         ];
-        samples[0].vin_vbus_mv = Some(json!(19_000));
+        samples[0].pre_tps_vin_mv = Some(json!(19_000));
         samples[0].mains_present = Some(json!(true));
-        samples[1].vin_vbus_mv = Some(json!(19_000));
+        samples[1].pre_tps_vin_mv = Some(json!(19_000));
         samples[1].mains_present = Some(json!(true));
-        samples[2].vin_vbus_mv = Some(json!(19_000));
+        samples[2].pre_tps_vin_mv = Some(json!(19_000));
         samples[2].mains_present = Some(json!(true));
-        samples[3].vin_vbus_mv = Some(json!(3_016));
+        samples[3].pre_tps_vin_mv = Some(json!(3_016));
         samples[3].mains_present = Some(json!(true));
-        samples[4].vin_vbus_mv = Some(json!(3_016));
+        samples[4].pre_tps_vin_mv = Some(json!(3_016));
         samples[4].mains_present = Some(json!(true));
-        samples[5].vin_vbus_mv = Some(json!(2_024));
+        samples[5].pre_tps_vin_mv = Some(json!(2_024));
         samples[5].mains_present = Some(json!(false));
-        samples[6].vin_vbus_mv = Some(json!(2_024));
+        samples[6].pre_tps_vin_mv = Some(json!(2_024));
         samples[6].mains_present = Some(json!(false));
 
         classify_load_acceptance_phases(SceneKind::BackupOnly, &mut samples);
@@ -5569,7 +5571,7 @@ mod tests {
             "input": {
                 "mains_present": true,
                 "source": "battery",
-                "vin_vbus_mv": 0,
+                "pre_tps_vin_mv": 0,
                 "assist_power_stage": "backup"
             },
             "mode": "backup"
@@ -5581,7 +5583,7 @@ mod tests {
             "input": {
                 "mains_present": false,
                 "source": "battery",
-                "vin_vbus_mv": 2999,
+                "pre_tps_vin_mv": 2999,
                 "assist_power_stage": "backup"
             }
         });
@@ -5596,7 +5598,7 @@ mod tests {
             "input": {
                 "mains_present": false,
                 "source": "battery",
-                "vin_vbus_mv": 5100,
+                "pre_tps_vin_mv": 5100,
                 "assist_power_stage": "assist_low"
             },
             "mode": "supplement"
@@ -5612,7 +5614,7 @@ mod tests {
             "input": {
                 "mains_present": false,
                 "source": "battery",
-                "vin_vbus_mv": 2500,
+                "pre_tps_vin_mv": 2500,
                 "assist_power_stage": "assist_low"
             },
             "mode": "standby"
@@ -5806,7 +5808,7 @@ mod tests {
                     isolapurr_port_c_ma: None,
                     mains_present: None,
                     assist_target_vout_mv: None,
-                    vin_vbus_mv: Some(json!(11800)),
+                    pre_tps_vin_mv: Some(json!(11800)),
                     vin_iin_ma: None,
                     tps_total_iout_ma: None,
                     battery_current_ma: None,
@@ -5844,7 +5846,7 @@ mod tests {
                     isolapurr_port_c_ma: None,
                     mains_present: None,
                     assist_target_vout_mv: None,
-                    vin_vbus_mv: Some(json!(11810)),
+                    pre_tps_vin_mv: Some(json!(11810)),
                     vin_iin_ma: None,
                     tps_total_iout_ma: None,
                     battery_current_ma: None,
@@ -5882,7 +5884,7 @@ mod tests {
                     isolapurr_port_c_ma: None,
                     mains_present: None,
                     assist_target_vout_mv: None,
-                    vin_vbus_mv: Some(json!(11820)),
+                    pre_tps_vin_mv: Some(json!(11820)),
                     vin_iin_ma: None,
                     tps_total_iout_ma: None,
                     battery_current_ma: None,

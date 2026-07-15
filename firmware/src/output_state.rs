@@ -1,4 +1,4 @@
-use crate::net_types::AdvancedPowerExpandedSnapshot;
+use crate::net_types::RuntimeModePolicySnapshot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputSelector {
@@ -48,11 +48,11 @@ pub struct InputGateThresholds {
 }
 
 impl InputGateThresholds {
-    pub const fn from_advanced_power(advanced_power: AdvancedPowerExpandedSnapshot) -> Self {
+    pub const fn from_runtime_policy(policy: RuntimeModePolicySnapshot) -> Self {
         Self {
-            cutoff_mv: advanced_power.input_uvlo_cutoff_mv,
-            recover_mv: advanced_power.input_uvlo_recover_mv,
-            required_samples: advanced_power.input_uvlo_required_samples,
+            cutoff_mv: policy.tuning.input_uvlo_cutoff_mv,
+            recover_mv: policy.tuning.input_uvlo_recover_mv,
+            required_samples: policy.tuning.input_uvlo_required_samples,
         }
     }
 }
@@ -274,7 +274,9 @@ mod tests {
         InputGateTracker, LowBatteryOutputHoldReleaseInput, OutputGateReason, OutputRuntimeState,
         OutputSelector,
     };
-    use crate::net_types::AdvancedPowerExpandedSnapshot;
+    use crate::net_types::{
+        RuntimeModeFixedPolicy, RuntimeModePolicySnapshot, RuntimeModeTuningSnapshot,
+    };
 
     #[test]
     fn input_gate_requires_three_consecutive_low_fresh_samples() {
@@ -314,27 +316,31 @@ mod tests {
     #[test]
     fn input_gate_thresholds_follow_advanced_power_snapshot() {
         assert_eq!(
-            InputGateThresholds::from_advanced_power(AdvancedPowerExpandedSnapshot {
+            InputGateThresholds::from_runtime_policy(RuntimeModePolicySnapshot {
                 rated_vout_mv: 12_000,
-                standby_vout_mv: 11_300,
-                assist_low_vout_mv: 11_400,
-                assist_enter_iout_ma: 100,
-                assist_exit_iout_ma: 50,
-                assist_required_samples: 2,
-                assist_ramp_step_mv: 100,
-                assist_ramp_interval_ms: 200,
-                rated_enter_iout_ma: 100,
-                rated_exit_iout_ma: 50,
-                vin_drop_threshold_pct: 4,
-                required_samples: 2,
-                input_uvlo_cutoff_mv: 11_300,
-                input_uvlo_recover_mv: 11_500,
-                input_uvlo_required_samples: 3,
-                source_limited_vin_drop_pct: 1,
-                source_limited_enter_iout_ma: 2_600,
-                source_limited_exit_iout_ma: 50,
-                source_limited_required_samples: 2,
-                source_limited_recover_margin_mv: 400,
+                tuning: RuntimeModeTuningSnapshot {
+                    standby_vout_mv: 11_300,
+                    input_uvlo_cutoff_mv: 11_300,
+                    input_uvlo_recover_mv: 11_500,
+                    input_uvlo_required_samples: 3,
+                    source_limited_enter_iout_ma: 2_600,
+                },
+                fixed: RuntimeModeFixedPolicy {
+                    assist_low_drop_mv: 600,
+                    assist_enter_iout_ma: 100,
+                    assist_exit_iout_ma: 50,
+                    assist_required_samples: 2,
+                    assist_ramp_step_mv: 100,
+                    assist_ramp_interval_ms: 200,
+                    rated_enter_iout_ma: 100,
+                    rated_exit_iout_ma: 50,
+                    vin_drop_threshold_pct: 4,
+                    required_samples: 2,
+                    source_limited_vin_drop_pct: 1,
+                    source_limited_exit_iout_ma: 50,
+                    source_limited_required_samples: 2,
+                    source_limited_recover_margin_mv: 400,
+                },
             }),
             InputGateThresholds {
                 cutoff_mv: 11_300,

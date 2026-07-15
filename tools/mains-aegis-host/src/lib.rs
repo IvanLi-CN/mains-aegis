@@ -32,7 +32,7 @@ use std::{
     process::Stdio,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc, Arc, Mutex, OnceLock,
     },
     time::{Duration, Instant},
 };
@@ -666,6 +666,56 @@ struct AdvancedPowerCapabilities {
     input_uvlo_recover_mv: AdvancedPowerFieldU16Capability,
     input_uvlo_required_samples: AdvancedPowerFieldU8Capability,
     source_limited_enter_delta_ma: AdvancedPowerFieldI16Capability,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeModeTuningDefaults {
+    pub standby_drop_mv: u16,
+    pub input_uvlo_cutoff_mv: u16,
+    pub input_uvlo_recover_mv: u16,
+    pub input_uvlo_required_samples: u8,
+    pub source_limited_enter_delta_ma: i16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+struct RuntimeModeU16Bounds {
+    min: u16,
+    max: u16,
+    step: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+struct RuntimeModeI16Bounds {
+    min: i16,
+    max: i16,
+    step: i16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+struct RuntimeModeU8Bounds {
+    min: u8,
+    max: u8,
+    step: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+struct RuntimeModeCapabilityBoundsFile {
+    standby_drop_mv: RuntimeModeU16Bounds,
+    input_uvlo_threshold_mv: RuntimeModeU16Bounds,
+    input_uvlo_required_samples: RuntimeModeU8Bounds,
+    source_limited_enter_delta_ma: RuntimeModeI16Bounds,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RuntimeModeProfileFile {
+    max_rated_vout_mv: u16,
+    defaults: RuntimeModeTuningDefaults,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RuntimeModeProfilesFile {
+    capabilities: RuntimeModeCapabilityBoundsFile,
+    profiles: Vec<RuntimeModeProfileFile>,
 }
 
 #[derive(Debug, Serialize)]
@@ -9304,23 +9354,34 @@ fn default_settings() -> DeviceSettingsState {
     default_settings_for_rated_vout(12_000)
 }
 
+fn runtime_mode_profiles() -> &'static RuntimeModeProfilesFile {
+    static RUNTIME_MODE_PROFILES: OnceLock<RuntimeModeProfilesFile> = OnceLock::new();
+    RUNTIME_MODE_PROFILES.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../schemas/runtime_mode_profiles.json"))
+            .expect("runtime_mode_profiles.json")
+    })
+}
+
+pub fn runtime_mode_tuning_defaults_for_rated_vout(
+    rated_vout_mv: u16,
+) -> RuntimeModeTuningDefaults {
+    runtime_mode_profiles()
+        .profiles
+        .iter()
+        .find(|profile| rated_vout_mv <= profile.max_rated_vout_mv)
+        .map(|profile| profile.defaults)
+        .unwrap_or_else(|| {
+            runtime_mode_profiles()
+                .profiles
+                .last()
+                .expect("runtime mode profiles")
+                .defaults
+        })
+}
+
 fn default_settings_for_rated_vout(rated_vout_mv: u16) -> DeviceSettingsState {
-    let standby_drop_mv = if rated_vout_mv <= 12_000 { 700 } else { 900 };
-    let input_uvlo_cutoff_mv = if rated_vout_mv <= 12_000 {
-        11_300
-    } else {
-        18_200
-    };
-    let input_uvlo_recover_mv = if rated_vout_mv <= 12_000 {
-        11_500
-    } else {
-        18_400
-    };
-    let source_limited_enter_delta_ma = if rated_vout_mv <= 12_000 {
-        2_500
-    } else {
-        1_000
-    };
+    let defaults = runtime_mode_tuning_defaults_for_rated_vout(rated_vout_mv);
+    let bounds = runtime_mode_profiles().capabilities;
     DeviceSettingsState {
         wifi_configured: None,
         wifi_ssid: None,
@@ -9331,43 +9392,43 @@ fn default_settings_for_rated_vout(rated_vout_mv: u16) -> DeviceSettingsState {
             timer_h: 2,
         },
         advanced_power: AdvancedPowerSettings {
-            standby_drop_mv,
-            input_uvlo_cutoff_mv,
-            input_uvlo_recover_mv,
-            input_uvlo_required_samples: 3,
-            source_limited_enter_delta_ma,
+            standby_drop_mv: defaults.standby_drop_mv,
+            input_uvlo_cutoff_mv: defaults.input_uvlo_cutoff_mv,
+            input_uvlo_recover_mv: defaults.input_uvlo_recover_mv,
+            input_uvlo_required_samples: defaults.input_uvlo_required_samples,
+            source_limited_enter_delta_ma: defaults.source_limited_enter_delta_ma,
         },
         advanced_power_capabilities: AdvancedPowerCapabilities {
             rated_vout_mv,
             standby_drop_mv: AdvancedPowerFieldU16Capability {
-                default: standby_drop_mv,
-                min: 0,
-                max: 3000,
-                step: 20,
+                default: defaults.standby_drop_mv,
+                min: bounds.standby_drop_mv.min,
+                max: bounds.standby_drop_mv.max,
+                step: bounds.standby_drop_mv.step,
             },
             input_uvlo_cutoff_mv: AdvancedPowerFieldU16Capability {
-                default: input_uvlo_cutoff_mv,
-                min: 5_000,
-                max: 20_000,
-                step: 20,
+                default: defaults.input_uvlo_cutoff_mv,
+                min: bounds.input_uvlo_threshold_mv.min,
+                max: bounds.input_uvlo_threshold_mv.max,
+                step: bounds.input_uvlo_threshold_mv.step,
             },
             input_uvlo_recover_mv: AdvancedPowerFieldU16Capability {
-                default: input_uvlo_recover_mv,
-                min: 5_000,
-                max: 20_000,
-                step: 20,
+                default: defaults.input_uvlo_recover_mv,
+                min: bounds.input_uvlo_threshold_mv.min,
+                max: bounds.input_uvlo_threshold_mv.max,
+                step: bounds.input_uvlo_threshold_mv.step,
             },
             input_uvlo_required_samples: AdvancedPowerFieldU8Capability {
-                default: 3,
-                min: 1,
-                max: 5,
-                step: 1,
+                default: defaults.input_uvlo_required_samples,
+                min: bounds.input_uvlo_required_samples.min,
+                max: bounds.input_uvlo_required_samples.max,
+                step: bounds.input_uvlo_required_samples.step,
             },
             source_limited_enter_delta_ma: AdvancedPowerFieldI16Capability {
-                default: source_limited_enter_delta_ma,
-                min: -100,
-                max: 3000,
-                step: 50,
+                default: defaults.source_limited_enter_delta_ma,
+                min: bounds.source_limited_enter_delta_ma.min,
+                max: bounds.source_limited_enter_delta_ma.max,
+                step: bounds.source_limited_enter_delta_ma.step,
             },
         },
     }

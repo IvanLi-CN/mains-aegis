@@ -18,9 +18,9 @@ use esp_firmware::bq40z50;
 use esp_firmware::fan;
 use esp_firmware::ina3221;
 use esp_firmware::net_types::{
-    validate_advanced_power_settings, AdvancedPowerExpandedSnapshot, AdvancedPowerSettingsSnapshot,
-    AdvancedPowerValidationError, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot,
-    DerivedPowerInputSnapshot, DerivedPowerPolicySnapshot, DerivedPowerSnapshot,
+    validate_advanced_power_settings, AdvancedPowerSettingsSnapshot, AdvancedPowerValidationError,
+    DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerInputSnapshot,
+    DerivedPowerPolicySnapshot, DerivedPowerSnapshot, RuntimeModePolicySnapshot,
 };
 use esp_firmware::output_protection;
 use esp_firmware::output_retry::{self, TpsConfigRetryDecision};
@@ -3639,7 +3639,7 @@ pub struct PowerManager<'d, I2C> {
     backup_usb_charge_guard: BackupUsbChargeGuard,
     dcin_input_pressure: DcinInputPressureTracker,
     advanced_power_settings: AdvancedPowerSettingsSnapshot,
-    advanced_power_expanded: AdvancedPowerExpandedSnapshot,
+    runtime_mode_policy: RuntimeModePolicySnapshot,
     advanced_power_storage_ready: bool,
     advanced_power_storage_incompatible: bool,
     manual_charge_prefs: ManualChargePrefs,
@@ -4294,17 +4294,16 @@ where
         initial_ui_snapshot.dashboard_detail.manual_charge.prefs = manual_charge_prefs;
         initial_ui_snapshot.dashboard_detail.manual_charge.runtime =
             ManualChargeRuntimeState::idle();
-        let advanced_power_expanded =
-            advanced_power_settings
-                .expand(cfg.vout_mv)
-                .unwrap_or_else(|_| {
-                    AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(cfg.vout_mv)
-                        .expand(cfg.vout_mv)
-                        .unwrap()
-                });
+        let runtime_mode_policy = advanced_power_settings
+            .resolve_runtime_policy(cfg.vout_mv)
+            .unwrap_or_else(|_| {
+                AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(cfg.vout_mv)
+                    .resolve_runtime_policy(cfg.vout_mv)
+                    .unwrap()
+            });
         let mut cfg = cfg;
-        cfg.standby_vout_mv = advanced_power_expanded.standby_vout_mv;
-        cfg.assist_low_vout_mv = advanced_power_expanded.assist_low_vout_mv;
+        cfg.standby_vout_mv = runtime_mode_policy.standby_vout_mv();
+        cfg.assist_low_vout_mv = runtime_mode_policy.assist_low_vout_mv();
         let output_state = OutputRuntimeState::new(
             cfg.requested_outputs,
             cfg.active_outputs,
@@ -4430,7 +4429,7 @@ where
             backup_usb_charge_guard: BackupUsbChargeGuard::default(),
             dcin_input_pressure: DcinInputPressureTracker::default(),
             advanced_power_settings,
-            advanced_power_expanded,
+            runtime_mode_policy,
             advanced_power_storage_ready,
             advanced_power_storage_incompatible,
             manual_charge_prefs,
@@ -4499,9 +4498,7 @@ where
             fan: fan::Controller::new(cfg.fan_config),
             vin_sample_missing_streak: 0,
             input_gate: output_state_logic::InputGateTracker::new(
-                output_state_logic::InputGateThresholds::from_advanced_power(
-                    advanced_power_expanded,
-                ),
+                output_state_logic::InputGateThresholds::from_runtime_policy(runtime_mode_policy),
             ),
             usb_pd_state: usb_pd::UsbPdPortState::default(),
             usb_pd_input_current_limit_ma: None,
@@ -6663,17 +6660,17 @@ where
         &mut self,
         settings: AdvancedPowerSettingsSnapshot,
     ) -> Result<(), AdvancedPowerApplyError> {
-        let expanded = settings
-            .expand(self.cfg.vout_mv)
+        let runtime_mode_policy = settings
+            .resolve_runtime_policy(self.cfg.vout_mv)
             .map_err(AdvancedPowerApplyError::Validation)?;
         self.persist_advanced_power_settings(settings)
             .map_err(AdvancedPowerApplyError::Storage)?;
         self.advanced_power_settings = settings;
-        self.advanced_power_expanded = expanded;
-        self.cfg.standby_vout_mv = expanded.standby_vout_mv;
-        self.cfg.assist_low_vout_mv = expanded.assist_low_vout_mv;
+        self.runtime_mode_policy = runtime_mode_policy;
+        self.cfg.standby_vout_mv = runtime_mode_policy.standby_vout_mv();
+        self.cfg.assist_low_vout_mv = runtime_mode_policy.assist_low_vout_mv();
         self.input_gate.update_thresholds(
-            output_state_logic::InputGateThresholds::from_advanced_power(expanded),
+            output_state_logic::InputGateThresholds::from_runtime_policy(runtime_mode_policy),
         );
         // recompute_ui_mode() already re-evaluates the current assist stage and applies a
         // runtime REF-only VOUT trim when the effective target changes.
@@ -10023,7 +10020,7 @@ where
                 mains_present,
                 input_source: self.ui_snapshot.dashboard_detail.input_source,
                 dcin_assist_allowed,
-                rated_vout_mv: self.advanced_power_expanded.rated_vout_mv,
+                rated_vout_mv: self.runtime_mode_policy.rated_vout_mv,
                 standby_target_vout_mv: self.cfg.standby_vout_mv,
                 current_assist_target_vout_mv: self.assist_target_ramp.current_vout_mv,
                 assist_low_target_vout_mv: self.cfg.assist_low_vout_mv,
@@ -10034,27 +10031,32 @@ where
                 tps_total_iout_ma,
                 tps_total_iout_fresh,
                 tps_total_iout_sample_seq,
-                assist_enter_iout_ma: self.advanced_power_expanded.assist_enter_iout_ma,
-                assist_exit_iout_ma: self.advanced_power_expanded.assist_exit_iout_ma,
-                assist_required_samples: self.advanced_power_expanded.assist_required_samples,
-                rated_enter_iout_ma: self.advanced_power_expanded.rated_enter_iout_ma,
-                rated_exit_iout_ma: self.advanced_power_expanded.rated_exit_iout_ma,
-                vin_drop_threshold_pct: self.advanced_power_expanded.vin_drop_threshold_pct,
-                required_samples: self.advanced_power_expanded.required_samples,
+                assist_enter_iout_ma: self.runtime_mode_policy.fixed.assist_enter_iout_ma,
+                assist_exit_iout_ma: self.runtime_mode_policy.fixed.assist_exit_iout_ma,
+                assist_required_samples: self.runtime_mode_policy.fixed.assist_required_samples,
+                rated_enter_iout_ma: self.runtime_mode_policy.fixed.rated_enter_iout_ma,
+                rated_exit_iout_ma: self.runtime_mode_policy.fixed.rated_exit_iout_ma,
+                vin_drop_threshold_pct: self.runtime_mode_policy.fixed.vin_drop_threshold_pct,
+                required_samples: self.runtime_mode_policy.fixed.required_samples,
                 source_limited_vin_drop_pct: self
-                    .advanced_power_expanded
+                    .runtime_mode_policy
+                    .fixed
                     .source_limited_vin_drop_pct,
                 source_limited_enter_iout_ma: self
-                    .advanced_power_expanded
+                    .runtime_mode_policy
+                    .tuning
                     .source_limited_enter_iout_ma,
                 source_limited_exit_iout_ma: self
-                    .advanced_power_expanded
+                    .runtime_mode_policy
+                    .fixed
                     .source_limited_exit_iout_ma,
                 source_limited_required_samples: self
-                    .advanced_power_expanded
+                    .runtime_mode_policy
+                    .fixed
                     .source_limited_required_samples,
                 source_limited_recover_margin_mv: self
-                    .advanced_power_expanded
+                    .runtime_mode_policy
+                    .fixed
                     .source_limited_recover_margin_mv,
             },
         );
@@ -10088,14 +10090,14 @@ where
                     .last_step_at_ms
                     .map(|last| {
                         now_ms.saturating_sub(last)
-                            >= u64::from(self.advanced_power_expanded.assist_ramp_interval_ms)
+                            >= u64::from(self.runtime_mode_policy.fixed.assist_ramp_interval_ms)
                     })
                     .unwrap_or(true);
                 if can_step {
                     let next = self
                         .assist_target_ramp
                         .current_vout_mv
-                        .saturating_add(self.advanced_power_expanded.assist_ramp_step_mv)
+                        .saturating_add(self.runtime_mode_policy.fixed.assist_ramp_step_mv)
                         .min(target_vout_mv);
                     self.assist_target_ramp.current_vout_mv = next;
                     self.assist_target_ramp.last_step_at_ms = Some(now_ms);
@@ -12178,7 +12180,7 @@ where
                 vindpm,
                 iindpm,
             },
-            self.advanced_power_expanded.vin_drop_threshold_pct,
+            self.runtime_mode_policy.fixed.vin_drop_threshold_pct,
         );
         let mut effective_policy_target_ichg_ma = policy_target_ichg_ma;
         let mut policy_detail_status_text = dcin_charge_detail_status_text(

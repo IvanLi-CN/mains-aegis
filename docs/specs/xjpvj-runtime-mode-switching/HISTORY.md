@@ -399,3 +399,21 @@
 - `source-limited-19v-optimized-cut-r3-20260713T0155Z` 完整三场景通过新 verifier：hold
   TPS 最大分别 `1089mW / 1089mW / 1016mW`，均无超 2W 样本；普通 VIN cut 最低
   `18049mV`，两个过载场景接管后最低均为 `18744mV`。
+- runtime-mode 默认值与 owner-facing 可调 bounds 收敛到
+  `schemas/runtime_mode_profiles.json`，并由 firmware build script 在编译期生成 profile 表；
+  host / Web 共用同一 schema，不再各自维护分散的默认快照。
+- 当前默认值确定为：
+  - `12V`: `standby_drop_mv=700`、`input_uvlo_cutoff_mv=11300`、
+    `input_uvlo_recover_mv=11500`、`input_uvlo_required_samples=3`、
+    `source_limited_enter_delta_ma=2500`
+  - `19V`: `standby_drop_mv=900`、`input_uvlo_cutoff_mv=18200`、
+    `input_uvlo_recover_mv=18400`、`input_uvlo_required_samples=3`、
+    `source_limited_enter_delta_ma=1000`
+- 补归档当前 `c8bd8130` 版 12V 四场景最终 evidence：
+  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c8bd8130-rerun-20260715T0838Z/`。
+  其中 `source_in_budget / 2500mA` 已替换为电池充满后的 clean rerun，去除了充电干扰。
+- 补归档当前 `c8bd8130` 版 19V 四场景最终 evidence：
+  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-c8bd8130-r2-20260715T0817Z/`。
+  其中 `source_in_budget / 2500mA` 已替换为充电结束后的 clean rerun；hold 期间
+  `charger_allow_charge=false`、`battery_current_ma=0`，suite 继续保持
+  `signoff_valid=true`。

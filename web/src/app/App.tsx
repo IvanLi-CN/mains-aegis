@@ -71,6 +71,10 @@ import type {
   SerialTraceEntry,
   UpsStatus,
 } from "../api/types";
+import {
+  buildAdvancedPowerDefaults,
+  resolvePreTpsVinMv,
+} from "../api/runtimeModeProfiles";
 import { SegmentedControl } from "../components/ui/segmented-control";
 import { Button } from "../components/ui/button";
 import {
@@ -3520,8 +3524,8 @@ function PowerPage({ record }: { record: DeviceRecord }) {
             value={boolLabel(status?.input.mains_present, "yes", "no")}
           />
           <MetricLine
-            label="VIN VBUS"
-            value={formatVoltage(status?.input.vin_vbus_mv)}
+            label="Pre-TPS VIN"
+            value={formatVoltage(resolvePreTpsVinMv(status?.input))}
           />
           <MetricLine
             label="VIN IIN"
@@ -4429,13 +4433,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
 }
 
 function defaultAdvancedPowerSettings(): AdvancedPowerSettings {
-  return {
-    standby_drop_mv: 700,
-    input_uvlo_cutoff_mv: 11300,
-    input_uvlo_recover_mv: 11500,
-    input_uvlo_required_samples: 3,
-    source_limited_enter_delta_ma: 2500,
-  };
+  return buildAdvancedPowerDefaults(12_000);
 }
 
 function AdvancedPowerField({

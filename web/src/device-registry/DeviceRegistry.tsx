@@ -38,6 +38,10 @@ import {
   type DevdSerialSession,
 } from "../api/client";
 import { subscribeStatusStream, type StatusStream } from "../api/statusStream";
+import {
+  buildAdvancedPowerCapabilities,
+  buildAdvancedPowerDefaults,
+} from "../api/runtimeModeProfiles";
 import type {
   AdvancedPowerSettings,
   DevdDevice,
@@ -3122,6 +3126,7 @@ type DeviceSettingsPatch = {
 };
 
 function defaultDeviceSettings(): DeviceSettings {
+  const ratedVoutMv = 12_000;
   return {
     wifi: {
       configured: false,
@@ -3133,21 +3138,8 @@ function defaultDeviceSettings(): DeviceSettings {
       speed: "ma_500",
       timer_h: 2,
     },
-    advanced_power: {
-      standby_drop_mv: 700,
-      input_uvlo_cutoff_mv: 11300,
-      input_uvlo_recover_mv: 11500,
-      input_uvlo_required_samples: 3,
-      source_limited_enter_delta_ma: 2500,
-    },
-    advanced_power_capabilities: {
-      rated_vout_mv: 12000,
-      standby_drop_mv: { default: 700, min: 0, max: 3000, step: 20 },
-      input_uvlo_cutoff_mv: { default: 11300, min: 5000, max: 20000, step: 20 },
-      input_uvlo_recover_mv: { default: 11500, min: 5000, max: 20000, step: 20 },
-      input_uvlo_required_samples: { default: 3, min: 1, max: 5, step: 1 },
-      source_limited_enter_delta_ma: { default: 2500, min: -100, max: 3000, step: 50 },
-    },
+    advanced_power: buildAdvancedPowerDefaults(ratedVoutMv),
+    advanced_power_capabilities: buildAdvancedPowerCapabilities(ratedVoutMv),
   };
 }
 
