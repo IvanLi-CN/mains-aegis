@@ -797,6 +797,162 @@ def render_html(
       return typeof value === "boolean" ? String(value) : "n/a";
     }}
 
+    function fmtToken(value) {{
+      return value == null || value === "" ? "n/a" : String(value);
+    }}
+
+    function escapeHtml(value) {{
+      return String(value).replace(/[&<>"']/g, ch => ({{
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }})[ch]);
+    }}
+
+    function phaseMeaning(phase) {{
+      switch (phase) {{
+        case "pre":
+          return "Idle baseline before the runner applies any load or input switching.";
+        case "transition_load":
+          return "Load-apply transient while the electronic load ramps toward the requested current with VIN still online.";
+        case "hold":
+          return "Main online hold window under the programmed load.";
+        case "transition_source_limited":
+          return "Handoff transient: TPS output has started participating, but source-limited backup is not fully latched yet.";
+        case "backup_online":
+          return "Source-limited backup is latched while VIN remains online, so UPS is actively supporting the load.";
+        case "transition_backup":
+          return "Backup handoff transient after input loss or an input-off decision, before backup fully settles.";
+        case "backup":
+          return "Stable backup window after UPS has taken over the load.";
+        case "restore":
+          return "Restore window while the load is handed back from backup to the online path.";
+        case "transition_unload":
+          return "Unload transient while the runner disables the electronic load and returns toward post-idle.";
+        case "post":
+          return "Post-idle window after the load has been removed.";
+        default:
+          return "Recorded scene phase window.";
+      }}
+    }}
+
+    function findActiveSpanIndex(targetT) {{
+      for (let index = 0; index < tagSpans.length; index += 1) {{
+        const span = tagSpans[index];
+        if (targetT >= span.start && targetT <= span.end) return index;
+      }}
+      let fallback = -1;
+      for (let index = 0; index < tagSpans.length; index += 1) {{
+        if (tagSpans[index].start <= targetT) fallback = index;
+      }}
+      return fallback;
+    }}
+
+    function findActiveTransitionIndex(targetT) {{
+      let activeIndex = -1;
+      for (let index = 0; index < stageTransitions.length; index += 1) {{
+        if (stageTransitions[index].t_s <= targetT) {{
+          activeIndex = index;
+        }} else {{
+          break;
+        }}
+      }}
+      return activeIndex;
+    }}
+
+    function transitionChangeSummary(previous, current) {{
+      if (!current) return [];
+      if (!previous) return [];
+      const changes = [];
+      const trackedFields = [
+        ["stage", "stage"],
+        ["mode", "mode"],
+        ["backup_reason", "backup_reason"],
+        ["charger_state", "charger"],
+      ];
+      for (const [field, label] of trackedFields) {{
+        if (current[field] !== previous[field]) {{
+          changes.push(`${{label}} ${{fmtToken(previous[field])}} -> ${{fmtToken(current[field])}}`);
+        }}
+      }}
+      if (current.charger_allow_charge !== previous.charger_allow_charge) {{
+        changes.push(
+          `allow_charge ${{fmtBool(previous.charger_allow_charge)}} -> ${{fmtBool(current.charger_allow_charge)}}`
+        );
+      }}
+      return changes;
+    }}
+
+    function transitionMeaning(previous, current) {{
+      if (!current) return "No state marker matched this sample.";
+      if (!previous) {{
+        return "Scene baseline state.";
+      }}
+      if (
+        current.backup_reason === "source_limited" &&
+        previous.backup_reason !== "source_limited"
+      ) {{
+        return "UPS latched source-limited backup: VIN is still online, but the upstream source can no longer carry the load.";
+      }}
+      if (
+        current.backup_reason === "input_absent" &&
+        previous.backup_reason !== "input_absent"
+      ) {{
+        return "UPS confirmed the input as absent/cut and switched the backup reason to input_absent.";
+      }}
+      if (current.stage === "backup" && previous.stage !== "backup") {{
+        return "Runtime stage changed to backup: UPS has taken over the load.";
+      }}
+      if (current.mode === "backup" && previous.mode !== "backup") {{
+        return "Published mode changed to backup.";
+      }}
+      if (current.charger_state !== previous.charger_state) {{
+        return `Charger state changed to ${{fmtToken(current.charger_state)}}.`;
+      }}
+      if (current.charger_allow_charge !== previous.charger_allow_charge) {{
+        return `Charge permission changed to ${{fmtBool(current.charger_allow_charge)}}.`;
+      }}
+      return "";
+    }}
+
+    function chartTagDetails(targetT) {{
+      const spanIndex = findActiveSpanIndex(targetT);
+      const transitionIndex = findActiveTransitionIndex(targetT);
+      const span = spanIndex >= 0 ? tagSpans[spanIndex] : null;
+      const transition = transitionIndex >= 0 ? stageTransitions[transitionIndex] : null;
+      const previousTransition = transitionIndex > 0 ? stageTransitions[transitionIndex - 1] : null;
+      const transitionWindowS = Math.max(0.35, Math.min(1.2, (state.end - state.start) * 0.03));
+      const showTransition = transition && Math.abs(targetT - transition.t_s) <= transitionWindowS;
+      const transitionMeaningText = transitionMeaning(previousTransition, transition);
+      const phaseHtml = span
+        ? `
+          <div><strong>P${{spanIndex + 1}}</strong> ${{escapeHtml(span.label)}}</div>
+          <div>${{escapeHtml(phaseMeaning(span.phase))}}</div>
+          <div>range=${{fmtT(span.start)}}..${{fmtT(span.end)}} | phase=${{escapeHtml(span.phase)}}</div>
+        `
+        : `
+          <div><strong>P*</strong></div>
+          <div>No phase span matched this sample.</div>
+        `;
+      const transitionChanges = transitionChangeSummary(previousTransition, transition);
+      const transitionHtml = !showTransition
+        ? ``
+        : `
+          <div style="margin-top:4px"><strong>S${{transitionIndex + 1}}</strong> ${{previousTransition ? "state change" : "initial state"}}</div>
+          ${{transitionMeaningText ? `<div>${{escapeHtml(transitionMeaningText)}}</div>` : ""}}
+          <div>t=${{fmtT(transition.t_s)}} | stage=${{escapeHtml(fmtToken(transition.stage))}} | mode=${{escapeHtml(fmtToken(transition.mode))}}</div>
+          <div>backup_reason=${{escapeHtml(fmtToken(transition.backup_reason))}} | charger=${{escapeHtml(fmtToken(transition.charger_state))}} | allow_charge=${{fmtBool(transition.charger_allow_charge)}}</div>
+          ${{transitionChanges.length ? `<div>${{escapeHtml(transitionChanges.join(" | "))}}</div>` : ""}}
+        `;
+      return `
+        <div style="margin-top:6px"><strong>Chart Tags</strong></div>
+        ${{phaseHtml}}
+        ${{transitionHtml}}
+      `;
+    }}
+
     function updateLegend() {{
       legend.innerHTML = "";
       for (const item of seriesConfig) {{
@@ -1183,6 +1339,7 @@ def render_html(
         for (const row of candidates) {{
           if (Math.abs(row.t_s - targetT) < Math.abs(nearest.t_s - targetT)) nearest = row;
         }}
+        const tagHelp = chartTagDetails(nearest.t_s);
         const cx = scaleX(nearest.t_s, left, width);
         cursor.setAttribute("x1", cx);
         cursor.setAttribute("x2", cx);
@@ -1200,6 +1357,7 @@ def render_html(
           <div><strong>${{fmtT(nearest.t_s)}}</strong></div>
           <div>phase=${{nearest.phase || "n/a"}} | stage=${{nearest.stage || "n/a"}} | mode=${{nearest.mode || "n/a"}}</div>
           <div>mains_present=${{fmtBool(nearest.mains_present)}} | load_enabled=${{fmtBool(nearest.load_output_enabled)}} | load_gen=${{nearest.load_status_generation ?? "n/a"}}</div>
+          ${{tagHelp}}
           <div style="margin-top:6px"><strong>Voltage traces</strong></div>
           ${{seriesLines}}
           <div style="margin-top:6px"><strong>UPS</strong></div>

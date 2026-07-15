@@ -1,5 +1,5 @@
 {
-  "created_at": "2026-07-14T16:03:25.558516+00:00",
+  "created_at": "2026-07-15T02:02:15.757572+00:00",
   "load_protection": {
     "load_max_i_ma_total": 4000,
     "load_max_p_mw": 80000,
@@ -71,7 +71,12 @@
       "source_current_limit_ma": 3000,
       "source_voltage_mv": 12000,
       "suite_contract": "source_limited_12v",
-      "target_ma": 1000
+      "target_ma": 1000,
+      "transport": {
+        "electronic_load": "Loadlynx:released-cli+saved-device",
+        "power_source": "Isolapurr:cli+url",
+        "ups": "cli+ipc+usb"
+      }
     },
     {
       "advanced_power": {
@@ -95,14 +100,14 @@
         "standby_drop_mv": 700,
         "vin_drop_threshold_pct": 4
       },
-      "effective_sample_rate_hz": 5.029,
+      "effective_sample_rate_hz": 5.074,
       "failed_acceptance_checks": [],
       "failures": [],
       "include_backup": false,
       "load_max_i_ma_total": 4000,
       "load_max_p_mw": 80000,
       "load_min_v_mv": 3000,
-      "max_sample_gap_s": 0.204,
+      "max_sample_gap_s": 0.205,
       "output_profile": "12v",
       "report_dir": "12v-source_in_budget-2500ma",
       "run_validity": "valid_for_signoff",
@@ -112,7 +117,7 @@
         "failures": [],
         "hold_tps_power": {
           "limit_mw": 2000,
-          "maximum_mw": 1137,
+          "maximum_mw": 409,
           "missing_samples": 0,
           "over_2w_samples": 0
         },
@@ -134,7 +139,12 @@
       "source_current_limit_ma": 3000,
       "source_voltage_mv": 12000,
       "suite_contract": "source_limited_12v",
-      "target_ma": 2500
+      "target_ma": 2500,
+      "transport": {
+        "electronic_load": "Loadlynx:released-cli+saved-device",
+        "power_source": "Isolapurr:cli+url",
+        "ups": "cli+ipc+usb"
+      }
     },
     {
       "advanced_power": {
@@ -199,7 +209,12 @@
       "source_current_limit_ma": 3000,
       "source_voltage_mv": 12000,
       "suite_contract": "source_limited_12v",
-      "target_ma": 3900
+      "target_ma": 3900,
+      "transport": {
+        "electronic_load": "Loadlynx:released-cli+saved-device",
+        "power_source": "Isolapurr:cli+url",
+        "ups": "cli+ipc+usb"
+      }
     },
     {
       "advanced_power": {
@@ -267,7 +282,12 @@
       "source_current_limit_ma": 3000,
       "source_voltage_mv": 12000,
       "suite_contract": "source_limited_12v",
-      "target_ma": 3900
+      "target_ma": 3900,
+      "transport": {
+        "electronic_load": "Loadlynx:released-cli+saved-device",
+        "power_source": "Isolapurr:cli+url",
+        "ups": "cli+ipc+usb"
+      }
     }
   ],
   "suite_contract": "source_limited_12v",
@@ -275,13 +295,11 @@
   "thresholds": {
     "engineering_sample_rate_hz": 3.0,
     "max_sample_gap_s": 0.5,
-    "minimum_sample_rate_hz": 2.0,
-    "sample_interval_ms": 200,
-    "ups_watch_freshness_ms": 750
+    "minimum_sample_rate_hz": 2.0
   },
   "transport": {
     "electronic_load": "Loadlynx:released-cli+saved-device",
     "power_source": "Isolapurr:cli+url",
-    "ups": "mains-aegis CLI + native IPC + USB"
+    "ups": "cli+ipc+usb"
   }
 }

@@ -28,6 +28,12 @@ class VoltageChartTooltipTests(unittest.TestCase):
         self.assertIn("target=${fmtMa(nearest.target_ma)} | actual=${fmtMa(nearest.load_i_total_ma)}", html)
         self.assertNotIn("load_i_local_ma", html)
         self.assertNotIn("load_i_remote_ma", html)
+        self.assertIn("<strong>Chart Tags</strong>", html)
+        self.assertNotIn("P* = phase window | S* = state marker", html)
+        self.assertIn("Scene baseline state.", html)
+        self.assertIn("const transitionWindowS = Math.max(0.35, Math.min(1.2, (state.end - state.start) * 0.03));", html)
+        self.assertIn("const showTransition = transition && Math.abs(targetT - transition.t_s) <= transitionWindowS;", html)
+        self.assertNotIn("No state marker was recorded before this sample.", html)
 
     def test_backup_transition_span_starts_on_first_live_cut_effect(self):
         rows = [
@@ -49,6 +55,45 @@ class VoltageChartTooltipTests(unittest.TestCase):
                 {"phase": "backup", "start": 25.113, "end": 26.054, "label": "backup / input cut"},
             ],
         )
+
+    def test_tooltip_includes_phase_and_state_marker_meanings(self):
+        html = RENDERER.render_html(
+            "test chart",
+            Path("/tmp/timeseries.jsonl"),
+            [
+                {
+                    "t_s": 0.0,
+                    "phase": "pre",
+                    "stage": "standby",
+                    "mode": "standby",
+                    "backup_reason": None,
+                    "charger_state": "ok",
+                    "charger_allow_charge": False,
+                    "source_v": 12.0,
+                    "vin_v": 12.0,
+                    "ups_vout": 11.3,
+                    "load_v": 12.0,
+                },
+                {
+                    "t_s": 1.0,
+                    "phase": "transition_unload",
+                    "stage": "standby",
+                    "mode": "standby",
+                    "backup_reason": None,
+                    "charger_state": "ok",
+                    "charger_allow_charge": False,
+                    "source_v": 12.0,
+                    "vin_v": 12.0,
+                    "ups_vout": 11.3,
+                    "load_v": 12.0,
+                },
+            ],
+            0.5,
+        )
+
+        self.assertIn("function chartTagDetails(targetT)", html)
+        self.assertIn("Unload transient while the runner disables the electronic load and returns toward post-idle.", html)
+        self.assertIn("<strong>S${transitionIndex + 1}</strong> ${previousTransition ? \"state change\" : \"initial state\"}", html)
 
 
 if __name__ == "__main__":
