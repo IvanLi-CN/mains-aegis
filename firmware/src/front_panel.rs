@@ -2528,7 +2528,14 @@ where
                 );
             }
 
-            if matches!(resolved_target, DashboardTouchTarget::ManualStart) {
+            if matches!(resolved_target, DashboardTouchTarget::ManualStart)
+                && self
+                    .self_check_snapshot
+                    .dashboard_detail
+                    .manual_charge
+                    .runtime
+                    .loop_confirmation_required
+            {
                 self.self_check_overlay = SelfCheckOverlay::ManualChargeLoopbackConfirm;
                 self.note_interaction_feedback();
                 self.needs_redraw = true;
@@ -2981,6 +2988,15 @@ fn manual_charge_ui_action_name(action: ManualChargeUiAction) -> &'static str {
         }
         ManualChargeUiAction::SetTimerLimit(front_panel_scene::ManualChargeTimerLimit::H6) => {
             "set_timer_6h"
+        }
+        ManualChargeUiAction::SetPowerPath(front_panel_scene::ManualChargePowerPath::Auto) => {
+            "set_power_path_auto"
+        }
+        ManualChargeUiAction::SetPowerPath(front_panel_scene::ManualChargePowerPath::DcIn) => {
+            "set_power_path_dcin"
+        }
+        ManualChargeUiAction::SetPowerPath(front_panel_scene::ManualChargePowerPath::UsbC) => {
+            "set_power_path_usbc"
         }
         ManualChargeUiAction::Start => "start",
         ManualChargeUiAction::StartConfirmedLoopback => "start_confirmed_loopback",

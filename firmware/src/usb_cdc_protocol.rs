@@ -47,10 +47,13 @@ pub enum UsbCdcRequest {
     GetIdentity,
     GetStatus,
     GetSettings,
+    GetChargeControl,
     GetDiagSnapshot(DiagSnapshotRequest),
     RecoverBmsDischargeAuthorization,
     SetLogLevel(LogLevel),
     SetManualChargePrefs(ManualChargePrefsCommand),
+    PreviewChargeControl(ManualChargePrefsCommand),
+    ControlManualCharge(ManualChargeControlCommand),
     SetAdvancedPower(AdvancedPowerSettingsSnapshot),
     ResetAdvancedPower,
     EnableOutputBypass,
@@ -110,6 +113,13 @@ pub struct ManualChargePrefsCommand {
     pub target: ManualChargeTarget,
     pub speed: ManualChargeSpeed,
     pub timer_limit: ManualChargeTimerLimit,
+    pub power_path: ManualChargePowerPath,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ManualChargeControlCommand {
+    pub action: ManualChargeControlAction,
+    pub confirm_loop: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,6 +141,19 @@ pub enum ManualChargeTimerLimit {
     H1,
     H2,
     H6,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManualChargePowerPath {
+    Auto,
+    DcIn,
+    UsbC,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManualChargeControlAction {
+    Start,
+    Stop,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -174,6 +197,7 @@ pub enum UsbCdcProtocolError {
     UnsafeOperation,
     InvalidLogLevel,
     InvalidManualChargePrefs,
+    InvalidManualChargeControl,
     InvalidAdvancedPowerSettings,
     InvalidWifiSsid,
     InvalidWifiPsk,
@@ -191,6 +215,7 @@ impl UsbCdcProtocolError {
             Self::UnsafeOperation => "unsafe_operation",
             Self::InvalidLogLevel => "invalid_log_level",
             Self::InvalidManualChargePrefs => "invalid_manual_charge_prefs",
+            Self::InvalidManualChargeControl => "invalid_manual_charge_control",
             Self::InvalidAdvancedPowerSettings => "invalid_advanced_power_settings",
             Self::InvalidWifiSsid => "invalid_wifi_ssid",
             Self::InvalidWifiPsk => "invalid_wifi_psk",
@@ -208,6 +233,9 @@ impl UsbCdcProtocolError {
             Self::UnsafeOperation => "requested operation is outside the safe USB control surface",
             Self::InvalidLogLevel => "log level must be error, warn, info, debug, or trace",
             Self::InvalidManualChargePrefs => "manual charge prefs are outside the safe set",
+            Self::InvalidManualChargeControl => {
+                "manual charge control action must be start or stop"
+            }
             Self::InvalidAdvancedPowerSettings => {
                 "advanced power settings are outside the supported range or ordering"
             }
@@ -323,6 +351,18 @@ pub fn parse_http_manual_charge_request(
     parse_manual_charge_prefs(body)
 }
 
+pub fn parse_http_manual_charge_control_request(
+    body: &str,
+) -> Result<ManualChargeControlCommand, UsbCdcProtocolError> {
+    parse_manual_charge_control(body)
+}
+
+pub fn parse_http_manual_charge_preview_request(
+    body: &str,
+) -> Result<ManualChargePrefsCommand, UsbCdcProtocolError> {
+    parse_manual_charge_preview(body)
+}
+
 pub fn parse_http_advanced_power_request(
     body: &str,
 ) -> Result<AdvancedPowerSettingsSnapshot, UsbCdcProtocolError> {
@@ -434,7 +474,7 @@ pub fn render_protocol_error_json<const N: usize>(
     request_id: Option<&str>,
     error: UsbCdcProtocolError,
 ) {
-    render_error_json(buf, request_id, error.code(), error.message(), false);
+    render_error_json_with_details(buf, request_id, error.code(), error.message(), false, None);
 }
 
 pub fn render_error_json<const N: usize>(
@@ -443,6 +483,17 @@ pub fn render_error_json<const N: usize>(
     code: &str,
     message: &str,
     retryable: bool,
+) {
+    render_error_json_with_details(buf, request_id, code, message, retryable, None);
+}
+
+pub fn render_error_json_with_details<const N: usize>(
+    buf: &mut String<N>,
+    request_id: Option<&str>,
+    code: &str,
+    message: &str,
+    retryable: bool,
+    details_json: Option<&str>,
 ) {
     buf.clear();
     let _ = buf.push_str(r#"{"type":"error","#);
@@ -455,7 +506,13 @@ pub fn render_error_json<const N: usize>(
     write_json_string_escaped(buf, code);
     let _ = buf.push_str(r#"","message":""#);
     write_json_string_escaped(buf, message);
-    let _ = write!(buf, r#"","retryable":{},"details":null}}"#, retryable);
+    let _ = write!(buf, r#"","retryable":{},"details":"#, retryable);
+    if let Some(details_json) = details_json {
+        let _ = buf.push_str(details_json);
+    } else {
+        let _ = buf.push_str("null");
+    }
+    let _ = buf.push_str("}}");
 }
 
 pub fn encode_wifi_config_record(
@@ -531,6 +588,7 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
         "get_identity" => Ok(UsbCdcRequest::GetIdentity),
         "get_status" => Ok(UsbCdcRequest::GetStatus),
         "get_settings" => Ok(UsbCdcRequest::GetSettings),
+        "get_charge_control" => Ok(UsbCdcRequest::GetChargeControl),
         "get_diag_snapshot" => Ok(UsbCdcRequest::GetDiagSnapshot(parse_diag_snapshot_request(
             line,
         )?)),
@@ -544,6 +602,12 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
         }
         "set_manual_charge_prefs" => Ok(UsbCdcRequest::SetManualChargePrefs(
             parse_manual_charge_prefs(line)?,
+        )),
+        "preview_charge_control" => Ok(UsbCdcRequest::PreviewChargeControl(
+            parse_manual_charge_preview(line)?,
+        )),
+        "control_manual_charge" => Ok(UsbCdcRequest::ControlManualCharge(
+            parse_manual_charge_control(line)?,
         )),
         "set_advanced_power" => Ok(UsbCdcRequest::SetAdvancedPower(
             parse_advanced_power_settings(line)?,
@@ -649,6 +713,19 @@ fn parse_manual_charge_prefs(line: &str) -> Result<ManualChargePrefsCommand, Usb
         "ma_1000" => ManualChargeSpeed::Ma1000,
         _ => return Err(UsbCdcProtocolError::InvalidManualChargePrefs),
     };
+    let power_path = match json_string_field::<16>(line, "power_path")?
+        .unwrap_or_else(|| {
+            let mut default = String::<16>::new();
+            let _ = default.push_str("auto");
+            default
+        })
+        .as_str()
+    {
+        "auto" => ManualChargePowerPath::Auto,
+        "dcin" => ManualChargePowerPath::DcIn,
+        "usbc" => ManualChargePowerPath::UsbC,
+        _ => return Err(UsbCdcProtocolError::InvalidManualChargePrefs),
+    };
     let timer_limit =
         match json_u8_field(line, "timer_h")?.ok_or(UsbCdcProtocolError::MissingField)? {
             1 => ManualChargeTimerLimit::H1,
@@ -660,6 +737,86 @@ fn parse_manual_charge_prefs(line: &str) -> Result<ManualChargePrefsCommand, Usb
         target,
         speed,
         timer_limit,
+        power_path,
+    })
+}
+
+fn parse_manual_charge_control(
+    line: &str,
+) -> Result<ManualChargeControlCommand, UsbCdcProtocolError> {
+    let action = match json_string_field::<16>(line, "action")?
+        .ok_or(UsbCdcProtocolError::MissingField)?
+        .as_str()
+    {
+        "start" => ManualChargeControlAction::Start,
+        "stop" => ManualChargeControlAction::Stop,
+        _ => return Err(UsbCdcProtocolError::InvalidManualChargeControl),
+    };
+    Ok(ManualChargeControlCommand {
+        action,
+        confirm_loop: json_bool_field(line, "confirm_loop")?.unwrap_or(false),
+    })
+}
+
+fn parse_manual_charge_preview(
+    line: &str,
+) -> Result<ManualChargePrefsCommand, UsbCdcProtocolError> {
+    let target = match json_string_field::<16>(line, "target")?
+        .ok_or(UsbCdcProtocolError::MissingField)?
+        .as_str()
+    {
+        "pack_3v7" => ManualChargeTarget::Pack3V7,
+        "rsoc_80" => ManualChargeTarget::Rsoc80,
+        "full_100" => ManualChargeTarget::Full100,
+        _ => return Err(UsbCdcProtocolError::InvalidManualChargePrefs),
+    };
+    let current_ma = json_u16_field(line, "current_ma")?.or_else(|| {
+        json_string_field::<16>(line, "speed")
+            .ok()
+            .flatten()
+            .and_then(|speed| match speed.as_str() {
+                "ma_100" => Some(100),
+                "ma_500" => Some(500),
+                "ma_1000" => Some(1000),
+                _ => None,
+            })
+    });
+    let speed = match current_ma.ok_or(UsbCdcProtocolError::MissingField)? {
+        100 => ManualChargeSpeed::Ma100,
+        500 => ManualChargeSpeed::Ma500,
+        1000 => ManualChargeSpeed::Ma1000,
+        _ => return Err(UsbCdcProtocolError::InvalidManualChargePrefs),
+    };
+    let timer_minutes = json_u16_field(line, "timer_minutes")?.or_else(|| {
+        json_u8_field(line, "timer_h")
+            .ok()
+            .flatten()
+            .map(|value| u16::from(value) * 60)
+    });
+    let timer_limit = match timer_minutes.ok_or(UsbCdcProtocolError::MissingField)? {
+        60 => ManualChargeTimerLimit::H1,
+        120 => ManualChargeTimerLimit::H2,
+        360 => ManualChargeTimerLimit::H6,
+        _ => return Err(UsbCdcProtocolError::InvalidManualChargePrefs),
+    };
+    let power_path = match json_string_field::<16>(line, "power_path")?
+        .unwrap_or_else(|| {
+            let mut default = String::<16>::new();
+            let _ = default.push_str("auto");
+            default
+        })
+        .as_str()
+    {
+        "auto" => ManualChargePowerPath::Auto,
+        "dcin" => ManualChargePowerPath::DcIn,
+        "usbc" => ManualChargePowerPath::UsbC,
+        _ => return Err(UsbCdcProtocolError::InvalidManualChargePrefs),
+    };
+    Ok(ManualChargePrefsCommand {
+        target,
+        speed,
+        timer_limit,
+        power_path,
     })
 }
 
@@ -832,6 +989,22 @@ fn json_i16_field(line: &str, key: &str) -> Result<Option<i16>, UsbCdcProtocolEr
         .parse::<i16>()
         .map(Some)
         .map_err(|_| UsbCdcProtocolError::InvalidJson)
+}
+
+fn json_bool_field(line: &str, key: &str) -> Result<Option<bool>, UsbCdcProtocolError> {
+    let Some(idx) = json_value_offset(line, key) else {
+        return Ok(None);
+    };
+    let bytes = line.as_bytes();
+    if line[idx..].starts_with("true") {
+        validate_json_number_terminator(bytes, idx + 4)?;
+        return Ok(Some(true));
+    }
+    if line[idx..].starts_with("false") {
+        validate_json_number_terminator(bytes, idx + 5)?;
+        return Ok(Some(false));
+    }
+    Err(UsbCdcProtocolError::InvalidJson)
 }
 
 fn validate_json_number_terminator(bytes: &[u8], idx: usize) -> Result<(), UsbCdcProtocolError> {
@@ -1302,6 +1475,7 @@ mod tests {
                     target: ManualChargeTarget::Rsoc80,
                     speed: ManualChargeSpeed::Ma500,
                     timer_limit: ManualChargeTimerLimit::H2,
+                    power_path: ManualChargePowerPath::Auto,
                 })
             }
         );

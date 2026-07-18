@@ -1,7 +1,7 @@
 use crate::front_panel_scene::{
     is_bq40_activation_needed, BmsRecoveryUiAction, BmsResultKind, DashboardChargerProtocol,
-    DashboardInputSource, ManualChargeSpeed, ManualChargeStopReason, SelfCheckCommState,
-    SelfCheckUiSnapshot, UpsMode,
+    DashboardInputSource, ManualChargePowerPath, ManualChargeSpeed, ManualChargeStopReason,
+    SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
 };
 use esp_firmware::bq40z50;
 use esp_firmware::fan;
@@ -41,6 +41,9 @@ pub(super) const BACKUP_USB_CHARGE_STOP_POWER_LIMIT_W10: u32 = 30;
 pub(super) const BACKUP_USB_CHARGE_TELEMETRY_MISS_LIMIT: u8 = 2;
 pub(super) const BACKUP_USB_AUTO_CHARGE_ICHG_MA: u16 = CHARGE_POLICY_NORMAL_ICHG_MA;
 pub(super) const BACKUP_USB_AUTO_CHARGE_STATUS_TEXT: &str = "CHG500";
+pub(super) const MANUAL_CHARGE_USB_PD_HIGH_POWER_MIN_VOLTAGE_MV: u16 = 9_000;
+pub(super) const MANUAL_CHARGE_USB_PD_HIGH_POWER_MAX_VOLTAGE_MV: u16 = 20_000;
+pub(super) const MANUAL_CHARGE_USB_PD_HIGH_POWER_MIN_POWER_MW: u32 = 20_000;
 pub(super) const DCIN_ADAPTIVE_START_ICHG_MA: u16 = 100;
 const DCIN_ADAPTIVE_STEP_UP_ICHG_MA: u16 = 100;
 const DCIN_ADAPTIVE_STEP_DOWN_ICHG_MA: u16 = 200;
@@ -131,6 +134,137 @@ pub(super) fn dashboard_input_source_name(source: Option<DashboardInputSource>) 
         Some(DashboardInputSource::UsbC) => "usbc",
         Some(DashboardInputSource::Auto) => "auto",
         None => "none",
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ManualChargeBindingReason {
+    ExplicitDcIn,
+    ExplicitUsbC,
+    AutoHighPowerUsbPd,
+    AutoDcInFallback,
+    AutoUsbCFallback,
+}
+
+impl ManualChargeBindingReason {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ExplicitDcIn => "explicit_dcin",
+            Self::ExplicitUsbC => "explicit_usbc",
+            Self::AutoHighPowerUsbPd => "auto_high_power_usb_pd",
+            Self::AutoDcInFallback => "auto_dcin_fallback",
+            Self::AutoUsbCFallback => "auto_usbc_fallback",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ManualChargeBindingPlan {
+    pub(super) bound_path: DashboardInputSource,
+    pub(super) binding_reason: ManualChargeBindingReason,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ManualChargeBindingError {
+    Unavailable,
+    NotQualified,
+}
+
+pub(super) const fn manual_charge_bound_input_source(
+    path: ManualChargePowerPath,
+) -> Option<DashboardInputSource> {
+    match path {
+        ManualChargePowerPath::Auto => None,
+        ManualChargePowerPath::DcIn => Some(DashboardInputSource::DcIn),
+        ManualChargePowerPath::UsbC => Some(DashboardInputSource::UsbC),
+    }
+}
+
+pub(super) fn manual_charge_usb_pd_high_power_qualified(
+    contract_mv: Option<u16>,
+    contract_ma: Option<u16>,
+) -> bool {
+    let (Some(contract_mv), Some(contract_ma)) = (contract_mv, contract_ma) else {
+        return false;
+    };
+    let contract_power_mw = (u32::from(contract_mv) * u32::from(contract_ma)) / 1_000;
+    (MANUAL_CHARGE_USB_PD_HIGH_POWER_MIN_VOLTAGE_MV
+        ..=MANUAL_CHARGE_USB_PD_HIGH_POWER_MAX_VOLTAGE_MV)
+        .contains(&contract_mv)
+        && contract_power_mw > MANUAL_CHARGE_USB_PD_HIGH_POWER_MIN_POWER_MW
+}
+
+pub(super) fn manual_charge_binding_plan(
+    requested_path: ManualChargePowerPath,
+    dcin_present: bool,
+    usbc_present: bool,
+    usbc_charge_ready: bool,
+    usbc_unsafe_source_latched: bool,
+    usb_pd_contract_mv: Option<u16>,
+    usb_pd_contract_ma: Option<u16>,
+) -> Result<ManualChargeBindingPlan, ManualChargeBindingError> {
+    let usbc_qualified = usbc_present && usbc_charge_ready && !usbc_unsafe_source_latched;
+    match requested_path {
+        ManualChargePowerPath::DcIn => dcin_present
+            .then_some(ManualChargeBindingPlan {
+                bound_path: DashboardInputSource::DcIn,
+                binding_reason: ManualChargeBindingReason::ExplicitDcIn,
+            })
+            .ok_or(ManualChargeBindingError::Unavailable),
+        ManualChargePowerPath::UsbC => {
+            if !usbc_present {
+                Err(ManualChargeBindingError::Unavailable)
+            } else if !usbc_qualified {
+                Err(ManualChargeBindingError::NotQualified)
+            } else {
+                Ok(ManualChargeBindingPlan {
+                    bound_path: DashboardInputSource::UsbC,
+                    binding_reason: ManualChargeBindingReason::ExplicitUsbC,
+                })
+            }
+        }
+        ManualChargePowerPath::Auto => {
+            if manual_charge_usb_pd_high_power_qualified(usb_pd_contract_mv, usb_pd_contract_ma)
+                && usbc_qualified
+            {
+                Ok(ManualChargeBindingPlan {
+                    bound_path: DashboardInputSource::UsbC,
+                    binding_reason: ManualChargeBindingReason::AutoHighPowerUsbPd,
+                })
+            } else if dcin_present {
+                Ok(ManualChargeBindingPlan {
+                    bound_path: DashboardInputSource::DcIn,
+                    binding_reason: ManualChargeBindingReason::AutoDcInFallback,
+                })
+            } else if usbc_qualified {
+                Ok(ManualChargeBindingPlan {
+                    bound_path: DashboardInputSource::UsbC,
+                    binding_reason: ManualChargeBindingReason::AutoUsbCFallback,
+                })
+            } else if usbc_present {
+                Err(ManualChargeBindingError::NotQualified)
+            } else {
+                Err(ManualChargeBindingError::Unavailable)
+            }
+        }
+    }
+}
+
+pub(super) const fn manual_charge_loop_confirmation_required(
+    bound_path: DashboardInputSource,
+    output_enabled: bool,
+    output_power_w10: Option<u32>,
+    power_telemetry_fresh: bool,
+) -> bool {
+    if !matches!(bound_path, DashboardInputSource::UsbC) || !output_enabled {
+        return false;
+    }
+    if !power_telemetry_fresh {
+        return true;
+    }
+    match output_power_w10 {
+        Some(power_w10) => power_w10 >= BACKUP_USB_CHARGE_START_POWER_LIMIT_W10,
+        None => true,
     }
 }
 

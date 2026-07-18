@@ -31,7 +31,8 @@
 - devd Web USB control lease 已落地：多候选设备必须由用户选择，Web 创建 lease 后 heartbeat 续租，断开/移除/页面卸载时释放，TTL 到期自动释放，settings 写入与 USB Console hydration 均要求有效 lease。
 - Web Serial 与 devd 连接路径在读取 USB identity 后都会匹配 firmware artifact catalog。未命中时返回 `firmware_artifact_mismatch` 气泡并阻断可写 session；devd 路径会释放刚创建的 lease，用户点击显式忽略按钮后才重新发起连接。
 - USB Console 保留 raw/ignored 串口记录本身，不再额外显示 `Decode issue` 或 `defmt decoder unavailable` 诊断标签；连接时的 firmware artifact 匹配门禁负责阻断不匹配固件。
-- Settings 和 Connect 失败反馈统一为气泡 callout；WiFi 保存、WiFi 清除和 manual charge 写入在固件/devd 返回前显示 spinner 并禁用并发写入。
+- Settings 和 Connect 失败反馈统一为气泡 callout；WiFi 保存、WiFi 清除和 charge-control/advanced-power 写入在固件/devd 返回前显示 spinner 并禁用并发写入。
+- Power 页 owner-facing 手动充电控制已迁到单弹窗 `charge-control` 流：当前态解释来自 `GET /api/v1/charge-control`，preview 来自无副作用 `/preview`，`START/STOP/confirm_loop` 来自 action endpoint。
 - Fleet 卡片使用用户可理解的摘要字段，技术细节保留到单设备详情与 API 调试页。
 - Demo 复用正式前端路由，通过 `demo=true` 进入 mock-only 运行态；场景切换由左上角 Demo Logo 打开的悬浮控制面板完成，覆盖默认 fleet、空数据、全离线、大数量、USB、Critical Battery、Backup、API Debug 等路径，不再通过 public `seed=` URL 深链暴露。
 

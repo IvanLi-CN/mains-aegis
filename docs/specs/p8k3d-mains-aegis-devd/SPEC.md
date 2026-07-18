@@ -27,7 +27,7 @@
 - 设备绑定、别名和已选择 artifact 属于用户配置态，必须持久化到 devd 状态文件；默认位置复用参考项目的 host-tools 模式：`directories::ProjectDirs::config_dir()` 下的 `devices.json`。daemon 重启后 `GET /api/v1/devices` 仍能返回已知绑定，后续 `scan` 会把当前可见端口重新附加到对应绑定。
 - HTTP API 覆盖 identity、connection、settings、trace、events、artifact selection、reset、monitor start/stop、flash 与设备 settings 写入；`session` 仅作为历史兼容语义由 #k4vzn 接管。
 - HTTP API 覆盖 host power 查询、低功耗运行 profile 切换、suspend、shutdown dry-run 与事件广播。
-- 吸收旧本地 USB HTTP bridge 的兼容面：WiFi config、log level、manual charge endpoints 与 Web USB Console hydration 由 devd 直接提供；新的 owner-facing 查询面使用 `connection / settings / trace`。
+- 吸收旧本地 USB HTTP bridge 的兼容面：WiFi config、log level、manual charge endpoints、`charge-control` device endpoints 与 Web USB Console hydration 由 devd 直接提供；新的 owner-facing 查询面使用 `connection / settings / charge-control / trace`。
 - 跨 `Web App` / `mains-aegis-devd` / `mains-aegis` CLI 的通信方案优先级矩阵由 [`#rzx5v`](../rzx5v-client-transport-priority/SPEC.md) 统一定义；本规格不再重复定义跨客户端默认 transport 规则。
 - Firmware Catalog 成为 Web Direct、devd、本地构建和 GitHub Release 的统一 artifact 合同。
 - 固件 identity 暴露 build/profile/features/protocol/defmt 信息，devd 用它与 artifact manifest 匹配；不匹配时日志解码必须标记 `unverified`。
@@ -70,6 +70,9 @@
 - `POST /api/v1/wifi-config` / `DELETE /api/v1/wifi-config`: 通过指定 `device_id` 的已连接设备写入或清除 WiFi 配置；未指定 `device_id` 时仅允许单设备连接场景。
 - `POST /api/v1/settings/log-level`: 通过指定 `device_id` 的连接设备更新日志级别。
 - `POST /api/v1/settings/manual-charge`: 通过指定 `device_id` 的连接设备更新手动充电偏好。
+- `GET /api/v1/devices/{id}/charge-control`: 返回 owner-facing charge-control detail。
+- `POST /api/v1/devices/{id}/charge-control/preview`: 返回 owner-facing preview detail。
+- `POST /api/v1/devices/{id}/control/manual-charge`: 执行 `START/STOP/confirm_loop`。
 - `POST /api/v1/settings/advanced-power`: 通过指定 `device_id` 的连接设备整块替换 Advanced Power 高级设置。当前设备侧合同固定为 11 个数字字段，并继续只保存相对偏移量或无量纲值。
 - `POST /api/v1/settings/advanced-power/reset`: 通过指定 `device_id` 的连接设备把 Advanced Power 恢复为设备默认值。
 
@@ -132,7 +135,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - 多个 native serial candidates 存在时，devd 必须把完整候选列表返回给 Web；Web 必须让用户明确选择要控制的设备。devd 和 Web 都不得基于 “已识别 / 已连接 / 第一个 / 最近使用” 自动替用户决定。
 - Web 创建租约时必须提交用户选择的 devd device id；devd 仅能连接该指定设备。目标不存在、不可连接、被其他有效租约占用或 identity 不可用时返回 API-compatible error envelope。
 - 租约创建成功后，devd 返回 `lease_id`、`device_id`、`identity.device_id`、`expires_at`、`heartbeat_interval_ms` 与 `lease_ttl_ms`。
-- settings、WiFi config、log level、manual charge、USB Console hydration、serial event stream 等 Web USB 控制请求必须携带有效 `lease_id` 或绑定到有效 lease；无有效租约时返回 `web_session_required` 或 `web_session_expired`，不得继续写入硬件。
+- settings、WiFi config、log level、manual charge prefs、charge-control action/preview、USB Console hydration、serial event stream 等 Web USB 控制请求必须携带有效 `lease_id` 或绑定到有效 lease；无有效租约时返回 `web_session_required` 或 `web_session_expired`，不得继续写入硬件。
 - 正常释放路径：Web 在显式 disconnect、移除设备、页面 `pagehide` / `beforeunload` 时应使用 keepalive request 或 `sendBeacon` 发送 release；devd 收到 release 后必须立即停止 monitor、关闭 native serial session，并把设备状态更新为 disconnected。
 - 异常释放路径：Web 断网、浏览器崩溃、系统休眠或网络抖动导致 release 未送达时，devd 通过租约 TTL 自动释放。默认目标为 `heartbeat_interval_ms=2000`、`lease_ttl_ms=8000`、cleanup tick 不超过 `1000ms`；因此无心跳后通常应在 8-9 秒内释放 USB 占用，不允许分钟级错误占用。
 - 网络抖动处理：单次 SSE 断开、短暂 heartbeat 失败或页面短暂不可见不得立即释放；只要 heartbeat 在 TTL 内恢复，devd 保持租约。超过 TTL 后释放，后续 Web 必须重新创建租约并重新读取 identity。

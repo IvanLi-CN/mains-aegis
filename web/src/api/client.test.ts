@@ -1,10 +1,213 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  getDeviceChargeControl,
+  getStatus,
   getSettings,
+  previewDeviceChargeControl,
   resetDeviceAdvancedPower,
+  setDeviceManualChargeControl,
+  setDeviceManualChargePrefs,
   setDeviceAdvancedPower,
 } from "./client";
+import type { DeviceSettings, UpsStatus } from "./types";
+
+function baseLanStatus(): UpsStatus {
+  return {
+    mode: "standby",
+    input: {
+      source: "dcin",
+      mains_present: true,
+      input_vbus_mv: 12190,
+      input_ibus_ma: 274,
+      pre_tps_vin_mv: 12190,
+      vin_vbus_mv: 12190,
+      input_gate_state: "enabled",
+      input_gate_reason: "none",
+      input_power_good: true,
+      vin_iin_ma: 274,
+      tps_total_iout_ma: 36,
+      tps_limit_threshold_ma: 100,
+      pressure_state: "headroom",
+      pressure_score_pct: 0,
+      pressure_reason: "none",
+      vin_baseline_mv: 12190,
+      vin_drop_mv: 0,
+    },
+    output: {
+      requested: "both",
+      active: "both",
+      recoverable: "both",
+      gate_reason: "none",
+      out_a: {
+        state: "ok",
+        enabled: true,
+        vbus_mv: 11380,
+        iout_ma: 16,
+      },
+      out_b: {
+        state: "ok",
+        enabled: true,
+        vbus_mv: 11380,
+        iout_ma: 20,
+      },
+    },
+    charger: {
+      state: "ok",
+      allow_charge: true,
+      ichg_ma: 100,
+      ibat_ma: 47,
+      vbat_present: true,
+      policy_target_ichg_ma: 100,
+      limit_active: false,
+      limit_reason: "none",
+      limit_detail: null,
+      limit_threshold_ma: null,
+      detail_status: "CHG100",
+    },
+    charge_control: {
+      mode: "auto",
+      manual_active: false,
+      takeover: false,
+      stop_inhibit: false,
+      last_stop_reason: null,
+      requested_power_path: "auto",
+      bound_power_path: "dcin",
+      start_state: "ready",
+      output_power_w10: 3,
+      power_telemetry_fresh: true,
+    },
+    battery: {
+      state: "ok",
+      pack_mv: 16020,
+      current_ma: 0,
+      soc_pct: 99,
+      no_battery: false,
+      discharge_ready: true,
+      charge_fet_on: true,
+      discharge_fet_on: true,
+      precharge_fet_on: false,
+      issue_detail: null,
+      recovery_pending: false,
+      last_result: null,
+    },
+    thermal: {
+      tmp_a_state: "ok",
+      tmp_a_c: 28,
+      tmp_b_state: "ok",
+      tmp_b_c: 29,
+    },
+    network: {
+      state: "connected",
+      ipv4: "192.168.31.232",
+      last_error: null,
+    },
+  };
+}
+
+function baseLanSettings(): DeviceSettings {
+  return {
+    wifi: {
+      configured: true,
+      ssid: "lab",
+    },
+    log_level: "info",
+    manual_charge: {
+      target: "full_100",
+      speed: "ma_500",
+      timer_h: 2,
+      power_path: "auto",
+    },
+    charge_capabilities: {
+      target_voltage_mv: 16800,
+      normal_current_ma: 500,
+      dc_derated_current_ma: 100,
+      dcin_input_limit_ma: 1000,
+      max_output_current_ma: 3500,
+      usb_pd_high_power_min_voltage_mv: 9000,
+      usb_pd_high_power_max_voltage_mv: 20000,
+      usb_pd_high_power_min_power_mw: 20000,
+      loop_start_max_power_without_confirm_w10: 20,
+      loop_stop_power_latched_w10: 30,
+      loop_telemetry_miss_limit: 2,
+      supported_power_paths: ["auto", "dcin", "usbc"],
+      auto_path_priority: ["usbc", "dcin"],
+    },
+    advanced_power: {
+      standby_drop_mv: 900,
+      input_uvlo_cutoff_mv: 11400,
+      input_uvlo_recover_mv: 11600,
+      input_uvlo_required_samples: 3,
+      source_limited_enter_delta_ma: 1000,
+    },
+    advanced_power_capabilities: {
+      rated_vout_mv: 12000,
+      standby_drop_mv: {
+        default: 900,
+        min: 100,
+        max: 3000,
+        step: 50,
+      },
+      input_uvlo_cutoff_mv: {
+        default: 11400,
+        min: 10000,
+        max: 13000,
+        step: 100,
+      },
+      input_uvlo_recover_mv: {
+        default: 11600,
+        min: 10100,
+        max: 13100,
+        step: 100,
+      },
+      input_uvlo_required_samples: {
+        default: 3,
+        min: 1,
+        max: 10,
+        step: 1,
+      },
+      source_limited_enter_delta_ma: {
+        default: 1000,
+        min: 100,
+        max: 5000,
+        step: 100,
+      },
+    },
+  };
+}
+
+function jsonResponse(body: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+    },
+    ...init,
+  });
+}
+
+async function withFetchMock<T>(
+  implementation: typeof fetch,
+  run: () => Promise<T>,
+): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: implementation,
+  });
+  try {
+    return await run();
+  } finally {
+    if (originalFetch === undefined) {
+      delete (globalThis as typeof globalThis & { fetch?: typeof fetch }).fetch;
+    } else {
+      Object.defineProperty(globalThis, "fetch", {
+        configurable: true,
+        value: originalFetch,
+      });
+    }
+  }
+}
 
 describe("mock advanced power reset", () => {
   test("preserves 19V mock capabilities when resetting advanced power", async () => {
@@ -69,5 +272,193 @@ describe("mock advanced power reset", () => {
         value: originalWindow,
       });
     }
+  });
+
+  test("updates mock manual charge prefs and runtime control snapshots", async () => {
+    const baseUrl = "mock:lab-standby";
+
+    await setDeviceManualChargePrefs(baseUrl, {
+      target: "rsoc_80",
+      speed: "ma_500",
+      timer_h: 6,
+      power_path: "dcin",
+    });
+
+    const settings = await getSettings(baseUrl);
+    expect(settings.manual_charge).toEqual({
+      target: "rsoc_80",
+      speed: "ma_500",
+      timer_h: 6,
+      power_path: "dcin",
+    });
+
+    const response = await setDeviceManualChargeControl(baseUrl, {
+      action: "start",
+    });
+
+    expect(response.summary.manual_active).toBe(true);
+    expect(response.readiness.planned_path.bound).toBe("dcin");
+
+    const status = await getStatus(baseUrl);
+    expect(status.charge_control?.manual_active).toBe(true);
+    expect(status.charge_control?.bound_power_path).toBe("dcin");
+  });
+
+  test("surfaces loop confirmation on mock USB-C manual start", async () => {
+    const baseUrl = "mock:lab-standby";
+
+    await setDeviceManualChargePrefs(baseUrl, {
+      target: "full_100",
+      speed: "ma_500",
+      timer_h: 2,
+      power_path: "usbc",
+    });
+    const status = await getStatus(baseUrl);
+    if (status.charge_control) {
+      status.charge_control.output_power_w10 = 24;
+    }
+
+    await expect(
+      setDeviceManualChargeControl(baseUrl, { action: "start" }),
+    ).rejects.toMatchObject({
+      envelope: {
+        code: "loop_confirmation_required",
+        details: {
+          readiness: {
+            state: "confirm_required",
+            planned_path: {
+              bound: "usbc",
+            },
+          },
+        },
+      },
+    });
+  });
+});
+
+describe("LAN charge-control compatibility", () => {
+  test("falls back to status/settings when the detail endpoint is missing", async () => {
+    const status = baseLanStatus();
+    const settings = baseLanSettings();
+
+    const detail = await withFetchMock(
+      async (input) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/charge-control")) {
+          return jsonResponse(
+            {
+              error: {
+                code: "not_found",
+                message: "not found",
+                retryable: false,
+                details: null,
+              },
+            },
+            { status: 404, statusText: "Not Found" },
+          );
+        }
+        if (url.endsWith("/api/v1/status")) return jsonResponse(status);
+        if (url.endsWith("/api/v1/settings")) return jsonResponse(settings);
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+      async () => getDeviceChargeControl("http://device.test"),
+    );
+
+    expect(detail.readiness.state).toBe("ready");
+    expect(detail.readiness.planned_path.requested).toBe("auto");
+    expect(detail.readiness.planned_path.bound).toBe("dcin");
+    expect(detail.telemetry.input_source).toBe("dcin");
+    expect(detail.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "battery.charge_fet_on",
+          value: true,
+        }),
+      ]),
+    );
+  });
+
+  test("synthesizes confirm-required preview when preview endpoint is missing", async () => {
+    const status = baseLanStatus();
+    if (status.charge_control) {
+      status.charge_control.output_power_w10 = 24;
+      status.charge_control.power_telemetry_fresh = true;
+    }
+    const settings = baseLanSettings();
+
+    const detail = await withFetchMock(
+      async (input) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/charge-control/preview")) {
+          return jsonResponse(
+            {
+              error: {
+                code: "not_found",
+                message: "not found",
+                retryable: false,
+                details: null,
+              },
+            },
+            { status: 404, statusText: "Not Found" },
+          );
+        }
+        if (url.endsWith("/api/v1/status")) return jsonResponse(status);
+        if (url.endsWith("/api/v1/settings")) return jsonResponse(settings);
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+      async () =>
+        previewDeviceChargeControl("http://device.test", {
+          target: "full_100",
+          current_ma: 500,
+          timer_minutes: 120,
+          power_path: "usbc",
+        }),
+    );
+
+    expect(detail.readiness.state).toBe("confirm_required");
+    expect(detail.readiness.action).toBe("confirm_loop");
+    expect(detail.readiness.planned_path.bound).toBe("usbc");
+    expect(detail.telemetry.output_power_w10).toBe(24);
+  });
+
+  test("converts legacy control responses into charge-control detail", async () => {
+    const status = baseLanStatus();
+    const settings = baseLanSettings();
+
+    const detail = await withFetchMock(
+      async (input) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/control/manual-charge")) {
+          return jsonResponse({
+            charge_control: {
+              mode: "manual",
+              manual_active: true,
+              takeover: false,
+              stop_inhibit: false,
+              last_stop_reason: null,
+              requested_power_path: "dcin",
+              bound_power_path: "dcin",
+              start_state: "ready",
+              output_power_w10: 3,
+              power_telemetry_fresh: true,
+              remaining_minutes: 119,
+              loop_override_active: false,
+            },
+          });
+        }
+        if (url.endsWith("/api/v1/status")) return jsonResponse(status);
+        if (url.endsWith("/api/v1/settings")) return jsonResponse(settings);
+        throw new Error(`unexpected fetch: ${url}`);
+      },
+      async () =>
+        setDeviceManualChargeControl("http://device.test", {
+          action: "start",
+        }),
+    );
+
+    expect(detail.summary.manual_active).toBe(true);
+    expect(detail.summary.remaining_minutes).toBe(119);
+    expect(detail.readiness.state).toBe("running");
+    expect(detail.readiness.planned_path.bound).toBe("dcin");
   });
 });

@@ -298,3 +298,36 @@ submission_gate=approved
 ### Safety blocked
 
 ![Manual charge blocked](./assets/manual-charge-blocked.png)
+
+### Web Power charge control
+
+PR: include
+source_type=mock_ui
+target_program=mock-only
+capture_scope=app-window
+sensitive_exclusion=N/A
+submission_gate=approved
+
+![Web Power charge control](./images/charge-control-power-page.png)
+
+### Web manual charge request dialog
+
+PR: include
+source_type=mock_ui
+target_program=mock-only
+capture_scope=app-window
+sensitive_exclusion=N/A
+submission_gate=approved
+
+![Web manual charge request dialog](./images/charge-control-request-dialog.png)
+
+### Web USB-C loop override dialog
+
+PR: include
+source_type=mock_ui
+target_program=mock-only
+capture_scope=app-window
+sensitive_exclusion=N/A
+submission_gate=approved
+
+![Web USB-C loop override dialog](./images/charge-control-loop-confirm.png)

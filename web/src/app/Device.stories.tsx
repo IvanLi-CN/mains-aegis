@@ -94,13 +94,32 @@ export const PowerDetail: Story = {
   render: () => renderApp("/devices/mains-aegis-a1b2c3/power", "power-headroom"),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByRole("heading", { name: "Charging" }),
+    ).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("heading", { name: "Discharging" }),
+    ).toBeInTheDocument();
     await expect(await canvas.findByText("Input")).toBeInTheDocument();
-    await expect(await canvas.findByText("Pressure")).toBeInTheDocument();
+    await expect(await canvas.findByText("Output gate")).toBeInTheDocument();
     await expect(await canvas.findByText("Policy target")).toBeInTheDocument();
     await expect(await canvas.findByText("Limit reason")).toBeInTheDocument();
     await expect(await canvas.findByText("headroom")).toBeInTheDocument();
     await expect(await canvas.findByText("500 mA")).toBeInTheDocument();
     await expect(await canvas.findByText("42 mA / 100 mA")).toBeInTheDocument();
+    const chargeStatus = canvasElement.querySelector(
+      '[data-evidence-target="charge-control"] .charge-control-status',
+    );
+    const chargeBadge = canvasElement.querySelector(
+      '[data-evidence-target="charge-control"] .charge-control-status .severity-badge',
+    );
+    expect(chargeStatus).not.toBeNull();
+    expect(chargeBadge).not.toBeNull();
+    const statusWidth = chargeStatus?.getBoundingClientRect().width ?? 0;
+    const badgeWidth = chargeBadge?.getBoundingClientRect().width ?? 0;
+    expect(statusWidth).toBeGreaterThan(0);
+    expect(badgeWidth).toBeGreaterThan(0);
+    expect(badgeWidth).toBeLessThan(statusWidth * 0.5);
   },
 };
 

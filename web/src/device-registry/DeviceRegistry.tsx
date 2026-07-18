@@ -9,7 +9,9 @@ import {
   createDevdWebLease,
   decodeDefmtFrame,
   disconnectDevdDevice,
+  getDeviceChargeControl,
   getDevdDeviceIdentity,
+  getDevdDeviceChargeControl,
   getDevdDeviceSettings,
   getDevdDeviceTrace,
   getDevdSerialSession,
@@ -19,6 +21,8 @@ import {
   getStatus,
   listDevdDevices,
   normalizeBaseUrl,
+  previewDeviceChargeControl,
+  previewDevdDeviceChargeControl,
   probeDevice,
   releaseDevdWebLease,
   resetDeviceAdvancedPower,
@@ -28,9 +32,11 @@ import {
   sendDevdWifiConfig,
   setDeviceAdvancedPower,
   setDeviceLogLevel,
+  setDeviceManualChargeControl,
   setDevdLogLevel,
   setDevdAdvancedPower,
   setDeviceManualChargePrefs,
+  setDevdManualChargeControl,
   setDevdManualChargePrefs,
   subscribeDevdSerialEvents,
   toErrorEnvelope,
@@ -44,6 +50,7 @@ import {
 } from "../api/runtimeModeProfiles";
 import type {
   AdvancedPowerSettings,
+  ChargeControlDetail,
   DevdDevice,
   DevdWebLease,
   DeviceRecord,
@@ -89,6 +96,7 @@ import {
   type AdvancedPowerInput,
   type CommandResult,
   type DeviceChannelTransport,
+  type ManualChargeControlInput,
   type ManualChargePrefsInput,
   type WifiConfigInput,
   type WifiProvisioningProgress,
@@ -1333,7 +1341,8 @@ export function DeviceRegistryProvider({
 
       if (transport === "devd") {
         const devdChannel = rememberedDevdChannel(record);
-        if (!devdChannel?.baseUrl) return unavailableChannelError("devd");
+        if (!devdChannel || devdChannel.baseUrl === undefined)
+          return unavailableChannelError("devd");
         let devdDeviceId = devdChannel.devdDeviceId ?? null;
         if (!devdDeviceId) {
           const scan = await scanDevdDevices(devdChannel.baseUrl);
@@ -1952,6 +1961,361 @@ export function DeviceRegistryProvider({
     [records, setSerialCommandError],
   );
 
+  const refreshChargeControlDetail = useCallback(
+    async (deviceId: string): Promise<CommandResult> => {
+      const record = records.find(
+        (candidate) => candidate.target.deviceId === deviceId,
+      );
+      if (!record) return serialCommandUnavailable();
+      if (record.target.mock) {
+        const detail = await getDeviceChargeControl(record.target.baseUrl);
+        setRecords((current) =>
+          current.map((candidate) =>
+            candidate.target.deviceId === deviceId
+              ? patchSerialStatusRecord(
+                  candidate,
+                  chargeControlPatchFromDetail(detail),
+                  "manual_charge",
+                  "Charge control detail refreshed",
+                )
+              : candidate,
+          ),
+        );
+        return { ok: true, detail };
+      }
+      const selectedTransport = resolvePreferredTransport(
+        record,
+        serialSessions.current,
+      );
+      if (selectedTransport === "http") {
+        try {
+          const detail = await withRememberedHttpFallback(record, (httpBaseUrl) =>
+            getDeviceChargeControl(httpBaseUrl),
+          );
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === deviceId
+                ? patchSerialStatusRecord(
+                    candidate,
+                    chargeControlPatchFromDetail(detail),
+                    "manual_charge",
+                    "Charge control detail refreshed",
+                  )
+                : candidate,
+            ),
+          );
+          return { ok: true, detail };
+        } catch (error) {
+          const envelope = toErrorEnvelope(error);
+          setSerialCommandError(deviceId, envelope);
+          return {
+            ok: false,
+            error: envelope,
+            detail: chargeControlDetailFromErrorDetails(envelope.details),
+          };
+        }
+      }
+      if (selectedTransport === "devd") {
+        const devdBaseUrl = devdBaseUrlForRecord(record);
+        if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
+        try {
+          const detail = await getDevdDeviceChargeControl(
+            devdBaseUrl,
+            devdDeviceId,
+          );
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === deviceId
+                ? patchSerialStatusRecord(
+                    candidate,
+                    chargeControlPatchFromDetail(detail),
+                    "manual_charge",
+                    "Charge control detail refreshed",
+                  )
+                : candidate,
+            ),
+          );
+          return { ok: true, detail };
+        } catch (error) {
+          const envelope = toErrorEnvelope(error);
+          setSerialCommandError(deviceId, envelope);
+          return {
+            ok: false,
+            error: envelope,
+            detail: chargeControlDetailFromErrorDetails(envelope.details),
+          };
+        }
+      }
+      const session = serialSessions.current.get(deviceId);
+      if (!session) return serialCommandUnavailable();
+      try {
+        const detail = await session.requestChargeControl();
+        setRecords((current) =>
+          current.map((candidate) =>
+            candidate.target.deviceId === deviceId
+              ? patchSerialStatusRecord(
+                  candidate,
+                  chargeControlPatchFromDetail(detail),
+                  "manual_charge",
+                  "Charge control detail refreshed",
+                )
+              : candidate,
+          ),
+        );
+        return { ok: true, detail };
+      } catch (error) {
+        const envelope = errorFromSerialFailure(error);
+        setSerialCommandError(deviceId, envelope);
+        return {
+          ok: false,
+          error: envelope,
+          detail: chargeControlDetailFromErrorDetails(envelope.details),
+        };
+      }
+    },
+    [records, setSerialCommandError],
+  );
+
+  const previewManualCharge = useCallback(
+    async (
+      deviceId: string,
+      prefs: ManualChargePrefsInput,
+    ): Promise<CommandResult> => {
+      const record = records.find(
+        (candidate) => candidate.target.deviceId === deviceId,
+      );
+      if (!record) return serialCommandUnavailable();
+      const input = manualChargePreviewInput(prefs);
+      if (record.target.mock) {
+        const detail = await previewDeviceChargeControl(
+          record.target.baseUrl,
+          input,
+        );
+        return { ok: true, detail };
+      }
+      const selectedTransport = resolvePreferredTransport(
+        record,
+        serialSessions.current,
+      );
+      if (selectedTransport === "http") {
+        try {
+          const detail = await withRememberedHttpFallback(record, (httpBaseUrl) =>
+            previewDeviceChargeControl(httpBaseUrl, input),
+          );
+          return { ok: true, detail };
+        } catch (error) {
+          const envelope = toErrorEnvelope(error);
+          setSerialCommandError(deviceId, envelope);
+          return {
+            ok: false,
+            error: envelope,
+            detail: chargeControlDetailFromErrorDetails(envelope.details),
+          };
+        }
+      }
+      if (selectedTransport === "devd") {
+        const devdBaseUrl = devdBaseUrlForRecord(record);
+        if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
+        try {
+          const detail = await previewDevdDeviceChargeControl(
+            devdBaseUrl,
+            devdDeviceId,
+            devdLeaseIdForRecord(record),
+            input,
+          );
+          return { ok: true, detail };
+        } catch (error) {
+          const envelope = toErrorEnvelope(error);
+          setSerialCommandError(deviceId, envelope);
+          return {
+            ok: false,
+            error: envelope,
+            detail: chargeControlDetailFromErrorDetails(envelope.details),
+          };
+        }
+      }
+      const session = serialSessions.current.get(deviceId);
+      if (!session) return serialCommandUnavailable();
+      try {
+        const detail = await session.previewChargeControl(input);
+        return { ok: true, detail };
+      } catch (error) {
+        const envelope = errorFromSerialFailure(error);
+        setSerialCommandError(deviceId, envelope);
+        return {
+          ok: false,
+          error: envelope,
+          detail: chargeControlDetailFromErrorDetails(envelope.details),
+        };
+      }
+    },
+    [records, setSerialCommandError],
+  );
+
+  const controlManualCharge = useCallback(
+    async (
+      deviceId: string,
+      input: ManualChargeControlInput,
+    ): Promise<CommandResult> => {
+      const record = records.find(
+        (candidate) => candidate.target.deviceId === deviceId,
+      );
+      if (!record) return serialCommandUnavailable();
+      const selectedTransport = resolvePreferredTransport(
+        record,
+        serialSessions.current,
+      );
+      const successMessage =
+        input.action === "start"
+          ? input.confirm_loop
+            ? "Manual charge started with USB-C loop override"
+            : "Manual charge started"
+          : "Manual charge stopped";
+      if (selectedTransport === "http") {
+        try {
+          const detail = await withRememberedHttpFallback(
+            record,
+            (httpBaseUrl) => setDeviceManualChargeControl(httpBaseUrl, input),
+          );
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === deviceId
+                ? patchSerialStatusRecord(
+                    candidate,
+                    chargeControlPatchFromDetail(detail),
+                    "manual_charge",
+                    successMessage,
+                  )
+                : candidate,
+            ),
+          );
+          return { ok: true, message: successMessage, detail };
+        } catch (error) {
+          const envelope = toErrorEnvelope(error);
+          const detail = chargeControlDetailFromErrorDetails(envelope.details);
+          if (detail) {
+            setRecords((current) =>
+              current.map((candidate) =>
+                candidate.target.deviceId === deviceId
+                  ? patchSerialStatusRecord(
+                      candidate,
+                      chargeControlPatchFromDetail(detail),
+                      "manual_charge",
+                      "Charge control detail updated from action failure",
+                    )
+                  : candidate,
+              ),
+            );
+          }
+          setSerialCommandError(deviceId, envelope);
+          return { ok: false, error: envelope, detail };
+        }
+      }
+      if (selectedTransport === "devd") {
+        const devdBaseUrl = devdBaseUrlForRecord(record);
+        if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
+        try {
+          const leaseId = devdLeaseIdForRecord(record);
+          const detail = await setDevdManualChargeControl(
+            devdBaseUrl,
+            devdDeviceId,
+            leaseId,
+            input,
+          );
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === deviceId
+                ? patchSerialStatusRecord(
+                    candidate,
+                    chargeControlPatchFromDetail(detail),
+                    "manual_charge",
+                    successMessage,
+                  )
+                : candidate,
+            ),
+          );
+          return { ok: true, message: successMessage, detail };
+        } catch (error) {
+          const envelope = toErrorEnvelope(error);
+          const detail = chargeControlDetailFromErrorDetails(envelope.details);
+          if (detail) {
+            setRecords((current) =>
+              current.map((candidate) =>
+                candidate.target.deviceId === deviceId
+                  ? patchSerialStatusRecord(
+                      candidate,
+                      chargeControlPatchFromDetail(detail),
+                      "manual_charge",
+                      "Charge control detail updated from action failure",
+                    )
+                  : candidate,
+              ),
+            );
+          }
+          setSerialCommandError(deviceId, envelope);
+          return { ok: false, error: envelope, detail };
+        }
+      }
+      if (!record.target.mock) {
+        const session = serialSessions.current.get(deviceId);
+        if (!session) return serialCommandUnavailable();
+        try {
+          const detail = await session.controlManualCharge(input);
+          setRecords((current) =>
+            current.map((candidate) =>
+              candidate.target.deviceId === deviceId
+                ? patchSerialStatusRecord(
+                    candidate,
+                    chargeControlPatchFromDetail(detail),
+                    "manual_charge",
+                    successMessage,
+                  )
+                : candidate,
+            ),
+          );
+          return { ok: true, message: successMessage, detail };
+        } catch (error) {
+          const envelope = errorFromSerialFailure(error);
+          const detail = chargeControlDetailFromErrorDetails(envelope.details);
+          if (detail) {
+            setRecords((current) =>
+              current.map((candidate) =>
+                candidate.target.deviceId === deviceId
+                  ? patchSerialStatusRecord(
+                      candidate,
+                      chargeControlPatchFromDetail(detail),
+                      "manual_charge",
+                      "Charge control detail updated from action failure",
+                    )
+                  : candidate,
+              ),
+            );
+          }
+          setSerialCommandError(deviceId, envelope);
+          return { ok: false, error: envelope, detail };
+        }
+      }
+      const detail = await getDeviceChargeControl(record.target.baseUrl);
+      setRecords((current) =>
+        current.map((candidate) =>
+          candidate.target.deviceId === deviceId
+            ? patchSerialStatusRecord(
+                candidate,
+                chargeControlPatchFromDetail(detail),
+                "manual_charge",
+                successMessage,
+              )
+            : candidate,
+        ),
+      );
+      return { ok: true, message: successMessage, detail };
+    },
+    [records, setSerialCommandError],
+  );
+
   const setAdvancedPower = useCallback(
     async (
       deviceId: string,
@@ -2461,6 +2825,9 @@ export function DeviceRegistryProvider({
       clearWifiConfig,
       setSerialLogLevel,
       setManualChargePrefs,
+      refreshChargeControlDetail,
+      previewManualCharge,
+      controlManualCharge,
       setAdvancedPower,
       resetAdvancedPower,
       removeDevice,
@@ -2486,6 +2853,9 @@ export function DeviceRegistryProvider({
       clearWifiConfig,
       setSerialLogLevel,
       setManualChargePrefs,
+      refreshChargeControlDetail,
+      previewManualCharge,
+      controlManualCharge,
       setAdvancedPower,
       resetAdvancedPower,
       removeDevice,
@@ -2845,6 +3215,8 @@ function mergeDeviceRecord(
     serial: incoming.serial ?? existing.serial,
     settings: incoming.settings ?? existing.settings,
     status: incoming.status ?? existing.status,
+    chargeControlDetail:
+      incoming.chargeControlDetail ?? existing.chargeControlDetail,
     network: incoming.network ?? existing.network,
     identity: incoming.identity ?? existing.identity,
     connectionState:
@@ -2870,7 +3242,11 @@ function isDevdSerial(
     baseUrl: string;
   };
 } {
-  return record.serial?.source === "devd" && Boolean(record.serial.baseUrl);
+  return (
+    record.serial?.source === "devd" &&
+    record.serial.baseUrl !== undefined &&
+    record.serial.baseUrl !== null
+  );
 }
 
 function isManageableDevdDevice(device: DevdDevice): boolean {
@@ -2911,7 +3287,7 @@ function devdLanBaseUrl(
 function devdBaseUrlForRecord(record: DeviceRecord): string | null {
   if (record.serial?.source === "devd") return record.serial.baseUrl ?? "";
   if (record.target.transport === "devd") return record.target.baseUrl ?? "";
-  if (record.target.rememberedChannels?.devd?.baseUrl)
+  if (record.target.rememberedChannels?.devd)
     return record.target.rememberedChannels.devd.baseUrl;
   return null;
 }
@@ -2979,7 +3355,11 @@ function rememberedDevdChannel(
       seenAt: record.target.addedAt,
     };
   }
-  if (record.serial?.source === "devd" && record.serial.baseUrl) {
+  if (
+    record.serial?.source === "devd" &&
+    record.serial.baseUrl !== undefined &&
+    record.serial.baseUrl !== null
+  ) {
     return {
       baseUrl: record.serial.baseUrl,
       seenAt: record.lastUpdated ?? record.target.addedAt,
@@ -2994,7 +3374,7 @@ function isTransportAvailable(
   sessions: Map<string, WebSerialTransport>,
 ): boolean {
   if (transport === "http") return Boolean(rememberedHttpBaseUrl(record));
-  if (transport === "devd") return Boolean(devdBaseUrlForRecord(record));
+  if (transport === "devd") return devdBaseUrlForRecord(record) !== null;
   return (
     record.serial?.connected === true || sessions.has(record.target.deviceId)
   );
@@ -3121,8 +3501,14 @@ type DeviceSettingsPatch = {
   wifi_ssid?: string | null;
   log_level?: DeviceSettings["log_level"];
   manual_charge?: DeviceSettings["manual_charge"];
+  charge_capabilities?: DeviceSettings["charge_capabilities"];
   advanced_power?: DeviceSettings["advanced_power"];
   advanced_power_capabilities?: DeviceSettings["advanced_power_capabilities"];
+};
+
+type DeviceStatusPatch = {
+  charge_control?: UpsStatus["charge_control"];
+  chargeControlDetail?: ChargeControlDetail | null;
 };
 
 function defaultDeviceSettings(): DeviceSettings {
@@ -3137,9 +3523,46 @@ function defaultDeviceSettings(): DeviceSettings {
       target: "full_100",
       speed: "ma_500",
       timer_h: 2,
+      power_path: "auto",
+    },
+    charge_capabilities: {
+      target_voltage_mv: 16_800,
+      normal_current_ma: 500,
+      dc_derated_current_ma: 100,
+      dcin_input_limit_ma: 1_000,
+      max_output_current_ma: 3_500,
+      usb_pd_high_power_min_voltage_mv: 9_000,
+      usb_pd_high_power_max_voltage_mv: 20_000,
+      usb_pd_high_power_min_power_mw: 20_000,
+      loop_start_max_power_without_confirm_w10: 20,
+      loop_stop_power_latched_w10: 30,
+      loop_telemetry_miss_limit: 2,
+      supported_power_paths: ["auto", "dcin", "usbc"],
+      auto_path_priority: ["usbc_pd_high_power", "dcin", "usbc"],
     },
     advanced_power: buildAdvancedPowerDefaults(ratedVoutMv),
     advanced_power_capabilities: buildAdvancedPowerCapabilities(ratedVoutMv),
+  };
+}
+
+function manualChargePreviewInput(
+  prefs: DeviceSettings["manual_charge"],
+): {
+  target: DeviceSettings["manual_charge"]["target"];
+  current_ma: number;
+  timer_minutes: number;
+  power_path: DeviceSettings["manual_charge"]["power_path"];
+} {
+  return {
+    target: prefs.target,
+    current_ma:
+      prefs.speed === "ma_100"
+        ? 100
+        : prefs.speed === "ma_1000"
+          ? 1_000
+          : 500,
+    timer_minutes: prefs.timer_h * 60,
+    power_path: prefs.power_path ?? "auto",
   };
 }
 
@@ -3251,6 +3674,28 @@ function updateSerialSettings(
   );
 }
 
+function patchSerialStatusRecord(
+  record: DeviceRecord,
+  patch: DeviceStatusPatch,
+  target: string,
+  message: string,
+): DeviceRecord {
+  const nextStatus = mergeDeviceStatus(record.status, patch);
+  const nextRecord: DeviceRecord = {
+    ...record,
+    status: nextStatus,
+    chargeControlDetail:
+      patch.chargeControlDetail ?? record.chargeControlDetail ?? null,
+    error: null,
+    lastUpdated: new Date().toISOString(),
+  };
+  if (!record.serial) return nextRecord;
+  return appendSerialLog(
+    nextRecord,
+    serialLogFromFrame({ type: "log", level: "info", target, message }),
+  );
+}
+
 function mergeLanDeviceSnapshot(
   record: DeviceRecord,
   status: UpsStatus | undefined,
@@ -3297,10 +3742,64 @@ function mergeDeviceSettings(
     },
     log_level: patch.log_level ?? current.log_level,
     manual_charge: patch.manual_charge ?? current.manual_charge,
+    charge_capabilities:
+      patch.charge_capabilities ?? current.charge_capabilities,
     advanced_power: patch.advanced_power ?? current.advanced_power,
     advanced_power_capabilities:
       patch.advanced_power_capabilities ?? current.advanced_power_capabilities,
   };
+}
+
+function mergeDeviceStatus(
+  current: UpsStatus | null,
+  patch: DeviceStatusPatch,
+): UpsStatus | null {
+  if (!current) return current;
+  return {
+    ...current,
+    charge_control: patch.charge_control ?? current.charge_control,
+  };
+}
+
+function chargeControlSummaryFromDetail(
+  detail: ChargeControlDetail,
+): NonNullable<UpsStatus["charge_control"]> {
+  return {
+    mode: detail.summary.mode,
+    manual_active: detail.summary.manual_active,
+    takeover: detail.summary.takeover,
+    stop_inhibit: detail.summary.stop_inhibit,
+    last_stop_reason: detail.summary.last_stop_reason,
+    requested_power_path: detail.readiness.planned_path.requested,
+    bound_power_path: detail.readiness.planned_path.bound,
+    start_state: detail.readiness.state,
+    output_power_w10: detail.telemetry.output_power_w10,
+    power_telemetry_fresh: detail.telemetry.power_telemetry_fresh,
+  };
+}
+
+function chargeControlPatchFromDetail(
+  detail: ChargeControlDetail,
+): DeviceStatusPatch {
+  return {
+    charge_control: chargeControlSummaryFromDetail(detail),
+    chargeControlDetail: detail,
+  };
+}
+
+function chargeControlDetailFromErrorDetails(
+  details: unknown,
+): ChargeControlDetail | null {
+  if (!details || typeof details !== "object") return null;
+  if (
+    "summary" in details &&
+    "readiness" in details &&
+    "telemetry" in details &&
+    "evidence" in details
+  ) {
+    return details as ChargeControlDetail;
+  }
+  return null;
 }
 
 function serialCommandUnavailable(): CommandResult {

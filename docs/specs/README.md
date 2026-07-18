@@ -26,6 +26,7 @@ Index 表格的 `Status` 仅允许使用：`active`、`superseded(#<id>)`、`arc
 | 7jqrq | Mains Aegis CLI / devd alignment | archived | `7jqrq-mains-aegis-cli-devd-alignment/SPEC.md` | 2026-06-03 | 主机工具对齐与 release/install 基线已完成；CLI `device session` 与新查询面迁移改由 #k4vzn 接管 |
 | p8k3d | Mains Aegis Device Daemon | archived | `p8k3d-mains-aegis-devd/SPEC.md` | 2026-06-14 | devd v1 foundation 已完成；`diag-snapshot`、synthetic power event 与 CLI trace follow 已补齐 `TPS output current` 停充根因、`lan_derived` 兼容面与 DC IN `1000mA/96%` 输入限值观测 |
 | ypfpu | Web management UI | active | `ypfpu-web-management-ui/SPEC.md` | 2026-06-03 | Web 管理端 v1 基线已完成；LAN 管理、settings 与 LAN/USB 收敛改由 #k4vzn 接管 |
+| q7mzc | Owner-facing charge control | active | `q7mzc-owner-facing-charge-control/SPEC.md` | 2026-07-17 | 统一 status summary + charge-control detail/preview/action 合同；Power 页改为当前态卡片 + 单弹窗手动充电控制 |
 | hn29u | USB-C PD/PPS sink v1 | archived | `hn29u-usb-c-pd-sink-pps/SPEC.md` | 2026-04-23 | hotplug PPS 恢复已稳定闭环：reset 基线约 `1.67s` 回到 `PPS`，主人实测真实热插拔也已恢复到秒级协商成功 |
 | nq7s2 | BQ40 balance baseline + observability | archived | `nq7s2-bq40-balance-baseline-and-observability/SPEC.md` | 2026-04-07 | PR #59 已完成实现/文档/预览收口；实板已确认 DF 对齐，active balancing 触发待后续在完整 charge/relax 条件下复核 |
 | edbpk | BQ40 Cell4 protocol-safe diagnostics | archived | `edbpk-bq40-cell4-protocol-diagnostics/SPEC.md` | 2026-03-15 | 已完成协议修正、只读诊断收敛、flash/monitor 互斥与 reply PEC 探测；`Cell4` 根因已排除工具误读路径 |
@@ -49,7 +50,7 @@ Index 表格的 `Status` 仅允许使用：`active`、`superseded(#<id>)`、`arc
 | eu2b8 | BQ25792 500mA charge policy + DC derate | archived | `eu2b8-bq25792-charge-policy/SPEC.md` | 2026-06-14 | 主线 charger state machine 已作为 SoT；DC IN 停充真相源使用 `TPS output current > 100mA`，并新增 BACKUP USB-C `<2W` 自动放行、`>3W`/两次缺样锁存与可观测状态 |
 | 2drzf | BQ40 mainboard DF protection baseline | archived | `2drzf-bq40-mainboard-df-protection-baseline/SPEC.md` | 2026-04-03 | 冻结 `asset-df-mainboard` 的 `OCC/OCD/SOCC/SOCD` 主板基线，并把 `TMP + BMS` 最高温收敛为共享热控真相源 |
 | mturr | Front panel display-chain long-press diagnostics | archived | `mturr-front-panel-display-chain-diagnostics/SPEC.md` | 2026-04-04 | 已完成主固件实现、本地构建、真机 flash/monitor 与 `CENTER` 长按 defmt 取证 |
-| zp4cg | Manual charge dashboard page + EEPROM prefs | archived | `zp4cg-manual-charge-dashboard/SPEC.md` | 2026-04-07 | `MANUAL` 三级页面仅保存 prefs；手动 START 现需 USB-C 回环确认，确认 flag 仅在当前 RAM 会话有效 |
+| zp4cg | Manual charge dashboard page + EEPROM prefs | archived | `zp4cg-manual-charge-dashboard/SPEC.md` | 2026-04-07 | `MANUAL` 三级页面仅保存 prefs；Web/API owner-facing 充电控制真相已由 #q7mzc 接管 |
 | jxz2t | GitHub Pages docs site handbooks | archived | `jxz2t-docs-site-handbooks/SPEC.md` | 2026-05-05 | Pages 根站点改由 Web App 发布，文档站保留为 `/docs/` 子路径；原 `docs-site/`、手册页面与 PR #63 记录仍为历史基线 |
 | h6sae | BQ40 `LOCK` root cause + closure | active | `h6sae-bq40-lock-root-cause/SPEC.md` | 2026-04-13 | 已命中 `termination` 分流并提交 `ITERM` 对齐修复；下一步需要 `<90%` 解锁后的 live 闭环复验 |
 | amc32 | WiFi / service discovery / read-only API foundation | active | `amc32-wifi-service-discovery-api-foundation/SPEC.md` | 2026-06-03 | `net_http` 与 `web_serial` 已成为默认主固件能力；“LAN 只读 API” 假设由 #k4vzn 继续演进 |

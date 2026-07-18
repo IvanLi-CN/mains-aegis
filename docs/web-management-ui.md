@@ -58,11 +58,18 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 
 - 入口：`/devices/:device_id/power`
 - 目的：拆解输入、充电、输出之间的能量路径，便于调试 UPS 行为。
-- 主要内容：市电输入、`input_vbus_mv` / `input_ibus_ma`、输出请求与实际激活通道、`gate_reason`、OUT A/B 电压电流、recoverable 状态。
+- 主要内容：市电输入、`input_vbus_mv` / `input_ibus_ma`、输出请求与实际激活通道、`gate_reason`、OUT A/B 电压电流、recoverable 状态，以及 owner-facing `charge-control` 当前态摘要。
 - 输入面板必须直接展示 `source / pressure_state / pressure_score_pct / pressure_reason / tps_total_iout_ma / tps_limit_threshold_ma / vin_baseline_mv / vin_drop_mv`，让 owner 能判断当前 `DC IN` 压力，尤其是 `TPS output current > 100mA` 的停充场景。
-- 充电面板必须直接展示 `policy_target_ichg_ma / limit_active / limit_reason / limit_threshold_ma / detail_status`，并在 `pressure_tps_output_current` 时用 owner-facing 文案显示 `Stopped: TPS output current <actual>mA > 100mA`。
-- 接口对接：`GET /api/v1/status` 的 `input`、`output`、`charger`。
-- 交互：按 `Input`、`Charger`、`Output A`、`Output B` 分段，所有写操作按钮首版不出现。
+- 充电主卡片只展示当前态：当前模式、当前输入/绑定路径、策略目标、`IBAT` 实测、当前限流摘要、当前环路避免状态、剩余时间、停止/阻断原因与直接证据摘要。不是当前态的规则、合同表或推导性说明不得常驻显示。
+- 接口对接：
+  - `GET /api/v1/status` 的 `input`、`output`、`charger` 与紧凑 `charge_control` 摘要
+  - `GET /api/v1/charge-control` 作为 Power 页当前态与手动充电弹窗的权威详情面
+  - `POST /api/v1/charge-control/preview` 用于回答“如果现在点 START 会怎样”
+  - `POST /api/v1/control/manual-charge` 用于 `START/STOP/confirm_loop`
+- 交互：
+  - 手动充电只通过弹窗发起，不在 Power 页常驻表单。
+  - 同一弹窗内完成 defaults 编辑、preview、`START/STOP` 与 USB-C 环路确认。
+  - 若 `readiness.state=confirm_required`，确认态必须留在同一弹窗内，不再跳出第二个 owner-facing 窗口。
 
 ### 5. 电池与 BMS
 
@@ -93,10 +100,10 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 
 - 入口：`/devices/:device_id/settings`
 - 目的：对单台实机执行当前设备 API 支持的 settings 写入；LAN 直连与 devd transport 使用同一字段语义。
-- 可写范围：WiFi SSID/PSK 覆盖或清除、手动充电偏好、设备日志级别，以及 Advanced Power staged assist/takeover 高级参数。当前设备侧合同为 11 个数字字段：`standby_drop_mv`、`assist_low_drop_mv`、`assist_enter_delta_ma`、`assist_exit_delta_ma`、`assist_required_samples`、`assist_ramp_step_mv`、`assist_ramp_interval_ms`、`rated_enter_delta_ma`、`rated_exit_delta_ma`、`vin_drop_threshold_pct`、`required_samples`。
+- 可写范围：WiFi SSID/PSK 覆盖或清除、设备日志级别，以及 Advanced Power staged assist/takeover 高级参数。手动充电 owner-facing 控制已迁到 Power 页弹窗；Settings 只保留持久化 `manual_charge` prefs 的兼容入口，不承担 `START/STOP`。
 - Secret 规则：PSK 只在用户提交时通过 USB CDC 或 LAN API 写入固件 EEPROM，不在 UI、日志或 ack 中回显；提交后清空表单。默认固件启用 `net_http`，但不存在默认 WiFi 凭据；固件优先读取 EEPROM WiFi config，写入后更新运行时 WiFi 配置，清除后清空 EEPROM slot 并立即断开 WiFi。
 - 反馈规则：WiFi 保存/清除必须等固件 ack 或 LAN accepted response 与连接状态反馈后才显示结果；等待期间按钮显示 loading。连接硬件、保存 WiFi、清除 WiFi 和 settings 失败统一以气泡 callout 展示。
-- LAN 直连：HTTP 设备通过 `/api/v1/settings` 读取快照，并通过 `/api/v1/wifi-config`、`/api/v1/settings/log-level`、`/api/v1/settings/manual-charge`、`/api/v1/settings/advanced-power` 与 `/api/v1/settings/advanced-power/reset` 执行当前支持的写入；高风险写入必须有显式确认。
+- LAN 直连：HTTP 设备通过 `/api/v1/settings` 读取快照；WiFi / log level / advanced power 继续走 settings 写接口。手动充电偏好仍可持久化到 `/api/v1/settings/manual-charge`，但 owner-facing 运行态控制与原因解释必须走 `charge-control` 合同。
 - devd 控制面：通过 `mains-aegis-devd` 持有 USB CDC 或 LAN transport 后，Web App 可使用同一 Settings 表单；devd 仍然独占 USB CDC，但日志与 trace 通过新的 `trace` 模型呈现在 USB Console。
 - 日志：Settings 页提供 USB Console。USB Console 展示当前 Web Serial 或 devd transport 内 Web 可见的 CDC/HTTP trace：Web 发出的 `tx/request`、固件返回的 `rx/response`、structured `log`、`status`、`hello`、`error`，以及夹杂在 CDC 行流中的 raw / ignored 非协议行。控制台支持等级过滤、方向过滤、关键词搜索高亮、虚拟滚动、全屏查看，并允许用户切换 payload 自动折行或横向滚动。WiFi PSK 在 trace 中脱敏。完整 `defmt` monitor 仍由 devd 在 artifact identity 匹配后解码。
 
@@ -126,7 +133,7 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 - Protocol：`mains-aegis.cdc.v1`。
 - Frame types：`hello`、`status`、`log`、`request`、`response`、`error`、`wifi_config`。
 - Web 写命令必须带 `request_id`，固件返回同 ID 的 `response` 或 `error`。
-- Settings requests：`get_identity`、`get_status`、`get_settings`、`set_log_level`、`set_manual_charge_prefs`、`set_advanced_power`、`reset_advanced_power`。`set_advanced_power` 必须整块提交 11 个数字字段，不允许以 owner-facing 绝对电压或绝对电流值写入。
+- Settings / charge-control requests：`get_identity`、`get_status`、`get_settings`、`get_charge_control`、`preview_charge_control`、`control_manual_charge`、`set_log_level`、`set_manual_charge_prefs`、`set_advanced_power`、`reset_advanced_power`。`set_advanced_power` 必须整块提交 11 个数字字段，不允许以 owner-facing 绝对电压或绝对电流值写入。
 - WiFi config：`{"type":"wifi_config","request_id":"...","op":"set","ssid":"...","psk":"..."}` 或 `op:"clear"`。
 - Error envelope：`{ code, message, retryable, details }`，与 HTTP API 错误形状一致。
 

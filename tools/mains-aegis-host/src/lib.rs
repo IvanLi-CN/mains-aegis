@@ -614,6 +614,7 @@ struct DeviceSettingsState {
     wifi_ssid: Option<String>,
     log_level: String,
     manual_charge: ManualChargePrefs,
+    charge_capabilities: ChargeCapabilities,
     advanced_power: AdvancedPowerSettings,
     advanced_power_capabilities: AdvancedPowerCapabilities,
 }
@@ -623,6 +624,24 @@ struct ManualChargePrefs {
     target: String,
     speed: String,
     timer_h: u8,
+    power_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChargeCapabilities {
+    target_voltage_mv: u16,
+    normal_current_ma: u16,
+    dc_derated_current_ma: u16,
+    dcin_input_limit_ma: u16,
+    max_output_current_ma: u16,
+    usb_pd_high_power_min_voltage_mv: u16,
+    usb_pd_high_power_max_voltage_mv: u16,
+    usb_pd_high_power_min_power_mw: u32,
+    loop_start_max_power_without_confirm_w10: u32,
+    loop_stop_power_latched_w10: u32,
+    loop_telemetry_miss_limit: u8,
+    supported_power_paths: [String; 3],
+    auto_path_priority: [String; 3],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -798,6 +817,25 @@ struct ManualChargeRequest {
     target: String,
     speed: String,
     timer_h: u8,
+    power_path: Option<String>,
+    device_id: Option<String>,
+    lease_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManualChargePreviewRequest {
+    target: String,
+    current_ma: u16,
+    timer_minutes: u16,
+    power_path: Option<String>,
+    device_id: Option<String>,
+    lease_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ManualChargeControlRequest {
+    action: String,
+    confirm_loop: Option<bool>,
     device_id: Option<String>,
     lease_id: Option<String>,
 }
@@ -924,6 +962,10 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
         )
         .route("/api/v1/settings/log-level", post(set_log_level))
         .route("/api/v1/settings/manual-charge", post(set_manual_charge))
+        .route(
+            "/api/v1/control/manual-charge",
+            post(set_manual_charge_control),
+        )
         .route("/api/v1/settings/advanced-power", post(set_advanced_power))
         .route(
             "/api/v1/settings/advanced-power/reset",
@@ -943,6 +985,18 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
         .route("/api/v1/devices/{id}/binding", delete(unbind_device))
         .route("/api/v1/devices/{id}/identity", get(device_identity))
         .route("/api/v1/devices/{id}/status", get(device_status))
+        .route(
+            "/api/v1/devices/{id}/charge-control",
+            get(device_charge_control),
+        )
+        .route(
+            "/api/v1/devices/{id}/charge-control/preview",
+            post(preview_device_charge_control),
+        )
+        .route(
+            "/api/v1/devices/{id}/control/manual-charge",
+            post(device_manual_charge_control),
+        )
         .route(
             "/api/v1/devices/{id}/diag-snapshot",
             get(device_diag_snapshot),
@@ -1946,6 +2000,10 @@ async fn dispatch_ipc_request(
             let input: ManualChargeRequest = serde_json::from_value(params)?;
             json_result(set_manual_charge(State(state.clone()), Json(input)).await)
         }
+        "control.manual_charge" => {
+            let input: ManualChargeControlRequest = serde_json::from_value(params)?;
+            json_result(set_manual_charge_control(State(state.clone()), Json(input)).await)
+        }
         "settings.advanced_power.set" => {
             let input: AdvancedPowerRequest = serde_json::from_value(params)?;
             json_result(set_advanced_power(State(state.clone()), Json(input)).await)
@@ -2734,9 +2792,51 @@ fn parse_lan_http_json_response(
         .and_then(|code| code.parse::<u16>().ok())
         .unwrap_or(0);
     if !(200..300).contains(&status) {
-        return Err(HttpError::retryable(
-            "lan_http_status_failed",
-            format!("{method} {path} from {address} returned HTTP {status}"),
+        let status_code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+        let trimmed_body = body.trim();
+        if !trimmed_body.is_empty() {
+            if let Ok(value) = serde_json::from_str::<Value>(trimmed_body) {
+                if let Some(error) = value.get("error") {
+                    return Err(HttpError(
+                        ApiError {
+                            code: error
+                                .get("code")
+                                .and_then(Value::as_str)
+                                .unwrap_or("lan_http_status_failed")
+                                .to_string(),
+                            message: error
+                                .get("message")
+                                .and_then(Value::as_str)
+                                .unwrap_or("LAN HTTP request failed")
+                                .to_string(),
+                            retryable: error
+                                .get("retryable")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(status >= 500),
+                            details: error.get("details").cloned(),
+                        },
+                        status_code,
+                    ));
+                }
+                return Err(HttpError(
+                    ApiError {
+                        code: "lan_http_status_failed".to_string(),
+                        message: format!("{method} {path} from {address} returned HTTP {status}"),
+                        retryable: status >= 500,
+                        details: Some(value),
+                    },
+                    status_code,
+                ));
+            }
+        }
+        return Err(HttpError(
+            ApiError {
+                code: "lan_http_status_failed".to_string(),
+                message: format!("{method} {path} from {address} returned HTTP {status}"),
+                retryable: status >= 500,
+                details: None,
+            },
+            status_code,
         ));
     }
     if body.trim().is_empty() {
@@ -2752,6 +2852,7 @@ fn parse_lan_http_json_response(
 
 fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpError> {
     let advanced_power_capabilities = value.get("advanced_power_capabilities");
+    let charge_capabilities = value.get("charge_capabilities");
     let rated_vout_mv = advanced_power_capabilities
         .and_then(|snapshot| snapshot.get("rated_vout_mv"))
         .and_then(Value::as_u64)
@@ -2834,7 +2935,15 @@ fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpErr
                 .and_then(Value::as_u64)
                 .and_then(|value| u8::try_from(value).ok())
                 .unwrap_or(2),
+            power_path: manual_charge
+                .get("power_path")
+                .and_then(Value::as_str)
+                .unwrap_or("auto")
+                .to_string(),
         },
+        charge_capabilities: charge_capabilities
+            .and_then(|snapshot| serde_json::from_value(snapshot.clone()).ok())
+            .unwrap_or_else(default_charge_capabilities),
         advanced_power: AdvancedPowerSettings {
             standby_drop_mv: advanced_power
                 .and_then(|snapshot| snapshot.get("standby_drop_mv"))
@@ -3009,6 +3118,13 @@ fn find_logical_device_id_for_identity(
         .into_iter()
         .find(|device| device_matches_identity_id(device, identity_device_id))
         .map(|device| device.id.clone())
+}
+
+fn resolve_device_record_id(state: &DevdState, target_device_id: &str) -> Option<String> {
+    if state.devices.contains_key(target_device_id) {
+        return Some(target_device_id.to_string());
+    }
+    find_logical_device_id_for_identity(state, target_device_id)
 }
 
 fn transport_preference(transport: &DeviceTransport) -> u8 {
@@ -5015,6 +5131,10 @@ async fn set_manual_charge(
         target: input.target.clone(),
         speed: input.speed.clone(),
         timer_h: input.timer_h,
+        power_path: input
+            .power_path
+            .clone()
+            .unwrap_or_else(|| "auto".to_string()),
     };
     let response = send_settings_command(
         &state,
@@ -5025,7 +5145,8 @@ async fn set_manual_charge(
             body: Some(json!({
                 "target": input.target,
                 "speed": input.speed,
-                "timer_h": input.timer_h
+                "timer_h": input.timer_h,
+                "power_path": prefs.power_path.clone()
             })),
         },
         json!({
@@ -5033,13 +5154,351 @@ async fn set_manual_charge(
             "op": "set_manual_charge_prefs",
             "target": input.target,
             "speed": input.speed,
-            "timer_h": input.timer_h
+            "timer_h": input.timer_h,
+            "power_path": prefs.power_path.clone()
         }),
         |settings| settings.manual_charge = prefs,
         "manual_charge",
         "Manual charge preferences updated through mains-aegis-devd",
     )
     .await?;
+    Ok(Json(response))
+}
+
+async fn set_manual_charge_control(
+    State(state): State<AppState>,
+    Json(input): Json<ManualChargeControlRequest>,
+) -> Result<Json<Value>, HttpError> {
+    let target = resolve_settings_control_target(
+        &state,
+        input.device_id.as_deref(),
+        input.lease_id.as_deref(),
+    )?;
+    let action = normalize_manual_charge_action(&input.action)?;
+    let confirm_loop = input.confirm_loop.unwrap_or(false);
+    let log_message = match action {
+        "start" => "Manual charge start requested through mains-aegis-devd",
+        "stop" => "Manual charge stop requested through mains-aegis-devd",
+        _ => "Manual charge control requested through mains-aegis-devd",
+    };
+    let response = match &target {
+        SettingsControlTarget::Usb { device_id, .. } => {
+            let response = match send_settings_frame(
+                &state,
+                &target,
+                json!({
+                    "type": "request",
+                    "op": "control_manual_charge",
+                    "action": action,
+                    "confirm_loop": confirm_loop
+                }),
+                |_| {},
+                "manual_charge",
+                log_message,
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(error) if should_fallback_charge_control_read(&error) => {
+                    let (lan_address, _, _) = device_charge_control_context(&state, device_id)?;
+                    let address = lan_address.ok_or(error)?;
+                    send_lan_json_request(
+                        &state,
+                        device_id,
+                        &address,
+                        LanSettingsRequest {
+                            method: "POST",
+                            path: "/api/v1/control/manual-charge",
+                            body: Some(json!({
+                                "action": action,
+                                "confirm_loop": confirm_loop
+                            })),
+                        },
+                        "manual_charge",
+                        log_message,
+                    )
+                    .await?
+                }
+                Err(error) => return Err(error),
+            };
+            let (lan_address, cached_status, settings) =
+                device_charge_control_context(&state, device_id)?;
+            let response = if is_charge_control_detail_payload(&response) {
+                response
+            } else {
+                load_compatible_charge_control_detail(
+                    &state,
+                    device_id,
+                    lan_address.as_deref(),
+                    cached_status.as_ref(),
+                    &settings,
+                    response.get("charge_control"),
+                    None,
+                )
+                .await?
+            };
+            merge_charge_control_into_cached_status(&state, device_id, &response);
+            response
+        }
+        SettingsControlTarget::Lan { device_id, address } => {
+            let response = send_lan_json_request(
+                &state,
+                device_id,
+                address,
+                LanSettingsRequest {
+                    method: "POST",
+                    path: "/api/v1/control/manual-charge",
+                    body: Some(json!({
+                        "action": action,
+                        "confirm_loop": confirm_loop
+                    })),
+                },
+                "manual_charge",
+                log_message,
+            )
+            .await?;
+            let (_, cached_status, settings) = device_charge_control_context(&state, device_id)?;
+            let response = if is_charge_control_detail_payload(&response) {
+                response
+            } else {
+                load_compatible_charge_control_detail(
+                    &state,
+                    device_id,
+                    Some(address.as_str()),
+                    cached_status.as_ref(),
+                    &settings,
+                    response.get("charge_control"),
+                    None,
+                )
+                .await?
+            };
+            merge_charge_control_into_cached_status(&state, device_id, &response);
+            response
+        }
+    };
+    Ok(Json(response))
+}
+
+async fn preview_device_charge_control(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<ManualChargePreviewRequest>,
+) -> Result<Json<Value>, HttpError> {
+    let target = resolve_settings_control_target(&state, Some(&id), input.lease_id.as_deref())?;
+    let power_path = input
+        .power_path
+        .clone()
+        .unwrap_or_else(|| "auto".to_string());
+    let response = match &target {
+        SettingsControlTarget::Usb { device_id, .. } => {
+            match send_settings_frame(
+                &state,
+                &target,
+                json!({
+                    "type": "request",
+                    "op": "preview_charge_control",
+                    "target": input.target,
+                    "current_ma": input.current_ma,
+                    "timer_minutes": input.timer_minutes,
+                    "power_path": power_path,
+                }),
+                |_| {},
+                "manual_charge",
+                "Manual charge preview requested through mains-aegis-devd",
+            )
+            .await
+            {
+                Ok(response) if is_charge_control_detail_payload(&response) => response,
+                Ok(response) => {
+                    let (lan_address, cached_status, settings) =
+                        device_charge_control_context(&state, device_id)?;
+                    load_compatible_charge_control_detail(
+                        &state,
+                        device_id,
+                        lan_address.as_deref(),
+                        cached_status.as_ref(),
+                        &settings,
+                        response.get("charge_control"),
+                        Some(&input),
+                    )
+                    .await?
+                }
+                Err(error) if should_fallback_charge_control_read(&error) => {
+                    let (lan_address, cached_status, settings) =
+                        device_charge_control_context(&state, device_id)?;
+                    load_compatible_charge_control_detail(
+                        &state,
+                        device_id,
+                        lan_address.as_deref(),
+                        cached_status.as_ref(),
+                        &settings,
+                        None,
+                        Some(&input),
+                    )
+                    .await?
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        SettingsControlTarget::Lan { device_id, address } => {
+            match send_lan_json_request(
+                &state,
+                device_id,
+                address,
+                LanSettingsRequest {
+                    method: "POST",
+                    path: "/api/v1/charge-control/preview",
+                    body: Some(json!({
+                        "target": input.target,
+                        "current_ma": input.current_ma,
+                        "timer_minutes": input.timer_minutes,
+                        "power_path": power_path,
+                    })),
+                },
+                "manual_charge",
+                "Manual charge preview requested through mains-aegis-devd",
+            )
+            .await
+            {
+                Ok(response) if is_charge_control_detail_payload(&response) => response,
+                Ok(response) => {
+                    let (_, cached_status, settings) =
+                        device_charge_control_context(&state, device_id)?;
+                    load_compatible_charge_control_detail(
+                        &state,
+                        device_id,
+                        Some(address.as_str()),
+                        cached_status.as_ref(),
+                        &settings,
+                        response.get("charge_control"),
+                        Some(&input),
+                    )
+                    .await?
+                }
+                Err(error) if should_fallback_charge_control_read(&error) => {
+                    let (_, cached_status, settings) =
+                        device_charge_control_context(&state, device_id)?;
+                    load_compatible_charge_control_detail(
+                        &state,
+                        device_id,
+                        Some(address.as_str()),
+                        cached_status.as_ref(),
+                        &settings,
+                        None,
+                        Some(&input),
+                    )
+                    .await?
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    };
+    Ok(Json(response))
+}
+
+async fn device_manual_charge_control(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<ManualChargeControlRequest>,
+) -> Result<Json<Value>, HttpError> {
+    let target = resolve_settings_control_target(&state, Some(&id), input.lease_id.as_deref())?;
+    let action = normalize_manual_charge_action(&input.action)?;
+    let confirm_loop = input.confirm_loop.unwrap_or(false);
+    let response = match &target {
+        SettingsControlTarget::Usb { device_id, .. } => {
+            let response = match send_settings_frame(
+                &state,
+                &target,
+                json!({
+                    "type": "request",
+                    "op": "control_manual_charge",
+                    "action": action,
+                    "confirm_loop": confirm_loop
+                }),
+                |_| {},
+                "manual_charge",
+                "Manual charge control requested through mains-aegis-devd",
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(error) if should_fallback_charge_control_read(&error) => {
+                    let (lan_address, _, _) = device_charge_control_context(&state, device_id)?;
+                    let address = lan_address.ok_or(error)?;
+                    send_lan_json_request(
+                        &state,
+                        device_id,
+                        &address,
+                        LanSettingsRequest {
+                            method: "POST",
+                            path: "/api/v1/control/manual-charge",
+                            body: Some(json!({
+                                "action": action,
+                                "confirm_loop": confirm_loop
+                            })),
+                        },
+                        "manual_charge",
+                        "Manual charge control requested through mains-aegis-devd",
+                    )
+                    .await?
+                }
+                Err(error) => return Err(error),
+            };
+            let (lan_address, cached_status, settings) =
+                device_charge_control_context(&state, device_id)?;
+            let response = if is_charge_control_detail_payload(&response) {
+                response
+            } else {
+                load_compatible_charge_control_detail(
+                    &state,
+                    device_id,
+                    lan_address.as_deref(),
+                    cached_status.as_ref(),
+                    &settings,
+                    response.get("charge_control"),
+                    None,
+                )
+                .await?
+            };
+            merge_charge_control_into_cached_status(&state, device_id, &response);
+            response
+        }
+        SettingsControlTarget::Lan { device_id, address } => {
+            let response = send_lan_json_request(
+                &state,
+                device_id,
+                address,
+                LanSettingsRequest {
+                    method: "POST",
+                    path: "/api/v1/control/manual-charge",
+                    body: Some(json!({
+                        "action": action,
+                        "confirm_loop": confirm_loop
+                    })),
+                },
+                "manual_charge",
+                "Manual charge control requested through mains-aegis-devd",
+            )
+            .await?;
+            let (_, cached_status, settings) = device_charge_control_context(&state, device_id)?;
+            let response = if is_charge_control_detail_payload(&response) {
+                response
+            } else {
+                load_compatible_charge_control_detail(
+                    &state,
+                    device_id,
+                    Some(address.as_str()),
+                    cached_status.as_ref(),
+                    &settings,
+                    response.get("charge_control"),
+                    None,
+                )
+                .await?
+            };
+            merge_charge_control_into_cached_status(&state, device_id, &response);
+            response
+        }
+    };
     Ok(Json(response))
 }
 
@@ -5270,6 +5729,98 @@ async fn device_settings(
     Ok(Json(settings_snapshot(&settings)))
 }
 
+async fn device_charge_control(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    let record_id = {
+        let guard = state.inner.lock().expect("state lock");
+        resolve_device_record_id(&guard, &id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?
+    };
+    let (transport, port_path, lan_address, monitor_command_tx, cached_status, settings) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&record_id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (
+            device.transport.clone(),
+            device.port_path.clone(),
+            device.lan_address.clone().or_else(|| {
+                device
+                    .identity
+                    .as_ref()
+                    .and_then(|identity| identity.get("network"))
+                    .and_then(|network| network.get("ipv4"))
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            }),
+            guard
+                .monitors
+                .get(&record_id)
+                .and_then(|monitor| monitor.command_tx.clone()),
+            device.status.clone(),
+            device.settings.clone(),
+        )
+    };
+    let detail = match transport {
+        DeviceTransport::NativeSerial => {
+            let port_path = port_path.ok_or_else(|| {
+                HttpError::retryable(
+                    "device_port_missing",
+                    "native serial device has no port path",
+                )
+            })?;
+            match read_device_charge_control_async(&state, &id, port_path, monitor_command_tx).await
+            {
+                Ok(detail) => detail,
+                Err(error) if should_fallback_charge_control_read(&error) => {
+                    load_compatible_charge_control_detail(
+                        &state,
+                        &record_id,
+                        lan_address.as_deref(),
+                        cached_status.as_ref(),
+                        &settings,
+                        None,
+                        None,
+                    )
+                    .await?
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        DeviceTransport::Lan => {
+            let address = lan_address.ok_or_else(|| {
+                HttpError::retryable(
+                    "device_lan_address_missing",
+                    "LAN device has no reachable HTTP address",
+                )
+            })?;
+            match lan_http_json(&address, "GET", "/api/v1/charge-control", None).await {
+                Ok(detail) => detail,
+                Err(error) if should_fallback_charge_control_read(&error) => {
+                    load_compatible_charge_control_detail(
+                        &state,
+                        &record_id,
+                        Some(address.as_str()),
+                        cached_status.as_ref(),
+                        &settings,
+                        None,
+                        None,
+                    )
+                    .await?
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        DeviceTransport::Mock => mock_charge_control_detail(cached_status.as_ref(), &settings),
+    };
+    merge_charge_control_into_cached_status(&state, &record_id, &detail);
+    Ok(Json(detail))
+}
+
 async fn devd_compat_settings(
     Query(query): Query<WebLeaseQuery>,
     State(state): State<AppState>,
@@ -5287,8 +5838,695 @@ fn settings_snapshot(settings: &DeviceSettingsState) -> Value {
         },
         "log_level": settings.log_level.clone(),
         "manual_charge": settings.manual_charge.clone(),
+        "charge_capabilities": settings.charge_capabilities.clone(),
         "advanced_power": settings.advanced_power.clone(),
         "advanced_power_capabilities": settings.advanced_power_capabilities.clone(),
+    })
+}
+
+const CHARGE_CONTROL_LOOP_GUARDS: [&str; 3] = [
+    "loop_start_low_output_gate",
+    "loop_telemetry_miss_latch",
+    "loop_stop_high_output_latch",
+];
+
+fn is_charge_control_detail_payload(value: &Value) -> bool {
+    value.get("summary").is_some()
+        && value.get("readiness").is_some()
+        && value.get("telemetry").is_some()
+        && value.get("evidence").is_some()
+}
+
+fn manual_charge_current_ma_from_speed(speed: &str) -> Option<u16> {
+    match speed {
+        "ma_100" => Some(100),
+        "ma_500" => Some(500),
+        "ma_1000" => Some(1_000),
+        _ => None,
+    }
+}
+
+fn device_charge_control_context(
+    state: &AppState,
+    device_id: &str,
+) -> Result<(Option<String>, Option<Value>, DeviceSettingsState), HttpError> {
+    let guard = state.inner.lock().expect("state lock");
+    let device = guard
+        .devices
+        .get(device_id)
+        .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+    Ok((
+        device.lan_address.clone().or_else(|| {
+            device
+                .identity
+                .as_ref()
+                .and_then(|identity| identity.get("network"))
+                .and_then(|network| network.get("ipv4"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        }),
+        device.status.clone(),
+        device.settings.clone(),
+    ))
+}
+
+async fn load_charge_control_compat_status(
+    state: &AppState,
+    device_id: &str,
+    lan_address: Option<&str>,
+    cached_status: Option<&Value>,
+) -> Result<Option<Value>, HttpError> {
+    if let Some(address) = lan_address {
+        match lan_http_json(address, "GET", "/api/v1/status", None).await {
+            Ok(status) => {
+                update_device_status_snapshot(state, device_id, status.clone());
+                return Ok(Some(status));
+            }
+            Err(error) => {
+                if let Some(cached_status) = cached_status {
+                    tracing::debug!(
+                        "charge-control compat using cached status for {device_id}: {error}"
+                    );
+                    return Ok(Some(cached_status.clone()));
+                }
+                return Err(error);
+            }
+        }
+    }
+    if let Some(cached_status) = cached_status.cloned() {
+        return Ok(Some(cached_status));
+    }
+    let trace_status = {
+        let guard = state.inner.lock().expect("state lock");
+        guard.devices.get(device_id).and_then(|device| {
+            device.trace.iter().rev().find_map(|entry| {
+                if entry.kind != "frame" || entry.frame_type.as_deref() != Some("response") {
+                    return None;
+                }
+                let payload = serde_json::from_str::<Value>(&entry.payload).ok()?;
+                let result = payload.get("result")?;
+                if result.get("mode").is_some()
+                    && result.get("input").is_some()
+                    && result.get("charger").is_some()
+                    && result.get("battery").is_some()
+                    && result.get("output").is_some()
+                {
+                    Some(result.clone())
+                } else {
+                    None
+                }
+            })
+        })
+    };
+    if let Some(status) = trace_status {
+        update_device_status_snapshot(state, device_id, status.clone());
+        return Ok(Some(status));
+    }
+    Ok(cached_status.cloned())
+}
+
+fn legacy_charge_control_block(
+    legacy_reason: Option<&str>,
+    requested_path: &str,
+    bound_path: Option<&str>,
+    summary: Option<&Value>,
+    status: Option<&Value>,
+) -> Option<(String, String)> {
+    let battery = status.and_then(|snapshot| snapshot.get("battery"));
+    let charger = status.and_then(|snapshot| snapshot.get("charger"));
+    let battery_state = battery
+        .and_then(|snapshot| snapshot.get("state"))
+        .and_then(Value::as_str);
+    let no_battery = battery
+        .and_then(|snapshot| snapshot.get("no_battery"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let pack_mv_present = battery
+        .and_then(|snapshot| snapshot.get("pack_mv"))
+        .and_then(Value::as_i64)
+        .is_some();
+    let vbat_present = charger
+        .and_then(|snapshot| snapshot.get("vbat_present"))
+        .and_then(Value::as_bool);
+    let charge_fet_on = battery
+        .and_then(|snapshot| snapshot.get("charge_fet_on"))
+        .and_then(Value::as_bool);
+    let issue_detail = battery
+        .and_then(|snapshot| snapshot.get("issue_detail"))
+        .and_then(Value::as_str);
+    let charger_detail_status = charger
+        .and_then(|snapshot| snapshot.get("detail_status"))
+        .and_then(Value::as_str);
+
+    let mapped = match legacy_reason {
+        Some("manual_charge_blocked_battery_full") => Some((
+            "battery_full".to_string(),
+            "manual charge is blocked because the battery is already full".to_string(),
+        )),
+        Some("manual_charge_blocked_target_reached") => Some((
+            "target_reached".to_string(),
+            "manual charge is blocked because the requested target is already reached".to_string(),
+        )),
+        Some("manual_charge_path_unavailable") => Some((
+            "path_unavailable".to_string(),
+            "the requested manual charge power path is not available".to_string(),
+        )),
+        Some("manual_charge_path_not_qualified") => Some((
+            "path_not_qualified".to_string(),
+            "the requested USB-C path does not meet the required PD contract".to_string(),
+        )),
+        Some("manual_charge_blocked_no_input") => Some((
+            "no_input".to_string(),
+            "manual charge is blocked because no eligible input source is available".to_string(),
+        )),
+        Some("manual_charge_blocked_temperature") => Some((
+            "temperature_blocked".to_string(),
+            "manual charge is blocked by charger temperature protection".to_string(),
+        )),
+        Some("manual_charge_blocked_output_overload") => Some((
+            "output_overload".to_string(),
+            "manual charge is blocked by output overload protection".to_string(),
+        )),
+        Some("manual_charge_blocked_charger_runtime") => Some((
+            "charger_runtime_unavailable".to_string(),
+            "manual charge is blocked because charger runtime telemetry is unavailable".to_string(),
+        )),
+        Some("manual_charge_blocked_no_bms") => {
+            if no_battery
+                || matches!(battery_state, Some("missing"))
+                || matches!(vbat_present, Some(false))
+                || !pack_mv_present
+            {
+                Some((
+                    "battery_telemetry_unready".to_string(),
+                    "manual charge is blocked because battery telemetry is not ready".to_string(),
+                ))
+            } else if issue_detail == Some("xchg_blocked")
+                || (charge_fet_on == Some(false) && charger_detail_status == Some("LOCK"))
+            {
+                Some((
+                    "blocked_unknown".to_string(),
+                    "manual charge is blocked because the battery charge path is locked"
+                        .to_string(),
+                ))
+            } else {
+                Some((
+                    "blocked_unknown".to_string(),
+                    "manual charge is blocked by direct battery evidence that does not yet map to a public code".to_string(),
+                ))
+            }
+        }
+        Some("loop_confirmation_required") => Some((
+            "loop_confirmation_required".to_string(),
+            "USB-C path requires loopback confirmation before manual charge can start".to_string(),
+        )),
+        Some(reason) => Some((
+            "blocked_unknown".to_string(),
+            format!("manual charge is blocked by direct device evidence ({reason})"),
+        )),
+        None => None,
+    };
+    if mapped.is_some() {
+        return mapped;
+    }
+    if requested_path != "auto" && bound_path.is_none() {
+        return Some((
+            "path_unavailable".to_string(),
+            "the requested manual charge power path is not available".to_string(),
+        ));
+    }
+    if summary
+        .and_then(|snapshot| snapshot.get("start_state"))
+        .and_then(Value::as_str)
+        == Some("blocked")
+    {
+        return Some((
+            "blocked_unknown".to_string(),
+            "manual charge is blocked by direct device evidence that does not yet map to a public code".to_string(),
+        ));
+    }
+    None
+}
+
+fn legacy_charge_control_detail_from_status(
+    status: Option<&Value>,
+    settings: &DeviceSettingsState,
+    summary_override: Option<&Value>,
+    preview_request: Option<&ManualChargePreviewRequest>,
+) -> Value {
+    let summary =
+        summary_override.or_else(|| status.and_then(|snapshot| snapshot.get("charge_control")));
+    let requested_path = preview_request
+        .and_then(|request| request.power_path.as_deref())
+        .or_else(|| {
+            summary
+                .and_then(|snapshot| snapshot.get("requested_power_path"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or(settings.manual_charge.power_path.as_str())
+        .to_string();
+    let input = status.and_then(|snapshot| snapshot.get("input"));
+    let charger = status.and_then(|snapshot| snapshot.get("charger"));
+    let battery = status.and_then(|snapshot| snapshot.get("battery"));
+    let input_source = input
+        .and_then(|snapshot| snapshot.get("source"))
+        .and_then(Value::as_str);
+    let mains_present = input
+        .and_then(|snapshot| snapshot.get("mains_present"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let summary_bound = summary
+        .and_then(|snapshot| snapshot.get("bound_power_path"))
+        .and_then(Value::as_str);
+    let summary_binding_reason = summary
+        .and_then(|snapshot| snapshot.get("binding_reason"))
+        .and_then(Value::as_str);
+    let (bound_path, binding_reason) = match requested_path.as_str() {
+        "auto" => {
+            match summary_bound.or(input_source.filter(|value| matches!(*value, "dcin" | "usbc"))) {
+                Some(bound) => (
+                    Some(bound.to_string()),
+                    summary_binding_reason
+                        .map(ToOwned::to_owned)
+                        .or_else(|| Some("legacy_current_input".to_string())),
+                ),
+                None => (None, summary_binding_reason.map(ToOwned::to_owned)),
+            }
+        }
+        "dcin" => {
+            if input_source == Some("dcin") || mains_present {
+                (
+                    Some("dcin".to_string()),
+                    Some(
+                        if input_source == Some("dcin") {
+                            "legacy_current_input"
+                        } else {
+                            "legacy_dcin_present"
+                        }
+                        .to_string(),
+                    ),
+                )
+            } else {
+                (None, None)
+            }
+        }
+        "usbc" => {
+            if input_source == Some("usbc") || summary_bound == Some("usbc") {
+                (
+                    Some("usbc".to_string()),
+                    Some(
+                        if input_source == Some("usbc") {
+                            "legacy_current_input"
+                        } else {
+                            "legacy_summary"
+                        }
+                        .to_string(),
+                    ),
+                )
+            } else {
+                (None, None)
+            }
+        }
+        other => (Some(other.to_string()), None),
+    };
+    let output_power_w10 = summary
+        .and_then(|snapshot| snapshot.get("output_power_w10"))
+        .and_then(Value::as_u64);
+    let power_telemetry_fresh = summary
+        .and_then(|snapshot| snapshot.get("power_telemetry_fresh"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let loop_confirmation_required = summary
+        .and_then(|snapshot| snapshot.get("loop_confirmation_required"))
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            bound_path.as_deref() == Some("usbc")
+                && (!power_telemetry_fresh
+                    || output_power_w10.is_none()
+                    || output_power_w10.is_some_and(|value| {
+                        value
+                            >= u64::from(
+                                settings
+                                    .charge_capabilities
+                                    .loop_start_max_power_without_confirm_w10,
+                            )
+                    }))
+        });
+    let manual_active = summary
+        .and_then(|snapshot| snapshot.get("manual_active"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let legacy_reason = summary
+        .and_then(|snapshot| snapshot.get("start_block_reason"))
+        .and_then(Value::as_str);
+    let block = if manual_active {
+        None
+    } else if loop_confirmation_required {
+        Some((
+            "loop_confirmation_required".to_string(),
+            "USB-C path requires loopback confirmation before manual charge can start".to_string(),
+        ))
+    } else {
+        legacy_charge_control_block(
+            legacy_reason,
+            requested_path.as_str(),
+            bound_path.as_deref(),
+            summary,
+            status,
+        )
+    };
+    let readiness_state = if manual_active {
+        "running"
+    } else if loop_confirmation_required {
+        "confirm_required"
+    } else if block.is_some() {
+        "blocked"
+    } else {
+        "ready"
+    };
+    let readiness_action = if manual_active {
+        "stop"
+    } else if loop_confirmation_required {
+        "confirm_loop"
+    } else if block.is_some() {
+        "none"
+    } else {
+        "start"
+    };
+    let policy_target_ichg_ma = preview_request
+        .map(|request| Value::from(u64::from(request.current_ma)))
+        .or_else(|| {
+            charger
+                .and_then(|snapshot| snapshot.get("policy_target_ichg_ma"))
+                .cloned()
+        })
+        .unwrap_or_else(|| {
+            manual_charge_current_ma_from_speed(settings.manual_charge.speed.as_str())
+                .map(|value| Value::from(u64::from(value)))
+                .unwrap_or(Value::Null)
+        });
+    let input_limit_summary = match bound_path.as_deref().or(input_source) {
+        Some("dcin") => Some(format!(
+            "DCIN <= {} mA",
+            settings.charge_capabilities.dcin_input_limit_ma
+        )),
+        Some("usbc") => Some(format!(
+            "USB-C PD gate {}-{} V / {} W",
+            settings
+                .charge_capabilities
+                .usb_pd_high_power_min_voltage_mv
+                / 1000,
+            settings
+                .charge_capabilities
+                .usb_pd_high_power_max_voltage_mv
+                / 1000,
+            settings.charge_capabilities.usb_pd_high_power_min_power_mw / 1000
+        )),
+        _ => None,
+    };
+    let output_limit_summary = Some(format!(
+        "Max output {} mA",
+        settings.charge_capabilities.max_output_current_ma
+    ));
+    let mut evidence = Vec::with_capacity(8);
+    if let Some(issue_detail) = battery
+        .and_then(|snapshot| snapshot.get("issue_detail"))
+        .cloned()
+        .filter(|value| !value.is_null())
+    {
+        evidence.push(json!({
+            "source": "battery.issue_detail",
+            "code": "issue_detail",
+            "label": "Battery issue",
+            "value": issue_detail,
+        }));
+    }
+    if let Some(charge_fet_on) = battery
+        .and_then(|snapshot| snapshot.get("charge_fet_on"))
+        .cloned()
+    {
+        evidence.push(json!({
+            "source": "battery.charge_fet_on",
+            "code": "charge_fet_on",
+            "label": "Charge FET",
+            "value": charge_fet_on,
+        }));
+    }
+    if let Some(detail_status) = charger
+        .and_then(|snapshot| snapshot.get("detail_status"))
+        .cloned()
+        .filter(|value| !value.is_null())
+    {
+        evidence.push(json!({
+            "source": "charger.detail_status",
+            "code": "detail_status",
+            "label": "Charger status",
+            "value": detail_status,
+        }));
+    }
+    if let Some(vbat_present) = charger
+        .and_then(|snapshot| snapshot.get("vbat_present"))
+        .cloned()
+    {
+        evidence.push(json!({
+            "source": "charger.vbat_present",
+            "code": "vbat_present",
+            "label": "Battery present",
+            "value": vbat_present,
+        }));
+    }
+    if let Some(no_battery) = battery
+        .and_then(|snapshot| snapshot.get("no_battery"))
+        .cloned()
+    {
+        evidence.push(json!({
+            "source": "battery.no_battery",
+            "code": "no_battery",
+            "label": "No battery flag",
+            "value": no_battery,
+        }));
+    }
+    if let Some(start_block_reason) = summary
+        .and_then(|snapshot| snapshot.get("start_block_reason"))
+        .cloned()
+        .filter(|value| !value.is_null())
+    {
+        evidence.push(json!({
+            "source": "charge_control.start_block_reason",
+            "code": "start_block_reason",
+            "label": "Firmware start block",
+            "value": start_block_reason,
+        }));
+    }
+    if let Some(output_power_w10) = output_power_w10 {
+        evidence.push(json!({
+            "source": "charge_control.output_power_w10",
+            "code": "output_power_w10",
+            "label": "Output power",
+            "value": output_power_w10,
+        }));
+    }
+    evidence.push(json!({
+        "source": "charge_control.power_telemetry_fresh",
+        "code": "power_telemetry_fresh",
+        "label": "Power telemetry fresh",
+        "value": power_telemetry_fresh,
+    }));
+
+    json!({
+        "summary": {
+            "mode": summary
+                .and_then(|snapshot| snapshot.get("mode"))
+                .and_then(Value::as_str)
+                .unwrap_or("auto"),
+            "manual_active": manual_active,
+            "takeover": summary
+                .and_then(|snapshot| snapshot.get("takeover"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "stop_inhibit": summary
+                .and_then(|snapshot| snapshot.get("stop_inhibit"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "last_stop_reason": summary
+                .and_then(|snapshot| snapshot.get("last_stop_reason"))
+                .cloned()
+                .unwrap_or_else(|| json!("none")),
+            "remaining_minutes": summary
+                .and_then(|snapshot| snapshot.get("remaining_minutes"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "requested_power_path": requested_path,
+            "bound_power_path": bound_path,
+            "binding_reason": binding_reason,
+            "start_state": readiness_state,
+            "start_block_reason": block.as_ref().map(|(code, _)| code.clone()),
+            "loop_confirmation_required": loop_confirmation_required,
+            "loop_override_active": summary
+                .and_then(|snapshot| snapshot.get("loop_override_active"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "output_power_w10": output_power_w10,
+            "power_telemetry_fresh": power_telemetry_fresh,
+        },
+        "readiness": {
+            "state": readiness_state,
+            "action": readiness_action,
+            "planned_path": {
+                "requested": preview_request
+                    .and_then(|request| request.power_path.clone())
+                    .unwrap_or(requested_path.clone()),
+                "bound": bound_path,
+                "binding_reason": binding_reason,
+            },
+            "block": block.as_ref().map(|(code, message)| json!({
+                "code": code,
+                "message": message,
+            })),
+            "loop_override": {
+                "required": loop_confirmation_required,
+                "active": summary
+                    .and_then(|snapshot| snapshot.get("loop_override_active"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                "allowed_guards": CHARGE_CONTROL_LOOP_GUARDS,
+            },
+        },
+        "telemetry": {
+            "input_source": input_source.unwrap_or("unknown"),
+            "policy_target_ichg_ma": policy_target_ichg_ma,
+            "ibat_actual_ma": charger
+                .and_then(|snapshot| snapshot.get("ibat_ma"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "target_voltage_mv": settings.charge_capabilities.target_voltage_mv,
+            "iindpm_ma": Value::Null,
+            "vindpm_mv": Value::Null,
+            "output_power_w10": output_power_w10,
+            "power_telemetry_fresh": power_telemetry_fresh,
+            "input_limit_summary": input_limit_summary,
+            "output_limit_summary": output_limit_summary,
+        },
+        "evidence": evidence,
+    })
+}
+
+async fn load_compatible_charge_control_detail(
+    state: &AppState,
+    device_id: &str,
+    lan_address: Option<&str>,
+    cached_status: Option<&Value>,
+    settings: &DeviceSettingsState,
+    summary_override: Option<&Value>,
+    preview_request: Option<&ManualChargePreviewRequest>,
+) -> Result<Value, HttpError> {
+    let status =
+        load_charge_control_compat_status(state, device_id, lan_address, cached_status).await?;
+    if status.is_none() && summary_override.is_none() {
+        return Err(HttpError::retryable(
+            "charge_control_compat_unavailable",
+            "charge-control detail is unavailable because neither a fresh nor cached status snapshot exists",
+        ));
+    }
+    Ok(legacy_charge_control_detail_from_status(
+        status.as_ref(),
+        settings,
+        summary_override,
+        preview_request,
+    ))
+}
+
+fn should_fallback_charge_control_read(error: &HttpError) -> bool {
+    matches!(
+        error.0.code.as_str(),
+        "not_found"
+            | "unsupported_operation"
+            | "native_cdc_timeout"
+            | "native_charge_control_missing"
+            | "native_serial_open_failed"
+            | "native_monitor_command_timeout"
+            | "native_monitor_command_disconnected"
+    )
+}
+
+fn mock_charge_control_detail(
+    cached_status: Option<&Value>,
+    settings: &DeviceSettingsState,
+) -> Value {
+    let summary = cached_status
+        .and_then(|status| status.get("charge_control").cloned())
+        .unwrap_or_else(|| {
+            json!({
+                "mode": "auto",
+                "manual_active": false,
+                "takeover": false,
+                "stop_inhibit": false,
+                "last_stop_reason": "none",
+                "remaining_minutes": null,
+                "requested_power_path": settings.manual_charge.power_path,
+                "bound_power_path": null,
+                "binding_reason": null,
+                "start_state": "ready",
+                "start_block_reason": null,
+                "loop_confirmation_required": false,
+                "loop_override_active": false,
+                "output_power_w10": 0,
+                "power_telemetry_fresh": true
+            })
+        });
+    json!({
+        "summary": summary,
+        "readiness": {
+            "state": "ready",
+            "action": "start",
+            "planned_path": {
+                "requested": settings.manual_charge.power_path,
+                "bound": settings.manual_charge.power_path,
+                "binding_reason": "mock"
+            },
+            "block": null,
+            "loop_override": {
+                "required": false,
+                "active": false,
+                "allowed_guards": [
+                    "loop_start_low_output_gate",
+                    "loop_telemetry_miss_latch",
+                    "loop_stop_high_output_latch"
+                ]
+            }
+        },
+        "telemetry": {
+            "input_source": cached_status
+                .and_then(|status| status.get("input"))
+                .and_then(|input| input.get("source"))
+                .and_then(Value::as_str)
+                .unwrap_or("dcin"),
+            "policy_target_ichg_ma": cached_status
+                .and_then(|status| status.get("charger"))
+                .and_then(|charger| charger.get("policy_target_ichg_ma"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "ibat_actual_ma": cached_status
+                .and_then(|status| status.get("charger"))
+                .and_then(|charger| charger.get("ibat_ma"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "target_voltage_mv": settings
+                .charge_capabilities
+                .target_voltage_mv,
+            "iindpm_ma": Value::Null,
+            "vindpm_mv": Value::Null,
+            "output_power_w10": cached_status
+                .and_then(|status| status.get("charge_control"))
+                .and_then(|summary| summary.get("output_power_w10"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "power_telemetry_fresh": true,
+            "input_limit_summary": null,
+            "output_limit_summary": null
+        },
+        "evidence": []
     })
 }
 
@@ -5448,16 +6686,41 @@ async fn devd_compat_session(
         "logs": tail(&device.logs, query.logs_limit.unwrap_or(200).min(500)),
         "trace": tail(&device.trace, trace_limit),
         "transports": grouped_trace_by_transport(&device.trace, trace_limit),
-        "settings": {
-            "wifi": {
-                "configured": device.settings.wifi_configured.unwrap_or(false),
-                "ssid": device.settings.wifi_ssid,
-            },
-            "log_level": device.settings.log_level,
-            "manual_charge": device.settings.manual_charge,
-        },
+        "settings": settings_snapshot(&device.settings),
         "log_decode": device.log_decode
     })))
+}
+
+fn normalize_manual_charge_action(action: &str) -> Result<&'static str, HttpError> {
+    match action.trim().to_ascii_lowercase().as_str() {
+        "start" => Ok("start"),
+        "stop" => Ok("stop"),
+        _ => Err(HttpError::non_retryable(
+            "manual_charge_control_invalid",
+            "manual charge action must be start or stop",
+        )),
+    }
+}
+
+fn merge_charge_control_into_cached_status(state: &AppState, device_id: &str, response: &Value) {
+    let Some(charge_control) = response.get("summary") else {
+        return;
+    };
+    let merged_status = {
+        let guard = state.inner.lock().expect("state lock");
+        guard
+            .devices
+            .get(device_id)
+            .and_then(|device| device.status.clone())
+            .and_then(|mut status| {
+                let object = status.as_object_mut()?;
+                object.insert("charge_control".to_string(), charge_control.clone());
+                Some(status)
+            })
+    };
+    if let Some(status) = merged_status {
+        update_device_status_snapshot(state, device_id, status);
+    }
 }
 
 async fn devd_compat_identity(
@@ -6090,6 +7353,78 @@ where
         json!({"log": log}),
     );
     Ok(json!({"response": response, "settings": settings_snapshot}))
+}
+
+async fn send_lan_json_request(
+    state: &AppState,
+    device_id: &str,
+    address: &str,
+    request: LanSettingsRequest,
+    log_target: &str,
+    log_message: &str,
+) -> Result<Value, HttpError> {
+    let tx_payload = request
+        .body
+        .as_ref()
+        .map(redact_lan_body)
+        .map(|body| body.to_string())
+        .unwrap_or_default();
+    let tx_trace = structured_trace_entry(
+        "tx",
+        "http",
+        Some(format!("http://{address}{}", request.path)),
+        format!("{} {}", request.method, request.path).as_str(),
+        tx_payload,
+    );
+    let response =
+        lan_http_json(address, request.method, request.path, request.body.as_ref()).await?;
+    let rx_trace = structured_trace_entry(
+        "rx",
+        "http",
+        Some(format!("http://{address}{}", request.path)),
+        "control response",
+        response.to_string(),
+    );
+    let log = SerialLogEntry {
+        id: next_id(),
+        timestamp: now(),
+        level: "info".to_string(),
+        target: log_target.to_string(),
+        message: log_message.to_string(),
+    };
+    let snapshot = {
+        let mut guard = state.inner.lock().expect("state lock");
+        if let Some(device) = guard.devices.get_mut(device_id) {
+            push_bounded(&mut device.trace, tx_trace.clone(), LOG_LIMIT);
+            push_bounded(&mut device.trace, rx_trace.clone(), LOG_LIMIT);
+            push_bounded(&mut device.logs, log.clone(), LOG_LIMIT);
+            device.connection = ConnectionState::Connected;
+        }
+        persisted_snapshot(&guard)
+    };
+    persist_devd_state(&state.persistence, snapshot)?;
+    emit(
+        state,
+        Some(device_id.to_string()),
+        "lan_trace",
+        "LAN HTTP trace",
+        json!({"trace": tx_trace}),
+    );
+    emit(
+        state,
+        Some(device_id.to_string()),
+        "lan_trace",
+        "LAN HTTP trace",
+        json!({"trace": rx_trace}),
+    );
+    emit(
+        state,
+        Some(device_id.to_string()),
+        "serial_log",
+        "control log frame",
+        json!({"log": log}),
+    );
+    Ok(response)
 }
 
 fn ensure_wifi_runtime_supported(
@@ -7107,10 +8442,15 @@ fn error_from_cdc_response(response: &Value) -> HttpError {
         .and_then(|error| error.get("retryable"))
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    let details = error.and_then(|error| error.get("details")).cloned();
     if retryable {
-        HttpError::retryable(code, message)
+        if let Some(details) = details {
+            HttpError::retryable_with_details(code, message, details)
+        } else {
+            HttpError::retryable(code, message)
+        }
     } else {
-        HttpError::non_retryable(code, message)
+        HttpError::non_retryable_with_details(code, message, details)
     }
 }
 
@@ -7930,6 +9270,35 @@ async fn read_device_settings_async(
         )
     })?;
     settings_state_from_api(&result)
+}
+
+async fn read_device_charge_control_async(
+    state: &AppState,
+    device_id: &str,
+    port_path: String,
+    monitor_command_tx: Option<mpsc::Sender<NativeMonitorCommand>>,
+) -> Result<Value, HttpError> {
+    let request_id = format!("devd-charge-control-{}", Utc::now().timestamp_millis());
+    let frame = json!({
+        "type": "request",
+        "request_id": request_id,
+        "op": "get_charge_control"
+    });
+    let response = send_native_cdc_frame_with_monitor_fallback(
+        state,
+        device_id,
+        port_path,
+        monitor_command_tx,
+        frame,
+        request_id,
+    )
+    .await?;
+    response.get("result").cloned().ok_or_else(|| {
+        HttpError::retryable(
+            "native_charge_control_missing",
+            "charge-control response did not include result",
+        )
+    })
 }
 
 async fn reset_native_serial_async(port_path: String) -> Result<(), HttpError> {
@@ -9390,7 +10759,9 @@ fn default_settings_for_rated_vout(rated_vout_mv: u16) -> DeviceSettingsState {
             target: "full_100".to_string(),
             speed: "ma_500".to_string(),
             timer_h: 2,
+            power_path: "auto".to_string(),
         },
+        charge_capabilities: default_charge_capabilities(),
         advanced_power: AdvancedPowerSettings {
             standby_drop_mv: defaults.standby_drop_mv,
             input_uvlo_cutoff_mv: defaults.input_uvlo_cutoff_mv,
@@ -9431,6 +10802,28 @@ fn default_settings_for_rated_vout(rated_vout_mv: u16) -> DeviceSettingsState {
                 step: bounds.source_limited_enter_delta_ma.step,
             },
         },
+    }
+}
+
+fn default_charge_capabilities() -> ChargeCapabilities {
+    ChargeCapabilities {
+        target_voltage_mv: 16_800,
+        normal_current_ma: 500,
+        dc_derated_current_ma: 100,
+        dcin_input_limit_ma: 1_000,
+        max_output_current_ma: 3_500,
+        usb_pd_high_power_min_voltage_mv: 9_000,
+        usb_pd_high_power_max_voltage_mv: 20_000,
+        usb_pd_high_power_min_power_mw: 20_000,
+        loop_start_max_power_without_confirm_w10: 20,
+        loop_stop_power_latched_w10: 30,
+        loop_telemetry_miss_limit: 2,
+        supported_power_paths: ["auto".to_string(), "dcin".to_string(), "usbc".to_string()],
+        auto_path_priority: [
+            "usb_pd_high_power".to_string(),
+            "dcin".to_string(),
+            "usbc".to_string(),
+        ],
     }
 }
 
@@ -9480,12 +10873,19 @@ impl HttpError {
         )
     }
     fn non_retryable(code: &str, message: impl Into<String>) -> Self {
+        Self::non_retryable_with_details(code, message, None)
+    }
+    fn non_retryable_with_details(
+        code: &str,
+        message: impl Into<String>,
+        details: Option<Value>,
+    ) -> Self {
         Self(
             ApiError {
                 code: code.to_string(),
                 message: message.into(),
                 retryable: false,
-                details: None,
+                details,
             },
             StatusCode::BAD_REQUEST,
         )
@@ -11321,12 +12721,8 @@ mod tests {
             parse_lan_http_json_response(response, "GET", "/api/v1/diag-snapshot", "192.168.4.25")
                 .unwrap_err();
 
-        assert_eq!(error.0.code, "lan_http_status_failed");
-        assert!(
-            error.0.message.contains("HTTP 404"),
-            "unexpected message: {}",
-            error.0.message
-        );
+        assert_eq!(error.0.code, "not_found");
+        assert_eq!(error.1, StatusCode::NOT_FOUND);
     }
 
     #[test]
@@ -11659,7 +13055,27 @@ mod tests {
         let snapshot = json!({
             "wifi": {"configured": true, "ssid": "lab"},
             "log_level": "debug",
-            "manual_charge": {"target": "rsoc_80", "speed": "ma_1000", "timer_h": 6},
+            "manual_charge": {
+                "target": "rsoc_80",
+                "speed": "ma_1000",
+                "timer_h": 6,
+                "power_path": "usbc"
+            },
+            "charge_capabilities": {
+                "target_voltage_mv": 16800,
+                "normal_current_ma": 500,
+                "dc_derated_current_ma": 100,
+                "dcin_input_limit_ma": 1000,
+                "max_output_current_ma": 3500,
+                "usb_pd_high_power_min_voltage_mv": 9000,
+                "usb_pd_high_power_max_voltage_mv": 20000,
+                "usb_pd_high_power_min_power_mw": 20000,
+                "loop_start_max_power_without_confirm_w10": 20,
+                "loop_stop_power_latched_w10": 30,
+                "loop_telemetry_miss_limit": 2,
+                "supported_power_paths": ["auto", "dcin", "usbc"],
+                "auto_path_priority": ["usbc_pd_high_power", "dcin", "usbc"]
+            },
             "advanced_power": {
                 "standby_drop_mv": 1400,
                 "input_uvlo_cutoff_mv": 18300,
@@ -11685,6 +13101,19 @@ mod tests {
         assert_eq!(settings.manual_charge.target, "rsoc_80");
         assert_eq!(settings.manual_charge.speed, "ma_1000");
         assert_eq!(settings.manual_charge.timer_h, 6);
+        assert_eq!(settings.manual_charge.power_path, "usbc");
+        assert_eq!(
+            settings.charge_capabilities.usb_pd_high_power_min_power_mw,
+            20_000
+        );
+        assert_eq!(
+            settings.charge_capabilities.auto_path_priority,
+            [
+                "usbc_pd_high_power".to_string(),
+                "dcin".to_string(),
+                "usbc".to_string()
+            ]
+        );
         assert_eq!(settings.advanced_power.standby_drop_mv, 1400);
         assert_eq!(settings.advanced_power.input_uvlo_cutoff_mv, 18_300);
         assert_eq!(settings.advanced_power.input_uvlo_recover_mv, 18_500);

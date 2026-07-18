@@ -72,6 +72,107 @@ export type ChannelState = {
   iout_ma: number | null;
 };
 
+export type ChargePowerPath = "auto" | "dcin" | "usbc" | string;
+
+export type ChargeCapabilities = {
+  target_voltage_mv: number;
+  normal_current_ma: number;
+  dc_derated_current_ma: number;
+  dcin_input_limit_ma: number;
+  max_output_current_ma: number;
+  usb_pd_high_power_min_voltage_mv: number;
+  usb_pd_high_power_max_voltage_mv: number;
+  usb_pd_high_power_min_power_mw: number;
+  loop_start_max_power_without_confirm_w10: number;
+  loop_stop_power_latched_w10: number;
+  loop_telemetry_miss_limit: number;
+  supported_power_paths: ChargePowerPath[];
+  auto_path_priority: ChargePowerPath[];
+};
+
+export type ChargeControlSummary = {
+  mode: "auto" | "manual" | string;
+  manual_active: boolean;
+  takeover: boolean;
+  stop_inhibit: boolean;
+  last_stop_reason: string | null;
+  requested_power_path: ChargePowerPath;
+  bound_power_path: ChargePowerPath | null;
+  start_state: string;
+  output_power_w10: number | null;
+  power_telemetry_fresh: boolean;
+};
+
+export type ChargeControlBlock = {
+  code:
+    | "battery_full"
+    | "target_reached"
+    | "path_unavailable"
+    | "path_not_qualified"
+    | "no_input"
+    | "temperature_blocked"
+    | "battery_telemetry_unready"
+    | "output_overload"
+    | "charger_runtime_unavailable"
+    | "loop_confirmation_required"
+    | "blocked_unknown"
+    | string;
+  message: string;
+};
+
+export type ChargeControlDetailSummary = {
+  mode: "auto" | "manual" | string;
+  manual_active: boolean;
+  takeover: boolean;
+  stop_inhibit: boolean;
+  last_stop_reason: string | null;
+  remaining_minutes: number | null;
+  loop_override_active: boolean;
+};
+
+export type ChargeControlReadiness = {
+  state: "ready" | "blocked" | "confirm_required" | "running" | string;
+  action: "start" | "stop" | "confirm_loop" | "none" | string;
+  planned_path: {
+    requested: ChargePowerPath;
+    bound: ChargePowerPath | null;
+    binding_reason: string | null;
+  };
+  block: ChargeControlBlock | null;
+  loop_override: {
+    required: boolean;
+    active: boolean;
+    allowed_guards: string[];
+  };
+};
+
+export type ChargeControlTelemetry = {
+  input_source: string;
+  policy_target_ichg_ma: number | null;
+  ibat_actual_ma: number | null;
+  target_voltage_mv: number;
+  iindpm_ma: number | null;
+  vindpm_mv: number | null;
+  output_power_w10: number | null;
+  power_telemetry_fresh: boolean;
+  input_limit_summary: string | null;
+  output_limit_summary: string | null;
+};
+
+export type ChargeControlEvidenceEntry = {
+  source: string;
+  code: string;
+  label: string;
+  value: boolean | number | string | null;
+};
+
+export type ChargeControlDetail = {
+  summary: ChargeControlDetailSummary;
+  readiness: ChargeControlReadiness;
+  telemetry: ChargeControlTelemetry;
+  evidence: ChargeControlEvidenceEntry[];
+};
+
 export type UpsStatus = {
   mode: "standby" | "assist" | "backup" | "off" | "fault" | string;
   input: {
@@ -114,6 +215,7 @@ export type UpsStatus = {
     limit_threshold_ma?: number | null;
     detail_status?: string | null;
   };
+  charge_control?: ChargeControlSummary;
   battery: {
     state: "ok" | "warning" | "fault" | "missing" | string;
     pack_mv: number | null;
@@ -237,7 +339,9 @@ export type DeviceSettings = {
     target: "pack_3v7" | "rsoc_80" | "full_100" | string;
     speed: "ma_100" | "ma_500" | "ma_1000" | string;
     timer_h: 1 | 2 | 6 | number;
+    power_path?: ChargePowerPath;
   };
+  charge_capabilities?: ChargeCapabilities;
   advanced_power: {
     standby_drop_mv: number;
     input_uvlo_cutoff_mv: number;
@@ -289,6 +393,7 @@ export type DeviceRecord = {
   network: NetworkSummary | null;
   settings: DeviceSettings | null;
   status: UpsStatus | null;
+  chargeControlDetail?: ChargeControlDetail | null;
   connectionState: ConnectionState;
   streamState: "idle" | "streaming" | "polling" | "error";
   error: ApiErrorEnvelope["error"] | null;

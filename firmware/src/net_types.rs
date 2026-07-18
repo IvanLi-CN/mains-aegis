@@ -187,6 +187,7 @@ pub struct ManualChargeSettingsSnapshot {
     pub target: &'static str,
     pub speed: &'static str,
     pub timer_h: u8,
+    pub power_path: &'static str,
 }
 
 impl ManualChargeSettingsSnapshot {
@@ -195,6 +196,233 @@ impl ManualChargeSettingsSnapshot {
             target: "full_100",
             speed: "ma_500",
             timer_h: 2,
+            power_path: "auto",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChargeCapabilitiesSnapshot {
+    pub target_voltage_mv: u16,
+    pub normal_current_ma: u16,
+    pub dc_derated_current_ma: u16,
+    pub dcin_input_limit_ma: u16,
+    pub max_output_current_ma: u16,
+    pub usb_pd_high_power_min_voltage_mv: u16,
+    pub usb_pd_high_power_max_voltage_mv: u16,
+    pub usb_pd_high_power_min_power_mw: u32,
+    pub loop_start_max_power_without_confirm_w10: u32,
+    pub loop_stop_power_latched_w10: u32,
+    pub loop_telemetry_miss_limit: u8,
+    pub supported_power_paths: [&'static str; 3],
+    pub auto_path_priority: [&'static str; 3],
+}
+
+impl ChargeCapabilitiesSnapshot {
+    pub const fn defaults() -> Self {
+        Self {
+            target_voltage_mv: 16_800,
+            normal_current_ma: 500,
+            dc_derated_current_ma: 100,
+            dcin_input_limit_ma: 1_000,
+            max_output_current_ma: 3_500,
+            usb_pd_high_power_min_voltage_mv: 9_000,
+            usb_pd_high_power_max_voltage_mv: 20_000,
+            usb_pd_high_power_min_power_mw: 20_000,
+            loop_start_max_power_without_confirm_w10: 20,
+            loop_stop_power_latched_w10: 30,
+            loop_telemetry_miss_limit: 2,
+            supported_power_paths: ["auto", "dcin", "usbc"],
+            auto_path_priority: ["usb_pd_high_power", "dcin", "usbc"],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChargeControlSnapshot {
+    pub mode: &'static str,
+    pub manual_active: bool,
+    pub takeover: bool,
+    pub stop_inhibit: bool,
+    pub last_stop_reason: &'static str,
+    pub remaining_minutes: Option<u16>,
+    pub requested_power_path: &'static str,
+    pub bound_power_path: Option<&'static str>,
+    pub binding_reason: Option<&'static str>,
+    pub start_state: &'static str,
+    pub start_block_reason: Option<&'static str>,
+    pub loop_confirmation_required: bool,
+    pub loop_override_active: bool,
+    pub output_power_w10: Option<u32>,
+    pub power_telemetry_fresh: bool,
+}
+
+impl ChargeControlSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            mode: "auto",
+            manual_active: false,
+            takeover: false,
+            stop_inhibit: false,
+            last_stop_reason: "none",
+            remaining_minutes: None,
+            requested_power_path: "auto",
+            bound_power_path: None,
+            binding_reason: None,
+            start_state: "blocked",
+            start_block_reason: Some("manual_charge_path_unavailable"),
+            loop_confirmation_required: false,
+            loop_override_active: false,
+            output_power_w10: None,
+            power_telemetry_fresh: false,
+        }
+    }
+}
+
+pub const CHARGE_CONTROL_EVIDENCE_CAP: usize = 6;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChargeControlPlannedPathSnapshot {
+    pub requested: &'static str,
+    pub bound: Option<&'static str>,
+    pub binding_reason: Option<&'static str>,
+}
+
+impl ChargeControlPlannedPathSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            requested: "auto",
+            bound: None,
+            binding_reason: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChargeControlBlockSnapshot {
+    pub code: &'static str,
+    pub message: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChargeControlLoopOverrideSnapshot {
+    pub required: bool,
+    pub active: bool,
+    pub allowed_guards: [&'static str; 3],
+}
+
+impl ChargeControlLoopOverrideSnapshot {
+    pub const fn defaults() -> Self {
+        Self {
+            required: false,
+            active: false,
+            allowed_guards: [
+                "loop_start_low_output_gate",
+                "loop_telemetry_miss_latch",
+                "loop_stop_high_output_latch",
+            ],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChargeControlReadinessSnapshot {
+    pub state: &'static str,
+    pub action: &'static str,
+    pub planned_path: ChargeControlPlannedPathSnapshot,
+    pub block: Option<ChargeControlBlockSnapshot>,
+    pub loop_override: ChargeControlLoopOverrideSnapshot,
+}
+
+impl ChargeControlReadinessSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            state: "blocked",
+            action: "none",
+            planned_path: ChargeControlPlannedPathSnapshot::empty(),
+            block: None,
+            loop_override: ChargeControlLoopOverrideSnapshot::defaults(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChargeControlTelemetrySnapshot {
+    pub input_source: &'static str,
+    pub policy_target_ichg_ma: Option<u16>,
+    pub ibat_actual_ma: Option<i16>,
+    pub target_voltage_mv: u16,
+    pub iindpm_ma: Option<u16>,
+    pub vindpm_mv: Option<u16>,
+    pub output_power_w10: Option<u32>,
+    pub power_telemetry_fresh: bool,
+    pub input_limit_summary: Option<&'static str>,
+    pub output_limit_summary: Option<&'static str>,
+}
+
+impl ChargeControlTelemetrySnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            input_source: "unknown",
+            policy_target_ichg_ma: None,
+            ibat_actual_ma: None,
+            target_voltage_mv: 16_800,
+            iindpm_ma: None,
+            vindpm_mv: None,
+            output_power_w10: None,
+            power_telemetry_fresh: false,
+            input_limit_summary: None,
+            output_limit_summary: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChargeControlEvidenceValueSnapshot {
+    None,
+    Bool(bool),
+    I32(i32),
+    U16(u16),
+    U32(u32),
+    Str(&'static str),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChargeControlEvidenceEntrySnapshot {
+    pub source: &'static str,
+    pub code: &'static str,
+    pub label: &'static str,
+    pub value: ChargeControlEvidenceValueSnapshot,
+}
+
+impl ChargeControlEvidenceEntrySnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            source: "none",
+            code: "none",
+            label: "none",
+            value: ChargeControlEvidenceValueSnapshot::None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChargeControlDetailSnapshot {
+    pub summary: ChargeControlSnapshot,
+    pub readiness: ChargeControlReadinessSnapshot,
+    pub telemetry: ChargeControlTelemetrySnapshot,
+    pub evidence: [ChargeControlEvidenceEntrySnapshot; CHARGE_CONTROL_EVIDENCE_CAP],
+    pub evidence_len: u8,
+}
+
+impl ChargeControlDetailSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            summary: ChargeControlSnapshot::empty(),
+            readiness: ChargeControlReadinessSnapshot::empty(),
+            telemetry: ChargeControlTelemetrySnapshot::empty(),
+            evidence: [ChargeControlEvidenceEntrySnapshot::empty(); CHARGE_CONTROL_EVIDENCE_CAP],
+            evidence_len: 0,
         }
     }
 }
@@ -549,6 +777,7 @@ pub struct DeviceSettingsSnapshot {
     pub wifi: WifiSettingsSnapshot,
     pub log_level: &'static str,
     pub manual_charge: ManualChargeSettingsSnapshot,
+    pub charge_capabilities: ChargeCapabilitiesSnapshot,
     pub advanced_power: AdvancedPowerSettingsSnapshot,
     pub advanced_power_capabilities: AdvancedPowerCapabilitiesSnapshot,
 }
@@ -563,6 +792,7 @@ impl DeviceSettingsSnapshot {
             wifi: WifiSettingsSnapshot::unconfigured(),
             log_level: "info",
             manual_charge: ManualChargeSettingsSnapshot::defaults(),
+            charge_capabilities: ChargeCapabilitiesSnapshot::defaults(),
             advanced_power: AdvancedPowerSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv),
             advanced_power_capabilities: AdvancedPowerCapabilitiesSnapshot::for_rated_vout(
                 rated_vout_mv,
@@ -641,6 +871,7 @@ pub struct UpsStatusSnapshot {
     pub tmp_a_c: Option<i16>,
     pub tmp_b_state: &'static str,
     pub tmp_b_c: Option<i16>,
+    pub charge_control: ChargeControlSnapshot,
     pub front_panel: FrontPanelRuntimeSnapshot,
     pub network: NetworkUiSummary,
 }
@@ -1137,6 +1368,7 @@ impl UpsStatusSnapshot {
             tmp_a_c: None,
             tmp_b_state: "pending",
             tmp_b_c: None,
+            charge_control: ChargeControlSnapshot::empty(),
             front_panel: FrontPanelRuntimeSnapshot::unavailable(),
             network: NetworkUiSummary::disabled(),
         }

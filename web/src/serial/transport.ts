@@ -1,5 +1,6 @@
 import type {
   AdvancedPowerSettings,
+  ChargeControlDetail,
   DefmtDecodeResult,
   DeviceSettings,
   Identity,
@@ -210,12 +211,40 @@ export class WebSerialTransport {
     return result as DeviceSettings;
   }
 
+  async requestChargeControl(): Promise<ChargeControlDetail> {
+    const result = await this.request("get_charge_control");
+    return result as ChargeControlDetail;
+  }
+
   async setLogLevel(level: string): Promise<unknown> {
     return this.request("set_log_level", { level });
   }
 
-  async setManualChargePrefs(payload: { target: string; speed: string; timer_h: number }): Promise<unknown> {
+  async setManualChargePrefs(payload: {
+    target: string;
+    speed: string;
+    timer_h: number;
+    power_path?: string;
+  }): Promise<unknown> {
     return this.request("set_manual_charge_prefs", payload);
+  }
+
+  async previewChargeControl(payload: {
+    target: string;
+    current_ma: number;
+    timer_minutes: number;
+    power_path?: string;
+  }): Promise<ChargeControlDetail> {
+    const result = await this.request("preview_charge_control", payload);
+    return result as ChargeControlDetail;
+  }
+
+  async controlManualCharge(payload: {
+    action: "start" | "stop";
+    confirm_loop?: boolean;
+  }): Promise<ChargeControlDetail> {
+    const result = await this.request("control_manual_charge", payload);
+    return result as ChargeControlDetail;
   }
 
   async setAdvancedPower(payload: AdvancedPowerSettings): Promise<unknown> {
