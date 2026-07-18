@@ -1,6 +1,6 @@
-use esp_firmware::net_types::NetworkUiSummary;
-use esp_firmware::net_types::UpsStatusSnapshot;
-use esp_firmware::net_types::WifiSnapshot;
+use esp_firmware::net_types::{
+    ChargeControlSnapshot, NetworkUiSummary, UpsStatusSnapshot, WifiSnapshot,
+};
 use esp_firmware::output_state::{EnabledOutputs, OutputSelector};
 
 use crate::front_panel_scene::SelfCheckUiSnapshot;
@@ -139,6 +139,72 @@ pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot
         tmp_a_c: snapshot.tmp_a_c,
         tmp_b_state: comm_state_slug(snapshot.tmp_b),
         tmp_b_c: snapshot.tmp_b_c,
+        charge_control: ChargeControlSnapshot {
+            mode: if snapshot.dashboard_detail.manual_charge.runtime.active {
+                "manual"
+            } else {
+                "auto"
+            },
+            manual_active: snapshot.dashboard_detail.manual_charge.runtime.active,
+            takeover: snapshot.dashboard_detail.manual_charge.runtime.takeover,
+            stop_inhibit: snapshot.dashboard_detail.manual_charge.runtime.stop_inhibit,
+            last_stop_reason: manual_charge_stop_reason_slug(
+                snapshot
+                    .dashboard_detail
+                    .manual_charge
+                    .runtime
+                    .last_stop_reason,
+            ),
+            remaining_minutes: snapshot
+                .dashboard_detail
+                .manual_charge
+                .runtime
+                .remaining_minutes,
+            requested_power_path: manual_charge_power_path_slug(
+                snapshot
+                    .dashboard_detail
+                    .manual_charge
+                    .runtime
+                    .requested_power_path,
+            ),
+            bound_power_path: snapshot
+                .dashboard_detail
+                .manual_charge
+                .runtime
+                .bound_power_path
+                .map(input_source_slug),
+            binding_reason: snapshot
+                .dashboard_detail
+                .manual_charge
+                .runtime
+                .binding_reason,
+            start_state: snapshot.dashboard_detail.manual_charge.runtime.start_state,
+            start_block_reason: snapshot
+                .dashboard_detail
+                .manual_charge
+                .runtime
+                .start_block_reason,
+            loop_confirmation_required: snapshot
+                .dashboard_detail
+                .manual_charge
+                .runtime
+                .loop_confirmation_required,
+            loop_override_active: snapshot
+                .dashboard_detail
+                .manual_charge
+                .runtime
+                .loopback_override,
+            output_power_w10: snapshot
+                .dashboard_detail
+                .manual_charge
+                .runtime
+                .output_power_w10,
+            power_telemetry_fresh: snapshot
+                .dashboard_detail
+                .manual_charge
+                .runtime
+                .power_telemetry_fresh,
+        },
         front_panel: current_front_panel_runtime_summary(),
         network: current_network_summary(),
     }
@@ -189,6 +255,30 @@ fn comm_state_slug(state: SelfCheckCommState) -> &'static str {
         SelfCheckCommState::Warn => "warn",
         SelfCheckCommState::Err => "err",
         SelfCheckCommState::NotAvailable => "not_available",
+    }
+}
+
+fn manual_charge_power_path_slug(
+    path: crate::front_panel_scene::ManualChargePowerPath,
+) -> &'static str {
+    match path {
+        crate::front_panel_scene::ManualChargePowerPath::Auto => "auto",
+        crate::front_panel_scene::ManualChargePowerPath::DcIn => "dcin",
+        crate::front_panel_scene::ManualChargePowerPath::UsbC => "usbc",
+    }
+}
+
+fn manual_charge_stop_reason_slug(
+    reason: crate::front_panel_scene::ManualChargeStopReason,
+) -> &'static str {
+    match reason {
+        crate::front_panel_scene::ManualChargeStopReason::None => "none",
+        crate::front_panel_scene::ManualChargeStopReason::UserStop => "user_stop",
+        crate::front_panel_scene::ManualChargeStopReason::TimerExpired => "timer_expired",
+        crate::front_panel_scene::ManualChargeStopReason::PackReached => "pack_reached",
+        crate::front_panel_scene::ManualChargeStopReason::RsocReached => "rsoc_reached",
+        crate::front_panel_scene::ManualChargeStopReason::FullReached => "full_reached",
+        crate::front_panel_scene::ManualChargeStopReason::SafetyBlocked => "safety_blocked",
     }
 }
 

@@ -32,17 +32,17 @@ use esp_firmware::usb_pd::UsbPdSinkManager;
 use esp_firmware::{
     mdns_wire::{derive_device_identity, DeviceIdentity},
     net_contract::{
-        render_compact_status_json, render_diag_snapshot_json,
+        render_charge_control_result_json, render_compact_status_json, render_diag_snapshot_json,
         render_identity_json_with_write_controls, render_status_json, BuildInfo,
     },
     net_types::{UpsStatusSnapshot, WifiConnectionState, WifiErrorKind},
     usb_cdc_protocol::{
-        parse_frame, render_error_json, render_hello_json, render_log_json,
-        render_protocol_error_json, render_response_json, render_status_frame_json,
-        render_wifi_config_ack_json, request_id_hint, LogLevel, UsbCdcFrame, UsbCdcLineBuffer,
-        UsbCdcRequest, WifiConfigCommand, WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP,
-        WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP, WEB_SERIAL_RESPONSE_BODY_CAP,
-        WEB_SERIAL_RESPONSE_FRAME_CAP,
+        parse_frame, render_error_json, render_error_json_with_details, render_hello_json,
+        render_log_json, render_protocol_error_json, render_response_json,
+        render_status_frame_json, render_wifi_config_ack_json, request_id_hint, LogLevel,
+        UsbCdcFrame, UsbCdcLineBuffer, UsbCdcRequest, WifiConfigCommand,
+        WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP, WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP,
+        WEB_SERIAL_RESPONSE_BODY_CAP, WEB_SERIAL_RESPONSE_FRAME_CAP,
     },
 };
 use esp_hal::clock::CpuClock;
@@ -1592,6 +1592,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             manual_charge_target_api_value(prefs.target),
             manual_charge_speed_api_value(prefs.speed),
             prefs.timer_limit.hours(),
+            manual_charge_power_path_api_value(prefs.power_path),
+        );
+        esp_firmware::net::publish_charge_control_detail(
+            power.current_manual_charge_control_detail_snapshot(),
         );
         sync_advanced_power_net_settings(&power);
         esp_firmware::net::set_device_log_level("info");
@@ -1600,6 +1604,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     }
     let initial_snapshot = power.ui_snapshot();
     net_bridge::publish_status_snapshot(initial_snapshot);
+    #[cfg(feature = "net_http")]
+    esp_firmware::net::publish_charge_control_detail(
+        power.current_manual_charge_control_detail_snapshot(),
+    );
     #[cfg(feature = "net_http")]
     esp_firmware::net::publish_diag_snapshot(power.derived_power_snapshot());
     front_panel.update_self_check_snapshot(initial_snapshot);
@@ -1814,6 +1822,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             let ui_snapshot = power.ui_snapshot();
             net_bridge::publish_status_snapshot(ui_snapshot);
             #[cfg(feature = "net_http")]
+            esp_firmware::net::publish_charge_control_detail(
+                power.current_manual_charge_control_detail_snapshot(),
+            );
+            #[cfg(feature = "net_http")]
             esp_firmware::net::publish_diag_snapshot(power.derived_power_snapshot());
             #[cfg(feature = "net_http")]
             {
@@ -1858,8 +1870,61 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                 manual_charge_target_api_value(current.target),
                                 manual_charge_speed_api_value(current.speed),
                                 current.timer_limit.hours(),
+                                manual_charge_power_path_api_value(current.power_path),
+                            );
+                            esp_firmware::net::publish_charge_control_detail(
+                                power.current_manual_charge_control_detail_snapshot(),
                             );
                             defmt::info!("net: LAN manual charge preferences updated");
+                        }
+                        esp_firmware::net::LanManagementCommand::PreviewChargeControl(prefs) => {
+                            let mut body = heapless::String::<
+                                { esp_firmware::net::HTTP_RESPONSE_BODY_CAP },
+                            >::new();
+                            render_charge_control_result_json(
+                                &mut body,
+                                power.preview_manual_charge_control_detail_snapshot(prefs),
+                            );
+                            esp_firmware::net::set_lan_command_result(
+                                esp_firmware::net::LanCommandResult::Json(body),
+                            );
+                        }
+                        esp_firmware::net::LanManagementCommand::ControlManualCharge(command) => {
+                            match power.control_manual_charge(command) {
+                                Ok(_) => {
+                                    let mut body = heapless::String::<
+                                        { esp_firmware::net::HTTP_RESPONSE_BODY_CAP },
+                                    >::new();
+                                    let detail =
+                                        power.current_manual_charge_control_detail_snapshot();
+                                    render_charge_control_result_json(&mut body, detail);
+                                    esp_firmware::net::publish_charge_control_detail(detail);
+                                    esp_firmware::net::set_lan_command_result(
+                                        esp_firmware::net::LanCommandResult::Json(body),
+                                    );
+                                    defmt::info!("net: LAN manual charge control applied");
+                                }
+                                Err(err) => {
+                                    let mut details = heapless::String::<
+                                        { esp_firmware::net::HTTP_RESPONSE_BODY_CAP },
+                                    >::new();
+                                    render_charge_control_result_json(
+                                        &mut details,
+                                        power.current_manual_charge_control_detail_snapshot(),
+                                    );
+                                    esp_firmware::net::set_lan_command_result(
+                                        esp_firmware::net::LanCommandResult::ManualChargeControlError {
+                                            code: err.code,
+                                            message: err.message,
+                                            details,
+                                        },
+                                    );
+                                    defmt::warn!(
+                                        "net: LAN manual charge control rejected code={}",
+                                        err.code
+                                    );
+                                }
+                            }
                         }
                         esp_firmware::net::LanManagementCommand::SetAdvancedPower(settings) => {
                             match power.apply_advanced_power_settings(settings) {
@@ -1963,6 +2028,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     manual_charge_target_api_value(prefs.target),
                     manual_charge_speed_api_value(prefs.speed),
                     prefs.timer_limit.hours(),
+                    manual_charge_power_path_api_value(prefs.power_path),
                 );
                 sync_advanced_power_net_settings(&power);
             }
@@ -2256,6 +2322,16 @@ fn handle_web_serial_frame<'d, I2C>(
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
             }
+            UsbCdcRequest::GetChargeControl => {
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                render_charge_control_result_json(
+                    &mut body,
+                    power.current_manual_charge_control_detail_snapshot(),
+                );
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
+            }
             UsbCdcRequest::GetDiagSnapshot(request) => {
                 let mut body = heapless::String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
                 let mut frame = heapless::String::<WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP>::new();
@@ -2316,6 +2392,7 @@ fn handle_web_serial_frame<'d, I2C>(
                         manual_charge_target_api_value(current.target),
                         manual_charge_speed_api_value(current.speed),
                         current.timer_limit.hours(),
+                        manual_charge_power_path_api_value(current.power_path),
                     );
                 }
                 let _ = body.push_str(r#"{"manual_charge_prefs":"updated"}"#);
@@ -2327,6 +2404,49 @@ fn handle_web_serial_frame<'d, I2C>(
                     "manual_charge",
                     "safe manual charge preferences updated over USB",
                 );
+            }
+            UsbCdcRequest::PreviewChargeControl(prefs) => {
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                render_charge_control_result_json(
+                    &mut body,
+                    power.preview_manual_charge_control_detail_snapshot(prefs),
+                );
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
+            }
+            UsbCdcRequest::ControlManualCharge(command) => {
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                match power.control_manual_charge(command) {
+                    Ok(_) => {
+                        #[cfg(feature = "net_http")]
+                        esp_firmware::net::publish_charge_control_detail(
+                            power.current_manual_charge_control_detail_snapshot(),
+                        );
+                        render_charge_control_result_json(
+                            &mut body,
+                            power.current_manual_charge_control_detail_snapshot(),
+                        );
+                        render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                        write_web_serial_line(serial, frame.as_str());
+                    }
+                    Err(err) => {
+                        render_charge_control_result_json(
+                            &mut body,
+                            power.current_manual_charge_control_detail_snapshot(),
+                        );
+                        render_error_json_with_details(
+                            &mut frame,
+                            Some(request_id.as_str()),
+                            err.code,
+                            err.message,
+                            false,
+                            Some(body.as_str()),
+                        );
+                        write_web_serial_line(serial, frame.as_str());
+                    }
+                }
             }
             UsbCdcRequest::SetAdvancedPower(settings) => {
                 let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
@@ -2537,6 +2657,17 @@ const fn manual_charge_speed_api_value(
         front_panel_scene::ManualChargeSpeed::Ma100 => "ma_100",
         front_panel_scene::ManualChargeSpeed::Ma500 => "ma_500",
         front_panel_scene::ManualChargeSpeed::Ma1000 => "ma_1000",
+    }
+}
+
+#[cfg(feature = "net_http")]
+const fn manual_charge_power_path_api_value(
+    power_path: front_panel_scene::ManualChargePowerPath,
+) -> &'static str {
+    match power_path {
+        front_panel_scene::ManualChargePowerPath::Auto => "auto",
+        front_panel_scene::ManualChargePowerPath::DcIn => "dcin",
+        front_panel_scene::ManualChargePowerPath::UsbC => "usbc",
     }
 }
 
@@ -2822,6 +2953,7 @@ where
         target: manual_charge_target_api_value(prefs.target),
         speed: manual_charge_speed_api_value(prefs.speed),
         timer_h: prefs.timer_limit.hours(),
+        power_path: manual_charge_power_path_api_value(prefs.power_path),
     };
     settings.advanced_power = power.advanced_power_settings_snapshot();
     settings.advanced_power_capabilities = power.advanced_power_capabilities_snapshot();

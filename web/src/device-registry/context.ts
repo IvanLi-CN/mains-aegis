@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import type {
   AdvancedPowerSettings,
+  ChargeControlDetail,
   DeviceRecord,
   DeviceSettings,
   DeviceTarget,
@@ -28,8 +29,17 @@ export type AddDeviceResult =
   | { ok: false; error: DeviceRecord["error"] };
 
 export type CommandResult =
-  | { ok: true; message?: string; network?: WifiApplyNetwork }
-  | { ok: false; error: DeviceRecord["error"] };
+  | {
+      ok: true;
+      message?: string;
+      network?: WifiApplyNetwork;
+      detail?: ChargeControlDetail | null;
+    }
+  | {
+      ok: false;
+      error: DeviceRecord["error"];
+      detail?: ChargeControlDetail | null;
+    };
 
 export type WifiConfigInput = {
   ssid: string;
@@ -43,6 +53,10 @@ export type WifiProvisioningProgress = {
 };
 
 export type ManualChargePrefsInput = DeviceSettings["manual_charge"];
+export type ManualChargeControlInput = {
+  action: "start" | "stop";
+  confirm_loop?: boolean;
+};
 export type AdvancedPowerInput = AdvancedPowerSettings;
 
 export type DeviceRegistryContextValue = {
@@ -63,6 +77,9 @@ export type DeviceRegistryContextValue = {
   clearWifiConfig: (deviceId: string, onProgress?: (progress: WifiProvisioningProgress) => void) => Promise<CommandResult>;
   setSerialLogLevel: (deviceId: string, level: DeviceSettings["log_level"]) => Promise<CommandResult>;
   setManualChargePrefs: (deviceId: string, prefs: ManualChargePrefsInput) => Promise<CommandResult>;
+  refreshChargeControlDetail: (deviceId: string) => Promise<CommandResult>;
+  previewManualCharge: (deviceId: string, prefs: ManualChargePrefsInput) => Promise<CommandResult>;
+  controlManualCharge: (deviceId: string, input: ManualChargeControlInput) => Promise<CommandResult>;
   setAdvancedPower: (deviceId: string, advancedPower: AdvancedPowerInput) => Promise<CommandResult>;
   resetAdvancedPower: (deviceId: string) => Promise<CommandResult>;
   removeDevice: (deviceId: string) => void;

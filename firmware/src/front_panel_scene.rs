@@ -264,10 +264,19 @@ impl Default for ManualChargeTimerLimit {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ManualChargePowerPath {
+    #[default]
+    Auto,
+    DcIn,
+    UsbC,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct ManualChargePrefs {
     pub target: ManualChargeTarget,
     pub speed: ManualChargeSpeed,
     pub timer_limit: ManualChargeTimerLimit,
+    pub power_path: ManualChargePowerPath,
 }
 
 impl ManualChargePrefs {
@@ -276,6 +285,7 @@ impl ManualChargePrefs {
             target: ManualChargeTarget::Full100,
             speed: ManualChargeSpeed::Ma500,
             timer_limit: ManualChargeTimerLimit::H2,
+            power_path: ManualChargePowerPath::Auto,
         }
     }
 }
@@ -299,6 +309,14 @@ pub struct ManualChargeRuntimeState {
     pub stop_inhibit: bool,
     pub last_stop_reason: ManualChargeStopReason,
     pub remaining_minutes: Option<u16>,
+    pub requested_power_path: ManualChargePowerPath,
+    pub bound_power_path: Option<DashboardInputSource>,
+    pub binding_reason: Option<&'static str>,
+    pub start_state: &'static str,
+    pub start_block_reason: Option<&'static str>,
+    pub loop_confirmation_required: bool,
+    pub output_power_w10: Option<u32>,
+    pub power_telemetry_fresh: bool,
 }
 
 impl ManualChargeRuntimeState {
@@ -310,6 +328,14 @@ impl ManualChargeRuntimeState {
             stop_inhibit: false,
             last_stop_reason: ManualChargeStopReason::None,
             remaining_minutes: None,
+            requested_power_path: ManualChargePowerPath::Auto,
+            bound_power_path: None,
+            binding_reason: None,
+            start_state: "blocked",
+            start_block_reason: Some("manual_charge_path_unavailable"),
+            loop_confirmation_required: false,
+            output_power_w10: None,
+            power_telemetry_fresh: false,
         }
     }
 }
@@ -334,6 +360,7 @@ pub enum ManualChargeUiAction {
     SetTarget(ManualChargeTarget),
     SetSpeed(ManualChargeSpeed),
     SetTimerLimit(ManualChargeTimerLimit),
+    SetPowerPath(ManualChargePowerPath),
     Start,
     StartConfirmedLoopback,
     Stop,

@@ -191,7 +191,41 @@ pub fn render_settings_json<const N: usize>(
     let _ = buf.push_str("\"manual_charge\":{");
     json_field_str(buf, "target", settings.manual_charge.target, true);
     json_field_str(buf, "speed", settings.manual_charge.speed, true);
-    let _ = write!(buf, "\"timer_h\":{}", settings.manual_charge.timer_h);
+    let _ = write!(
+        buf,
+        "\"timer_h\":{},\"power_path\":\"{}\"",
+        settings.manual_charge.timer_h, settings.manual_charge.power_path
+    );
+    let _ = buf.push_str("},\"charge_capabilities\":{");
+    let _ = write!(
+        buf,
+        "\"target_voltage_mv\":{},\"normal_current_ma\":{},\"dc_derated_current_ma\":{},\"dcin_input_limit_ma\":{},\"max_output_current_ma\":{},\"usb_pd_high_power_min_voltage_mv\":{},\"usb_pd_high_power_max_voltage_mv\":{},\"usb_pd_high_power_min_power_mw\":{},\"loop_start_max_power_without_confirm_w10\":{},\"loop_stop_power_latched_w10\":{},\"loop_telemetry_miss_limit\":{},",
+        settings.charge_capabilities.target_voltage_mv,
+        settings.charge_capabilities.normal_current_ma,
+        settings.charge_capabilities.dc_derated_current_ma,
+        settings.charge_capabilities.dcin_input_limit_ma,
+        settings.charge_capabilities.max_output_current_ma,
+        settings.charge_capabilities.usb_pd_high_power_min_voltage_mv,
+        settings.charge_capabilities.usb_pd_high_power_max_voltage_mv,
+        settings.charge_capabilities.usb_pd_high_power_min_power_mw,
+        settings
+            .charge_capabilities
+            .loop_start_max_power_without_confirm_w10,
+        settings.charge_capabilities.loop_stop_power_latched_w10,
+        settings.charge_capabilities.loop_telemetry_miss_limit,
+    );
+    write_string_array(
+        buf,
+        "supported_power_paths",
+        &settings.charge_capabilities.supported_power_paths,
+        true,
+    );
+    write_string_array(
+        buf,
+        "auto_path_priority",
+        &settings.charge_capabilities.auto_path_priority,
+        false,
+    );
     let _ = buf.push_str("},\"advanced_power\":{");
     let _ = write!(
         buf,
@@ -319,6 +353,8 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
         true,
     );
     json_field_opt_str(buf, "detail_status", status.charger_detail_status, false);
+    let _ = buf.push_str("},\"charge_control\":{");
+    render_charge_control_summary_object_fields(buf, status.charge_control);
     let _ = buf.push_str("},\"battery\":{");
     json_field_str(buf, "state", status.battery_state, true);
     json_field_opt_u16(buf, "pack_mv", status.battery_pack_mv, true);
@@ -478,8 +514,10 @@ pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: U
         buf,
         "limit_threshold_ma",
         status.charger_limit_threshold_ma,
-        false,
+        true,
     );
+    let _ = buf.push_str("},\"charge_control\":{");
+    render_charge_control_summary_object_fields(buf, status.charge_control);
     let _ = buf.push_str("},\"battery\":{");
     json_field_str(buf, "state", status.battery_state, true);
     json_field_opt_u16(buf, "pack_mv", status.battery_pack_mv, true);
@@ -512,6 +550,14 @@ pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: U
         false,
     );
     let _ = buf.push_str("}}");
+}
+
+pub fn render_charge_control_result_json<const N: usize>(
+    buf: &mut String<N>,
+    detail: crate::net_types::ChargeControlDetailSnapshot,
+) {
+    buf.clear();
+    render_charge_control_detail_object(buf, detail);
 }
 
 pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: DerivedPowerSnapshot) {
@@ -1312,6 +1358,228 @@ fn write_network_summary_object<const N: usize>(
     let _ = buf.push('}');
 }
 
+fn write_string_array<const N: usize, const M: usize>(
+    buf: &mut String<N>,
+    key: &str,
+    values: &[&str; M],
+    trailing_comma: bool,
+) {
+    let _ = write!(buf, "\"{}\":[", key);
+    for (index, value) in values.iter().enumerate() {
+        if index != 0 {
+            let _ = buf.push(',');
+        }
+        let _ = buf.push('"');
+        write_json_string_escaped(buf, value);
+        let _ = buf.push('"');
+    }
+    let _ = buf.push(']');
+    if trailing_comma {
+        let _ = buf.push(',');
+    }
+}
+
+fn render_charge_control_summary_object_fields<const N: usize>(
+    buf: &mut String<N>,
+    charge_control: crate::net_types::ChargeControlSnapshot,
+) {
+    json_field_str(buf, "mode", charge_control.mode, true);
+    json_field_bool(buf, "manual_active", charge_control.manual_active, true);
+    json_field_bool(buf, "takeover", charge_control.takeover, true);
+    json_field_bool(buf, "stop_inhibit", charge_control.stop_inhibit, true);
+    json_field_str(
+        buf,
+        "last_stop_reason",
+        charge_control.last_stop_reason,
+        true,
+    );
+    json_field_str(
+        buf,
+        "requested_power_path",
+        charge_control.requested_power_path,
+        true,
+    );
+    json_field_opt_str(
+        buf,
+        "bound_power_path",
+        charge_control.bound_power_path,
+        true,
+    );
+    json_field_str(buf, "start_state", charge_control.start_state, true);
+    json_field_u32_opt(
+        buf,
+        "output_power_w10",
+        charge_control.output_power_w10,
+        true,
+    );
+    json_field_bool(
+        buf,
+        "power_telemetry_fresh",
+        charge_control.power_telemetry_fresh,
+        false,
+    );
+}
+
+fn render_charge_control_detail_object<const N: usize>(
+    buf: &mut String<N>,
+    detail: crate::net_types::ChargeControlDetailSnapshot,
+) {
+    buf.clear();
+    let _ = buf.push_str("{\"summary\":{");
+    render_charge_control_detail_summary_object_fields(buf, detail.summary);
+    let _ = buf.push_str("},\"readiness\":{");
+    render_charge_control_readiness_object_fields(buf, detail.readiness);
+    let _ = buf.push_str("},\"telemetry\":{");
+    render_charge_control_telemetry_object_fields(buf, detail.telemetry);
+    let _ = buf.push_str("},\"evidence\":[");
+    for index in 0..usize::from(detail.evidence_len) {
+        if index != 0 {
+            let _ = buf.push(',');
+        }
+        let _ = buf.push('{');
+        render_charge_control_evidence_object_fields(buf, detail.evidence[index]);
+        let _ = buf.push('}');
+    }
+    let _ = buf.push_str("]}");
+}
+
+fn render_charge_control_detail_summary_object_fields<const N: usize>(
+    buf: &mut String<N>,
+    charge_control: crate::net_types::ChargeControlSnapshot,
+) {
+    json_field_str(buf, "mode", charge_control.mode, true);
+    json_field_bool(buf, "manual_active", charge_control.manual_active, true);
+    json_field_bool(buf, "takeover", charge_control.takeover, true);
+    json_field_bool(buf, "stop_inhibit", charge_control.stop_inhibit, true);
+    json_field_str(
+        buf,
+        "last_stop_reason",
+        charge_control.last_stop_reason,
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "remaining_minutes",
+        charge_control.remaining_minutes,
+        true,
+    );
+    json_field_bool(
+        buf,
+        "loop_override_active",
+        charge_control.loop_override_active,
+        false,
+    );
+}
+
+fn render_charge_control_readiness_object_fields<const N: usize>(
+    buf: &mut String<N>,
+    readiness: crate::net_types::ChargeControlReadinessSnapshot,
+) {
+    json_field_str(buf, "state", readiness.state, true);
+    json_field_str(buf, "action", readiness.action, true);
+    let _ = buf.push_str("\"planned_path\":{");
+    json_field_str(buf, "requested", readiness.planned_path.requested, true);
+    json_field_opt_str(buf, "bound", readiness.planned_path.bound, true);
+    json_field_opt_str(
+        buf,
+        "binding_reason",
+        readiness.planned_path.binding_reason,
+        false,
+    );
+    let _ = buf.push_str("},\"block\":");
+    if let Some(block) = readiness.block {
+        let _ = buf.push('{');
+        json_field_str(buf, "code", block.code, true);
+        json_field_str(buf, "message", block.message, false);
+        let _ = buf.push('}');
+    } else {
+        let _ = buf.push_str("null");
+    }
+    let _ = buf.push_str(",\"loop_override\":{");
+    json_field_bool(buf, "required", readiness.loop_override.required, true);
+    json_field_bool(buf, "active", readiness.loop_override.active, true);
+    write_string_array(
+        buf,
+        "allowed_guards",
+        &readiness.loop_override.allowed_guards,
+        false,
+    );
+    let _ = buf.push('}');
+}
+
+fn render_charge_control_telemetry_object_fields<const N: usize>(
+    buf: &mut String<N>,
+    telemetry: crate::net_types::ChargeControlTelemetrySnapshot,
+) {
+    json_field_str(buf, "input_source", telemetry.input_source, true);
+    json_field_opt_u16(
+        buf,
+        "policy_target_ichg_ma",
+        telemetry.policy_target_ichg_ma,
+        true,
+    );
+    json_field_opt_i16(buf, "ibat_actual_ma", telemetry.ibat_actual_ma, true);
+    json_field_u32(
+        buf,
+        "target_voltage_mv",
+        telemetry.target_voltage_mv as u32,
+        true,
+    );
+    json_field_opt_u16(buf, "iindpm_ma", telemetry.iindpm_ma, true);
+    json_field_opt_u16(buf, "vindpm_mv", telemetry.vindpm_mv, true);
+    json_field_u32_opt(buf, "output_power_w10", telemetry.output_power_w10, true);
+    json_field_bool(
+        buf,
+        "power_telemetry_fresh",
+        telemetry.power_telemetry_fresh,
+        true,
+    );
+    json_field_opt_str(
+        buf,
+        "input_limit_summary",
+        telemetry.input_limit_summary,
+        true,
+    );
+    json_field_opt_str(
+        buf,
+        "output_limit_summary",
+        telemetry.output_limit_summary,
+        false,
+    );
+}
+
+fn render_charge_control_evidence_object_fields<const N: usize>(
+    buf: &mut String<N>,
+    evidence: crate::net_types::ChargeControlEvidenceEntrySnapshot,
+) {
+    json_field_str(buf, "source", evidence.source, true);
+    json_field_str(buf, "code", evidence.code, true);
+    json_field_str(buf, "label", evidence.label, true);
+    let _ = buf.push_str("\"value\":");
+    match evidence.value {
+        crate::net_types::ChargeControlEvidenceValueSnapshot::None => {
+            let _ = buf.push_str("null");
+        }
+        crate::net_types::ChargeControlEvidenceValueSnapshot::Bool(value) => {
+            let _ = buf.push_str(if value { "true" } else { "false" });
+        }
+        crate::net_types::ChargeControlEvidenceValueSnapshot::I32(value) => {
+            let _ = write!(buf, "{}", value);
+        }
+        crate::net_types::ChargeControlEvidenceValueSnapshot::U16(value) => {
+            let _ = write!(buf, "{}", value);
+        }
+        crate::net_types::ChargeControlEvidenceValueSnapshot::U32(value) => {
+            let _ = write!(buf, "{}", value);
+        }
+        crate::net_types::ChargeControlEvidenceValueSnapshot::Str(value) => {
+            let _ = buf.push('"');
+            write_json_string_escaped(buf, value);
+            let _ = buf.push('"');
+        }
+    }
+}
+
 fn json_field_str<const N: usize>(
     buf: &mut String<N>,
     key: &str,
@@ -1396,6 +1664,15 @@ fn json_field_u32<const N: usize>(
     trailing_comma: bool,
 ) {
     json_field_opt_num(buf, key, Some(value as i64), trailing_comma);
+}
+
+fn json_field_u32_opt<const N: usize>(
+    buf: &mut String<N>,
+    key: &str,
+    value: Option<u32>,
+    trailing_comma: bool,
+) {
+    json_field_opt_num(buf, key, value.map(|value| value as i64), trailing_comma);
 }
 
 fn json_field_opt_u8<const N: usize>(
@@ -1762,10 +2039,9 @@ mod tests {
                     target: "rsoc_80",
                     speed: "ma_500",
                     timer_h: 2,
+                    power_path: "auto",
                 },
-                advanced_power: crate::net_types::AdvancedPowerSettingsSnapshot::defaults(),
-                advanced_power_capabilities:
-                    crate::net_types::AdvancedPowerCapabilitiesSnapshot::for_rated_vout(12_000),
+                ..DeviceSettingsSnapshot::defaults()
             },
         );
         let value: serde_json::Value = serde_json::from_str(body.as_str())

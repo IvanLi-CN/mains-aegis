@@ -50,6 +50,7 @@ import {
   type SVGProps,
 } from "react";
 import type { LucideIcon } from "lucide-react";
+import * as Dialog from "@radix-ui/react-dialog";
 import {
   bindDevdDevice,
   getIdentity,
@@ -62,6 +63,7 @@ import {
 } from "../api/client";
 import type {
   AdvancedPowerSettings,
+  ChargeControlDetail,
   DeviceRecord,
   DeviceSettings,
   DevdDevice,
@@ -89,6 +91,7 @@ import {
   useDeviceRegistry,
   type AddDeviceInput,
   type DeviceChannelTransport,
+  type ManualChargeControlInput,
   type WifiProvisioningProgress,
 } from "../device-registry/context";
 import { isDemoQueryEnabled } from "../demo/query";
@@ -1633,21 +1636,22 @@ function buildFleetEntryRecord(
     : null;
   const httpBaseUrl =
     companionBaseUrl ?? devdLanBaseUrl(httpDevice, identity);
+  const devdRecordId =
+    devdDevice?.id ??
+    httpDevice?.id ??
+    existingRecord?.target.rememberedChannels?.devd?.devdDeviceId ??
+    deviceId;
   const target = {
     deviceId,
-    baseUrl: httpBaseUrl ?? existingRecord?.target.baseUrl ?? devdBaseUrl,
+    baseUrl: devdBaseUrl,
     alias:
       existingRecord?.target.alias ??
       identity?.hostname ??
       discovered.displayName,
     location: existingRecord?.target.location ?? "devd records",
     addedAt: existingRecord?.target.addedAt ?? new Date().toISOString(),
-    transport:
-      existingRecord?.target.transport ??
-      (httpDevice ? "http" : "devd"),
-    preferredTransport:
-      existingRecord?.target.preferredTransport ??
-      (httpDevice ? "http" : "devd"),
+    transport: "devd" as const,
+    preferredTransport: "devd" as const,
     rememberedChannels: {
       ...existingRecord?.target.rememberedChannels,
       ...(httpDevice
@@ -1670,16 +1674,14 @@ function buildFleetEntryRecord(
             },
           }
         : {}),
-      ...(devdDevice
-        ? {
-            devd: {
-              baseUrl: devdBaseUrl,
-              devdDeviceId: devdDevice.id,
-              seenAt: new Date().toISOString(),
-              transport: devdDevice.transport === "mock" ? "mock" : "usb",
-            },
-          }
-        : {}),
+      devd: {
+        baseUrl: devdBaseUrl,
+        devdDeviceId: devdRecordId,
+        seenAt: new Date().toISOString(),
+        transport: devdDevice
+          ? (devdDevice.transport === "mock" ? "mock" : "usb")
+          : "lan",
+      },
     },
   } satisfies DeviceRecord["target"];
   const connected =
@@ -3420,6 +3422,25 @@ function errorFeedback(error: DeviceRecord["error"]): UiFeedback {
   };
 }
 
+function manualChargeControlFeedback(
+  error: DeviceRecord["error"],
+): UiFeedback {
+  const detail = chargeControlDetailFromPayload(error?.details);
+  if (detail?.readiness.block?.message) {
+    return {
+      tone: "error",
+      message: `${sentenceWithTerminator(detail.readiness.block.message)} Planned path: ${chargeControlPathLabel(detail)}.`,
+    };
+  }
+  if (detail?.readiness.state === "confirm_required") {
+    return {
+      tone: "error",
+      message: chargeControlSummaryText(detail),
+    };
+  }
+  return errorFeedback(error);
+}
+
 function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
   const status = record.status;
   return (
@@ -3482,7 +3503,128 @@ function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
 }
 
 function PowerPage({ record }: { record: DeviceRecord }) {
+  const {
+    setManualChargePrefs,
+    refreshChargeControlDetail,
+    previewManualCharge,
+    controlManualCharge,
+  } = useDeviceRegistry();
   const status = record.status;
+  const settings = record.settings;
+  const liveDetail = record.chargeControlDetail;
+  const [manualPrefs, setManualPrefs] = useState<DeviceSettings["manual_charge"]>(
+    settings?.manual_charge ?? defaultManualChargePrefs(),
+  );
+  const [feedback, setFeedback] = useState<UiFeedback | null>(null);
+  const [dialogFeedback, setDialogFeedback] = useState<UiFeedback | null>(null);
+  const [busy, setBusy] = useState<
+    "request-save" | "request-start" | "stop" | "confirm" | null
+  >(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [requestDialogOpen, setRequestDialogOpen] = useState(false);
+  const [previewDetail, setPreviewDetail] = useState<ChargeControlDetail | null>(
+    null,
+  );
+  const refreshChargeControlDetailRef = useRef(refreshChargeControlDetail);
+  const chargeControlRefreshKey = [
+    record.target.deviceId,
+    record.target.transport ?? "",
+    record.target.preferredTransport ?? "",
+    record.target.baseUrl,
+    record.target.rememberedChannels?.devd?.baseUrl ?? "",
+    record.target.rememberedChannels?.devd?.devdDeviceId ?? "",
+    record.serial?.source ?? "",
+    record.serial?.baseUrl ?? "",
+    record.serial?.connected ? "connected" : "disconnected",
+  ].join("|");
+
+  useEffect(() => {
+    refreshChargeControlDetailRef.current = refreshChargeControlDetail;
+  }, [refreshChargeControlDetail]);
+
+  useEffect(() => {
+    if (!settings?.manual_charge) return;
+    setManualPrefs({
+      ...settings.manual_charge,
+      power_path: settings.manual_charge.power_path ?? "auto",
+    });
+  }, [settings]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let retryTimer: number | null = null;
+    let retriedBootstrap = false;
+    const runRefresh = () => {
+      void refreshChargeControlDetailRef.current(record.target.deviceId).then(
+        (result) => {
+          if (cancelled) return;
+          if (result.ok || result.detail) {
+            setFeedback(null);
+            return;
+          }
+          const bootstrapRetry =
+            !retriedBootstrap &&
+            (record.target.temporary ||
+              record.target.transport === "devd" ||
+              record.target.preferredTransport === "devd") &&
+            (result.error?.code === "serial_session_required" ||
+              result.error?.code === "devd_channel_unavailable");
+          if (bootstrapRetry) {
+            retriedBootstrap = true;
+            retryTimer = window.setTimeout(() => {
+              retryTimer = null;
+              runRefresh();
+            }, 500);
+            return;
+          }
+          setFeedback(errorFeedback(result.error));
+        },
+      );
+    };
+    runRefresh();
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
+  }, [chargeControlRefreshKey, record.target.deviceId]);
+
+  useEffect(() => {
+    if (!requestDialogOpen) {
+      setPreviewBusy(false);
+      setPreviewDetail(null);
+      setDialogFeedback(null);
+      return;
+    }
+    if (liveDetail?.summary.manual_active) {
+      setPreviewBusy(false);
+      setPreviewDetail(liveDetail);
+      setDialogFeedback(null);
+      return;
+    }
+    let cancelled = false;
+    setPreviewBusy(true);
+    setDialogFeedback(null);
+    void previewManualCharge(record.target.deviceId, manualPrefs).then((result) => {
+      if (cancelled) return;
+      setPreviewBusy(false);
+      setPreviewDetail(result.detail ?? null);
+      if (!result.ok && !result.detail) {
+        setDialogFeedback(errorFeedback(result.error));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    requestDialogOpen,
+    record.target.deviceId,
+    manualPrefs.target,
+    manualPrefs.speed,
+    manualPrefs.timer_h,
+    manualPrefs.power_path,
+    liveDetail?.summary.manual_active,
+  ]);
+
   const pressureScore = Math.max(0, Math.min(100, status?.input.pressure_score_pct ?? 0));
   const pressureState = status?.input.pressure_state ?? "--";
   const limitReason = status?.charger.limit_reason ?? "none";
@@ -3497,161 +3639,905 @@ function PowerPage({ record }: { record: DeviceRecord }) {
     tpsTotalIoutMa,
     tpsLimitThresholdMa,
   );
+  const chargeControlTone = chargeControlSeverity(liveDetail);
+  const chargeControlLoading = liveDetail == null;
+  const requestDetail = previewDetail ?? liveDetail;
+  const currentReason =
+    liveDetail?.readiness.block?.message ??
+    powerReasonLabel(liveDetail?.summary.last_stop_reason);
+  const directEvidence = chargeControlEvidenceText(liveDetail);
+  const directEvidenceEntries = chargeControlEvidenceEntries(liveDetail);
+  const chargeCurrentSource = chargePowerPathLabel(
+    liveDetail?.telemetry.input_source ?? status?.input.source,
+  );
+  const chargeBoundPath = chargeControlPathLabel(liveDetail);
+  const chargePolicyTarget = formatCurrent(
+    liveDetail?.telemetry.policy_target_ichg_ma,
+  );
+  const chargeInputLimitSummary = liveDetail?.telemetry.input_limit_summary ?? "--";
+  const chargeIbatActual = formatCurrent(liveDetail?.telemetry.ibat_actual_ma);
+  const chargeLoopLabel = chargeControlLoopLabel(liveDetail);
+  const controlDetailEntries = [
+    {
+      label: "Target voltage",
+      value: formatVoltage(liveDetail?.telemetry.target_voltage_mv),
+    },
+    {
+      label: "Input limit",
+      value: liveDetail?.telemetry.input_limit_summary ?? "--",
+    },
+    {
+      label: "Output limit",
+      value: liveDetail?.telemetry.output_limit_summary ?? "--",
+    },
+    {
+      label: "VINDPM",
+      value: formatVoltage(liveDetail?.telemetry.vindpm_mv),
+    },
+    {
+      label: "IINDPM",
+      value: formatCurrent(liveDetail?.telemetry.iindpm_ma),
+    },
+    {
+      label: "Output power",
+      value: formatPowerWatts(liveDetail?.telemetry.output_power_w10),
+    },
+  ];
+  const readinessEntries = [
+    { label: "Current reason", value: currentReason },
+    {
+      label: "Loop avoid",
+      value: chargeControlLoopLabel(liveDetail),
+    },
+    {
+      label: "Remaining",
+      value: formatRemainingMinutes(liveDetail?.summary.remaining_minutes),
+    },
+  ];
+
+  async function persistManualChargePrefs(
+    busyState: "request-save" | "request-start" | "confirm",
+  ): Promise<boolean> {
+    setBusy(busyState);
+    setDialogFeedback(null);
+    const result = await setManualChargePrefs(record.target.deviceId, manualPrefs);
+    if (!result.ok) {
+      setBusy(null);
+      setDialogFeedback(errorFeedback(result.error));
+      return false;
+    }
+    return true;
+  }
+
+  async function onRequestDialogSaveDefaults() {
+    const saved = await persistManualChargePrefs("request-save");
+    const refreshed = saved
+      ? await refreshChargeControlDetail(record.target.deviceId)
+      : null;
+    setBusy(null);
+    if (!saved) return;
+    if (refreshed && !refreshed.ok && !refreshed.detail) {
+      setFeedback(errorFeedback(refreshed.error));
+      return;
+    }
+    setRequestDialogOpen(false);
+    setFeedback(successFeedback("Manual charge defaults saved"));
+  }
+
+  async function onRequestDialogStart(confirmLoop = false) {
+    const saved = await persistManualChargePrefs(
+      confirmLoop ? "confirm" : "request-start",
+    );
+    if (!saved) return;
+    const result = await controlManualCharge(record.target.deviceId, {
+      action: "start",
+      confirm_loop: confirmLoop || undefined,
+    });
+    setBusy(null);
+    if (result.ok) {
+      setRequestDialogOpen(false);
+      setPreviewDetail(null);
+      setDialogFeedback(null);
+      setFeedback(successFeedback(result.message ?? "Manual charge started"));
+      return;
+    }
+    if (result.detail) {
+      setPreviewDetail(result.detail);
+      if (result.detail.readiness.state === "confirm_required") {
+        return;
+      }
+    }
+    if (result.error) {
+      setDialogFeedback(manualChargeControlFeedback(result.error));
+    }
+  }
+
+  async function onRequestDialogStop() {
+    setBusy("stop");
+    setDialogFeedback(null);
+    const result = await controlManualCharge(record.target.deviceId, {
+      action: "stop",
+    });
+    setBusy(null);
+    if (result.ok) {
+      setRequestDialogOpen(false);
+      setPreviewDetail(null);
+      setFeedback(successFeedback(result.message ?? "Manual charge stopped"));
+      return;
+    }
+    if (result.detail) setPreviewDetail(result.detail);
+    if (result.error) {
+      setDialogFeedback(manualChargeControlFeedback(result.error));
+    }
+  }
+
   return (
     <section className="page-flow">
       <DeviceStatusBand record={record} />
-      <div className="detail-grid three">
-        <InfoPanel title="Input" icon={PlugZap}>
-          <div className="power-pressure-summary">
-            <span className={`severity-badge severity-${pressureSeverity}`}>
-              {pressureState}
-            </span>
-            <strong>{pressureScore}%</strong>
-            <span>{pressureReasonLabel}</span>
+      <section className="power-domain-section" data-evidence-target="power-charging">
+        <div className="power-domain-header">
+          <span className="power-domain-icon">
+            <BatteryCharging size={18} />
+          </span>
+          <div>
+            <h2>Charging</h2>
+            <p>
+              Manual and automatic charge control, selected input path, source
+              pressure, and charger runtime.
+            </p>
           </div>
-          <div
-            className="power-pressure-bar"
-            aria-label={`Input pressure ${pressureScore}%`}
-          >
-            <span
-              className={`power-pressure-fill power-pressure-fill-${pressureSeverity}`}
-              style={{ width: `${pressureScore}%` }}
+        </div>
+
+        <section
+          className="info-panel charge-control-panel"
+          data-evidence-target="charge-control"
+        >
+          <header>
+            <BatteryCharging size={18} />
+            <h2>Charge Control</h2>
+          </header>
+          <div className="charge-control-shell">
+            <div className="charge-control-overview">
+              <div className="charge-control-hero">
+                <div className="charge-control-status">
+                  <span className={`severity-badge severity-${chargeControlTone}`}>
+                    {chargeModeLabel(liveDetail)}
+                  </span>
+                  <strong>{chargeControlHeadline(liveDetail)}</strong>
+                  <p>{chargeControlSummaryText(liveDetail)}</p>
+                </div>
+              </div>
+              <div className="charge-control-kpis charge-control-kpis-overview">
+                <div className="charge-kpi">
+                  <span>Current source</span>
+                  <strong>{chargeCurrentSource}</strong>
+                  <em>{status?.charger.state ?? "--"}</em>
+                </div>
+                <div className="charge-kpi">
+                  <span>Bound path</span>
+                  <strong>{chargeBoundPath}</strong>
+                  <em>{chargePowerPathLabel(status?.input.source)}</em>
+                </div>
+                <div className="charge-kpi">
+                  <span>Policy target</span>
+                  <strong>{chargePolicyTarget}</strong>
+                  <em>{chargeInputLimitSummary}</em>
+                </div>
+                <div className="charge-kpi">
+                  <span>IBAT actual</span>
+                  <strong>{chargeIbatActual}</strong>
+                  <em>{chargeLoopLabel}</em>
+                </div>
+              </div>
+            </div>
+
+            <div className="charge-control-body">
+              <div className="charge-control-main">
+                <section className="charge-control-section">
+                  <h3>Control detail</h3>
+                  <div className="charge-control-fact-grid">
+                    {controlDetailEntries.map((entry) => (
+                      <div className="charge-control-fact" key={entry.label}>
+                        <span>{entry.label}</span>
+                        <strong>{entry.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+                {directEvidenceEntries.length ? (
+                  <section className="charge-control-section">
+                    <h3>Direct evidence</h3>
+                    <div className="charge-evidence-grid">
+                      {directEvidenceEntries.map((entry) => (
+                        <div
+                          className="charge-evidence-card"
+                          key={`${entry.source}:${entry.code}`}
+                        >
+                          <span>{entry.label}</span>
+                          <strong>{chargeControlEvidenceValue(entry.value)}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : directEvidence ? (
+                  <section className="charge-control-section">
+                    <h3>Direct evidence</h3>
+                    <p className="charge-control-section-copy">{directEvidence}</p>
+                  </section>
+                ) : null}
+              </div>
+              <aside className="charge-control-rail" aria-label="Charge readiness and evidence">
+                <div className="charge-control-rail-group charge-control-rail-action">
+                  <h3>Next step</h3>
+                  <p className="charge-control-rail-copy">
+                    {chargeControlActionHint(liveDetail)}
+                  </p>
+                  <div className="form-actions charge-control-actions charge-control-actions-inline">
+                    <button
+                      className="primary-button"
+                      data-importance="critical"
+                      type="button"
+                      disabled={busy !== null}
+                      onClick={() => {
+                        setFeedback(null);
+                        setDialogFeedback(null);
+                        setPreviewDetail(null);
+                        setRequestDialogOpen(true);
+                      }}
+                    >
+                      {liveDetail?.summary.manual_active
+                        ? "Manage manual charge"
+                        : "Request manual charge"}
+                    </button>
+                  </div>
+                  {feedback ? <FeedbackMessage feedback={feedback} /> : null}
+                </div>
+
+                <div className="charge-control-rail-group">
+                  <h3>Readiness</h3>
+                  <p className="charge-control-rail-copy">
+                    {chargeControlReadinessHint(liveDetail)}
+                  </p>
+                  <div className="charge-control-readiness-grid">
+                    {readinessEntries.map((entry) => (
+                      <div className="charge-control-readiness-card" key={entry.label}>
+                        <span>{entry.label}</span>
+                        <strong>{entry.value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </section>
+
+        <div className="detail-grid charge-diagnostics-grid">
+          <InfoPanel title="Input" icon={PlugZap}>
+            <div className="power-pressure-summary">
+              <span className={`severity-badge severity-${pressureSeverity}`}>
+                {pressureState}
+              </span>
+              <strong>{pressureScore}%</strong>
+              <span>{pressureReasonLabel}</span>
+            </div>
+            <div
+              className="power-pressure-bar"
+              aria-label={`Input pressure ${pressureScore}%`}
+            >
+              <span
+                className={`power-pressure-fill power-pressure-fill-${pressureSeverity}`}
+                style={{ width: `${pressureScore}%` }}
+              />
+            </div>
+            <MetricLine label="Source" value={status?.input.source ?? "--"} />
+            <MetricLine
+              label="Mains present"
+              value={boolLabel(status?.input.mains_present, "yes", "no")}
             />
+            <MetricLine
+              label="Pre-TPS VIN"
+              value={formatVoltage(resolvePreTpsVinMv(status?.input))}
+            />
+            <MetricLine
+              label="VIN IIN"
+              value={formatCurrent(status?.input.vin_iin_ma)}
+            />
+            <MetricLine
+              label="Pressure"
+              value={`${pressureState} / ${pressureScore}%`}
+            />
+            <MetricLine
+              label="Reason"
+              value={pressureReasonLabel}
+            />
+            <MetricLine
+              label="TPS output"
+              value={powerThresholdSummary(tpsTotalIoutMa, tpsLimitThresholdMa)}
+            />
+            <MetricLine
+              label="VIN baseline"
+              value={formatVoltage(status?.input.vin_baseline_mv)}
+            />
+            <MetricLine
+              label="VIN drop"
+              value={formatVoltage(status?.input.vin_drop_mv)}
+            />
+          </InfoPanel>
+          <InfoPanel title="Charger" icon={BatteryCharging}>
+            <MetricLine label="State" value={status?.charger.state ?? "--"} />
+            <div className="power-limit-summary">
+              <span className={`severity-badge severity-${pressureSeverity}`}>
+                {status?.charger.limit_active ? "limited" : "tracking"}
+              </span>
+              <strong>{formatCurrent(status?.charger.policy_target_ichg_ma)}</strong>
+              <span>{limitReasonLabel}</span>
+            </div>
+            <MetricLine
+              label="Stop cause"
+              value={stopSummary}
+            />
+            <MetricLine
+              label="Detail"
+              value={status?.charger.detail_status ?? "--"}
+            />
+            <MetricLine
+              label="Allow charge"
+              value={boolLabel(status?.charger.allow_charge, "yes", "no")}
+            />
+            <MetricLine
+              label="ICHG"
+              value={formatCurrent(status?.charger.ichg_ma)}
+            />
+            <MetricLine
+              label="Policy target"
+              value={formatCurrent(status?.charger.policy_target_ichg_ma)}
+            />
+            <MetricLine
+              label="Limit"
+              value={boolLabel(status?.charger.limit_active, "yes", "no")}
+            />
+            <MetricLine
+              label="Limit reason"
+              value={limitReasonLabel}
+            />
+            <MetricLine
+              label="Limit threshold"
+              value={formatCurrent(status?.charger.limit_threshold_ma)}
+            />
+            <MetricLine
+              label="IBAT"
+              value={formatCurrent(status?.charger.ibat_ma)}
+            />
+          </InfoPanel>
+        </div>
+      </section>
+
+      <section className="power-domain-section" data-evidence-target="power-discharging">
+        <div className="power-domain-header">
+          <span className="power-domain-icon">
+            <Cable size={18} />
+          </span>
+          <div>
+            <h2>Discharging</h2>
+            <p>
+              Output gate state and live load on each UPS output path.
+            </p>
           </div>
-          <MetricLine label="Source" value={status?.input.source ?? "--"} />
-          <MetricLine
-            label="Mains present"
-            value={boolLabel(status?.input.mains_present, "yes", "no")}
-          />
-          <MetricLine
-            label="Pre-TPS VIN"
-            value={formatVoltage(resolvePreTpsVinMv(status?.input))}
-          />
-          <MetricLine
-            label="VIN IIN"
-            value={formatCurrent(status?.input.vin_iin_ma)}
-          />
-          <MetricLine
-            label="Pressure"
-            value={`${pressureState} / ${pressureScore}%`}
-          />
-          <MetricLine
-            label="Reason"
-            value={pressureReasonLabel}
-          />
-          <MetricLine
-            label="TPS output"
-            value={powerThresholdSummary(tpsTotalIoutMa, tpsLimitThresholdMa)}
-          />
-          <MetricLine
-            label="VIN baseline"
-            value={formatVoltage(status?.input.vin_baseline_mv)}
-          />
-          <MetricLine
-            label="VIN drop"
-            value={formatVoltage(status?.input.vin_drop_mv)}
-          />
-        </InfoPanel>
-        <InfoPanel title="Charger" icon={BatteryCharging}>
-          <MetricLine label="State" value={status?.charger.state ?? "--"} />
-          <div className="power-limit-summary">
-            <span className={`severity-badge severity-${pressureSeverity}`}>
-              {status?.charger.limit_active ? "limited" : "tracking"}
-            </span>
-            <strong>{formatCurrent(status?.charger.policy_target_ichg_ma)}</strong>
-            <span>{limitReasonLabel}</span>
-          </div>
-          <MetricLine
-            label="Stop cause"
-            value={stopSummary}
-          />
-          <MetricLine
-            label="Detail"
-            value={status?.charger.detail_status ?? "--"}
-          />
-          <MetricLine
-            label="Allow charge"
-            value={boolLabel(status?.charger.allow_charge, "yes", "no")}
-          />
-          <MetricLine
-            label="ICHG"
-            value={formatCurrent(status?.charger.ichg_ma)}
-          />
-          <MetricLine
-            label="Policy target"
-            value={formatCurrent(status?.charger.policy_target_ichg_ma)}
-          />
-          <MetricLine
-            label="Limit"
-            value={boolLabel(status?.charger.limit_active, "yes", "no")}
-          />
-          <MetricLine
-            label="Limit reason"
-            value={limitReasonLabel}
-          />
-          <MetricLine
-            label="Limit threshold"
-            value={formatCurrent(status?.charger.limit_threshold_ma)}
-          />
-          <MetricLine
-            label="IBAT"
-            value={formatCurrent(status?.charger.ibat_ma)}
-          />
-        </InfoPanel>
-        <InfoPanel title="Output gate" icon={Cable}>
-          <MetricLine
-            label="Requested"
-            value={status?.output.requested ?? "--"}
-          />
-          <MetricLine label="Active" value={status?.output.active ?? "--"} />
-          <MetricLine
-            label="Recoverable"
-            value={status?.output.recoverable ?? "--"}
-          />
-          <MetricLine
-            label="Gate reason"
-            value={status?.output.gate_reason ?? "none"}
-          />
-        </InfoPanel>
-        <InfoPanel title="OUT A" icon={Activity}>
-          <MetricLine
-            label="State"
-            value={status?.output.out_a.state ?? "--"}
-          />
-          <MetricLine
-            label="Enabled"
-            value={boolLabel(status?.output.out_a.enabled, "yes", "no")}
-          />
-          <MetricLine
-            label="Voltage"
-            value={formatVoltage(status?.output.out_a.vbus_mv)}
-          />
-          <MetricLine
-            label="Current"
-            value={formatCurrent(status?.output.out_a.iout_ma)}
-          />
-        </InfoPanel>
-        <InfoPanel title="OUT B" icon={Activity}>
-          <MetricLine
-            label="State"
-            value={status?.output.out_b.state ?? "--"}
-          />
-          <MetricLine
-            label="Enabled"
-            value={boolLabel(status?.output.out_b.enabled, "yes", "no")}
-          />
-          <MetricLine
-            label="Voltage"
-            value={formatVoltage(status?.output.out_b.vbus_mv)}
-          />
-          <MetricLine
-            label="Current"
-            value={formatCurrent(status?.output.out_b.iout_ma)}
-          />
-        </InfoPanel>
-      </div>
+        </div>
+
+        <div className="detail-grid charge-diagnostics-grid">
+          <InfoPanel
+            title="Output gate"
+            icon={Cable}
+            className="charge-diagnostics-span-two"
+          >
+            <MetricLine
+              label="Requested"
+              value={status?.output.requested ?? "--"}
+            />
+            <MetricLine label="Active" value={status?.output.active ?? "--"} />
+            <MetricLine
+              label="Recoverable"
+              value={status?.output.recoverable ?? "--"}
+            />
+            <MetricLine
+              label="Gate reason"
+              value={status?.output.gate_reason ?? "none"}
+            />
+          </InfoPanel>
+          <InfoPanel title="OUT A" icon={Activity}>
+            <MetricLine
+              label="State"
+              value={status?.output.out_a.state ?? "--"}
+            />
+            <MetricLine
+              label="Enabled"
+              value={boolLabel(status?.output.out_a.enabled, "yes", "no")}
+            />
+            <MetricLine
+              label="Voltage"
+              value={formatVoltage(status?.output.out_a.vbus_mv)}
+            />
+            <MetricLine
+              label="Current"
+              value={formatCurrent(status?.output.out_a.iout_ma)}
+            />
+          </InfoPanel>
+          <InfoPanel title="OUT B" icon={Activity}>
+            <MetricLine
+              label="State"
+              value={status?.output.out_b.state ?? "--"}
+            />
+            <MetricLine
+              label="Enabled"
+              value={boolLabel(status?.output.out_b.enabled, "yes", "no")}
+            />
+            <MetricLine
+              label="Voltage"
+              value={formatVoltage(status?.output.out_b.vbus_mv)}
+            />
+            <MetricLine
+              label="Current"
+              value={formatCurrent(status?.output.out_b.iout_ma)}
+            />
+          </InfoPanel>
+        </div>
+      </section>
+      <Dialog.Root
+        open={requestDialogOpen}
+        onOpenChange={(open) => {
+          if (busy !== null) return;
+          setRequestDialogOpen(open);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="pwa-update-dialog-overlay" />
+          <Dialog.Content className="pwa-update-dialog charge-request-dialog">
+            <Dialog.Title className="pwa-update-dialog-title">
+              Request manual charge
+            </Dialog.Title>
+            <Dialog.Description className="pwa-update-dialog-description">
+              Choose the target, charge current, timer, and preferred power
+              path. The preview and every explanation below come from the
+              device's formal charge-control contract.
+            </Dialog.Description>
+            <div className="settings-form">
+              <SettingsSegmentedControl
+                label="Charge target"
+                value={manualPrefs.target}
+                options={[
+                  ["pack_3v7", "3.7V"],
+                  ["rsoc_80", "80%"],
+                  ["full_100", "100%"],
+                ]}
+                onChange={(target) =>
+                  setManualPrefs((current) => ({
+                    ...current,
+                    target: target as DeviceSettings["manual_charge"]["target"],
+                  }))
+                }
+              />
+              <SettingsSegmentedControl
+                label="Charge speed"
+                value={manualPrefs.speed}
+                options={[
+                  ["ma_100", "100mA"],
+                  ["ma_500", "500mA"],
+                  ["ma_1000", "1A"],
+                ]}
+                onChange={(speed) =>
+                  setManualPrefs((current) => ({
+                    ...current,
+                    speed: speed as DeviceSettings["manual_charge"]["speed"],
+                  }))
+                }
+              />
+              <SettingsSegmentedControl
+                label="Timer"
+                value={String(manualPrefs.timer_h)}
+                options={[
+                  ["1", "1h"],
+                  ["2", "2h"],
+                  ["6", "6h"],
+                ]}
+                onChange={(timer) =>
+                  setManualPrefs((current) => ({
+                    ...current,
+                    timer_h: Number(timer) as 1 | 2 | 6,
+                  }))
+                }
+              />
+              <SettingsSegmentedControl
+                label="Power path"
+                value={manualPrefs.power_path ?? "auto"}
+                options={[
+                  ["auto", "Auto"],
+                  ["dcin", "DCIN"],
+                  ["usbc", "USB-C"],
+                ]}
+                onChange={(powerPath) =>
+                  setManualPrefs((current) => ({
+                    ...current,
+                    power_path: powerPath,
+                  }))
+                }
+              />
+              <div className="settings-copy">
+                <p className="field-help">
+                  Next preset: {manualChargePresetLabel(manualPrefs)} via{" "}
+                  {chargePowerPathLabel(manualPrefs.power_path ?? "auto")}.
+                </p>
+                <p className="field-help">
+                  Planned path: {chargeControlPathLabel(requestDetail)}.
+                </p>
+                <p className="field-help">
+                  {previewBusy
+                    ? "Loading direct readiness evidence from the device..."
+                    : chargeControlSummaryText(requestDetail)}
+                </p>
+                {requestDetail?.readiness.state === "confirm_required" ? (
+                  <p className="field-help">
+                    Granting override only bypasses:{" "}
+                    {requestDetail.readiness.loop_override.allowed_guards.join(
+                      ", ",
+                    )}
+                    . Current output power is{" "}
+                    {requestDetail.telemetry.power_telemetry_fresh === false ||
+                    requestDetail.telemetry.output_power_w10 === null
+                      ? "unknown"
+                      : formatPowerWatts(requestDetail.telemetry.output_power_w10)}
+                    .
+                  </p>
+                ) : null}
+                {chargeControlEvidenceText(requestDetail) ? (
+                  <p className="field-help">
+                    Direct evidence: {chargeControlEvidenceText(requestDetail)}
+                  </p>
+                ) : null}
+              </div>
+              <details className="settings-copy">
+                <summary>Charge capabilities and rules</summary>
+                <p className="field-help">
+                  Target voltage:{" "}
+                  {formatVoltage(settings?.charge_capabilities?.target_voltage_mv)}
+                  . Normal / derated current:{" "}
+                  {formatCurrent(settings?.charge_capabilities?.normal_current_ma)} /{" "}
+                  {formatCurrent(
+                    settings?.charge_capabilities?.dc_derated_current_ma,
+                  )}
+                  . DCIN limit:{" "}
+                  {formatCurrent(settings?.charge_capabilities?.dcin_input_limit_ma)}.
+                </p>
+                <p className="field-help">
+                  USB-C PD gate:{" "}
+                  {settings?.charge_capabilities
+                    ? `${(settings.charge_capabilities.usb_pd_high_power_min_voltage_mv / 1000).toFixed(2)} V-${(settings.charge_capabilities.usb_pd_high_power_max_voltage_mv / 1000).toFixed(2)} V / ${(settings.charge_capabilities.usb_pd_high_power_min_power_mw / 1000).toFixed(0)} W`
+                    : "--"}
+                  . Loop-free start:{" "}
+                  {settings?.charge_capabilities
+                    ? `< ${(settings.charge_capabilities.loop_start_max_power_without_confirm_w10 / 10).toFixed(1)} W`
+                    : "--"}
+                  . Loop stop latch:{" "}
+                  {settings?.charge_capabilities
+                    ? `> ${(settings.charge_capabilities.loop_stop_power_latched_w10 / 10).toFixed(1)} W`
+                    : "--"}
+                  .
+                </p>
+              </details>
+              {dialogFeedback ? <FeedbackMessage feedback={dialogFeedback} /> : null}
+            </div>
+            <div className="pwa-update-dialog-actions">
+              <Dialog.Close asChild>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={busy !== null}
+                >
+                  Cancel
+                </button>
+              </Dialog.Close>
+              {liveDetail?.summary.manual_active ? (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={busy !== null}
+                  onClick={() => void onRequestDialogStop()}
+                >
+                  <ButtonLabel
+                    busy={busy === "stop"}
+                    busyText="Stopping"
+                    text="STOP"
+                  />
+                </button>
+              ) : null}
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={busy !== null}
+                onClick={() => void onRequestDialogSaveDefaults()}
+              >
+                <ButtonLabel
+                  busy={busy === "request-save"}
+                  busyText="Saving"
+                  text="Save defaults"
+                />
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={
+                  busy !== null ||
+                  previewBusy ||
+                  requestDetail?.readiness.action === "none" ||
+                  liveDetail?.summary.manual_active === true
+                }
+                onClick={() =>
+                  void onRequestDialogStart(
+                    requestDetail?.readiness.state === "confirm_required",
+                  )
+                }
+              >
+                <ButtonLabel
+                  busy={busy === "request-start" || busy === "confirm"}
+                  busyText={
+                    busy === "confirm" ? "Confirming" : "Requesting"
+                  }
+                  text={
+                    requestDetail?.readiness.state === "confirm_required"
+                      ? "Allow and START"
+                      : "Request START"
+                  }
+                />
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </section>
   );
+}
+
+function defaultManualChargePrefs(): DeviceSettings["manual_charge"] {
+  return {
+    target: "full_100",
+    speed: "ma_500",
+    timer_h: 2,
+    power_path: "auto",
+  };
+}
+
+function manualChargePresetLabel(
+  prefs: DeviceSettings["manual_charge"],
+): string {
+  return [
+    manualChargeTargetLabel(prefs.target),
+    manualChargeSpeedLabel(prefs.speed),
+    manualChargeTimerLabel(prefs.timer_h),
+  ].join(" / ");
+}
+
+function manualChargeTargetLabel(target: string): string {
+  if (target === "pack_3v7") return "3.7V";
+  if (target === "rsoc_80") return "80%";
+  if (target === "full_100") return "100%";
+  return target;
+}
+
+function manualChargeSpeedLabel(speed: string): string {
+  if (speed === "ma_100") return "100mA";
+  if (speed === "ma_500") return "500mA";
+  if (speed === "ma_1000") return "1A";
+  return speed;
+}
+
+function manualChargeTimerLabel(timer: number): string {
+  return `${timer}h`;
+}
+
+function chargeModeLabel(detail: ChargeControlDetail | null | undefined): string {
+  if (!detail) return "SYNC";
+  if (detail.summary.manual_active) return "MANUAL";
+  if (detail.summary.stop_inhibit) return "HOLD";
+  return "AUTO";
+}
+
+function chargeControlSeverity(
+  detail: ChargeControlDetail | null | undefined,
+): "ok" | "info" | "warning" {
+  if (!detail) return "info";
+  if (detail.readiness.state === "blocked") return "warning";
+  if (detail.readiness.state === "confirm_required") return "warning";
+  if (detail.summary.manual_active && detail.summary.loop_override_active)
+    return "warning";
+  if (detail.summary.manual_active) return "info";
+  if (detail.summary.stop_inhibit) return "warning";
+  return "ok";
+}
+
+function chargeControlHeadline(
+  detail: ChargeControlDetail | null | undefined,
+): string {
+  if (!detail) return "Loading charge control details";
+  switch (detail.readiness.state) {
+    case "running":
+      return "Manual charge session active";
+    case "blocked":
+      return "Manual charge is not ready";
+    case "confirm_required":
+      return "USB-C loop confirmation required";
+    case "ready":
+      return "Manual charge is ready to start";
+    default:
+      return "Automatic charging state";
+  }
+}
+
+function chargeControlSummaryText(
+  detail: ChargeControlDetail | null | undefined,
+): string {
+  if (!detail) {
+    return "The app is fetching direct readiness evidence from the device.";
+  }
+  const plannedPath = chargeControlPathLabel(detail);
+  if (detail.summary.manual_active) {
+    return `Following ${plannedPath} with ${formatCurrent(
+      detail.telemetry.policy_target_ichg_ma,
+    )} target and ${formatCurrent(detail.telemetry.ibat_actual_ma)} actual battery current.`;
+  }
+  if (detail.readiness.state === "blocked" && detail.readiness.block) {
+    return `${sentenceWithTerminator(detail.readiness.block.message)} Planned path: ${plannedPath}.`;
+  }
+  if (detail.readiness.state === "confirm_required") {
+    return `START would bind ${plannedPath}. Current output power is ${
+      detail.telemetry.power_telemetry_fresh === false ||
+      detail.telemetry.output_power_w10 === null
+        ? "unknown"
+        : formatPowerWatts(detail.telemetry.output_power_w10)
+    }, so USB-C loop confirmation is required.`;
+  }
+  if (detail.summary.stop_inhibit) {
+    return `Manual charge is held after ${powerReasonLabel(
+      detail.summary.last_stop_reason,
+    )}. A new request is required before it can resume.`;
+  }
+  return `Next START will bind ${plannedPath} and target ${formatCurrent(
+    detail.telemetry.policy_target_ichg_ma,
+  )}.`;
+}
+
+function chargeControlReadinessHint(
+  detail: ChargeControlDetail | null | undefined,
+): string {
+  if (!detail) {
+    return "Waiting for the device to return the current charge-control detail.";
+  }
+  if (detail.summary.manual_active) {
+    return "Manual charge is already running on the bound path. Use the action area to inspect or stop the current session.";
+  }
+  if (detail.readiness.state === "confirm_required") {
+    return "This request needs an explicit USB-C loopback override before the device will allow manual charge to start.";
+  }
+  if (detail.readiness.state === "blocked") {
+    return "The selected preset is blocked right now. Clear the live block below, then request a new manual session.";
+  }
+  if (detail.summary.stop_inhibit) {
+    return "A previous manual session is still held. Wait for the hold condition to clear, then request a fresh session.";
+  }
+  return "The current preset is startable now and the device is ready to accept a manual charge request.";
+}
+
+function chargeControlActionHint(
+  detail: ChargeControlDetail | null | undefined,
+): string {
+  if (!detail) return "Charge-control actions are loading from the device.";
+  if (detail.summary.manual_active) {
+    return "Open the dialog to stop this session or update its defaults.";
+  }
+  if (detail.readiness.state === "confirm_required") {
+    return "Open the request dialog and confirm the temporary USB-C loop override.";
+  }
+  if (detail.readiness.state === "blocked") {
+    return "Open the request dialog after the current block clears.";
+  }
+  return "Open the request dialog to review the preset and start manual charge.";
+}
+
+function chargeControlLoopLabel(
+  detail: ChargeControlDetail | null | undefined,
+): string {
+  if (!detail) return "--";
+  if (detail.readiness.state === "confirm_required")
+    return "confirmation required";
+  if (detail.summary.loop_override_active) return "override active";
+  if (detail.summary.manual_active && detail.readiness.planned_path.bound === "usbc") {
+    return detail.telemetry.power_telemetry_fresh
+      ? "USB-C guarded"
+      : "USB-C telemetry stale";
+  }
+  if (detail.readiness.planned_path.bound === "dcin") return "not applicable on DCIN";
+  return "inactive";
+}
+
+function chargeControlPathLabel(
+  detail: ChargeControlDetail | null | undefined,
+): string {
+  if (!detail) return "--";
+  return chargePowerPathLabel(
+    detail.readiness.planned_path.bound ??
+      detail.readiness.planned_path.requested,
+  );
+}
+
+function chargePowerPathLabel(path: string | null | undefined): string {
+  if (!path) return "--";
+  if (path === "dcin") return "DCIN";
+  if (path === "usbc") return "USB-C";
+  if (path === "auto") return "Auto";
+  if (path === "usbc_pd_high_power") return "USB-C high-power PD";
+  return path.replaceAll("_", " ");
+}
+
+function formatRemainingMinutes(value: number | null | undefined): string {
+  if (typeof value !== "number") return "--";
+  if (value <= 0) return "0m";
+  const hours = Math.floor(value / 60);
+  const minutes = value % 60;
+  if (hours === 0) return `${minutes}m`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
+}
+
+function formatPowerWatts(valueW10: number | null | undefined): string {
+  if (typeof valueW10 !== "number") return "--";
+  return `${(valueW10 / 10).toFixed(1)} W`;
+}
+
+function sentenceWithTerminator(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+function chargeControlDetailFromPayload(
+  details: unknown,
+): ChargeControlDetail | null {
+  if (!details || typeof details !== "object") return null;
+  if (
+    "summary" in details &&
+    "readiness" in details &&
+    "telemetry" in details &&
+    "evidence" in details
+  ) {
+    return details as ChargeControlDetail;
+  }
+  return null;
+}
+
+function chargeControlEvidenceText(
+  detail: ChargeControlDetail | null | undefined,
+): string | null {
+  if (!detail || detail.evidence.length === 0) return null;
+  return chargeControlEvidenceEntries(detail)
+    .slice(0, 3)
+    .map((entry) => `${entry.label}: ${chargeControlEvidenceValue(entry.value)}`)
+    .join(" · ");
+}
+
+function chargeControlEvidenceEntries(
+  detail: ChargeControlDetail | null | undefined,
+): ChargeControlDetail["evidence"] {
+  if (!detail) return [];
+  return detail.evidence.slice(0, 4);
+}
+
+function chargeControlEvidenceValue(
+  value: ChargeControlDetail["evidence"][number]["value"],
+): string {
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") return value;
+  return "--";
 }
 
 function BatteryPage({ record }: { record: DeviceRecord }) {
@@ -3734,8 +4620,9 @@ function BatteryPage({ record }: { record: DeviceRecord }) {
         </InfoPanel>
         <InfoPanel title="Issue detail" icon={AlertTriangle}>
           <p className="panel-note">
-            {battery?.issue_detail ??
-              "No active battery issue reported by the v1 status snapshot."}
+            {battery?.issue_detail
+              ? batteryIssueDetailSummary(battery.issue_detail)
+              : "No active battery issue reported by the v1 status snapshot."}
           </p>
         </InfoPanel>
       </div>
@@ -3948,7 +4835,6 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   const {
     sendWifiConfig,
     clearWifiConfig,
-    setManualChargePrefs,
     setAdvancedPower,
     resetAdvancedPower,
   } =
@@ -3956,16 +4842,6 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   const settings = record.settings;
   const [ssid, setSsid] = useState(settings?.wifi.ssid ?? "");
   const [psk, setPsk] = useState("");
-  const [manualPrefs, setManualPrefs] = useState<
-    DeviceSettings["manual_charge"]
-  >(
-    settings?.manual_charge ??
-      ({
-        target: "full_100",
-        speed: "ma_500",
-        timer_h: 2,
-      } as DeviceSettings["manual_charge"]),
-  );
   const [advancedPower, setAdvancedPowerDraft] = useState<AdvancedPowerSettings>(
     settings?.advanced_power ?? defaultAdvancedPowerSettings(),
   );
@@ -3974,7 +4850,7 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   const [wifiProgress, setWifiProgress] =
     useState<WifiProvisioningProgress | null>(null);
   const [busy, setBusy] = useState<
-    "wifi-save" | "wifi-clear" | "manual" | "advanced-power" | "advanced-power-reset" | null
+    "wifi-save" | "wifi-clear" | "advanced-power" | "advanced-power-reset" | null
   >(null);
   const activeTransport = activeRecordTransport(record);
   const hardwareCapability = resolveUpsHardwareCapability(record);
@@ -3996,7 +4872,6 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
 
   useEffect(() => {
     if (!settings) return;
-    setManualPrefs(settings.manual_charge);
     setAdvancedPowerDraft(settings.advanced_power);
     if (settings.wifi.ssid) setSsid(settings.wifi.ssid);
   }, [settings]);
@@ -4061,22 +4936,6 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
     } else {
       setWifiMessage(errorFeedback(result.error));
     }
-  }
-
-  async function onManualPrefsSubmit(event: FormEvent) {
-    event.preventDefault();
-    setBusy("manual");
-    setMessage(null);
-    const result = await setManualChargePrefs(
-      record.target.deviceId,
-      manualPrefs,
-    );
-    setBusy(null);
-    setMessage(
-      result.ok
-        ? successFeedback("Manual charge preferences updated")
-        : errorFeedback(result.error),
-    );
   }
 
   async function onAdvancedPowerSubmit(event: FormEvent) {
@@ -4223,66 +5082,38 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
         <section className="info-panel settings-panel">
           <header>
             <SlidersHorizontal size={18} />
-            <h2>Device settings</h2>
+            <h2>Charge control moved</h2>
           </header>
-          <form className="settings-form" onSubmit={onManualPrefsSubmit}>
-            <SettingsSegmentedControl
-              label="Charge target"
-              value={manualPrefs.target}
-              options={[
-                ["pack_3v7", "3.7V"],
-                ["rsoc_80", "80%"],
-                ["full_100", "100%"],
-              ]}
-              onChange={(target) =>
-                setManualPrefs((current) => ({
-                  ...current,
-                  target: target as DeviceSettings["manual_charge"]["target"],
-                }))
-              }
-            />
-            <SettingsSegmentedControl
-              label="Charge speed"
-              value={manualPrefs.speed}
-              options={[
-                ["ma_100", "100mA"],
-                ["ma_500", "500mA"],
-                ["ma_1000", "1A"],
-              ]}
-              onChange={(speed) =>
-                setManualPrefs((current) => ({
-                  ...current,
-                  speed: speed as DeviceSettings["manual_charge"]["speed"],
-                }))
-              }
-            />
-            <SettingsSegmentedControl
-              label="Timer"
-              value={String(manualPrefs.timer_h)}
-              options={[
-                ["1", "1h"],
-                ["2", "2h"],
-                ["6", "6h"],
-              ]}
-              onChange={(timer) =>
-                setManualPrefs((current) => ({
-                  ...current,
-                  timer_h: Number(timer) as 1 | 2 | 6,
-                }))
-              }
-            />
-            <button
-              className="primary-button"
-              type="submit"
-              disabled={busy !== null}
-            >
-              <ButtonLabel
-                busy={busy === "manual"}
-                busyText="Applying"
-                text="Apply prefs"
-              />
-            </button>
-          </form>
+          <div className="settings-copy">
+            <p className="field-help">
+              Manual and automatic charging controls now live on the Power page
+              so the operator can see runtime path binding, limits, loop
+              confirmation, and live charger telemetry before opening the
+              manual-charge request dialog.
+            </p>
+            <div className="secret-note capability-note">
+              <CircleHelp size={15} />
+              <div>
+                <strong>Use Power for charge control</strong>
+                <span>
+                  Settings only keeps WiFi and advanced power thresholds. Power
+                  now keeps the live charge contract visible while the manual
+                  charge request itself runs inside a popup flow.
+                </span>
+              </div>
+            </div>
+            <div className="form-actions">
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() =>
+                  navigate(deviceHref(record.target.deviceId, "power"))
+                }
+              >
+                Open Power page
+              </button>
+            </div>
+          </div>
         </section>
 
         <section className="info-panel settings-panel advanced-power-panel">
@@ -4614,13 +5445,15 @@ function InfoPanel({
   title,
   icon: Icon,
   children,
+  className,
 }: {
   title: string;
   icon: typeof Gauge;
   children: React.ReactNode;
+  className?: string;
 }) {
   return (
-    <section className="info-panel">
+    <section className={className ? `info-panel ${className}` : "info-panel"}>
       <header>
         <Icon size={18} />
         <h2>{title}</h2>
@@ -5562,6 +6395,44 @@ function pressureSeverityForState(
 
 function powerReasonLabel(reason: string | null | undefined): string {
   switch (reason) {
+    case "user_stop":
+      return "User stop";
+    case "timer_expired":
+      return "Timer expired";
+    case "pack_reached":
+      return "Pack target reached";
+    case "rsoc_reached":
+      return "RSOC target reached";
+    case "full_reached":
+      return "Full target reached";
+    case "safety_blocked":
+      return "Safety blocked";
+    case "manual_charge_blocked_safety":
+      return "Safety blocked";
+    case "manual_charge_blocked_no_input":
+      return "No usable input";
+    case "manual_charge_blocked_temp":
+      return "Temperature blocked";
+    case "manual_charge_blocked_no_bms":
+      return "Battery charge authorization unavailable";
+    case "manual_charge_blocked_output_overload":
+      return "Output overload";
+    case "manual_charge_path_unavailable":
+      return "Requested path unavailable";
+    case "manual_charge_path_not_qualified":
+      return "USB-C not charge-qualified";
+    case "loop_confirmation_required":
+      return "Loop confirmation required";
+    case "auto_dcin_fallback":
+      return "Auto selected DCIN";
+    case "auto_high_power_usb_pd":
+      return "Auto selected high-power USB-C PD";
+    case "auto_usbc_fallback":
+      return "Auto selected USB-C";
+    case "explicit_dcin":
+      return "Manual DCIN";
+    case "explicit_usbc":
+      return "Manual USB-C";
     case "tps_output_current":
       return "TPS output current";
     case "pressure_tps_output_current":
@@ -5578,6 +6449,32 @@ function powerReasonLabel(reason: string | null | undefined): string {
       return "IINDPM";
     case "pressure_poorsrc":
       return "Poor source";
+    case "xchg_blocked":
+      return "BMS charge path blocked";
+    case "chg_fet_off":
+      return "Battery charge FET off";
+    case "xdsg_blocked":
+      return "BMS discharge path blocked";
+    case "dsg_fet_off":
+      return "Battery discharge FET off";
+    case "cell_undervoltage":
+      return "Cell undervoltage";
+    case "remaining_capacity_alarm":
+      return "Remaining-capacity alarm";
+    case "permanent_failure":
+      return "Permanent failure";
+    case "sleep_mode":
+      return "Sleep mode";
+    case "pack_output_path_open":
+      return "Pack output path open";
+    case "physical_vbat_absent":
+      return "Pack VBAT absent at charger";
+    case "op_status_unavailable":
+      return "BMS status unavailable";
+    case "sbs_error_code":
+      return "BMS SBS error";
+    case "no_battery":
+      return "Pack not detected";
     case "vin_drop_watch":
       return "VIN drop watch";
     case "vin_drop":
@@ -5589,6 +6486,60 @@ function powerReasonLabel(reason: string | null | undefined): string {
     default:
       return reason;
   }
+}
+
+function batteryIssueDetailSummary(reason: string): string {
+  const label = powerReasonLabel(reason);
+  return label === reason ? reason : `${label} (${reason})`;
+}
+
+function manualChargeBmsBlockCause(
+  status: UpsStatus | null | undefined,
+): string | null {
+  if (!status) return null;
+  if (status.battery.no_battery) {
+    return "the battery pack is not detected";
+  }
+  switch (status.battery.issue_detail) {
+    case "xchg_blocked":
+      return "the battery management system is blocking the charge path (XCHG)";
+    case "chg_fet_off":
+      return "the battery charge FET is off";
+    case "xdsg_blocked":
+      return "the battery discharge path is blocked by BMS";
+    case "dsg_fet_off":
+      return "the battery discharge FET is off";
+    case "cell_undervoltage":
+      return "the battery is below the cell-undervoltage recovery gate";
+    case "remaining_capacity_alarm":
+      return "the battery raised a remaining-capacity alarm";
+    case "permanent_failure":
+      return "the battery reports a permanent failure";
+    case "sleep_mode":
+      return "the battery is in sleep mode";
+    case "pack_output_path_open":
+      return "the pack output path is open";
+    case "physical_vbat_absent":
+      return "the charger does not see pack voltage on VBAT";
+    case "op_status_unavailable":
+      return "the BMS operation-status word is unavailable";
+    case "sbs_error_code":
+      return "the battery reported an SBS error";
+    case "no_battery":
+      return "the battery pack is not detected";
+    default:
+      break;
+  }
+  if (status.battery.charge_fet_on === false) {
+    return "the battery charge FET is off";
+  }
+  if (status.charger.vbat_present === false) {
+    return "the charger does not detect battery voltage";
+  }
+  if (status.battery.discharge_ready === false) {
+    return "battery authorization telemetry is not ready";
+  }
+  return null;
 }
 
 function powerThresholdSummary(
@@ -5863,8 +6814,8 @@ function attentionSummary(record: DeviceRecord): string {
   if (status.output.gate_reason && status.output.gate_reason !== "none")
     return "Protection active";
   if (
-    status.thermal.tmp_a_state === "hot" ||
-    status.thermal.tmp_b_state === "hot"
+    status.thermal?.tmp_a_state === "hot" ||
+    status.thermal?.tmp_b_state === "hot"
   )
     return "High temperature";
   if (status.battery.issue_detail) return "Battery attention";

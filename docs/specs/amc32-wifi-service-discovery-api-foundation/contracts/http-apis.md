@@ -327,13 +327,15 @@ Host: mains-aegis-a1b2c3.local
 {
   "target": "rsoc_80",
   "speed": "ma_500",
-  "timer_h": 2
+  "timer_h": 2,
+  "power_path": "auto"
 }
 ```
 
 - `target`: `pack_3v7 | rsoc_80 | full_100`
 - `speed`: `ma_100 | ma_500 | ma_1000`
 - `timer_h`: `1 | 2 | 6`
+- `power_path`: `auto | dcin | usbc`
 
 ### 响应（Response）
 
@@ -347,6 +349,81 @@ Host: mains-aegis-a1b2c3.local
 
 - `400/invalid_manual_charge_prefs`: 参数不在安全集合中（retryable: no）
 - `409/busy`: 已有未消费 LAN management command（retryable: yes）
+
+## Charge Control（GET `/api/v1/charge-control`）
+
+- 范围（Scope）: external
+- 变更（Change）: New
+- 鉴权（Auth）: none
+
+### 响应（Response）
+
+- Success: `200 OK`
+
+返回 owner-facing 详情对象：
+
+```json
+{
+  "summary": {},
+  "readiness": {},
+  "telemetry": {},
+  "evidence": []
+}
+```
+
+- `summary`: 当前模式、会话剩余时间、loop override 活跃态
+- `readiness`: `state/action/planned_path/block/loop_override`
+- `telemetry`: 当前输入源、策略目标、IBAT 实测、目标电压、IINDPM/VINDPM、输出功率与限流摘要
+- `evidence`: 固件正式导出的直接证据数组
+
+## Charge Control Preview（POST `/api/v1/charge-control/preview`）
+
+- 范围（Scope）: external
+- 变更（Change）: New
+- 鉴权（Auth）: none
+
+### 请求（Request）
+
+```json
+{
+  "target": "full_100",
+  "current_ma": 500,
+  "timer_minutes": 120,
+  "power_path": "auto"
+}
+```
+
+### 响应（Response）
+
+- Success: `200 OK`
+
+返回与 `GET /api/v1/charge-control` 同形状的 detail，用于回答“如果现在点 START 会发生什么”。
+
+## Manual Charge Control（POST `/api/v1/control/manual-charge`）
+
+- 范围（Scope）: external
+- 变更（Change）: New
+- 鉴权（Auth）: none
+
+### 请求（Request）
+
+```json
+{"action":"start","confirm_loop":false}
+```
+
+- `action`: `start | stop`
+- `confirm_loop`: 仅用于 USB-C loop confirmation 场景
+
+### 响应（Response）
+
+- Success: `200 OK`
+
+返回与 `GET /api/v1/charge-control` 同形状的 detail。
+
+### 错误（Errors）
+
+- 正式失败也必须返回同形状 detail 于 `error.details`
+- `loop_confirmation_required` 必须以 `readiness.state=confirm_required` 表达
 
 ## Advanced Power（POST `/api/v1/settings/advanced-power`）
 

@@ -27,9 +27,9 @@ use crate::{
     mdns::{self, MdnsRuntimeConfig},
     mdns_wire::{derive_device_identity, DeviceIdentity},
     net_contract::{
-        accepts_event_stream, is_api_v1_path, render_diag_snapshot_json, render_identity_json,
-        render_network_json, render_ping_json, render_settings_json, render_status_json,
-        write_error_body, write_sse_event, BuildInfo,
+        accepts_event_stream, is_api_v1_path, render_charge_control_result_json,
+        render_diag_snapshot_json, render_identity_json, render_network_json, render_ping_json,
+        render_settings_json, render_status_json, write_error_body, write_sse_event, BuildInfo,
     },
     net_logic::{
         build_http_response_head, build_sse_response_head, lan_advanced_power_apply_timeout_ms,
@@ -37,15 +37,16 @@ use crate::{
         LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL_MS,
     },
     net_types::{
-        AdvancedPowerCapabilitiesSnapshot, AdvancedPowerSettingsSnapshot, DerivedPowerSnapshot,
-        DeviceSettingsSnapshot, FrontPanelRuntimeSnapshot, ManualChargeSettingsSnapshot,
-        NetworkUiSummary, UpsStatusSnapshot, WifiConnectionState, WifiErrorKind,
-        WifiSettingsSnapshot, WifiSnapshot,
+        AdvancedPowerCapabilitiesSnapshot, AdvancedPowerSettingsSnapshot,
+        ChargeControlDetailSnapshot, DerivedPowerSnapshot, DeviceSettingsSnapshot,
+        FrontPanelRuntimeSnapshot, ManualChargeSettingsSnapshot, NetworkUiSummary,
+        UpsStatusSnapshot, WifiConnectionState, WifiErrorKind, WifiSettingsSnapshot, WifiSnapshot,
     },
     usb_cdc_protocol::{
         parse_http_advanced_power_request, parse_http_log_level_request,
+        parse_http_manual_charge_control_request, parse_http_manual_charge_preview_request,
         parse_http_manual_charge_request, parse_http_reset_request, parse_http_wifi_config_request,
-        LogLevel, ManualChargePrefsCommand, WifiConfigSecret,
+        LogLevel, ManualChargeControlCommand, ManualChargePrefsCommand, WifiConfigSecret,
     },
 };
 
@@ -80,6 +81,8 @@ static UPS_STATUS: Mutex<RefCell<UpsStatusSnapshot>> =
     Mutex::new(RefCell::new(UpsStatusSnapshot::empty()));
 static DIAG_SNAPSHOT: Mutex<RefCell<DerivedPowerSnapshot>> =
     Mutex::new(RefCell::new(DerivedPowerSnapshot::empty()));
+static CHARGE_CONTROL_DETAIL: Mutex<RefCell<ChargeControlDetailSnapshot>> =
+    Mutex::new(RefCell::new(ChargeControlDetailSnapshot::empty()));
 static FRONT_PANEL_RUNTIME: Mutex<RefCell<FrontPanelRuntimeSnapshot>> =
     Mutex::new(RefCell::new(FrontPanelRuntimeSnapshot::unavailable()));
 static DEVICE_IDENTITY: Mutex<RefCell<Option<DeviceIdentity>>> = Mutex::new(RefCell::new(None));
@@ -108,6 +111,8 @@ pub enum LanManagementCommand {
     ClearWifi,
     SetLogLevel(LogLevel),
     SetManualCharge(ManualChargePrefsCommand),
+    PreviewChargeControl(ManualChargePrefsCommand),
+    ControlManualCharge(ManualChargeControlCommand),
     SetAdvancedPower(AdvancedPowerSettingsSnapshot),
     ResetAdvancedPower,
     RecoverBmsDischargeAuthorization,
@@ -123,6 +128,11 @@ pub enum LanCommandResult {
         message: &'static str,
     },
     AdvancedPowerStorageFailed,
+    ManualChargeControlError {
+        code: &'static str,
+        message: &'static str,
+        details: String<HTTP_RESPONSE_BODY_CAP>,
+    },
 }
 
 pub fn publish_ups_status(snapshot: UpsStatusSnapshot) {
@@ -134,6 +144,12 @@ pub fn publish_ups_status(snapshot: UpsStatusSnapshot) {
 pub fn publish_diag_snapshot(snapshot: DerivedPowerSnapshot) {
     critical_section::with(|cs| {
         *DIAG_SNAPSHOT.borrow_ref_mut(cs) = snapshot;
+    });
+}
+
+pub fn publish_charge_control_detail(snapshot: ChargeControlDetailSnapshot) {
+    critical_section::with(|cs| {
+        *CHARGE_CONTROL_DETAIL.borrow_ref_mut(cs) = snapshot;
     });
 }
 
@@ -235,7 +251,12 @@ pub fn set_device_log_level(level: &'static str) {
     });
 }
 
-pub fn set_manual_charge_settings(target: &'static str, speed: &'static str, timer_h: u8) {
+pub fn set_manual_charge_settings(
+    target: &'static str,
+    speed: &'static str,
+    timer_h: u8,
+    power_path: &'static str,
+) {
     critical_section::with(|cs| {
         let mut settings = DEVICE_SETTINGS
             .borrow_ref(cs)
@@ -245,6 +266,7 @@ pub fn set_manual_charge_settings(target: &'static str, speed: &'static str, tim
             target,
             speed,
             timer_h,
+            power_path,
         };
         *DEVICE_SETTINGS.borrow_ref_mut(cs) = Some(settings);
     });
@@ -846,6 +868,10 @@ async fn handle_http_connection(socket: &mut TcpSocket<'_>) -> Result<(), embass
             render_status_json(&mut body, current_status_snapshot());
             write_http_response(socket, "200 OK", body.as_str(), origin).await?;
         }
+        "/api/v1/charge-control" => {
+            render_charge_control_result_json(&mut body, current_charge_control_detail());
+            write_http_response(socket, "200 OK", body.as_str(), origin).await?;
+        }
         "/api/v1/diag-snapshot" => {
             let mut diag_body = String::<HTTP_DIAG_SNAPSHOT_BODY_CAP>::new();
             let packages = parse_diag_snapshot_query_packages(query);
@@ -942,6 +968,32 @@ async fn handle_http_write(
                 }
             }
         }
+        ("POST", "/api/v1/control/manual-charge") => {
+            match parse_http_manual_charge_control_request(request_body) {
+                Ok(command) => {
+                    await_command_result = true;
+                    queue_lan_command(LanManagementCommand::ControlManualCharge(command))
+                }
+                Err(err) => {
+                    write_error_body(&mut body, err.code(), err.message(), false, None);
+                    write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+                    return Ok(());
+                }
+            }
+        }
+        ("POST", "/api/v1/charge-control/preview") => {
+            match parse_http_manual_charge_preview_request(request_body) {
+                Ok(prefs) => {
+                    await_command_result = true;
+                    queue_lan_command(LanManagementCommand::PreviewChargeControl(prefs))
+                }
+                Err(err) => {
+                    write_error_body(&mut body, err.code(), err.message(), false, None);
+                    write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+                    return Ok(());
+                }
+            }
+        }
         ("POST", "/api/v1/settings/advanced-power") => {
             match parse_http_advanced_power_request(request_body) {
                 Ok(settings) => {
@@ -1022,6 +1074,20 @@ async fn handle_http_write(
                             origin,
                         )
                         .await?;
+                        return Ok(());
+                    }
+                    LanCommandResult::ManualChargeControlError {
+                        code,
+                        message,
+                        details,
+                    } => {
+                        write_error_body(&mut body, code, message, false, Some(details.as_str()));
+                        let status = if code == "loop_confirmation_required" {
+                            "409 Conflict"
+                        } else {
+                            "400 Bad Request"
+                        };
+                        write_http_response(socket, status, body.as_str(), origin).await?;
                         return Ok(());
                     }
                 }
@@ -1154,6 +1220,10 @@ fn current_status_snapshot() -> UpsStatusSnapshot {
 
 fn current_diag_snapshot() -> DerivedPowerSnapshot {
     critical_section::with(|cs| *DIAG_SNAPSHOT.borrow_ref(cs))
+}
+
+fn current_charge_control_detail() -> ChargeControlDetailSnapshot {
+    critical_section::with(|cs| *CHARGE_CONTROL_DETAIL.borrow_ref(cs))
 }
 
 fn split_request_target(target: &str) -> (&str, Option<&str>) {

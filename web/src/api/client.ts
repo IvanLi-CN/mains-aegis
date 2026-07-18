@@ -3,11 +3,15 @@ import { isDemoQueryEnabled } from "../demo/query";
 import {
   buildAdvancedPowerCapabilities,
   buildAdvancedPowerDefaults,
+  resolvePreTpsVinMv,
 } from "./runtimeModeProfiles";
 import type {
   AdvancedPowerSettings,
   AppRuntimeMode,
   ApiErrorEnvelope,
+  ChargeCapabilities,
+  ChargeControlDetail,
+  ChargeControlSummary,
   DevdScanTraceEntry,
   DevdDevice,
   DefmtDecodeResult,
@@ -40,6 +44,21 @@ type MockBindTargetState = {
 
 const mockBindTargetStateByBaseUrl = new Map<string, MockBindTargetState>();
 const mockSettingsByBaseUrl = new Map<string, DeviceSettings>();
+const mockStatusByBaseUrl = new Map<string, UpsStatus>();
+
+export type ManualChargeControlRequest = {
+  action: "start" | "stop";
+  confirm_loop?: boolean;
+};
+
+export type ManualChargePreviewRequest = {
+  target: DeviceSettings["manual_charge"]["target"];
+  current_ma: number;
+  timer_minutes: number;
+  power_path: DeviceSettings["manual_charge"]["power_path"];
+};
+
+export type ManualChargeControlResponse = ChargeControlDetail;
 
 export const isMockBaseUrl = (baseUrl: string) => baseUrl.startsWith("mock:");
 const APP_SESSION_HEADER = "x-mains-aegis-app-session";
@@ -48,6 +67,14 @@ const HTTP_SERVICE_MODE_META = 'meta[name="mains-aegis-http-service-mode"]';
 const APP_RUNTIME_MODE_META = 'meta[name="mains-aegis-app-runtime-mode"]';
 const APP_SESSION_META = 'meta[name="mains-aegis-app-session"]';
 const RUNTIME_PLACEHOLDER_PREFIX = "__MAINS_AEGIS_";
+
+type ChargeControlCompatSummary = NonNullable<UpsStatus["charge_control"]> & {
+  binding_reason?: string | null;
+  loop_confirmation_required?: boolean | null;
+  loop_override_active?: boolean | null;
+  remaining_minutes?: number | null;
+  start_block_reason?: string | null;
+};
 
 export type BridgeBootstrap = {
   token_required?: boolean;
@@ -270,10 +297,23 @@ function requestMock<T>(
     return Promise.resolve(getMockNetwork(baseUrl) as T);
   }
   if (path === "/api/v1/status") {
-    return Promise.resolve(getMockStatus(baseUrl) as T);
+    return Promise.resolve(mockStatusForBaseUrl(baseUrl) as T);
+  }
+  if (path === "/api/v1/charge-control") {
+    return Promise.resolve(mockChargeControlDetailForBaseUrl(baseUrl) as T);
   }
   if (path === "/api/v1/settings") {
     return Promise.resolve(mockSettingsForBaseUrl(baseUrl) as T);
+  }
+  if (path === "/api/v1/charge-control/preview" && method === "POST") {
+    return Promise.resolve(previewMockManualChargeControl(baseUrl, body) as T);
+  }
+  if (path === "/api/v1/settings/manual-charge" && method === "POST") {
+    updateMockManualChargePrefs(baseUrl, body);
+    return Promise.resolve({ manual_charge: "updated" } as T);
+  }
+  if (path === "/api/v1/control/manual-charge" && method === "POST") {
+    return Promise.resolve(updateMockManualChargeControl(baseUrl, body) as T);
   }
   if (path === "/api/v1/settings/advanced-power" && method === "POST") {
     updateMockAdvancedPower(baseUrl, body);
@@ -451,8 +491,35 @@ function requestMockDevd<T>(
   if (path === "/api/v1/identity") return Promise.resolve(identity as T);
   if (path === "/api/v1/network") return Promise.resolve(network as T);
   if (path === "/api/v1/status") return Promise.resolve(status as T);
+  if (path === "/api/v1/charge-control")
+    return Promise.resolve(mockChargeControlDetailForBaseUrl(baseUrl) as T);
   if (path === "/api/v1/settings")
     return Promise.resolve(mockSettingsForBaseUrl(baseUrl) as T);
+  if (path === "/api/v1/charge-control/preview" && method === "POST") {
+    return Promise.resolve(previewMockManualChargeControl(baseUrl, body) as T);
+  }
+  if (path === "/api/v1/settings/manual-charge" && method === "POST") {
+    updateMockManualChargePrefs(baseUrl, body);
+    return Promise.resolve({ manual_charge: "updated" } as T);
+  }
+  if (path === "/api/v1/control/manual-charge" && method === "POST") {
+    return Promise.resolve(updateMockManualChargeControl(baseUrl, body) as T);
+  }
+  if (path.match(/^\/api\/v1\/devices\/[^/]+\/charge-control$/)) {
+    return Promise.resolve(mockChargeControlDetailForBaseUrl(baseUrl) as T);
+  }
+  if (
+    path.match(/^\/api\/v1\/devices\/[^/]+\/charge-control\/preview$/) &&
+    method === "POST"
+  ) {
+    return Promise.resolve(previewMockManualChargeControl(baseUrl, body) as T);
+  }
+  if (
+    path.match(/^\/api\/v1\/devices\/[^/]+\/control\/manual-charge$/) &&
+    method === "POST"
+  ) {
+    return Promise.resolve(updateMockManualChargeControl(baseUrl, body) as T);
+  }
   if (path.match(/^\/api\/v1\/devices\/[^/]+\/settings$/)) {
     return Promise.resolve(mockSettingsForBaseUrl(baseUrl) as T);
   }
@@ -460,7 +527,7 @@ function requestMockDevd<T>(
     return Promise.resolve({
       connected: true,
       protocol: "mains-aegis.cdc.v1",
-      status,
+      status: mockStatusForBaseUrl(baseUrl),
       logs: [],
       trace: [],
       settings: mockSettingsForBaseUrl(baseUrl),
@@ -625,6 +692,42 @@ export const getSettings = (
     `/api/v1/settings${leaseQuery(leaseId)}`,
     options,
   );
+export async function getDeviceChargeControl(
+  baseUrl: string,
+  leaseId?: string,
+  options?: RequestOptions,
+): Promise<ChargeControlDetail> {
+  try {
+    const payload = await requestJson<unknown>(
+      baseUrl,
+      `/api/v1/charge-control${leaseQuery(leaseId)}`,
+      options,
+    );
+    if (isChargeControlDetailPayload(payload)) return payload;
+    const legacySummary = extractLegacyChargeControlSummary(payload);
+    if (legacySummary) {
+      return loadCompatibleDeviceChargeControl(
+        baseUrl,
+        leaseId,
+        undefined,
+        legacySummary,
+        options,
+      );
+    }
+    return loadCompatibleDeviceChargeControl(baseUrl, leaseId, undefined, undefined, options);
+  } catch (error) {
+    if (shouldFallbackToCompatibleChargeControl(error)) {
+      return loadCompatibleDeviceChargeControl(baseUrl, leaseId, undefined, undefined, options);
+    }
+    throw error;
+  }
+}
+export const previewDeviceChargeControl = (
+  baseUrl: string,
+  input: ManualChargePreviewRequest,
+  leaseId?: string,
+) =>
+  previewDeviceChargeControlCompat(baseUrl, input, leaseId);
 
 export type DevdSerialSession = {
   connected: boolean;
@@ -644,6 +747,358 @@ type RawDevdSerialSession = {
   trace: SerialTraceEntry[];
   settings?: DeviceSettings;
 };
+
+function isChargeControlDetailPayload(
+  payload: unknown,
+): payload is ChargeControlDetail {
+  return Boolean(
+    payload &&
+      typeof payload === "object" &&
+      "summary" in payload &&
+      "readiness" in payload &&
+      "telemetry" in payload &&
+      "evidence" in payload,
+  );
+}
+
+function extractLegacyChargeControlSummary(
+  payload: unknown,
+): Partial<ChargeControlCompatSummary> | undefined {
+  if (!payload || typeof payload !== "object" || !("charge_control" in payload)) {
+    return undefined;
+  }
+  const summary = (payload as { charge_control?: unknown }).charge_control;
+  return summary && typeof summary === "object"
+    ? (summary as Partial<ChargeControlCompatSummary>)
+    : undefined;
+}
+
+function shouldFallbackToCompatibleChargeControl(error: unknown): boolean {
+  return (
+    error instanceof MainsAegisApiError &&
+    (error.envelope.code === "not_found" || error.envelope.code === "http_404")
+  );
+}
+
+function defaultCompatChargeControlSummary(): ChargeControlCompatSummary {
+  return {
+    mode: "auto",
+    manual_active: false,
+    takeover: false,
+    stop_inhibit: false,
+    last_stop_reason: null,
+    requested_power_path: "auto",
+    bound_power_path: null,
+    start_state: "ready",
+    output_power_w10: null,
+    power_telemetry_fresh: true,
+    binding_reason: null,
+    loop_confirmation_required: false,
+    loop_override_active: false,
+    remaining_minutes: null,
+    start_block_reason: null,
+  };
+}
+
+function compatManualChargeCurrentMa(
+  speed: DeviceSettings["manual_charge"]["speed"],
+): number {
+  if (speed === "ma_100") return 100;
+  if (speed === "ma_1000") return 1000;
+  return 500;
+}
+
+function compatManualChargePreviewFromSettings(
+  settings: DeviceSettings,
+): ManualChargePreviewRequest {
+  return {
+    target: settings.manual_charge.target,
+    current_ma: compatManualChargeCurrentMa(settings.manual_charge.speed),
+    timer_minutes: settings.manual_charge.timer_h * 60,
+    power_path: settings.manual_charge.power_path ?? "auto",
+  };
+}
+
+function compatChargeControlSummary(
+  status: UpsStatus,
+  summaryOverride?: Partial<ChargeControlCompatSummary>,
+): ChargeControlCompatSummary {
+  return {
+    ...defaultCompatChargeControlSummary(),
+    ...((status.charge_control ?? {}) as Partial<ChargeControlCompatSummary>),
+    ...(summaryOverride ?? {}),
+  };
+}
+
+function compatBoundPowerPath(
+  status: UpsStatus,
+  requestedPowerPath: string,
+  summary: ChargeControlCompatSummary,
+): string | null {
+  if (requestedPowerPath === "dcin" || requestedPowerPath === "usbc") {
+    return requestedPowerPath;
+  }
+  const directSource = status.input.source;
+  if (directSource === "dcin" || directSource === "usbc") return directSource;
+  return summary.bound_power_path ?? null;
+}
+
+function compatBindingReason(
+  requestedPowerPath: string,
+  boundPowerPath: string | null,
+  summary: ChargeControlCompatSummary,
+): string | null {
+  if (summary.binding_reason) return summary.binding_reason;
+  if (!boundPowerPath) return null;
+  if (requestedPowerPath === "auto" && boundPowerPath === "dcin") {
+    return "auto_dcin_fallback";
+  }
+  if (requestedPowerPath === "auto" && boundPowerPath === "usbc") {
+    return "auto_usbc";
+  }
+  if (requestedPowerPath === "dcin") return "explicit_dcin";
+  if (requestedPowerPath === "usbc") return "explicit_usbc";
+  return null;
+}
+
+function compatChargeTelemetry(
+  status: UpsStatus,
+  settings: DeviceSettings,
+  summary: ChargeControlCompatSummary,
+) {
+  const inputSource = status.input.source ?? "unknown";
+  const dcinLimit = settings.charge_capabilities?.dcin_input_limit_ma ?? 1000;
+  const maxOutput = settings.charge_capabilities?.max_output_current_ma ?? 3500;
+  const pdMinVoltage =
+    settings.charge_capabilities?.usb_pd_high_power_min_voltage_mv ?? 9000;
+  const pdMaxVoltage =
+    settings.charge_capabilities?.usb_pd_high_power_max_voltage_mv ?? 20000;
+  const pdMinPowerMw =
+    settings.charge_capabilities?.usb_pd_high_power_min_power_mw ?? 20000;
+  return {
+    input_source: inputSource,
+    policy_target_ichg_ma: status.charger.policy_target_ichg_ma ?? null,
+    ibat_actual_ma: status.charger.ibat_ma ?? null,
+    target_voltage_mv:
+      settings.charge_capabilities?.target_voltage_mv ?? 16800,
+    iindpm_ma: status.charger.limit_active
+      ? status.charger.limit_threshold_ma ?? null
+      : null,
+    vindpm_mv: resolvePreTpsVinMv(status.input) ?? null,
+    output_power_w10: summary.output_power_w10 ?? null,
+    power_telemetry_fresh: summary.power_telemetry_fresh ?? true,
+    input_limit_summary:
+      inputSource === "dcin"
+        ? `DCIN <= ${dcinLimit} mA`
+        : inputSource === "usbc"
+          ? `USB-C PD gate ${pdMinVoltage / 1000}-${pdMaxVoltage / 1000} V / ${pdMinPowerMw / 1000} W`
+          : null,
+    output_limit_summary: `Max output ${maxOutput} mA`,
+  };
+}
+
+function compatChargeControlDetail(
+  status: UpsStatus,
+  settings: DeviceSettings,
+  previewRequest?: ManualChargePreviewRequest,
+  summaryOverride?: Partial<ChargeControlCompatSummary>,
+): ChargeControlDetail {
+  const summary = compatChargeControlSummary(status, summaryOverride);
+  const requestedPowerPath =
+    previewRequest?.power_path ??
+    summary.requested_power_path ??
+    settings.manual_charge.power_path ??
+    "auto";
+  const boundPowerPath = compatBoundPowerPath(
+    status,
+    requestedPowerPath,
+    summary,
+  );
+  const telemetry = compatChargeTelemetry(status, settings, summary);
+  const loopGuardThreshold =
+    settings.charge_capabilities?.loop_start_max_power_without_confirm_w10 ?? 20;
+  const loopConfirmationRequired =
+    boundPowerPath === "usbc" &&
+    (!telemetry.power_telemetry_fresh ||
+      telemetry.output_power_w10 === null ||
+      telemetry.output_power_w10 >= loopGuardThreshold);
+  const readinessState = summary.manual_active
+    ? "running"
+    : loopConfirmationRequired
+      ? "confirm_required"
+      : summary.start_state ?? "ready";
+  const readinessAction = summary.manual_active
+    ? "stop"
+    : readinessState === "confirm_required"
+      ? "confirm_loop"
+      : readinessState === "blocked"
+        ? "none"
+        : "start";
+  const startBlockCode =
+    typeof summary.start_block_reason === "string" &&
+    summary.start_block_reason.length > 0
+      ? summary.start_block_reason
+      : null;
+  const remainingMinutes = summary.manual_active
+    ? summary.remaining_minutes ??
+      previewRequest?.timer_minutes ??
+      settings.manual_charge.timer_h * 60
+    : null;
+  return {
+    summary: {
+      mode: summary.mode,
+      manual_active: summary.manual_active,
+      takeover: summary.takeover,
+      stop_inhibit: summary.stop_inhibit,
+      last_stop_reason: summary.last_stop_reason,
+      remaining_minutes: remainingMinutes,
+      loop_override_active: summary.loop_override_active ?? false,
+    },
+    readiness: {
+      state: readinessState,
+      action: readinessAction,
+      planned_path: {
+        requested: requestedPowerPath,
+        bound: boundPowerPath,
+        binding_reason: compatBindingReason(
+          requestedPowerPath,
+          boundPowerPath,
+          summary,
+        ),
+      },
+      block:
+        readinessState === "blocked"
+          ? {
+              code: startBlockCode ?? "blocked_unknown",
+              message: startBlockCode
+                ? `Manual charge is blocked by ${startBlockCode}.`
+                : "Manual charge is currently blocked.",
+            }
+          : null,
+      loop_override: {
+        required: loopConfirmationRequired,
+        active: summary.loop_override_active ?? false,
+        allowed_guards: [
+          "loop_start_low_output_gate",
+          "loop_telemetry_miss_latch",
+          "loop_stop_high_output_latch",
+        ],
+      },
+    },
+    telemetry,
+    evidence: [
+      {
+        source: "battery.charge_fet_on",
+        code: "charge_fet_on",
+        label: "Charge FET",
+        value: status.battery.charge_fet_on ?? null,
+      },
+      {
+        source: "charger.detail_status",
+        code: "detail_status",
+        label: "Charger status",
+        value: status.charger.detail_status ?? null,
+      },
+      {
+        source: "charger.vbat_present",
+        code: "vbat_present",
+        label: "Battery present",
+        value: status.charger.vbat_present,
+      },
+      {
+        source: "battery.no_battery",
+        code: "no_battery",
+        label: "No battery flag",
+        value: status.battery.no_battery,
+      },
+      {
+        source: "charge_control.output_power_w10",
+        code: "output_power_w10",
+        label: "Output power",
+        value: telemetry.output_power_w10,
+      },
+      {
+        source: "charge_control.power_telemetry_fresh",
+        code: "power_telemetry_fresh",
+        label: "Power telemetry fresh",
+        value: telemetry.power_telemetry_fresh,
+      },
+    ],
+  };
+}
+
+async function loadCompatibleDeviceChargeControl(
+  baseUrl: string,
+  leaseId?: string,
+  previewRequest?: ManualChargePreviewRequest,
+  summaryOverride?: Partial<ChargeControlCompatSummary>,
+  options?: RequestOptions,
+): Promise<ChargeControlDetail> {
+  const [status, settings] = await Promise.all([
+    getStatus(baseUrl, leaseId, options),
+    getSettings(baseUrl, leaseId, options),
+  ]);
+  return compatChargeControlDetail(
+    status,
+    settings,
+    previewRequest,
+    summaryOverride,
+  );
+}
+
+async function previewDeviceChargeControlCompat(
+  baseUrl: string,
+  input: ManualChargePreviewRequest,
+  leaseId?: string,
+): Promise<ChargeControlDetail> {
+  try {
+    const payload = await requestWithBody<unknown>(
+      baseUrl,
+      `/api/v1/charge-control/preview${leaseQuery(leaseId)}`,
+      "POST",
+      input,
+    );
+    if (isChargeControlDetailPayload(payload)) return payload;
+    const legacySummary = extractLegacyChargeControlSummary(payload);
+    if (legacySummary) {
+      return loadCompatibleDeviceChargeControl(
+        baseUrl,
+        leaseId,
+        input,
+        legacySummary,
+      );
+    }
+    return loadCompatibleDeviceChargeControl(baseUrl, leaseId, input);
+  } catch (error) {
+    if (shouldFallbackToCompatibleChargeControl(error)) {
+      return loadCompatibleDeviceChargeControl(baseUrl, leaseId, input);
+    }
+    throw error;
+  }
+}
+
+async function setDeviceManualChargeControlCompat(
+  baseUrl: string,
+  input: ManualChargeControlRequest,
+): Promise<ChargeControlDetail> {
+  const payload = await requestWithBody<unknown>(
+    baseUrl,
+    "/api/v1/control/manual-charge",
+    "POST",
+    input,
+  );
+  if (isChargeControlDetailPayload(payload)) return payload;
+  const legacySummary = extractLegacyChargeControlSummary(payload);
+  if (legacySummary) {
+    return loadCompatibleDeviceChargeControl(
+      baseUrl,
+      undefined,
+      undefined,
+      legacySummary,
+    );
+  }
+  return loadCompatibleDeviceChargeControl(baseUrl);
+}
 
 export type DevdSerialEvent = {
   id: string;
@@ -832,6 +1287,36 @@ export const setDeviceManualChargePrefs = (
     "POST",
     prefs,
   );
+export const setDeviceManualChargeControl = (
+  baseUrl: string,
+  input: ManualChargeControlRequest,
+) =>
+  setDeviceManualChargeControlCompat(baseUrl, input);
+export const getDevdDeviceChargeControl = (
+  baseUrl: string,
+  deviceId: string,
+) =>
+  requestJson<ChargeControlDetail>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/charge-control`,
+    { bridgeAuth: true },
+  );
+export const previewDevdDeviceChargeControl = (
+  baseUrl: string,
+  deviceId: string,
+  leaseId: string | null,
+  input: ManualChargePreviewRequest,
+) =>
+  requestWithBody<ChargeControlDetail>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/charge-control/preview`,
+    "POST",
+    {
+      ...input,
+      lease_id: leaseId ?? undefined,
+    },
+    { bridgeAuth: true },
+  );
 export const setDeviceAdvancedPower = (
   baseUrl: string,
   advancedPower: AdvancedPowerSettings,
@@ -898,6 +1383,22 @@ export const setDevdManualChargePrefs = (
     "/api/v1/settings/manual-charge",
     "POST",
     { ...prefs, device_id: deviceId, lease_id: leaseId ?? undefined },
+    { bridgeAuth: true },
+  );
+export const setDevdManualChargeControl = (
+  baseUrl: string,
+  deviceId: string,
+  leaseId: string | null,
+  input: ManualChargeControlRequest,
+) =>
+  requestWithBody<ChargeControlDetail>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/control/manual-charge`,
+    "POST",
+    {
+      ...input,
+      lease_id: leaseId ?? undefined,
+    },
     { bridgeAuth: true },
   );
 export const setDevdAdvancedPower = (
@@ -1108,7 +1609,9 @@ function defaultMockSettings(ratedVoutMv = 12_000): DeviceSettings {
       target: "full_100",
       speed: "ma_500",
       timer_h: 2,
+      power_path: "auto",
     },
+    charge_capabilities: defaultMockChargeCapabilities(),
     advanced_power: advancedPower,
     advanced_power_capabilities: buildAdvancedPowerCapabilities(ratedVoutMv),
   };
@@ -1123,6 +1626,377 @@ function mockSettingsForBaseUrl(baseUrl: string): DeviceSettings {
     mockSettingsByBaseUrl.set(baseUrl, defaultMockSettings(mockRatedVoutMv(baseUrl)));
   }
   return mockSettingsByBaseUrl.get(baseUrl)!;
+}
+
+function defaultMockChargeCapabilities(): ChargeCapabilities {
+  return {
+    target_voltage_mv: 16_800,
+    normal_current_ma: 500,
+    dc_derated_current_ma: 100,
+    dcin_input_limit_ma: 1_000,
+    max_output_current_ma: 3_500,
+    usb_pd_high_power_min_voltage_mv: 9_000,
+    usb_pd_high_power_max_voltage_mv: 20_000,
+    usb_pd_high_power_min_power_mw: 20_000,
+    loop_start_max_power_without_confirm_w10: 20,
+    loop_stop_power_latched_w10: 30,
+    loop_telemetry_miss_limit: 2,
+    supported_power_paths: ["auto", "dcin", "usbc"],
+    auto_path_priority: ["usbc", "dcin", "usbc"],
+  };
+}
+
+function defaultMockChargeControl(): ChargeControlSummary {
+  return {
+    mode: "auto",
+    manual_active: false,
+    takeover: false,
+    stop_inhibit: false,
+    last_stop_reason: null,
+    requested_power_path: "auto",
+    bound_power_path: null,
+    start_state: "idle",
+    output_power_w10: 0,
+    power_telemetry_fresh: true,
+  };
+}
+
+function mockStatusForBaseUrl(baseUrl: string): UpsStatus {
+  if (!mockStatusByBaseUrl.has(baseUrl)) {
+    const baseStatus = getMockStatus(baseUrl);
+    mockStatusByBaseUrl.set(baseUrl, {
+      ...baseStatus,
+      charge_control: baseStatus.charge_control ?? defaultMockChargeControl(),
+    });
+  }
+  return mockStatusByBaseUrl.get(baseUrl)!;
+}
+
+function manualChargeCurrentMa(
+  speed: DeviceSettings["manual_charge"]["speed"],
+): number {
+  if (speed === "ma_100") return 100;
+  if (speed === "ma_1000") return 1_000;
+  return 500;
+}
+
+function manualChargePreviewFromSettings(
+  settings: DeviceSettings,
+): ManualChargePreviewRequest {
+  return {
+    target: settings.manual_charge.target,
+    current_ma: manualChargeCurrentMa(settings.manual_charge.speed),
+    timer_minutes: settings.manual_charge.timer_h * 60,
+    power_path: settings.manual_charge.power_path ?? "auto",
+  };
+}
+
+function mockChargeTelemetry(
+  baseUrl: string,
+  status = mockStatusForBaseUrl(baseUrl),
+  settings = mockSettingsForBaseUrl(baseUrl),
+) {
+  const inputSource = status.input.source ?? "unknown";
+  return {
+    input_source: inputSource,
+    policy_target_ichg_ma: status.charger.policy_target_ichg_ma ?? null,
+    ibat_actual_ma: status.charger.ibat_ma ?? null,
+    target_voltage_mv:
+      settings.charge_capabilities?.target_voltage_mv ?? 16_800,
+    iindpm_ma: status.charger.limit_active
+      ? status.charger.limit_threshold_ma ?? null
+      : null,
+    vindpm_mv: resolvePreTpsVinMv(status.input) ?? null,
+    output_power_w10: status.charge_control?.output_power_w10 ?? 0,
+    power_telemetry_fresh: status.charge_control?.power_telemetry_fresh ?? true,
+    input_limit_summary:
+      inputSource === "dcin"
+        ? `${settings.charge_capabilities?.dcin_input_limit_ma ?? 1_000} mA DCIN`
+        : "PD-qualified USB-C input",
+    output_limit_summary: `${settings.charge_capabilities?.max_output_current_ma ?? 3_500} mA max output`,
+  };
+}
+
+function mockChargeControlSummaryFromDetail(
+  detail: ChargeControlDetail,
+): ChargeControlSummary {
+  return {
+    mode: detail.summary.mode,
+    manual_active: detail.summary.manual_active,
+    takeover: detail.summary.takeover,
+    stop_inhibit: detail.summary.stop_inhibit,
+    last_stop_reason: detail.summary.last_stop_reason,
+    requested_power_path: detail.readiness.planned_path.requested,
+    bound_power_path: detail.readiness.planned_path.bound,
+    start_state: detail.readiness.state,
+    output_power_w10: detail.telemetry.output_power_w10,
+    power_telemetry_fresh: detail.telemetry.power_telemetry_fresh,
+  };
+}
+
+function mockChargeControlDetailForBaseUrl(baseUrl: string): ChargeControlDetail {
+  const status = mockStatusForBaseUrl(baseUrl);
+  const settings = mockSettingsForBaseUrl(baseUrl);
+  const summary = status.charge_control ?? defaultMockChargeControl();
+  const currentPath =
+    summary.bound_power_path ?? summary.requested_power_path ?? "auto";
+  return {
+    summary: {
+      mode: summary.mode,
+      manual_active: summary.manual_active,
+      takeover: summary.takeover,
+      stop_inhibit: summary.stop_inhibit,
+      last_stop_reason: summary.last_stop_reason,
+      remaining_minutes:
+        summary.manual_active && settings.manual_charge.timer_h
+          ? settings.manual_charge.timer_h * 60
+          : null,
+      loop_override_active:
+        summary.manual_active && currentPath === "usbc" && summary.mode === "manual",
+    },
+    readiness: {
+      state: summary.manual_active ? "running" : summary.start_state,
+      action: summary.manual_active
+        ? "stop"
+        : summary.start_state === "confirm_required"
+          ? "confirm_loop"
+          : summary.start_state === "blocked"
+            ? "none"
+            : "start",
+      planned_path: {
+        requested: summary.requested_power_path,
+        bound: summary.bound_power_path,
+        binding_reason:
+          currentPath === "dcin"
+            ? "auto_dcin_fallback"
+            : currentPath === "usbc"
+              ? "explicit_usbc"
+              : null,
+      },
+      block:
+        summary.start_state === "blocked"
+          ? {
+              code: "blocked_unknown",
+              message: "Manual charge is currently blocked.",
+            }
+          : null,
+      loop_override: {
+        required: summary.start_state === "confirm_required",
+        active:
+          summary.manual_active && currentPath === "usbc" && summary.mode === "manual",
+        allowed_guards: [
+          "low_power_start_gate",
+          "telemetry_miss_latch",
+          "high_output_stop_latch",
+        ],
+      },
+    },
+    telemetry: mockChargeTelemetry(baseUrl, status, settings),
+    evidence: [
+      {
+        source: "policy.state",
+        code: "charger_state",
+        label: "Charger state",
+        value: status.charger.state ?? null,
+      },
+      {
+        source: "charger.vbat_present",
+        code: "vbat_present",
+        label: "VBAT present",
+        value: status.charger.vbat_present,
+      },
+      {
+        source: "battery.charge_fet_on",
+        code: "charge_fet",
+        label: "Charge FET",
+        value: status.battery.charge_fet_on ?? null,
+      },
+      {
+        source: "output_power_w10",
+        code: "output_power",
+        label: "Output power",
+        value: summary.output_power_w10,
+      },
+    ],
+  };
+}
+
+function updateMockManualChargePrefs(baseUrl: string, body: unknown) {
+  if (!body || typeof body !== "object") return;
+  const current = mockSettingsForBaseUrl(baseUrl);
+  const next = body as Partial<DeviceSettings["manual_charge"]>;
+  mockSettingsByBaseUrl.set(baseUrl, {
+    ...current,
+    manual_charge: {
+      ...current.manual_charge,
+      ...next,
+      power_path: next.power_path ?? current.manual_charge.power_path ?? "auto",
+    },
+  });
+  const currentStatus = mockStatusForBaseUrl(baseUrl);
+  mockStatusByBaseUrl.set(baseUrl, {
+    ...currentStatus,
+    charge_control: {
+      ...(currentStatus.charge_control ?? defaultMockChargeControl()),
+      requested_power_path:
+        next.power_path ??
+        current.manual_charge.power_path ??
+        currentStatus.charge_control?.requested_power_path ??
+        "auto",
+    },
+  });
+}
+
+function previewMockManualChargeControl(
+  baseUrl: string,
+  body: unknown,
+): ChargeControlDetail {
+  const settings = mockSettingsForBaseUrl(baseUrl);
+  const status = mockStatusForBaseUrl(baseUrl);
+  const input = (body ?? {}) as Partial<ManualChargePreviewRequest>;
+  const requested = input.power_path ?? settings.manual_charge.power_path ?? "auto";
+  const bound = requested === "auto" ? "dcin" : requested;
+  const outputPowerW10 = status.charge_control?.output_power_w10 ?? 0;
+  const powerFresh = status.charge_control?.power_telemetry_fresh ?? true;
+  const confirmRequired =
+    bound === "usbc" &&
+    (!powerFresh || outputPowerW10 === null || outputPowerW10 >= 20);
+  const blockedFull = status.battery.soc_pct === 100;
+  return {
+    summary: {
+      mode: status.charge_control?.mode ?? "auto",
+      manual_active: status.charge_control?.manual_active ?? false,
+      takeover: status.charge_control?.takeover ?? false,
+      stop_inhibit: status.charge_control?.stop_inhibit ?? false,
+      last_stop_reason: status.charge_control?.last_stop_reason ?? null,
+      remaining_minutes: status.charge_control?.manual_active
+        ? input.timer_minutes ?? settings.manual_charge.timer_h * 60
+        : null,
+      loop_override_active: false,
+    },
+    readiness: {
+      state: blockedFull ? "blocked" : confirmRequired ? "confirm_required" : "ready",
+      action: blockedFull ? "none" : confirmRequired ? "confirm_loop" : "start",
+      planned_path: {
+        requested,
+        bound,
+        binding_reason:
+          requested === "auto"
+            ? "auto_dcin_fallback"
+            : requested === "dcin"
+              ? "explicit_dcin"
+              : "explicit_usbc",
+      },
+      block: blockedFull
+        ? {
+            code: "battery_full",
+            message: "Battery is already full.",
+          }
+        : null,
+      loop_override: {
+        required: confirmRequired,
+        active: false,
+        allowed_guards: [
+          "low_power_start_gate",
+          "telemetry_miss_latch",
+          "high_output_stop_latch",
+        ],
+      },
+    },
+    telemetry: {
+      ...mockChargeTelemetry(baseUrl, status, settings),
+      policy_target_ichg_ma:
+        input.current_ma ?? manualChargeCurrentMa(settings.manual_charge.speed),
+    },
+    evidence: blockedFull
+      ? [
+          {
+            source: "policy.full_reason",
+            code: "battery_full",
+            label: "Policy full reason",
+            value: "full_reached",
+          },
+        ]
+      : [
+          {
+            source: "output_power_w10",
+            code: "output_power",
+            label: "Output power",
+            value: outputPowerW10,
+          },
+          {
+            source: "power_telemetry_fresh",
+            code: "power_telemetry_fresh",
+            label: "Power telemetry fresh",
+            value: powerFresh,
+          },
+        ],
+  };
+}
+
+function updateMockManualChargeControl(
+  baseUrl: string,
+  body: unknown,
+): ManualChargeControlResponse {
+  const currentStatus = mockStatusForBaseUrl(baseUrl);
+  const currentSettings = mockSettingsForBaseUrl(baseUrl);
+  const input = (body ?? {}) as Partial<ManualChargeControlRequest>;
+  const currentChargeControl =
+    currentStatus.charge_control ?? defaultMockChargeControl();
+  const action = input.action === "stop" ? "stop" : "start";
+  const requestedPowerPath =
+    currentSettings.manual_charge.power_path ??
+    currentChargeControl.requested_power_path ??
+    "auto";
+  if (action === "start") {
+    const needsConfirm =
+      requestedPowerPath === "usbc" &&
+      !input.confirm_loop &&
+      (currentChargeControl.output_power_w10 === null ||
+        currentChargeControl.output_power_w10 >= 20);
+    if (needsConfirm) {
+      const detail = previewMockManualChargeControl(
+        baseUrl,
+        manualChargePreviewFromSettings(currentSettings),
+      );
+      throw new MainsAegisApiError({
+        code: "loop_confirmation_required",
+        message: "USB-C path requires loopback confirmation before manual charge can start",
+        retryable: false,
+        details: detail,
+      });
+    }
+  }
+  const nextChargeControl: ChargeControlSummary =
+    action === "stop"
+      ? {
+          ...currentChargeControl,
+          mode: "auto",
+          manual_active: false,
+          takeover: false,
+          stop_inhibit: false,
+          bound_power_path: null,
+          start_state: "stopped",
+        }
+      : {
+          ...currentChargeControl,
+          mode: "manual",
+          manual_active: true,
+          takeover: true,
+          stop_inhibit: false,
+          requested_power_path: requestedPowerPath,
+          bound_power_path:
+            requestedPowerPath === "auto" ? "dcin" : requestedPowerPath,
+          start_state: "running",
+          output_power_w10: requestedPowerPath === "usbc" ? 24 : 0,
+          power_telemetry_fresh: true,
+          last_stop_reason: null,
+        };
+  mockStatusByBaseUrl.set(baseUrl, {
+    ...currentStatus,
+    charge_control: nextChargeControl,
+  });
+  return mockChargeControlDetailForBaseUrl(baseUrl);
 }
 
 function updateMockAdvancedPower(baseUrl: string, body: unknown) {

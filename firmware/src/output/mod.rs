@@ -7,9 +7,9 @@ use core::fmt::Write as _;
 use crate::front_panel_scene::{
     is_bq40_activation_needed, BeeperPrefs, BeeperSettingTarget, BeeperVolumeLevel,
     BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardInputSource,
-    ManualChargePrefs, ManualChargeRuntimeState, ManualChargeSpeed, ManualChargeStopReason,
-    ManualChargeTarget, ManualChargeTimerLimit, ManualChargeUiAction, SelfCheckCommState,
-    SelfCheckUiSnapshot, UpsMode,
+    ManualChargePowerPath, ManualChargePrefs, ManualChargeRuntimeState, ManualChargeSpeed,
+    ManualChargeStopReason, ManualChargeTarget, ManualChargeTimerLimit, ManualChargeUiAction,
+    SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
 };
 use crate::irq::IrqSnapshot;
 use crate::net_bridge;
@@ -19,8 +19,12 @@ use esp_firmware::fan;
 use esp_firmware::ina3221;
 use esp_firmware::net_types::{
     validate_advanced_power_settings, AdvancedPowerSettingsSnapshot, AdvancedPowerValidationError,
+    ChargeControlBlockSnapshot, ChargeControlDetailSnapshot, ChargeControlEvidenceEntrySnapshot,
+    ChargeControlEvidenceValueSnapshot, ChargeControlLoopOverrideSnapshot,
+    ChargeControlReadinessSnapshot, ChargeControlSnapshot, ChargeControlTelemetrySnapshot,
     DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerInputSnapshot,
     DerivedPowerPolicySnapshot, DerivedPowerSnapshot, RuntimeModePolicySnapshot,
+    CHARGE_CONTROL_EVIDENCE_CAP,
 };
 use esp_firmware::output_protection;
 use esp_firmware::output_retry::{self, TpsConfigRetryDecision};
@@ -202,6 +206,9 @@ struct ManualChargeRuntime {
     takeover: bool,
     loopback_override: bool,
     loopback_override_mode: Option<UpsMode>,
+    requested_power_path: ManualChargePowerPath,
+    bound_power_path: Option<DashboardInputSource>,
+    binding_reason: Option<ManualChargeBindingReason>,
     stop_inhibit: bool,
     last_stop_reason: ManualChargeStopReason,
     deadline: Option<Instant>,
@@ -214,6 +221,9 @@ impl ManualChargeRuntime {
             takeover: false,
             loopback_override: false,
             loopback_override_mode: None,
+            requested_power_path: ManualChargePowerPath::Auto,
+            bound_power_path: None,
+            binding_reason: None,
             stop_inhibit: false,
             last_stop_reason: ManualChargeStopReason::None,
             deadline: None,
@@ -221,10 +231,28 @@ impl ManualChargeRuntime {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ManualChargeControlEvaluation {
+    requested_power_path: ManualChargePowerPath,
+    bound_power_path: Option<DashboardInputSource>,
+    binding_reason: Option<ManualChargeBindingReason>,
+    start_state: &'static str,
+    start_block_reason: Option<&'static str>,
+    loop_confirmation_required: bool,
+    output_power_w10: Option<u32>,
+    power_telemetry_fresh: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AdvancedPowerApplyError {
     Validation(AdvancedPowerValidationError),
     Storage(esp_hal::i2c::master::Error),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ManualChargeControlError {
+    pub code: &'static str,
+    pub message: &'static str,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -320,6 +348,7 @@ impl ManualChargePrefsRecordV1 {
         bytes[1] = manual_charge_target_encode(self.prefs.target);
         bytes[2] = manual_charge_speed_encode(self.prefs.speed);
         bytes[3] = manual_charge_timer_encode(self.prefs.timer_limit);
+        bytes[4] = manual_charge_power_path_encode(self.prefs.power_path);
         bytes[31] = storage_crc8(&bytes[..31]);
         bytes
     }
@@ -336,6 +365,8 @@ impl ManualChargePrefsRecordV1 {
                 target: manual_charge_target_decode(bytes[1])?,
                 speed: manual_charge_speed_decode(bytes[2])?,
                 timer_limit: manual_charge_timer_decode(bytes[3])?,
+                power_path: manual_charge_power_path_decode(bytes[4])
+                    .unwrap_or(ManualChargePowerPath::Auto),
             },
         })
     }
@@ -806,6 +837,23 @@ const fn manual_charge_timer_decode(raw: u8) -> Option<ManualChargeTimerLimit> {
     }
 }
 
+const fn manual_charge_power_path_encode(path: ManualChargePowerPath) -> u8 {
+    match path {
+        ManualChargePowerPath::Auto => 0,
+        ManualChargePowerPath::DcIn => 1,
+        ManualChargePowerPath::UsbC => 2,
+    }
+}
+
+const fn manual_charge_power_path_decode(raw: u8) -> Option<ManualChargePowerPath> {
+    match raw {
+        0 => Some(ManualChargePowerPath::Auto),
+        1 => Some(ManualChargePowerPath::DcIn),
+        2 => Some(ManualChargePowerPath::UsbC),
+        _ => None,
+    }
+}
+
 const fn beeper_volume_decode(raw: u8) -> Option<BeeperVolumeLevel> {
     match raw {
         0 => Some(BeeperVolumeLevel::Off),
@@ -864,8 +912,34 @@ const fn web_serial_manual_charge_timer(
     }
 }
 
+const fn web_serial_manual_charge_power_path(
+    power_path: esp_firmware::usb_cdc_protocol::ManualChargePowerPath,
+) -> ManualChargePowerPath {
+    match power_path {
+        esp_firmware::usb_cdc_protocol::ManualChargePowerPath::Auto => ManualChargePowerPath::Auto,
+        esp_firmware::usb_cdc_protocol::ManualChargePowerPath::DcIn => ManualChargePowerPath::DcIn,
+        esp_firmware::usb_cdc_protocol::ManualChargePowerPath::UsbC => ManualChargePowerPath::UsbC,
+    }
+}
+
 fn manual_charge_timer_duration(limit: ManualChargeTimerLimit) -> Duration {
     Duration::from_secs(limit.hours() as u64 * 3_600)
+}
+
+const fn manual_charge_power_path_name(path: ManualChargePowerPath) -> &'static str {
+    match path {
+        ManualChargePowerPath::Auto => "auto",
+        ManualChargePowerPath::DcIn => "dcin",
+        ManualChargePowerPath::UsbC => "usbc",
+    }
+}
+
+const fn manual_charge_bound_path_name(path: Option<DashboardInputSource>) -> Option<&'static str> {
+    match path {
+        Some(DashboardInputSource::DcIn) => Some("dcin"),
+        Some(DashboardInputSource::UsbC) => Some("usbc"),
+        Some(DashboardInputSource::Auto) | None => None,
+    }
 }
 
 const fn manual_charge_stop_notice(reason: ManualChargeStopReason) -> &'static str {
@@ -878,6 +952,18 @@ const fn manual_charge_stop_notice(reason: ManualChargeStopReason) -> &'static s
         ManualChargeStopReason::UserStop | ManualChargeStopReason::None => {
             "manual_user_stop_inhibit"
         }
+    }
+}
+
+const fn manual_charge_stop_reason_name(reason: ManualChargeStopReason) -> &'static str {
+    match reason {
+        ManualChargeStopReason::None => "none",
+        ManualChargeStopReason::UserStop => "user_stop",
+        ManualChargeStopReason::TimerExpired => "timer_expired",
+        ManualChargeStopReason::PackReached => "pack_reached",
+        ManualChargeStopReason::RsocReached => "rsoc_reached",
+        ManualChargeStopReason::FullReached => "full_reached",
+        ManualChargeStopReason::SafetyBlocked => "safety_blocked",
     }
 }
 
@@ -4844,6 +4930,7 @@ where
     }
 
     pub fn ui_snapshot(&self) -> SelfCheckUiSnapshot {
+        let evaluation = self.current_manual_charge_control_evaluation();
         let mut snapshot = self.ui_snapshot;
         let mut detail = snapshot.dashboard_detail;
         detail.manual_charge.prefs = self.manual_charge_prefs;
@@ -4857,6 +4944,20 @@ where
                 self.manual_charge_runtime.deadline,
                 Instant::now(),
             ),
+            requested_power_path: if self.manual_charge_runtime.active {
+                self.manual_charge_runtime.requested_power_path
+            } else {
+                self.manual_charge_prefs.power_path
+            },
+            bound_power_path: evaluation.bound_power_path,
+            binding_reason: evaluation
+                .binding_reason
+                .map(ManualChargeBindingReason::as_str),
+            start_state: evaluation.start_state,
+            start_block_reason: evaluation.start_block_reason,
+            loop_confirmation_required: evaluation.loop_confirmation_required,
+            output_power_w10: evaluation.output_power_w10,
+            power_telemetry_fresh: evaluation.power_telemetry_fresh,
         };
         let fan_status = self.fan.status();
         let applied_fan = self.applied_fan_state;
@@ -6685,6 +6786,721 @@ where
         ))
     }
 
+    fn manual_charge_output_power_context(&self) -> (bool, Option<u32>, bool) {
+        let output_enabled =
+            charge_policy_output_enabled(&self.ui_snapshot, self.output_state.active_outputs);
+        let output_power_w10 =
+            charge_policy_output_power_w10(&self.ui_snapshot, self.output_state.active_outputs);
+        let (_, power_telemetry_fresh, _) = self.tps_total_iout_sample();
+        (output_enabled, output_power_w10, power_telemetry_fresh)
+    }
+
+    fn manual_charge_start_block_reason(
+        &self,
+        prefs: ManualChargePrefs,
+        bound_path: DashboardInputSource,
+        dcin_present: bool,
+        usbc_present: bool,
+        usbc_unsafe_source_latched: bool,
+    ) -> Option<&'static str> {
+        if self.manual_charge_target_is_full_or_reached(prefs) {
+            return Some(match prefs.target {
+                ManualChargeTarget::Full100 => "manual_charge_blocked_battery_full",
+                ManualChargeTarget::Pack3V7 | ManualChargeTarget::Rsoc80 => {
+                    "manual_charge_blocked_target_reached"
+                }
+            });
+        }
+        if !self.cfg.charger_enabled || !self.charger_allowed {
+            return Some("manual_charge_blocked_safety");
+        }
+        if matches!(bound_path, DashboardInputSource::DcIn) && !dcin_present {
+            return Some("manual_charge_path_unavailable");
+        }
+        if matches!(bound_path, DashboardInputSource::UsbC) {
+            if !usbc_present {
+                return Some("manual_charge_path_unavailable");
+            }
+            if usbc_unsafe_source_latched || !self.usb_pd_state.charge_ready {
+                return Some("manual_charge_path_not_qualified");
+            }
+        }
+        if matches!(
+            self.diag_snapshot.policy.output_block_reason,
+            Some("blocked_output_over_limit" | "blocked_output_power_unknown")
+        ) || matches!(
+            self.diag_snapshot.policy.state,
+            Some("blocked_output_over_limit")
+        ) {
+            return Some("manual_charge_blocked_output_overload");
+        }
+        match self.diag_snapshot.policy.state {
+            Some("blocked_no_input") => Some("manual_charge_blocked_no_input"),
+            Some("blocked_temp") => Some("manual_charge_blocked_temp"),
+            Some("blocked_no_bms") => Some("manual_charge_blocked_no_bms"),
+            _ => None,
+        }
+    }
+
+    fn manual_charge_target_is_full_or_reached(&self, prefs: ManualChargePrefs) -> bool {
+        match prefs.target {
+            ManualChargeTarget::Full100 => {
+                self.diag_snapshot.policy.full_reason.is_some()
+                    || self.diag_snapshot.policy.full_latched
+                    || self.diag_snapshot.charger.chg_stat == "termination_done"
+            }
+            ManualChargeTarget::Rsoc80 => self
+                .ui_snapshot
+                .bq40z50_soc_pct
+                .is_some_and(|soc| soc >= 80),
+            ManualChargeTarget::Pack3V7 => self
+                .ui_snapshot
+                .bq40z50_pack_mv
+                .is_some_and(|mv| mv >= 14_800),
+        }
+    }
+
+    fn manual_charge_control_evaluation_for_prefs(
+        &self,
+        prefs: ManualChargePrefs,
+    ) -> ManualChargeControlEvaluation {
+        let (output_enabled, output_power_w10, power_telemetry_fresh) =
+            self.manual_charge_output_power_context();
+        let dcin_present =
+            self.diag_snapshot.charger.ac2_present || self.ui_snapshot.dcin_present == Some(true);
+        let usbc_present = self.diag_snapshot.charger.ac1_present
+            || self.usb_pd_state.attached
+            || self.usb_pd_state.vbus_present == Some(true)
+            || self.ui_snapshot.fusb302_vbus_present == Some(true);
+        let usbc_unsafe_source_latched = usb_pd_runtime_unsafe_source_latched(
+            self.usb_pd_state.unsafe_source_latched,
+            usbc_present,
+            self.usb_pd_vac1_mv,
+        );
+        match manual_charge_binding_plan(
+            prefs.power_path,
+            dcin_present,
+            usbc_present,
+            self.usb_pd_state.charge_ready,
+            usbc_unsafe_source_latched,
+            self.usb_pd_state
+                .contract
+                .map(|contract| contract.voltage_mv),
+            self.usb_pd_state
+                .contract
+                .map(|contract| contract.current_ma),
+        ) {
+            Ok(plan) => {
+                let start_block_reason = self.manual_charge_start_block_reason(
+                    prefs,
+                    plan.bound_path,
+                    dcin_present,
+                    usbc_present,
+                    usbc_unsafe_source_latched,
+                );
+                let loop_confirmation_required = start_block_reason.is_none()
+                    && manual_charge_loop_confirmation_required(
+                        plan.bound_path,
+                        output_enabled,
+                        output_power_w10,
+                        power_telemetry_fresh,
+                    );
+                ManualChargeControlEvaluation {
+                    requested_power_path: prefs.power_path,
+                    bound_power_path: Some(plan.bound_path),
+                    binding_reason: Some(plan.binding_reason),
+                    start_state: if start_block_reason.is_some() {
+                        "blocked"
+                    } else if loop_confirmation_required {
+                        "confirm_required"
+                    } else {
+                        "ready"
+                    },
+                    start_block_reason,
+                    loop_confirmation_required,
+                    output_power_w10,
+                    power_telemetry_fresh,
+                }
+            }
+            Err(ManualChargeBindingError::Unavailable) => ManualChargeControlEvaluation {
+                requested_power_path: prefs.power_path,
+                bound_power_path: None,
+                binding_reason: None,
+                start_state: "blocked",
+                start_block_reason: Some("manual_charge_path_unavailable"),
+                loop_confirmation_required: false,
+                output_power_w10,
+                power_telemetry_fresh,
+            },
+            Err(ManualChargeBindingError::NotQualified) => ManualChargeControlEvaluation {
+                requested_power_path: prefs.power_path,
+                bound_power_path: None,
+                binding_reason: None,
+                start_state: "blocked",
+                start_block_reason: Some("manual_charge_path_not_qualified"),
+                loop_confirmation_required: false,
+                output_power_w10,
+                power_telemetry_fresh,
+            },
+        }
+    }
+
+    fn current_manual_charge_control_evaluation(&self) -> ManualChargeControlEvaluation {
+        let requested_power_path = if self.manual_charge_runtime.active {
+            self.manual_charge_runtime.requested_power_path
+        } else {
+            self.manual_charge_prefs.power_path
+        };
+        let (output_enabled, output_power_w10, power_telemetry_fresh) =
+            self.manual_charge_output_power_context();
+        if self.manual_charge_runtime.active {
+            return ManualChargeControlEvaluation {
+                requested_power_path,
+                bound_power_path: self.manual_charge_runtime.bound_power_path,
+                binding_reason: self.manual_charge_runtime.binding_reason,
+                start_state: "running",
+                start_block_reason: None,
+                loop_confirmation_required: false,
+                output_power_w10,
+                power_telemetry_fresh,
+            };
+        }
+        let _ = (output_enabled, output_power_w10, power_telemetry_fresh);
+        self.manual_charge_control_evaluation_for_prefs(self.manual_charge_prefs)
+    }
+
+    pub fn current_manual_charge_control_snapshot(&self) -> ChargeControlSnapshot {
+        let evaluation = self.current_manual_charge_control_evaluation();
+        ChargeControlSnapshot {
+            mode: if self.manual_charge_runtime.active {
+                "manual"
+            } else {
+                "auto"
+            },
+            manual_active: self.manual_charge_runtime.active,
+            takeover: self.manual_charge_runtime.takeover,
+            stop_inhibit: self.manual_charge_runtime.stop_inhibit,
+            last_stop_reason: manual_charge_stop_reason_name(
+                self.manual_charge_runtime.last_stop_reason,
+            ),
+            remaining_minutes: manual_charge_remaining_minutes(
+                self.manual_charge_runtime.deadline,
+                Instant::now(),
+            ),
+            requested_power_path: manual_charge_power_path_name(evaluation.requested_power_path),
+            bound_power_path: manual_charge_bound_path_name(evaluation.bound_power_path),
+            binding_reason: evaluation
+                .binding_reason
+                .map(ManualChargeBindingReason::as_str),
+            start_state: evaluation.start_state,
+            start_block_reason: evaluation.start_block_reason,
+            loop_confirmation_required: evaluation.loop_confirmation_required,
+            loop_override_active: self.manual_charge_runtime.loopback_override,
+            output_power_w10: evaluation.output_power_w10,
+            power_telemetry_fresh: evaluation.power_telemetry_fresh,
+        }
+    }
+
+    fn manual_charge_public_block(code: &str) -> ChargeControlBlockSnapshot {
+        match code {
+            "manual_charge_blocked_battery_full" => ChargeControlBlockSnapshot {
+                code: "battery_full",
+                message: "battery is already full",
+            },
+            "manual_charge_blocked_target_reached" => ChargeControlBlockSnapshot {
+                code: "target_reached",
+                message: "battery is already at the requested target",
+            },
+            "manual_charge_path_unavailable" => ChargeControlBlockSnapshot {
+                code: "path_unavailable",
+                message: "the requested manual charge power path is not available",
+            },
+            "manual_charge_path_not_qualified" => ChargeControlBlockSnapshot {
+                code: "path_not_qualified",
+                message: "the requested USB-C path is present but not PD charge-qualified",
+            },
+            "manual_charge_blocked_no_input" => ChargeControlBlockSnapshot {
+                code: "no_input",
+                message: "the selected power path is not delivering usable input power",
+            },
+            "manual_charge_blocked_temp" => ChargeControlBlockSnapshot {
+                code: "temperature_blocked",
+                message: "charger temperature gates are blocking manual charge",
+            },
+            "manual_charge_blocked_no_bms" => ChargeControlBlockSnapshot {
+                code: "battery_telemetry_unready",
+                message: "battery telemetry is not ready for safe manual charging",
+            },
+            "manual_charge_blocked_output_overload" => ChargeControlBlockSnapshot {
+                code: "output_overload",
+                message: "output overload protection is blocking manual charge",
+            },
+            "manual_charge_blocked_safety" => ChargeControlBlockSnapshot {
+                code: "charger_runtime_unavailable",
+                message: "manual charge is blocked because charger runtime is unavailable",
+            },
+            "loop_confirmation_required" => ChargeControlBlockSnapshot {
+                code: "loop_confirmation_required",
+                message: "USB-C manual charging needs loopback confirmation before start",
+            },
+            _ => ChargeControlBlockSnapshot {
+                code: "blocked_unknown",
+                message: "manual charge control request was rejected",
+            },
+        }
+    }
+
+    fn push_charge_control_evidence(
+        evidence: &mut [ChargeControlEvidenceEntrySnapshot; CHARGE_CONTROL_EVIDENCE_CAP],
+        evidence_len: &mut u8,
+        entry: ChargeControlEvidenceEntrySnapshot,
+    ) {
+        let index = usize::from(*evidence_len);
+        if index >= CHARGE_CONTROL_EVIDENCE_CAP {
+            return;
+        }
+        evidence[index] = entry;
+        *evidence_len += 1;
+    }
+
+    fn build_charge_control_evidence(
+        &self,
+        prefs: ManualChargePrefs,
+        evaluation: ManualChargeControlEvaluation,
+    ) -> (
+        [ChargeControlEvidenceEntrySnapshot; CHARGE_CONTROL_EVIDENCE_CAP],
+        u8,
+    ) {
+        let mut evidence =
+            [ChargeControlEvidenceEntrySnapshot::empty(); CHARGE_CONTROL_EVIDENCE_CAP];
+        let mut evidence_len = 0u8;
+        let dcin_present =
+            self.diag_snapshot.charger.ac2_present || self.ui_snapshot.dcin_present == Some(true);
+        let usbc_present = self.diag_snapshot.charger.ac1_present
+            || self.usb_pd_state.attached
+            || self.usb_pd_state.vbus_present == Some(true)
+            || self.ui_snapshot.fusb302_vbus_present == Some(true);
+
+        if let Some(reason) = evaluation.start_block_reason {
+            match reason {
+                "manual_charge_blocked_battery_full" => {
+                    if let Some(full_reason) = self.diag_snapshot.policy.full_reason {
+                        Self::push_charge_control_evidence(
+                            &mut evidence,
+                            &mut evidence_len,
+                            ChargeControlEvidenceEntrySnapshot {
+                                source: "policy.full_reason",
+                                code: "full_reason",
+                                label: "Policy full reason",
+                                value: ChargeControlEvidenceValueSnapshot::Str(full_reason),
+                            },
+                        );
+                    }
+                    if self.diag_snapshot.policy.full_latched {
+                        Self::push_charge_control_evidence(
+                            &mut evidence,
+                            &mut evidence_len,
+                            ChargeControlEvidenceEntrySnapshot {
+                                source: "policy.full_latched",
+                                code: "full_latched",
+                                label: "Full latch",
+                                value: ChargeControlEvidenceValueSnapshot::Bool(true),
+                            },
+                        );
+                    }
+                    if self.diag_snapshot.charger.chg_stat == "termination_done" {
+                        Self::push_charge_control_evidence(
+                            &mut evidence,
+                            &mut evidence_len,
+                            ChargeControlEvidenceEntrySnapshot {
+                                source: "charger.chg_stat",
+                                code: "termination_done",
+                                label: "Charger state",
+                                value: ChargeControlEvidenceValueSnapshot::Str("termination_done"),
+                            },
+                        );
+                    }
+                }
+                "manual_charge_blocked_target_reached" => match prefs.target {
+                    ManualChargeTarget::Rsoc80 => {
+                        if let Some(soc) = self.ui_snapshot.bq40z50_soc_pct {
+                            Self::push_charge_control_evidence(
+                                &mut evidence,
+                                &mut evidence_len,
+                                ChargeControlEvidenceEntrySnapshot {
+                                    source: "battery.soc_pct",
+                                    code: "target_reached",
+                                    label: "Battery SOC",
+                                    value: ChargeControlEvidenceValueSnapshot::U16(soc),
+                                },
+                            );
+                        }
+                    }
+                    ManualChargeTarget::Pack3V7 => {
+                        if let Some(pack_mv) = self.ui_snapshot.bq40z50_pack_mv {
+                            Self::push_charge_control_evidence(
+                                &mut evidence,
+                                &mut evidence_len,
+                                ChargeControlEvidenceEntrySnapshot {
+                                    source: "battery.pack_mv",
+                                    code: "target_reached",
+                                    label: "Battery pack voltage",
+                                    value: ChargeControlEvidenceValueSnapshot::U16(pack_mv),
+                                },
+                            );
+                        }
+                    }
+                    ManualChargeTarget::Full100 => {}
+                },
+                "manual_charge_path_unavailable" => {
+                    if matches!(
+                        evaluation.bound_power_path,
+                        Some(DashboardInputSource::DcIn)
+                    ) || matches!(prefs.power_path, ManualChargePowerPath::DcIn)
+                    {
+                        Self::push_charge_control_evidence(
+                            &mut evidence,
+                            &mut evidence_len,
+                            ChargeControlEvidenceEntrySnapshot {
+                                source: "charger.ac2_present",
+                                code: "path_present",
+                                label: "DCIN present",
+                                value: ChargeControlEvidenceValueSnapshot::Bool(dcin_present),
+                            },
+                        );
+                    } else {
+                        Self::push_charge_control_evidence(
+                            &mut evidence,
+                            &mut evidence_len,
+                            ChargeControlEvidenceEntrySnapshot {
+                                source: "usb_pd.attached",
+                                code: "path_present",
+                                label: "USB-C attached",
+                                value: ChargeControlEvidenceValueSnapshot::Bool(usbc_present),
+                            },
+                        );
+                    }
+                }
+                "manual_charge_path_not_qualified" => {
+                    Self::push_charge_control_evidence(
+                        &mut evidence,
+                        &mut evidence_len,
+                        ChargeControlEvidenceEntrySnapshot {
+                            source: "usb_pd.charge_ready",
+                            code: "pd_charge_ready",
+                            label: "USB-C PD charge ready",
+                            value: ChargeControlEvidenceValueSnapshot::Bool(
+                                self.usb_pd_state.charge_ready,
+                            ),
+                        },
+                    );
+                }
+                "manual_charge_blocked_no_input"
+                | "manual_charge_blocked_temp"
+                | "manual_charge_blocked_no_bms"
+                | "manual_charge_blocked_output_overload"
+                | "manual_charge_blocked_safety" => {
+                    if let Some(policy_state) = self.diag_snapshot.policy.state {
+                        Self::push_charge_control_evidence(
+                            &mut evidence,
+                            &mut evidence_len,
+                            ChargeControlEvidenceEntrySnapshot {
+                                source: "policy.state",
+                                code: "policy_state",
+                                label: "Policy state",
+                                value: ChargeControlEvidenceValueSnapshot::Str(policy_state),
+                            },
+                        );
+                    }
+                    if let Some(output_block_reason) = self.diag_snapshot.policy.output_block_reason
+                    {
+                        Self::push_charge_control_evidence(
+                            &mut evidence,
+                            &mut evidence_len,
+                            ChargeControlEvidenceEntrySnapshot {
+                                source: "policy.output_block_reason",
+                                code: "output_block_reason",
+                                label: "Output block reason",
+                                value: ChargeControlEvidenceValueSnapshot::Str(output_block_reason),
+                            },
+                        );
+                    }
+                    if let Some(issue_detail) = self.diag_snapshot.bms.issue_detail {
+                        Self::push_charge_control_evidence(
+                            &mut evidence,
+                            &mut evidence_len,
+                            ChargeControlEvidenceEntrySnapshot {
+                                source: "battery.issue_detail",
+                                code: "battery_issue_detail",
+                                label: "Battery issue detail",
+                                value: ChargeControlEvidenceValueSnapshot::Str(issue_detail),
+                            },
+                        );
+                    }
+                }
+                _ => {}
+            }
+        } else if evaluation.loop_confirmation_required {
+            Self::push_charge_control_evidence(
+                &mut evidence,
+                &mut evidence_len,
+                ChargeControlEvidenceEntrySnapshot {
+                    source: "power_telemetry_fresh",
+                    code: "power_telemetry_fresh",
+                    label: "Power telemetry fresh",
+                    value: ChargeControlEvidenceValueSnapshot::Bool(
+                        evaluation.power_telemetry_fresh,
+                    ),
+                },
+            );
+            if let Some(output_power_w10) = evaluation.output_power_w10 {
+                Self::push_charge_control_evidence(
+                    &mut evidence,
+                    &mut evidence_len,
+                    ChargeControlEvidenceEntrySnapshot {
+                        source: "output_power_w10",
+                        code: "output_power_w10",
+                        label: "Current output power",
+                        value: ChargeControlEvidenceValueSnapshot::U32(output_power_w10),
+                    },
+                );
+            }
+        } else if let Some(bound_path) = evaluation.bound_power_path {
+            match bound_path {
+                DashboardInputSource::DcIn => Self::push_charge_control_evidence(
+                    &mut evidence,
+                    &mut evidence_len,
+                    ChargeControlEvidenceEntrySnapshot {
+                        source: "charger.ac2_present",
+                        code: "path_present",
+                        label: "DCIN present",
+                        value: ChargeControlEvidenceValueSnapshot::Bool(dcin_present),
+                    },
+                ),
+                DashboardInputSource::UsbC => {
+                    Self::push_charge_control_evidence(
+                        &mut evidence,
+                        &mut evidence_len,
+                        ChargeControlEvidenceEntrySnapshot {
+                            source: "usb_pd.charge_ready",
+                            code: "pd_charge_ready",
+                            label: "USB-C PD charge ready",
+                            value: ChargeControlEvidenceValueSnapshot::Bool(
+                                self.usb_pd_state.charge_ready,
+                            ),
+                        },
+                    );
+                }
+                DashboardInputSource::Auto => {}
+            }
+        }
+
+        (evidence, evidence_len)
+    }
+
+    fn charge_control_detail_snapshot_from(
+        &self,
+        prefs: ManualChargePrefs,
+        evaluation: ManualChargeControlEvaluation,
+    ) -> ChargeControlDetailSnapshot {
+        let summary = ChargeControlSnapshot {
+            mode: if self.manual_charge_runtime.active {
+                "manual"
+            } else {
+                "auto"
+            },
+            manual_active: self.manual_charge_runtime.active,
+            takeover: self.manual_charge_runtime.takeover,
+            stop_inhibit: self.manual_charge_runtime.stop_inhibit,
+            last_stop_reason: manual_charge_stop_reason_name(
+                self.manual_charge_runtime.last_stop_reason,
+            ),
+            remaining_minutes: manual_charge_remaining_minutes(
+                self.manual_charge_runtime.deadline,
+                Instant::now(),
+            ),
+            requested_power_path: manual_charge_power_path_name(evaluation.requested_power_path),
+            bound_power_path: manual_charge_bound_path_name(evaluation.bound_power_path),
+            binding_reason: evaluation
+                .binding_reason
+                .map(ManualChargeBindingReason::as_str),
+            start_state: evaluation.start_state,
+            start_block_reason: evaluation.start_block_reason,
+            loop_confirmation_required: evaluation.loop_confirmation_required,
+            loop_override_active: self.manual_charge_runtime.loopback_override,
+            output_power_w10: evaluation.output_power_w10,
+            power_telemetry_fresh: evaluation.power_telemetry_fresh,
+        };
+        let public_block = evaluation
+            .start_block_reason
+            .map(Self::manual_charge_public_block)
+            .or_else(|| {
+                evaluation
+                    .loop_confirmation_required
+                    .then(|| Self::manual_charge_public_block("loop_confirmation_required"))
+            });
+        let (evidence, evidence_len) = self.build_charge_control_evidence(prefs, evaluation);
+        ChargeControlDetailSnapshot {
+            summary,
+            readiness: ChargeControlReadinessSnapshot {
+                state: evaluation.start_state,
+                action: if self.manual_charge_runtime.active {
+                    "stop"
+                } else if evaluation.loop_confirmation_required {
+                    "confirm_loop"
+                } else if evaluation.start_block_reason.is_none() {
+                    "start"
+                } else {
+                    "none"
+                },
+                planned_path: esp_firmware::net_types::ChargeControlPlannedPathSnapshot {
+                    requested: manual_charge_power_path_name(evaluation.requested_power_path),
+                    bound: manual_charge_bound_path_name(evaluation.bound_power_path),
+                    binding_reason: evaluation
+                        .binding_reason
+                        .map(ManualChargeBindingReason::as_str),
+                },
+                block: public_block,
+                loop_override: ChargeControlLoopOverrideSnapshot {
+                    required: evaluation.loop_confirmation_required,
+                    active: self.manual_charge_runtime.loopback_override,
+                    ..ChargeControlLoopOverrideSnapshot::defaults()
+                },
+            },
+            telemetry: ChargeControlTelemetrySnapshot {
+                input_source: self.diag_snapshot.policy.input_source,
+                policy_target_ichg_ma: self
+                    .diag_snapshot
+                    .policy
+                    .effective_target_ichg_ma
+                    .or(self.diag_snapshot.policy.target_ichg_ma),
+                ibat_actual_ma: self.diag_snapshot.charger.ibat_adc_ma,
+                target_voltage_mv: 16_800,
+                iindpm_ma: self.diag_snapshot.charger.iindpm_ma,
+                vindpm_mv: self.diag_snapshot.charger.vindpm_mv,
+                output_power_w10: evaluation.output_power_w10,
+                power_telemetry_fresh: evaluation.power_telemetry_fresh,
+                input_limit_summary: self
+                    .diag_snapshot
+                    .policy
+                    .limit_reason
+                    .filter(|value| *value != "none"),
+                output_limit_summary: self
+                    .diag_snapshot
+                    .policy
+                    .output_block_reason
+                    .or(self.diag_snapshot.policy.pressure_reason),
+            },
+            evidence,
+            evidence_len,
+        }
+    }
+
+    pub fn current_manual_charge_control_detail_snapshot(&self) -> ChargeControlDetailSnapshot {
+        let prefs = if self.manual_charge_runtime.active {
+            ManualChargePrefs {
+                target: self.manual_charge_prefs.target,
+                speed: self.manual_charge_prefs.speed,
+                timer_limit: self.manual_charge_prefs.timer_limit,
+                power_path: self.manual_charge_runtime.requested_power_path,
+            }
+        } else {
+            self.manual_charge_prefs
+        };
+        let evaluation = self.current_manual_charge_control_evaluation();
+        self.charge_control_detail_snapshot_from(prefs, evaluation)
+    }
+
+    pub fn preview_manual_charge_control_detail_snapshot(
+        &self,
+        prefs: esp_firmware::usb_cdc_protocol::ManualChargePrefsCommand,
+    ) -> ChargeControlDetailSnapshot {
+        if self.manual_charge_runtime.active {
+            return self.current_manual_charge_control_detail_snapshot();
+        }
+        let preview_prefs = ManualChargePrefs {
+            target: web_serial_manual_charge_target(prefs.target),
+            speed: web_serial_manual_charge_speed(prefs.speed),
+            timer_limit: web_serial_manual_charge_timer(prefs.timer_limit),
+            power_path: web_serial_manual_charge_power_path(prefs.power_path),
+        };
+        let evaluation = self.manual_charge_control_evaluation_for_prefs(preview_prefs);
+        self.charge_control_detail_snapshot_from(preview_prefs, evaluation)
+    }
+
+    fn manual_charge_control_error(code: &'static str) -> ManualChargeControlError {
+        let block = Self::manual_charge_public_block(code);
+        ManualChargeControlError {
+            code: block.code,
+            message: block.message,
+        }
+    }
+
+    pub fn control_manual_charge(
+        &mut self,
+        command: esp_firmware::usb_cdc_protocol::ManualChargeControlCommand,
+    ) -> Result<ChargeControlSnapshot, ManualChargeControlError> {
+        match command.action {
+            esp_firmware::usb_cdc_protocol::ManualChargeControlAction::Start => {
+                self.start_manual_charge_session(command.confirm_loop)
+            }
+            esp_firmware::usb_cdc_protocol::ManualChargeControlAction::Stop => {
+                let now = Instant::now();
+                self.bms_activation_force_charge_requested = false;
+                self.bms_activation_auto_force_charge_until = None;
+                self.bms_activation_auto_force_charge_programmed = false;
+                self.stop_manual_charge_session(ManualChargeStopReason::UserStop, true);
+                self.chg_next_poll_at = now;
+                Ok(self.current_manual_charge_control_snapshot())
+            }
+        }
+    }
+
+    fn start_manual_charge_session(
+        &mut self,
+        confirm_loop: bool,
+    ) -> Result<ChargeControlSnapshot, ManualChargeControlError> {
+        if self.manual_charge_runtime.active {
+            return Ok(self.current_manual_charge_control_snapshot());
+        }
+        let evaluation = self.current_manual_charge_control_evaluation();
+        if let Some(code) = evaluation.start_block_reason {
+            return Err(Self::manual_charge_control_error(code));
+        }
+        if evaluation.loop_confirmation_required && !confirm_loop {
+            return Err(Self::manual_charge_control_error(
+                "loop_confirmation_required",
+            ));
+        }
+        let Some(bound_power_path) = evaluation.bound_power_path else {
+            return Err(Self::manual_charge_control_error(
+                "manual_charge_path_unavailable",
+            ));
+        };
+        let now = Instant::now();
+        let charging_active = self.current_charging_requested();
+        self.manual_charge_runtime.active = true;
+        self.manual_charge_runtime.takeover = charging_active;
+        self.manual_charge_runtime.loopback_override =
+            confirm_loop && matches!(bound_power_path, DashboardInputSource::UsbC);
+        self.manual_charge_runtime.loopback_override_mode = self
+            .manual_charge_runtime
+            .loopback_override
+            .then_some(self.ui_snapshot.mode);
+        self.manual_charge_runtime.requested_power_path = evaluation.requested_power_path;
+        self.manual_charge_runtime.bound_power_path = Some(bound_power_path);
+        self.manual_charge_runtime.binding_reason = evaluation.binding_reason;
+        self.manual_charge_runtime.stop_inhibit = false;
+        self.manual_charge_runtime.last_stop_reason = ManualChargeStopReason::None;
+        self.manual_charge_runtime.deadline =
+            Some(now + manual_charge_timer_duration(self.manual_charge_prefs.timer_limit));
+        self.backup_usb_charge_guard
+            .reset_for_new_session(self.tps_telemetry_attempt_seq);
+        self.chg_next_poll_at = now;
+        self.update_manual_charge_ui_snapshot(now);
+        Ok(self.current_manual_charge_control_snapshot())
+    }
+
     pub fn request_manual_charge_action(&mut self, action: ManualChargeUiAction) {
         let now = Instant::now();
         let charging_active = self.current_charging_requested();
@@ -6735,38 +7551,28 @@ where
                     );
                 }
             }
+            ManualChargeUiAction::SetPowerPath(power_path) => {
+                if self.manual_charge_prefs.power_path != power_path {
+                    self.manual_charge_prefs.power_path = power_path;
+                    self.persist_manual_charge_prefs();
+                    defmt::info!(
+                        "manual_charge: set_power_path path={} active={=bool}",
+                        manual_charge_power_path_name(self.manual_charge_prefs.power_path),
+                        charging_active
+                    );
+                }
+            }
             ManualChargeUiAction::Start => {
-                defmt::warn!("manual_charge: start rejected reason=loopback_confirmation_required");
-                esp_println::println!(
-                    "manual_charge: start rejected reason=loopback_confirmation_required"
-                );
+                if let Err(err) = self.start_manual_charge_session(false) {
+                    defmt::warn!("manual_charge: start rejected reason={}", err.code);
+                    esp_println::println!("manual_charge: start rejected reason={}", err.code);
+                }
             }
             ManualChargeUiAction::StartConfirmedLoopback => {
-                self.manual_charge_runtime.active = true;
-                self.manual_charge_runtime.takeover = charging_active;
-                self.manual_charge_runtime.loopback_override = true;
-                self.manual_charge_runtime.loopback_override_mode = Some(self.ui_snapshot.mode);
-                self.manual_charge_runtime.stop_inhibit = false;
-                self.manual_charge_runtime.last_stop_reason = ManualChargeStopReason::None;
-                self.manual_charge_runtime.deadline =
-                    Some(now + manual_charge_timer_duration(self.manual_charge_prefs.timer_limit));
-                self.backup_usb_charge_guard
-                    .reset_for_new_session(self.tps_telemetry_attempt_seq);
-                self.chg_next_poll_at = now;
-                esp_println::println!(
-                    "manual_charge: start confirmed_loopback=true target={} speed_ma={} timer_h={} takeover={}",
-                    self.manual_charge_target_label(),
-                    self.manual_charge_prefs.speed.ichg_ma(),
-                    self.manual_charge_prefs.timer_limit.hours(),
-                    self.manual_charge_runtime.takeover
-                );
-                defmt::info!(
-                    "manual_charge: start confirmed_loopback=true target={} speed_ma={=u16} timer_h={=u8} takeover={=bool}",
-                    self.manual_charge_target_label(),
-                    self.manual_charge_prefs.speed.ichg_ma(),
-                    self.manual_charge_prefs.timer_limit.hours(),
-                    self.manual_charge_runtime.takeover
-                );
+                if let Err(err) = self.start_manual_charge_session(true) {
+                    defmt::warn!("manual_charge: start rejected reason={}", err.code);
+                    esp_println::println!("manual_charge: start rejected reason={}", err.code);
+                }
             }
             ManualChargeUiAction::Stop => {
                 self.bms_activation_force_charge_requested = false;
@@ -6793,6 +7599,9 @@ where
         ));
         self.request_manual_charge_action(ManualChargeUiAction::SetTimerLimit(
             web_serial_manual_charge_timer(prefs.timer_limit),
+        ));
+        self.request_manual_charge_action(ManualChargeUiAction::SetPowerPath(
+            web_serial_manual_charge_power_path(prefs.power_path),
         ));
     }
 
@@ -7063,6 +7872,9 @@ where
         self.manual_charge_runtime.takeover = false;
         self.manual_charge_runtime.loopback_override = false;
         self.manual_charge_runtime.loopback_override_mode = None;
+        self.manual_charge_runtime.requested_power_path = self.manual_charge_prefs.power_path;
+        self.manual_charge_runtime.bound_power_path = None;
+        self.manual_charge_runtime.binding_reason = None;
         self.manual_charge_runtime.stop_inhibit = inhibit;
         self.manual_charge_runtime.last_stop_reason = reason;
         self.manual_charge_runtime.deadline = None;
@@ -7070,6 +7882,7 @@ where
     }
 
     fn update_manual_charge_ui_snapshot(&mut self, now: Instant) {
+        let evaluation = self.current_manual_charge_control_evaluation();
         self.ui_snapshot.dashboard_detail.manual_charge.prefs = self.manual_charge_prefs;
         self.ui_snapshot.dashboard_detail.manual_charge.runtime = ManualChargeRuntimeState {
             active: self.manual_charge_runtime.active,
@@ -7081,6 +7894,20 @@ where
                 self.manual_charge_runtime.deadline,
                 now,
             ),
+            requested_power_path: if self.manual_charge_runtime.active {
+                self.manual_charge_runtime.requested_power_path
+            } else {
+                self.manual_charge_prefs.power_path
+            },
+            bound_power_path: evaluation.bound_power_path,
+            binding_reason: evaluation
+                .binding_reason
+                .map(ManualChargeBindingReason::as_str),
+            start_state: evaluation.start_state,
+            start_block_reason: evaluation.start_block_reason,
+            loop_confirmation_required: evaluation.loop_confirmation_required,
+            output_power_w10: evaluation.output_power_w10,
+            power_telemetry_fresh: evaluation.power_telemetry_fresh,
         };
     }
 
@@ -11751,7 +12578,7 @@ where
             .then_some(vsys_adc_mv)
             .flatten()
             .filter(|mv| *mv >= 5_000);
-        let input_source = detail_input_source(
+        let detected_input_source = detail_input_source(
             vbus_present,
             ac1_present,
             ac2_present,
@@ -11760,6 +12587,12 @@ where
             raw_vac1_adc_mv,
             raw_vac2_adc_mv,
         );
+        let mut input_source = self
+            .manual_charge_runtime
+            .active
+            .then_some(self.manual_charge_runtime.bound_power_path)
+            .flatten()
+            .or(detected_input_source);
         let usb_c_path_present =
             ac1_present || matches!(self.usb_pd_state.vbus_present, Some(true));
         let usb_pd_charge_gate_path_present =
@@ -11781,6 +12614,24 @@ where
             && ac1_present
             && charger_vbus_stat_allows_activation_charge(charger_vbus_stat);
         let usb_pd_charge_gate_ready = usb_pd_charge_gate_ready_raw || activation_bc12_charge_ready;
+        if self.manual_charge_runtime.active {
+            if let Some(bound_power_path) = self.manual_charge_runtime.bound_power_path {
+                if matches!(
+                    self.manual_charge_start_block_reason(
+                        self.manual_charge_prefs,
+                        bound_power_path,
+                        ac2_present,
+                        usb_c_path_present,
+                        usb_pd_unsafe_latched,
+                    ),
+                    Some("manual_charge_path_unavailable" | "manual_charge_path_not_qualified")
+                ) {
+                    self.stop_manual_charge_session(ManualChargeStopReason::SafetyBlocked, false);
+                    self.chg_next_poll_at = now;
+                    input_source = detected_input_source;
+                }
+            }
+        }
         let backup_vin_mains_present = self.current_mains_present();
         let backup_usb_charge_context = self.ui_snapshot.mode == UpsMode::Backup
             && backup_vin_mains_present == Some(false)

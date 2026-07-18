@@ -1,4 +1,5 @@
-:root {
+:root,
+[data-theme="light"] {
   color-scheme: light;
   --color-canvas: oklch(98.8% 0.006 105);
   --color-surface: oklch(96.3% 0.009 90);
@@ -58,4 +59,58 @@
   --font-ui: "Unica77 Cohere Web", Inter, Arial, ui-sans-serif, system-ui, sans-serif;
   --font-display: CohereText, "Space Grotesk", Inter, ui-sans-serif, system-ui, sans-serif;
   --font-mono: CohereMono, "SFMono-Regular", Consolas, monospace;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-canvas: oklch(19% 0.014 250);
+  --color-surface: oklch(22% 0.015 250);
+  --color-panel: oklch(25% 0.014 250);
+  --color-ink: oklch(94% 0.008 105);
+  --color-muted: oklch(73% 0.02 250);
+  --color-hairline: oklch(34% 0.014 250);
+  --color-primary: oklch(71% 0.11 165);
+  --color-primary-strong: oklch(79% 0.13 165);
+  --color-blue: oklch(73% 0.15 258);
+  --color-coral: oklch(74% 0.16 35);
+  --color-warning: oklch(79% 0.12 78);
+  --color-critical: oklch(72% 0.16 24);
+  --color-ok: oklch(73% 0.11 155);
+  --color-offline: oklch(67% 0.018 255);
+  --color-green: var(--color-ok);
+  --color-success: var(--color-ok);
+  --color-success-text: oklch(82% 0.1 155);
+  --color-focus: oklch(76% 0.16 258);
+  --color-status-info: var(--color-blue);
+  --color-status-ok: var(--color-ok);
+  --color-status-warning: var(--color-warning);
+  --color-status-critical: var(--color-critical);
+  --color-status-offline: var(--color-offline);
+  --color-on-primary: oklch(18% 0.014 250);
+  --color-nav-surface: oklch(21% 0.014 250);
+  --color-nav-hover: oklch(30% 0.04 165);
+  --color-overlay: oklch(8% 0.012 250 / 0.62);
+  --color-code-surface: oklch(14% 0.014 250);
+  --color-code-text: oklch(91% 0.034 155);
+  --color-status-band-accent: oklch(78% 0.11 72);
+  --color-status-band-cell: oklch(72% 0.09 78);
+  --color-status-band-hero: oklch(74% 0.13 52);
+  --color-status-band-muted: oklch(63% 0.08 72);
+  --color-critical-border: oklch(54% 0.1 25);
+  --color-warning-border: oklch(58% 0.1 76);
+  --color-mode-standby-surface: oklch(30% 0.035 160);
+  --color-mode-backup-surface: oklch(31% 0.05 258);
+  --color-mode-fault-surface: oklch(31% 0.06 25);
+  --color-severity-critical-surface: oklch(31% 0.06 25);
+  --color-severity-warning-surface: oklch(33% 0.07 82);
+  --color-severity-warning-text: oklch(85% 0.09 78);
+  --color-severity-ok-surface: oklch(30% 0.05 155);
+  --color-severity-info-surface: oklch(30% 0.04 258);
+  --color-severity-offline-surface: oklch(29% 0.018 255);
+  --color-sidebar-panel: oklch(20% 0.014 250);
+  --color-mobile-topbar: oklch(19% 0.014 250 / 0.94);
+  --shadow-focus: 0 0 0 3px oklch(76% 0.16 258 / 0.26);
+  --shadow-sidebar-panel: 18px 0 44px oklch(4% 0.012 250 / 0.42);
+  --shadow-command-panel: 0 18px 50px oklch(4% 0.012 250 / 0.38);
+  --shadow-popover: 0 14px 32px oklch(4% 0.012 250 / 0.34);
 }
