@@ -70,7 +70,10 @@ const NATIVE_MONITOR_COMMAND_TIMEOUT_MS: u64 = 750;
 const NATIVE_MONITOR_STOP_WAIT_MS: u64 = 1_000;
 const NATIVE_MONITOR_DECODE_DEFMT: bool = false;
 const NATIVE_MONITOR_POLL_STATUS: bool = true;
+const HOST_RUNTIME_SYNC_INTERVAL_MS: u64 = 1_000;
 const MONITOR_CACHE_FRESHNESS_MS: u64 = 750;
+const LINUX_PVE_CPU_SYSFS_ROOT: &str = "/sys/devices/system/cpu";
+const LINUX_PVE_MARKER_DIR: &str = "/etc/pve";
 #[cfg(not(test))]
 const DEVD_STATE_FILE_NAME: &str = "devices.json";
 #[cfg(not(test))]
@@ -217,6 +220,7 @@ struct AppState {
     http_service_mode: HttpServiceMode,
     app_session_secret: Option<Arc<str>>,
     persistence: DevdPersistence,
+    tokio_handle: Option<tokio::runtime::Handle>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -270,6 +274,7 @@ struct DevdState {
     monitors: HashMap<String, MonitorHandle>,
     web_leases: HashMap<String, WebUsbLease>,
     host_power: HostPowerState,
+    device_host_power: HashMap<String, DeviceHostPowerRuntime>,
     scan_trace: VecDeque<SerialTraceEntry>,
     persisted_device_trace: HashMap<String, VecDeque<SerialTraceEntry>>,
 }
@@ -278,6 +283,12 @@ struct DevdState {
 struct HostPowerState {
     previous_profile: Option<String>,
     last_action: Option<Value>,
+}
+
+#[derive(Debug, Default)]
+struct DeviceHostPowerRuntime {
+    last_ups_mode: Option<String>,
+    last_runtime_sync_attempt_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -1462,6 +1473,7 @@ fn create_app_state_with_auth_and_persistence(
         http_service_mode,
         app_session_secret,
         persistence,
+        tokio_handle: tokio::runtime::Handle::try_current().ok(),
     };
     spawn_web_lease_reaper(state.clone());
     state
@@ -3789,6 +3801,7 @@ async fn disconnect_device(
 async fn disconnect_device_inner(state: &AppState, id: &str) -> Result<DeviceRecord, HttpError> {
     stop_native_monitor(state, id, Duration::from_secs(2)).await?;
     let mut guard = state.inner.lock().expect("state lock");
+    guard.device_host_power.remove(id);
     let device = guard
         .devices
         .get_mut(id)
@@ -6563,6 +6576,7 @@ fn cache_device_settings(state: &AppState, device_id: &str, settings: DeviceSett
 fn invalidate_device_runtime_after_firmware_change(state: &AppState, device_id: &str) {
     let snapshot = {
         let mut guard = state.inner.lock().expect("state lock");
+        guard.device_host_power.remove(device_id);
         if let Some(device) = guard.devices.get_mut(device_id) {
             device.connection = ConnectionState::Disconnected;
             device.identity = None;
@@ -7540,8 +7554,29 @@ async fn wait_for_wifi_state(
     ))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostPowerAutomationAction {
+    EnterBackupPowerSaver,
+    ExitBackupRestorePrevious,
+}
+
+struct StatusRuntimeEffects {
+    power_event: Option<(SerialTraceEntry, Value)>,
+    host_power_action: Option<HostPowerAutomationAction>,
+    host_runtime_sync_due: bool,
+}
+
 fn update_device_status_snapshot(state: &AppState, device_id: &str, status: Value) {
-    let power_event = update_device_status_record(state, device_id, &status, false);
+    let effects = update_device_status_record(state, device_id, &status, false, true);
+    emit_device_status_effects(state, device_id, status, effects);
+}
+
+fn emit_device_status_effects(
+    state: &AppState,
+    device_id: &str,
+    status: Value,
+    effects: StatusRuntimeEffects,
+) {
     emit(
         state,
         Some(device_id.to_string()),
@@ -7549,7 +7584,7 @@ fn update_device_status_snapshot(state: &AppState, device_id: &str, status: Valu
         "CDC status snapshot",
         json!({"status": status}),
     );
-    if let Some((trace, payload)) = power_event {
+    if let Some((trace, payload)) = effects.power_event {
         emit(
             state,
             Some(device_id.to_string()),
@@ -7565,6 +7600,12 @@ fn update_device_status_snapshot(state: &AppState, device_id: &str, status: Valu
             payload,
         );
     }
+    maybe_schedule_host_power_runtime_effects(
+        state,
+        device_id,
+        effects.host_power_action,
+        effects.host_runtime_sync_due,
+    );
 }
 
 fn update_device_status_record(
@@ -7572,29 +7613,154 @@ fn update_device_status_record(
     device_id: &str,
     status: &Value,
     connection_is_live: bool,
-) -> Option<(SerialTraceEntry, Value)> {
-    let (power_event, snapshot) = {
+    persist: bool,
+) -> StatusRuntimeEffects {
+    let (effects, snapshot) = {
         let mut guard = state.inner.lock().expect("state lock");
-        let mut power_event = None;
-        if let Some(device) = guard.devices.get_mut(device_id) {
-            if connection_is_live {
-                device.connection = ConnectionState::Connected;
-            }
+        let mut effects = StatusRuntimeEffects {
+            power_event: None,
+            host_power_action: None,
+            host_runtime_sync_due: false,
+        };
+        let transport = guard
+            .devices
+            .get(device_id)
+            .map(|device| device.transport.clone());
+        if let Some(transport) = transport {
             let updated_at = Instant::now();
-            device.status = Some(status.clone());
-            device.status_updated_at = Some(updated_at);
-            let derived_diag_snapshot = derive_diag_snapshot_from_status(status, "monitor_status");
-            device.diag_snapshot = Some(derived_diag_snapshot.clone());
-            device.diag_snapshot_updated_at = Some(updated_at);
-            power_event = maybe_record_power_event(device, status);
-            if let Some((trace, _)) = power_event.as_ref() {
-                push_bounded(&mut device.trace, trace.clone(), LOG_LIMIT);
+            let current_mode = status_mode_slug(status);
+            let runtime = guard
+                .device_host_power
+                .entry(device_id.to_string())
+                .or_default();
+            effects.host_power_action =
+                evaluate_host_power_automation(transport.clone(), runtime, current_mode);
+            effects.host_runtime_sync_due =
+                host_runtime_sync_due(transport, runtime, current_mode, updated_at);
+            if let Some(device) = guard.devices.get_mut(device_id) {
+                if connection_is_live {
+                    device.connection = ConnectionState::Connected;
+                }
+                device.status = Some(status.clone());
+                device.status_updated_at = Some(updated_at);
+                let derived_diag_snapshot =
+                    derive_diag_snapshot_from_status(status, "monitor_status");
+                device.diag_snapshot = Some(derived_diag_snapshot.clone());
+                device.diag_snapshot_updated_at = Some(updated_at);
+                effects.power_event = maybe_record_power_event(device, status);
+                if let Some((trace, _)) = effects.power_event.as_ref() {
+                    push_bounded(&mut device.trace, trace.clone(), LOG_LIMIT);
+                }
             }
         }
-        (power_event, persisted_snapshot(&guard))
+        (effects, persisted_snapshot(&guard))
     };
-    let _ = persist_devd_state(&state.persistence, snapshot);
-    power_event
+    if persist {
+        let _ = persist_devd_state(&state.persistence, snapshot);
+    }
+    effects
+}
+
+fn status_mode_slug(status: &Value) -> Option<&str> {
+    status.get("mode").and_then(Value::as_str)
+}
+
+fn evaluate_host_power_automation(
+    transport: DeviceTransport,
+    runtime: &mut DeviceHostPowerRuntime,
+    current_mode: Option<&str>,
+) -> Option<HostPowerAutomationAction> {
+    let previous_mode = runtime.last_ups_mode.as_deref();
+    let action = if matches!(transport, DeviceTransport::NativeSerial) {
+        match (previous_mode, current_mode) {
+            (Some("backup"), Some(mode)) if mode != "backup" => {
+                Some(HostPowerAutomationAction::ExitBackupRestorePrevious)
+            }
+            (mode, Some("backup")) if mode != Some("backup") => {
+                Some(HostPowerAutomationAction::EnterBackupPowerSaver)
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    runtime.last_ups_mode = current_mode.map(str::to_string);
+    action
+}
+
+fn host_runtime_sync_due(
+    transport: DeviceTransport,
+    runtime: &mut DeviceHostPowerRuntime,
+    _current_mode: Option<&str>,
+    now: Instant,
+) -> bool {
+    if !matches!(transport, DeviceTransport::NativeSerial) {
+        return false;
+    }
+    let due = runtime
+        .last_runtime_sync_attempt_at
+        .is_none_or(|last_attempt| {
+            now.duration_since(last_attempt).as_millis() as u64 >= HOST_RUNTIME_SYNC_INTERVAL_MS
+        });
+    if due {
+        runtime.last_runtime_sync_attempt_at = Some(now);
+    }
+    due
+}
+
+fn maybe_schedule_host_power_runtime_effects(
+    state: &AppState,
+    device_id: &str,
+    action: Option<HostPowerAutomationAction>,
+    sync_due: bool,
+) {
+    let Some(handle) = state.tokio_handle.clone() else {
+        return;
+    };
+    let action_present = action.is_some();
+    if let Some(action) = action {
+        let state = state.clone();
+        let device_id = device_id.to_string();
+        handle.spawn(async move {
+            run_host_power_automation_action(state, device_id, action).await;
+        });
+    }
+    if sync_due && !action_present {
+        let state = state.clone();
+        let device_id = device_id.to_string();
+        handle.spawn(async move {
+            if let Err(error) =
+                sync_host_usb_session_to_device_if_possible(&state, &device_id).await
+            {
+                record_device_host_power_trace(
+                    &state,
+                    &device_id,
+                    "warn",
+                    "host USB session sync failed",
+                    json!({
+                        "ok": false,
+                        "action": "sync_usb_state",
+                        "error": http_error_payload(&error)
+                    }),
+                );
+            }
+            if let Err(error) =
+                sync_host_power_profile_to_device_if_possible(&state, &device_id).await
+            {
+                record_device_host_power_trace(
+                    &state,
+                    &device_id,
+                    "warn",
+                    "host power profile sync failed",
+                    json!({
+                        "ok": false,
+                        "action": "sync_profile",
+                        "error": http_error_payload(&error)
+                    }),
+                );
+            }
+        });
+    }
 }
 
 fn update_device_diag_snapshot(state: &AppState, device_id: &str, diag_snapshot: Value) {
@@ -7925,6 +8091,370 @@ fn maybe_record_power_event(
         payload.to_string(),
     );
     Some((trace, payload))
+}
+
+async fn run_host_power_automation_action(
+    state: AppState,
+    device_id: String,
+    action: HostPowerAutomationAction,
+) {
+    let dry_run = !state.allow_host_power_actions;
+    match action {
+        HostPowerAutomationAction::EnterBackupPowerSaver => {
+            match request_host_power_profile_action(&state, "power_saver", dry_run).await {
+                Ok(result) => {
+                    record_device_host_power_trace(
+                        &state,
+                        &device_id,
+                        "info",
+                        "host power automation entered backup saver",
+                        json!({
+                            "ok": true,
+                            "automation": "backup_enter",
+                            "requested_profile": "power_saver",
+                            "result": result
+                        }),
+                    );
+                }
+                Err(error) => {
+                    record_device_host_power_trace(
+                        &state,
+                        &device_id,
+                        "warn",
+                        "host power automation failed entering backup saver",
+                        json!({
+                            "ok": false,
+                            "automation": "backup_enter",
+                            "requested_profile": "power_saver",
+                            "error": http_error_payload(&error)
+                        }),
+                    );
+                }
+            }
+            if let Err(error) =
+                sync_host_usb_session_to_device_if_possible(&state, &device_id).await
+            {
+                record_device_host_power_trace(
+                    &state,
+                    &device_id,
+                    "warn",
+                    "host USB session sync after backup enter failed",
+                    json!({
+                        "ok": false,
+                        "automation": "backup_enter",
+                        "action": "sync_usb_state",
+                        "error": http_error_payload(&error)
+                    }),
+                );
+            }
+            if let Err(error) =
+                sync_host_power_profile_to_device_if_possible(&state, &device_id).await
+            {
+                record_device_host_power_trace(
+                    &state,
+                    &device_id,
+                    "warn",
+                    "host power profile sync after backup enter failed",
+                    json!({
+                        "ok": false,
+                        "automation": "backup_enter",
+                        "action": "sync_profile",
+                        "error": http_error_payload(&error)
+                    }),
+                );
+            }
+        }
+        HostPowerAutomationAction::ExitBackupRestorePrevious => {
+            match request_host_power_profile_action(&state, "restore_previous", dry_run).await {
+                Ok(result) => {
+                    record_device_host_power_trace(
+                        &state,
+                        &device_id,
+                        "info",
+                        "host power automation restored previous profile",
+                        json!({
+                            "ok": true,
+                            "automation": "backup_exit",
+                            "requested_profile": "restore_previous",
+                            "result": result
+                        }),
+                    );
+                }
+                Err(error) if error.0.code == "host_power_previous_profile_missing" => {
+                    record_device_host_power_trace(
+                        &state,
+                        &device_id,
+                        "warn",
+                        "host power automation fell back to balanced on backup exit",
+                        json!({
+                            "ok": false,
+                            "automation": "backup_exit",
+                            "requested_profile": "restore_previous",
+                            "fallback_profile": "balanced",
+                            "error": http_error_payload(&error)
+                        }),
+                    );
+                    match request_host_power_profile_action(&state, "balanced", dry_run).await {
+                        Ok(result) => {
+                            record_device_host_power_trace(
+                                &state,
+                                &device_id,
+                                "info",
+                                "host power automation applied balanced fallback",
+                                json!({
+                                    "ok": true,
+                                    "automation": "backup_exit",
+                                    "requested_profile": "balanced",
+                                    "result": result
+                                }),
+                            );
+                        }
+                        Err(fallback_error) => {
+                            record_device_host_power_trace(
+                                &state,
+                                &device_id,
+                                "warn",
+                                "host power automation failed balanced fallback",
+                                json!({
+                                    "ok": false,
+                                    "automation": "backup_exit",
+                                    "requested_profile": "balanced",
+                                    "error": http_error_payload(&fallback_error)
+                                }),
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    record_device_host_power_trace(
+                        &state,
+                        &device_id,
+                        "warn",
+                        "host power automation failed restoring previous profile",
+                        json!({
+                            "ok": false,
+                            "automation": "backup_exit",
+                            "requested_profile": "restore_previous",
+                            "error": http_error_payload(&error)
+                        }),
+                    );
+                }
+            }
+            if let Err(error) =
+                sync_host_usb_session_to_device_if_possible(&state, &device_id).await
+            {
+                record_device_host_power_trace(
+                    &state,
+                    &device_id,
+                    "warn",
+                    "host USB session sync after backup exit failed",
+                    json!({
+                        "ok": false,
+                        "automation": "backup_exit",
+                        "action": "sync_usb_state",
+                        "error": http_error_payload(&error)
+                    }),
+                );
+            }
+            if let Err(error) =
+                sync_host_power_profile_to_device_if_possible(&state, &device_id).await
+            {
+                record_device_host_power_trace(
+                    &state,
+                    &device_id,
+                    "warn",
+                    "host power profile sync after backup exit failed",
+                    json!({
+                        "ok": false,
+                        "automation": "backup_exit",
+                        "action": "sync_profile",
+                        "error": http_error_payload(&error)
+                    }),
+                );
+            }
+        }
+    }
+}
+
+async fn request_host_power_profile_action(
+    state: &AppState,
+    profile: &str,
+    dry_run: bool,
+) -> Result<Value, HttpError> {
+    let response = host_power_profile(
+        State(state.clone()),
+        Json(HostPowerProfileRequest {
+            profile: profile.to_string(),
+            dry_run: Some(dry_run),
+        }),
+    )
+    .await?;
+    Ok(response.0)
+}
+
+async fn sync_host_usb_session_to_device_if_possible(
+    state: &AppState,
+    device_id: &str,
+) -> Result<(), HttpError> {
+    let Some(command_tx) = native_monitor_command_sender(state, device_id) else {
+        return Ok(());
+    };
+    let request_id = format!("devd-host-usb-{}", Utc::now().timestamp_millis());
+    let frame = json!({
+        "type": "request",
+        "request_id": request_id,
+        "op": "set_host_usb_session_state",
+        "state": "healthy"
+    });
+    let response = send_monitor_cdc_frame_async_with_timeout(
+        command_tx,
+        frame,
+        request_id,
+        Duration::from_millis(NATIVE_MONITOR_COMMAND_TIMEOUT_MS),
+    )
+    .await?;
+    if response.get("type").and_then(Value::as_str) != Some("response")
+        || !response.get("ok").and_then(Value::as_bool).unwrap_or(false)
+    {
+        return Err(error_from_cdc_response(&response));
+    }
+    response.get("result").cloned().ok_or_else(|| {
+        HttpError::retryable(
+            "cdc_response_missing_result",
+            "CDC set_host_usb_session_state response did not include result",
+        )
+    })?;
+    record_device_host_power_trace(
+        state,
+        device_id,
+        "info",
+        "host USB session synced to firmware",
+        json!({
+            "ok": true,
+            "action": "sync_usb_state",
+            "usb_state": "healthy",
+        }),
+    );
+    Ok(())
+}
+
+async fn sync_host_power_profile_to_device_if_possible(
+    state: &AppState,
+    device_id: &str,
+) -> Result<(), HttpError> {
+    let Some(command_tx) = native_monitor_command_sender(state, device_id) else {
+        return Ok(());
+    };
+    let (profile, query_error) = match query_current_host_power_profile().await {
+        Ok(profile) => (Some(profile), None),
+        Err(error) => (None, Some(error)),
+    };
+    let request_id = format!("devd-host-prof-{}", Utc::now().timestamp_millis());
+    let frame = json!({
+        "type": "request",
+        "request_id": request_id,
+        "op": "set_host_power_profile",
+        "profile": profile.clone()
+    });
+    let response = send_monitor_cdc_frame_async_with_timeout(
+        command_tx,
+        frame.clone(),
+        request_id.clone(),
+        Duration::from_millis(NATIVE_MONITOR_COMMAND_TIMEOUT_MS),
+    )
+    .await?;
+    if response.get("type").and_then(Value::as_str) != Some("response")
+        || !response.get("ok").and_then(Value::as_bool).unwrap_or(false)
+    {
+        return Err(error_from_cdc_response(&response));
+    }
+    response.get("result").cloned().ok_or_else(|| {
+        HttpError::retryable(
+            "cdc_response_missing_result",
+            "CDC set_host_power_profile response did not include result",
+        )
+    })?;
+    let mut payload = json!({
+        "ok": true,
+        "action": "sync_profile",
+        "profile": profile,
+    });
+    if let Some(error) = query_error {
+        payload["query_error"] = error;
+    }
+    record_device_host_power_trace(
+        state,
+        device_id,
+        if payload.get("query_error").is_some() {
+            "warn"
+        } else {
+            "info"
+        },
+        if payload.get("query_error").is_some() {
+            "host power profile query failed; firmware overlay cleared"
+        } else {
+            "host power profile synced to firmware"
+        },
+        payload,
+    );
+    Ok(())
+}
+
+fn native_monitor_command_sender(
+    state: &AppState,
+    device_id: &str,
+) -> Option<mpsc::Sender<NativeMonitorCommand>> {
+    let guard = state.inner.lock().expect("state lock");
+    let device = guard.devices.get(device_id)?;
+    if !matches!(device.transport, DeviceTransport::NativeSerial) {
+        return None;
+    }
+    guard
+        .monitors
+        .get(device_id)
+        .and_then(|monitor| monitor.command_tx.clone())
+}
+
+fn record_device_host_power_trace(
+    state: &AppState,
+    device_id: &str,
+    level: &str,
+    summary: &str,
+    payload: Value,
+) {
+    let trace = structured_trace_entry(
+        level,
+        "event",
+        Some("host_power".to_string()),
+        summary,
+        payload.to_string(),
+    );
+    emit(
+        state,
+        Some(device_id.to_string()),
+        "serial_trace",
+        summary,
+        json!({"trace": trace}),
+    );
+    let mut guard = state.inner.lock().expect("state lock");
+    if let Some(device) = guard.devices.get_mut(device_id) {
+        push_bounded(&mut device.trace, trace, LOG_LIMIT);
+        push_log(
+            device,
+            if level == "warn" { "warn" } else { "info" },
+            "host_power",
+            summary,
+        );
+    }
+}
+
+fn http_error_payload(error: &HttpError) -> Value {
+    json!({
+        "code": error.0.code,
+        "message": error.0.message,
+        "retryable": error.0.retryable,
+        "details": error.0.details
+    })
 }
 
 fn spawn_web_lease_reaper(state: AppState) {
@@ -8586,7 +9116,7 @@ async fn host_power_profile(
         )
     })?;
     if !dry_run {
-        run_command_status(&command, "host_power_profile_failed").await?;
+        apply_host_power_profile(&target_profile).await?;
     }
     let existing_previous_profile = {
         let guard = state.inner.lock().expect("state lock");
@@ -9916,32 +10446,17 @@ fn append_monitor_trace(
     let trace_event = trace.clone();
     let log_event = log.clone();
     let status_event = status_from_trace_payload(&trace_event.payload);
-    let power_event = {
+    {
         let mut guard = state.inner.lock().expect("state lock");
-        let mut power_event = None;
         if let Some(device) = guard.devices.get_mut(device_id) {
             if device.identity.is_some() {
                 device.connection = ConnectionState::Connected;
             }
             push_bounded(&mut device.trace, trace, LOG_LIMIT);
-            if let Some(status) = status_event.clone() {
-                let updated_at = Instant::now();
-                device.status = Some(status.clone());
-                device.status_updated_at = Some(updated_at);
-                let derived_diag_snapshot =
-                    derive_diag_snapshot_from_status(&status, "monitor_status");
-                device.diag_snapshot = Some(derived_diag_snapshot);
-                device.diag_snapshot_updated_at = Some(updated_at);
-                power_event = maybe_record_power_event(device, &status);
-                if let Some((trace, _)) = power_event.as_ref() {
-                    push_bounded(&mut device.trace, trace.clone(), LOG_LIMIT);
-                }
-            }
             if let Some(log) = log {
                 push_bounded(&mut device.logs, log, LOG_LIMIT);
             }
         }
-        power_event
     };
     emit(
         state,
@@ -9960,29 +10475,8 @@ fn append_monitor_trace(
         );
     }
     if let Some(status) = status_event {
-        emit(
-            state,
-            Some(device_id.to_string()),
-            "serial_status",
-            "CDC status snapshot",
-            json!({"status": status}),
-        );
-    }
-    if let Some((trace, payload)) = power_event {
-        emit(
-            state,
-            Some(device_id.to_string()),
-            "serial_trace",
-            "power event",
-            json!({"trace": trace}),
-        );
-        emit(
-            state,
-            Some(device_id.to_string()),
-            "power_event",
-            "power event",
-            payload,
-        );
+        let effects = update_device_status_record(state, device_id, &status, false, false);
+        emit_device_status_effects(state, device_id, status, effects);
     }
 }
 
@@ -10280,7 +10774,11 @@ impl CommandSpec {
 
 fn host_power_backend_name() -> &'static str {
     if cfg!(target_os = "linux") {
-        "linux-systemd"
+        if linux_pve_host_detected() {
+            "linux-pve-cpufreq"
+        } else {
+            "linux-unsupported"
+        }
     } else if cfg!(target_os = "macos") {
         "macos-pmset"
     } else {
@@ -10289,9 +10787,10 @@ fn host_power_backend_name() -> &'static str {
 }
 
 fn host_power_capabilities() -> Value {
+    let profiles = host_power_supported_profiles();
     json!({
-        "low_power_running": cfg!(any(target_os = "linux", target_os = "macos")),
-        "profiles": host_power_supported_profiles(),
+        "low_power_running": !profiles.is_empty(),
+        "profiles": profiles,
         "suspend": cfg!(any(target_os = "linux", target_os = "macos")),
         "shutdown": cfg!(any(target_os = "linux", target_os = "macos")),
         "dry_run": true,
@@ -10301,7 +10800,10 @@ fn host_power_capabilities() -> Value {
 
 fn host_power_supported_profiles() -> Vec<&'static str> {
     if cfg!(target_os = "linux") {
-        vec!["power_saver", "balanced", "performance", "restore_previous"]
+        linux_pve_supported_profiles_at_root(
+            FsPath::new(LINUX_PVE_CPU_SYSFS_ROOT),
+            linux_pve_host_detected(),
+        )
     } else if cfg!(target_os = "macos") {
         vec!["power_saver", "balanced", "restore_previous"]
     } else {
@@ -10321,16 +10823,10 @@ async fn query_host_power_state() -> Value {
 
 async fn query_current_host_power_profile() -> Result<String, Value> {
     if cfg!(target_os = "linux") {
-        let command = linux_get_profile_command();
-        let output = run_command_output(&command).await?;
-        parse_linux_active_profile(&output).ok_or_else(|| {
-            json!({
-                "code": "host_power_profile_parse_failed",
-                "message": "power-profiles-daemon ActiveProfile output was not recognized",
-                "command": command,
-                "output": output
-            })
-        })
+        linux_pve_query_current_host_power_profile_at_root(
+            FsPath::new(LINUX_PVE_CPU_SYSFS_ROOT),
+            linux_pve_host_detected(),
+        )
     } else if cfg!(target_os = "macos") {
         let command = CommandSpec::new("pmset", ["-g"]);
         let output = run_command_output(&command).await?;
@@ -10405,18 +10901,11 @@ fn next_previous_profile(
 
 fn build_profile_command(profile: &str) -> Result<CommandSpec, HttpError> {
     if cfg!(target_os = "linux") {
-        let active_profile = match profile {
-            "power_saver" => "power-saver",
-            "balanced" => "balanced",
-            "performance" => "performance",
-            value => {
-                return Err(HttpError::non_retryable(
-                    "host_power_profile_unsupported",
-                    format!("unsupported Linux host power profile: {value}"),
-                ))
-            }
-        };
-        Ok(linux_set_profile_command(active_profile))
+        linux_pve_build_profile_command_at_root(
+            profile,
+            FsPath::new(LINUX_PVE_CPU_SYSFS_ROOT),
+            linux_pve_host_detected(),
+        )
     } else if cfg!(target_os = "macos") {
         match profile {
             "power_saver" => Ok(CommandSpec::new("pmset", ["-a", "lowpowermode", "1"])),
@@ -10507,47 +10996,210 @@ fn build_shutdown_command(delay_sec: u64, force: bool) -> Result<CommandSpec, Ht
     }
 }
 
-fn linux_get_profile_command() -> CommandSpec {
-    CommandSpec::new(
-        "busctl",
-        [
-            "--system",
-            "get-property",
-            "net.hadess.PowerProfiles",
-            "/net/hadess/PowerProfiles",
-            "net.hadess.PowerProfiles",
-            "ActiveProfile",
-        ],
+fn linux_pve_host_detected() -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    if FsPath::new(LINUX_PVE_MARKER_DIR).is_dir() {
+        return true;
+    }
+    std::process::Command::new("pveversion")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn linux_pve_supported_profiles_at_root(root: &FsPath, is_pve_host: bool) -> Vec<&'static str> {
+    if linux_pve_backend_paths_at_root(root, is_pve_host).is_err() {
+        return vec![];
+    }
+    let Some(governors) = linux_pve_available_governors_at_root(root) else {
+        return vec![];
+    };
+    let mut profiles = Vec::new();
+    if governors.contains("powersave") {
+        profiles.push("power_saver");
+    }
+    if governors.contains("schedutil") {
+        profiles.push("balanced");
+    }
+    if governors.contains("performance") {
+        profiles.push("performance");
+    }
+    if !profiles.is_empty() {
+        profiles.push("restore_previous");
+    }
+    profiles
+}
+
+fn linux_pve_query_current_host_power_profile_at_root(
+    root: &FsPath,
+    is_pve_host: bool,
+) -> Result<String, Value> {
+    let governor_path = linux_pve_backend_paths_at_root(root, is_pve_host)
+        .map_err(linux_pve_backend_unsupported_value)?
+        .into_iter()
+        .next()
+        .expect("governor path present");
+    let governor = fs::read_to_string(&governor_path).map_err(|error| {
+        json!({
+            "code": "host_power_profile_query_failed",
+            "message": format!("read {}: {error}", governor_path.display()),
+            "path": governor_path.display().to_string()
+        })
+    })?;
+    linux_pve_governor_to_profile(governor.trim())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            json!({
+                "code": "host_power_profile_parse_failed",
+                "message": "cpufreq governor did not map to a supported PVE host power profile",
+                "path": governor_path.display().to_string(),
+                "output": governor.trim()
+            })
+        })
+}
+
+fn linux_pve_build_profile_command_at_root(
+    profile: &str,
+    root: &FsPath,
+    is_pve_host: bool,
+) -> Result<CommandSpec, HttpError> {
+    let governor = linux_pve_profile_to_governor(profile)?;
+    let governor_paths = linux_pve_backend_paths_at_root(root, is_pve_host)
+        .map_err(linux_pve_backend_unsupported_http_error)?;
+    let mut args = vec!["set-governor".to_string(), governor.to_string()];
+    args.extend(governor_paths.iter().map(|path| path.display().to_string()));
+    Ok(CommandSpec::new("cpufreq-sysfs", args))
+}
+
+fn linux_pve_write_profile_at_root(
+    profile: &str,
+    root: &FsPath,
+    is_pve_host: bool,
+) -> Result<(), HttpError> {
+    let governor = linux_pve_profile_to_governor(profile)?;
+    let governor_paths = linux_pve_backend_paths_at_root(root, is_pve_host)
+        .map_err(linux_pve_backend_unsupported_http_error)?;
+    for governor_path in governor_paths {
+        fs::write(&governor_path, format!("{governor}\n")).map_err(|error| {
+            HttpError::retryable(
+                "host_power_profile_failed",
+                format!("write {}: {error}", governor_path.display()),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn linux_pve_backend_paths_at_root(
+    root: &FsPath,
+    is_pve_host: bool,
+) -> Result<Vec<PathBuf>, String> {
+    if !is_pve_host {
+        return Err(
+            "Linux host power profiles are only supported on Proxmox VE (PVE) hosts".to_string(),
+        );
+    }
+    let governor_paths = linux_pve_governor_paths_at_root(root);
+    if governor_paths.is_empty() {
+        return Err(format!(
+            "Proxmox VE host is missing cpufreq governor sysfs under {}",
+            root.display()
+        ));
+    }
+    Ok(governor_paths)
+}
+
+fn linux_pve_governor_paths_at_root(root: &FsPath) -> Vec<PathBuf> {
+    let mut paths = HashSet::new();
+
+    if let Ok(entries) = fs::read_dir(root.join("cpufreq")) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if !name.starts_with("policy") {
+                continue;
+            }
+            let governor_path = entry.path().join("scaling_governor");
+            if governor_path.is_file() {
+                paths.insert(governor_path);
+            }
+        }
+    }
+
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let Some(suffix) = name.strip_prefix("cpu") else {
+                continue;
+            };
+            if suffix.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
+                continue;
+            }
+            let governor_path = entry.path().join("cpufreq/scaling_governor");
+            if governor_path.is_file() {
+                paths.insert(governor_path);
+            }
+        }
+    }
+
+    let mut paths: Vec<_> = paths.into_iter().collect();
+    paths.sort();
+    paths
+}
+
+fn linux_pve_available_governors_at_root(root: &FsPath) -> Option<HashSet<String>> {
+    let available_path = linux_pve_governor_paths_at_root(root)
+        .into_iter()
+        .map(|path| path.with_file_name("scaling_available_governors"))
+        .find(|path| path.is_file())?;
+    let governors = fs::read_to_string(available_path).ok()?;
+    Some(
+        governors
+            .split_whitespace()
+            .map(|governor| governor.to_string())
+            .collect(),
     )
 }
 
-fn linux_set_profile_command(profile: &str) -> CommandSpec {
-    CommandSpec::new(
-        "busctl",
-        [
-            "--system",
-            "set-property",
-            "net.hadess.PowerProfiles",
-            "/net/hadess/PowerProfiles",
-            "net.hadess.PowerProfiles",
-            "ActiveProfile",
-            "s",
-            profile,
-        ],
-    )
-}
-
-fn parse_linux_active_profile(output: &str) -> Option<String> {
-    let profile = output
-        .split('"')
-        .nth(1)
-        .or_else(|| output.split_whitespace().last())?;
+fn linux_pve_profile_to_governor(profile: &str) -> Result<&'static str, HttpError> {
     match profile {
-        "power-saver" => Some("power_saver".to_string()),
-        "balanced" => Some("balanced".to_string()),
-        "performance" => Some("performance".to_string()),
+        "power_saver" => Ok("powersave"),
+        "balanced" => Ok("schedutil"),
+        "performance" => Ok("performance"),
+        value => Err(HttpError::non_retryable(
+            "host_power_profile_unsupported",
+            format!("unsupported Linux PVE host power profile: {value}"),
+        )),
+    }
+}
+
+fn linux_pve_governor_to_profile(governor: &str) -> Option<&'static str> {
+    match governor {
+        "powersave" => Some("power_saver"),
+        "schedutil" => Some("balanced"),
+        "performance" => Some("performance"),
         _ => None,
     }
+}
+
+fn linux_pve_backend_unsupported_http_error(message: String) -> HttpError {
+    HttpError::non_retryable("host_power_backend_unsupported", message)
+}
+
+fn linux_pve_backend_unsupported_value(message: String) -> Value {
+    json!({
+        "code": "host_power_backend_unsupported",
+        "message": message
+    })
 }
 
 fn parse_macos_low_power_mode(output: &str) -> Option<bool> {
@@ -10601,6 +11253,24 @@ async fn run_command_status(command: &CommandSpec, code: &str) -> Result<(), Htt
         Err(HttpError::retryable(
             code,
             format!("host power command exited with {status}"),
+        ))
+    }
+}
+
+async fn apply_host_power_profile(profile: &str) -> Result<(), HttpError> {
+    if cfg!(target_os = "linux") {
+        linux_pve_write_profile_at_root(
+            profile,
+            FsPath::new(LINUX_PVE_CPU_SYSFS_ROOT),
+            linux_pve_host_detected(),
+        )
+    } else if cfg!(target_os = "macos") {
+        let command = build_profile_command(profile)?;
+        run_command_status(&command, "host_power_profile_failed").await
+    } else {
+        Err(HttpError::non_retryable(
+            "host_power_backend_unsupported",
+            format!("host power control is not supported on {}", env::consts::OS),
         ))
     }
 }
@@ -11691,6 +12361,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_monitor_status_frames_update_host_runtime_bookkeeping() {
+        let state = create_app_state(false);
+        let device_id = "fixture-ups-device".to_string();
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.devices.insert(
+                device_id.clone(),
+                DeviceRecord {
+                    id: device_id.clone(),
+                    display_name: "USB CDC".into(),
+                    port_path: Some("/tmp/fixture-usb-test".into()),
+                    lan_address: None,
+                    lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
+                    transport: DeviceTransport::NativeSerial,
+                    binding: None,
+                    connection: ConnectionState::Connected,
+                    identity: Some(json!({"device_id": "fixture-mains-aegis"})),
+                    status: None,
+                    status_updated_at: None,
+                    diag_snapshot: None,
+                    diag_snapshot_updated_at: None,
+                    selected_artifact_id: None,
+                    log_decode: LogDecodeState::default(),
+                    settings: default_settings(),
+                    logs: VecDeque::new(),
+                    trace: VecDeque::new(),
+                    last_power_event_signature: None,
+                },
+            );
+        }
+
+        let line = br#"{"type":"response","request_id":"devd-status-1","ok":true,"result":{"mode":"standby"}}"#;
+        let (trace, log) = parse_cdc_line_for_monitor(line).expect("monitor trace");
+        append_monitor_trace(&state, &device_id, trace, log);
+
+        let guard = state.inner.lock().expect("state lock");
+        let runtime = guard
+            .device_host_power
+            .get(&device_id)
+            .expect("host runtime should be updated");
+        assert_eq!(runtime.last_ups_mode.as_deref(), Some("standby"));
+        assert!(runtime.last_runtime_sync_attempt_at.is_some());
+        assert_eq!(
+            guard.devices[&device_id].status.as_ref().unwrap()["mode"],
+            "standby"
+        );
+    }
+
+    #[tokio::test]
     async fn device_diag_snapshot_derives_from_fresh_status_cache() {
         let state = create_app_state(false);
         let device_id = "fixture-ups-device".to_string();
@@ -12393,6 +13113,120 @@ mod tests {
             next_status_at,
             next_status_at + Duration::from_millis(1)
         ));
+    }
+
+    #[test]
+    fn host_power_automation_is_native_serial_only() {
+        let mut lan_runtime = DeviceHostPowerRuntime::default();
+        assert_eq!(
+            evaluate_host_power_automation(DeviceTransport::Lan, &mut lan_runtime, Some("backup")),
+            None
+        );
+        assert_eq!(lan_runtime.last_ups_mode.as_deref(), Some("backup"));
+
+        let mut mock_runtime = DeviceHostPowerRuntime::default();
+        assert_eq!(
+            evaluate_host_power_automation(
+                DeviceTransport::Mock,
+                &mut mock_runtime,
+                Some("backup")
+            ),
+            None
+        );
+        assert_eq!(mock_runtime.last_ups_mode.as_deref(), Some("backup"));
+    }
+
+    #[test]
+    fn host_power_automation_fires_on_backup_edges() {
+        let mut runtime = DeviceHostPowerRuntime::default();
+        assert_eq!(
+            evaluate_host_power_automation(
+                DeviceTransport::NativeSerial,
+                &mut runtime,
+                Some("standby")
+            ),
+            None
+        );
+        assert_eq!(
+            evaluate_host_power_automation(
+                DeviceTransport::NativeSerial,
+                &mut runtime,
+                Some("backup")
+            ),
+            Some(HostPowerAutomationAction::EnterBackupPowerSaver)
+        );
+        assert_eq!(
+            evaluate_host_power_automation(
+                DeviceTransport::NativeSerial,
+                &mut runtime,
+                Some("backup")
+            ),
+            None
+        );
+        assert_eq!(
+            evaluate_host_power_automation(
+                DeviceTransport::NativeSerial,
+                &mut runtime,
+                Some("standby")
+            ),
+            Some(HostPowerAutomationAction::ExitBackupRestorePrevious)
+        );
+    }
+
+    #[test]
+    fn host_runtime_sync_is_native_serial_all_mode_and_throttled() {
+        let mut runtime = DeviceHostPowerRuntime::default();
+        let now = Instant::now();
+
+        assert!(!host_runtime_sync_due(
+            DeviceTransport::Lan,
+            &mut runtime,
+            Some("backup"),
+            now
+        ));
+        assert!(host_runtime_sync_due(
+            DeviceTransport::NativeSerial,
+            &mut runtime,
+            Some("backup"),
+            now
+        ));
+        assert!(!host_runtime_sync_due(
+            DeviceTransport::NativeSerial,
+            &mut runtime,
+            Some("backup"),
+            now + Duration::from_millis(HOST_RUNTIME_SYNC_INTERVAL_MS - 1)
+        ));
+        assert!(host_runtime_sync_due(
+            DeviceTransport::NativeSerial,
+            &mut runtime,
+            Some("backup"),
+            now + Duration::from_millis(HOST_RUNTIME_SYNC_INTERVAL_MS)
+        ));
+        assert!(host_runtime_sync_due(
+            DeviceTransport::NativeSerial,
+            &mut runtime,
+            Some("standby"),
+            now + Duration::from_millis(HOST_RUNTIME_SYNC_INTERVAL_MS * 2)
+        ));
+    }
+
+    #[test]
+    fn leaving_backup_keeps_runtime_sync_throttle_intact() {
+        let now = Instant::now();
+        let mut runtime = DeviceHostPowerRuntime {
+            last_ups_mode: Some("backup".to_string()),
+            last_runtime_sync_attempt_at: Some(now),
+        };
+
+        assert_eq!(
+            evaluate_host_power_automation(
+                DeviceTransport::NativeSerial,
+                &mut runtime,
+                Some("standby")
+            ),
+            Some(HostPowerAutomationAction::ExitBackupRestorePrevious)
+        );
+        assert_eq!(runtime.last_runtime_sync_attempt_at, Some(now));
     }
 
     #[test]
@@ -13605,35 +14439,105 @@ mod tests {
     }
 
     #[test]
-    fn parses_linux_power_profiles_active_profile() {
+    fn parses_linux_pve_governor_profiles() {
         assert_eq!(
-            parse_linux_active_profile("s \"power-saver\"\n").as_deref(),
+            linux_pve_governor_to_profile("powersave"),
             Some("power_saver")
         );
+        assert_eq!(linux_pve_governor_to_profile("schedutil"), Some("balanced"));
         assert_eq!(
-            parse_linux_active_profile("s \"balanced\"\n").as_deref(),
-            Some("balanced")
+            linux_pve_governor_to_profile("performance"),
+            Some("performance")
         );
-        assert_eq!(parse_linux_active_profile("s \"unknown\"\n"), None);
+        assert_eq!(linux_pve_governor_to_profile("ondemand"), None);
     }
 
     #[test]
-    fn builds_linux_power_profiles_dbus_command() {
+    fn maps_linux_pve_profiles_to_governors() {
         assert_eq!(
-            linux_set_profile_command("power-saver"),
-            CommandSpec::new(
-                "busctl",
-                [
-                    "--system",
-                    "set-property",
-                    "net.hadess.PowerProfiles",
-                    "/net/hadess/PowerProfiles",
-                    "net.hadess.PowerProfiles",
-                    "ActiveProfile",
-                    "s",
-                    "power-saver",
-                ],
-            )
+            linux_pve_profile_to_governor("power_saver").unwrap(),
+            "powersave"
+        );
+        assert_eq!(
+            linux_pve_profile_to_governor("balanced").unwrap(),
+            "schedutil"
+        );
+        assert_eq!(
+            linux_pve_profile_to_governor("performance").unwrap(),
+            "performance"
+        );
+    }
+
+    #[test]
+    fn builds_linux_pve_sysfs_profile_command() {
+        let temp = tempfile::tempdir().unwrap();
+        let (cpu_governor, policy_governor) = write_linux_pve_cpufreq_fixture(
+            temp.path(),
+            "performance",
+            "powersave schedutil performance",
+        );
+
+        let command =
+            linux_pve_build_profile_command_at_root("power_saver", temp.path(), true).unwrap();
+
+        assert_eq!(command.program, "cpufreq-sysfs");
+        assert_eq!(command.args[0], "set-governor");
+        assert_eq!(command.args[1], "powersave");
+        assert!(command.args.contains(&cpu_governor.display().to_string()));
+        assert!(command
+            .args
+            .contains(&policy_governor.display().to_string()));
+    }
+
+    #[test]
+    fn linux_pve_supported_profiles_follow_available_governors() {
+        let temp = tempfile::tempdir().unwrap();
+        write_linux_pve_cpufreq_fixture(temp.path(), "performance", "powersave performance");
+
+        assert_eq!(
+            linux_pve_supported_profiles_at_root(temp.path(), true),
+            vec!["power_saver", "performance", "restore_previous"]
+        );
+    }
+
+    #[test]
+    fn linux_pve_backend_rejects_non_pve_hosts() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let error =
+            linux_pve_build_profile_command_at_root("power_saver", temp.path(), false).unwrap_err();
+
+        assert_eq!(error.0.code, "host_power_backend_unsupported");
+    }
+
+    #[test]
+    fn linux_pve_query_reports_unsupported_for_non_pve_hosts() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let error =
+            linux_pve_query_current_host_power_profile_at_root(temp.path(), false).unwrap_err();
+
+        assert_eq!(error["code"], "host_power_backend_unsupported");
+    }
+
+    #[test]
+    fn linux_pve_write_profile_updates_all_governor_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let (cpu_governor, policy_governor) = write_linux_pve_cpufreq_fixture(
+            temp.path(),
+            "performance",
+            "powersave schedutil performance",
+        );
+
+        linux_pve_write_profile_at_root("balanced", temp.path(), true).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(cpu_governor).unwrap().trim(),
+            "schedutil"
+        );
+        assert_eq!(
+            fs::read_to_string(policy_governor).unwrap().trim(),
+            "schedutil"
         );
     }
 
@@ -13800,7 +14704,34 @@ mod tests {
             http_service_mode: HttpServiceMode::ApiOnly,
             app_session_secret: None,
             persistence: DevdPersistence::disabled(),
+            tokio_handle: tokio::runtime::Handle::try_current().ok(),
         }
+    }
+
+    fn write_linux_pve_cpufreq_fixture(
+        root: &FsPath,
+        governor: &str,
+        available_governors: &str,
+    ) -> (PathBuf, PathBuf) {
+        let cpu_dir = root.join("cpu0/cpufreq");
+        let policy_dir = root.join("cpufreq/policy0");
+        fs::create_dir_all(&cpu_dir).unwrap();
+        fs::create_dir_all(&policy_dir).unwrap();
+        let cpu_governor = cpu_dir.join("scaling_governor");
+        let policy_governor = policy_dir.join("scaling_governor");
+        fs::write(&cpu_governor, format!("{governor}\n")).unwrap();
+        fs::write(&policy_governor, format!("{governor}\n")).unwrap();
+        fs::write(
+            cpu_dir.join("scaling_available_governors"),
+            available_governors,
+        )
+        .unwrap();
+        fs::write(
+            policy_dir.join("scaling_available_governors"),
+            available_governors,
+        )
+        .unwrap();
+        (cpu_governor, policy_governor)
     }
 
     #[tokio::test]
@@ -13894,7 +14825,10 @@ mod tests {
             "dry_run": true,
             "action": "profile",
             "target_profile": "power_saver",
-            "command": linux_set_profile_command("power-saver")
+            "command": CommandSpec::new(
+                "cpufreq-sysfs",
+                ["set-governor", "powersave", "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"]
+            )
         });
         record_host_power_action(&state, "host power profile requested", payload);
 
@@ -13957,6 +14891,15 @@ mod tests {
     fn recovery_cdc_request_prefix_fits_firmware_request_id_limit() {
         let request_id = format!("{RECOVERY_CDC_REQUEST_PREFIX}-{}", 9_999_999_999_999_u64);
         assert!(request_id.len() <= 32, "{request_id}");
+    }
+
+    #[test]
+    fn host_runtime_sync_request_ids_fit_firmware_request_id_limit() {
+        let host_usb_request_id = format!("devd-host-usb-{}", 9_999_999_999_999_u64);
+        let host_power_request_id = format!("devd-host-prof-{}", 9_999_999_999_999_u64);
+
+        assert!(host_usb_request_id.len() <= 32, "{host_usb_request_id}");
+        assert!(host_power_request_id.len() <= 32, "{host_power_request_id}");
     }
 
     fn usb_port(port_name: &str, serial_number: Option<&str>) -> serialport::SerialPortInfo {
