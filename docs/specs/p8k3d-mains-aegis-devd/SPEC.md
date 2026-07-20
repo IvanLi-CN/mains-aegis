@@ -4,7 +4,7 @@
 
 - Status: 已完成（v1 devd foundation）
 - Created: 2026-05-02
-- Last: 2026-07-05
+- Last: 2026-07-20
 
 ## 接管说明
 
@@ -53,7 +53,7 @@
 - `POST /api/v1/devices/{id}/disconnect`: 断开设备 session。
 - `DELETE /api/v1/devices/{id}/binding`: 移除绑定，并同步 devd 持久状态。
 - `GET /api/v1/devices/{id}/identity`: 返回设备 firmware identity。
-- `GET /api/v1/devices/{id}/status`: 返回设备 owner-facing status。该接口同时通过 IPC `device.status` 暴露给 `mains-aegis device <id> status`；CLI 必须支持单次读和 `--watch` 连续 JSONL 采样，正式 Power Validation 的 UPS 状态采集不得因为 HTTP 或 IPC 原始方法更方便而绕过 CLI 能力缺口。
+- `GET /api/v1/devices/{id}/status`: 返回设备 owner-facing status。该接口同时通过 IPC `device.status` 暴露给 `mains-aegis device <id> status`；CLI 必须支持单次读和 `--watch` 连续 JSONL 采样，正式 Power Validation 的 UPS 状态采集不得因为 HTTP 或 IPC 原始方法更方便而绕过 CLI 能力缺口。固件 full 与 compact status JSON 必须包含 `host.power_profile`，取值为 `power_saver|balanced|performance|null`；`restore_previous` 仅是 devd 请求动作，不得作为设备状态值暴露。
 - `GET /api/v1/devices/{id}/diag-snapshot?package=<id>`: 通过 USB CDC `get_diag_snapshot` 获取只读 package 化诊断快照，并缓存到设备 session；重复 `package=` 选择多个 package，空 package 默认读取轻量 `core`。
 - `GET /api/v1/devices/{id}/diag-snapshot` 同时通过 IPC `device.diag_snapshot` 暴露给 `mains-aegis device <id> diag-snapshot --package <id>`；CLI 必须提供与 `status` 同构的 `--fresh`、`--cache-only`、`--include-meta`、`--watch`、`--interval-ms` 与 `--samples` 参数。
 - `POST /api/v1/devices/{id}/recovery/bms-discharge-authorization`: 触发受限 BMS 放电授权恢复。native serial 设备只有在存在显式绑定的 companion LAN 地址时才可先走设备 LAN HTTP `POST /api/v1/recovery/bms-discharge-authorization`，不可用时走 USB CDC `recover_bms_discharge_authorization`；缓存的 `identity/status.network.ipv4` 只是 telemetry，不得作为恢复写目标。LAN-only 设备直接调用设备本体 HTTP。devd 必须等待固件返回终态结果，不能把 `pending` 当作失败或成功；成功或失败后应刷新 status 与 diag-snapshot cache。
@@ -104,11 +104,18 @@ devd 的 host power 控制面用于 UPS 后备供电期间降低主机负载，�
 - 真实动作只在 devd 启动时带 `--allow-host-power-actions` 或环境变量 `MAINS_AEGIS_DEVD_ALLOW_HOST_POWER_ACTIONS=true` 时允许。
 - dry-run 响应必须包含 backend、action、target profile 或 delay、以及将执行的命令摘要，并且必须广播 `host_power` 事件。
 - shutdown `delay_sec` 按秒解释；真实关机请求必须立即下发给操作系统并以系统命令返回码作为 API 结果，不得由 devd 自行计时或自行决定何时关机。`delay_sec=0` 表示立即关机；`delay_sec>0` 表示使用系统级关机调度能力。
-- Linux 后端使用 `power-profiles-daemon` 的 `net.hadess.PowerProfiles` D-Bus `ActiveProfile` 作为低功耗运行入口：`power_saver` 映射为 `power-saver`，`balanced` 与 `performance` 映射到同名 profile；suspend 使用 logind D-Bus，shutdown 使用 `systemctl poweroff --no-block --when=...`，并仅在请求带 `force:true` 时附加 `--force`，确保命令一旦接收就由系统执行。
+- Linux 低功耗运行后端仅支持 Proxmox VE (PVE) 宿主机：devd 通过 `/etc/pve` 或 `pveversion` 识别平台，并读取/写入 cpufreq sysfs governor 作为 profile 入口；`power_saver -> powersave`、`balanced -> schedutil`、`performance -> performance`。非 PVE Linux 的 profile 查询或切换必须返回 `host_power_backend_unsupported`。Linux suspend 继续使用 logind D-Bus，shutdown 使用 `systemctl poweroff --no-block --when=...`，并仅在请求带 `force:true` 时附加 `--force`，确保命令一旦接收就由系统执行。
 - Linux `force:true` 仅支持 `delay_sec=0`；`force:true` 与非零延迟无法由 systemd 同时可靠表达，必须返回 `host_power_shutdown_unsupported`，由上游明确改发立即强制关机或非强制延迟关机。
 - macOS 后端使用 `pmset lowpowermode 1/0` 进入/退出低功耗运行；suspend 使用 `pmset sleepnow`，shutdown 使用系统 `shutdown`。macOS 原生命令只支持分钟粒度调度，`delay_sec>0` 会向上取整为分钟。
 - macOS 后端不接受 `force:true`；该 backend 无法用 `pmset`/`shutdown` 表达强制关机语义，必须返回 `host_power_shutdown_unsupported`，避免将普通 shutdown 误报为 forced compliance。
-- 若平台缺少 `power-profiles-daemon`、`busctl`、`pmset` 或权限不足，API 必须返回可诊断错误，不得 panic。
+- 若 PVE 宿主机缺少 cpufreq governor sysfs、`pmset` 或权限不足，API 必须返回可诊断错误，不得 panic。
+
+设备同步规则：
+
+- devd 只在 `NativeSerial` transport 上自动执行 UPS host power 策略；LAN-only 与 mock transport 不得触发本机 profile 切换，也不得伪造 `host.power_profile`。
+- native monitor 读取到 UPS `mode=backup` 的上升沿时，devd 调用 host profile `power_saver`；读取到从 `backup` 退出时，devd 调用 `restore_previous`，若没有可恢复的 previous profile 则回退 `balanced`。动作仍遵守默认 dry-run 与真实动作授权规则，并广播 `host_power` 事件。
+- devd 在 active native monitor 期间以约 1s cadence 查询本机当前 profile，并通过 USB CDC request `set_host_power_profile` 同步给固件；该请求体为 `{ "type":"request", "op":"set_host_power_profile", "profile":"power_saver|balanced|performance|null" }`。查询失败时必须发送 `profile:null` 清除固件 overlay，而不是保留旧值。
+- 固件只把最近一次 `set_host_power_profile` 作为短 TTL runtime overlay 暴露到 status/front-panel；TTL 过期、非 BACKUP 模式或 profile 为 `null` 时 `host.power_profile=null`，前面板 BACKUP 页显示 `POL --`。
 
 UPS 策略建议：
 
@@ -120,7 +127,7 @@ UPS 策略建议：
 
 CI 必须覆盖 devd 真实命令触发路径，而不仅是 fake command 或 dry-run：
 
-- Linux 使用 GitHub Actions `ubuntu-latest` runner 启动 QEMU Ubuntu guest VM，在 guest 内安装 `power-profiles-daemon`，以真实 `dry_run=false` 请求验证 `power_saver` profile 生效，并向 guest 下发真实 shutdown，断言 VM 关机退出。
+- Linux 不再以桌面 power-profiles guest 作为验证基线；真实验证必须在 Proxmox VE 宿主机上读取/切换 `powersave | schedutil | performance` governor，覆盖 `power_saver / balanced / performance / restore_previous`，并继续验证真实 shutdown 指令可被系统接收。
 - macOS 使用 GitHub Actions `macos-latest` 受管 runner VM 执行真实 `pmset lowpowermode` 切换，并发起可取消的系统 scheduled shutdown，断言 macOS 接收关机命令。若 GitHub-hosted macOS runner 不暴露 `lowpowermode`，该 job 必须验证 profile 请求返回可诊断 error envelope，并继续验证真实 scheduled shutdown。GitHub-hosted macOS runner 不支持在 runner 内再启动 macOS nested VM，因此该 job 以 runner VM 本身作为 macOS VM 验证对象。
 
 ### Web USB control lease
@@ -179,6 +186,9 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - devd 可无端口启动；无硬件验证通过 dry-run API 与单元测试中的 synthetic in-memory device state 覆盖设备管理、artifact selection、dry-run flash 与 session API。
 - devd 重启后仍保留绑定、别名和 artifact selection；但不会恢复 connected/Web lease/monitor/log ring 等运行态。
 - host power API 支持 Linux/macOS 查询、dry-run、事件广播和真实动作默认拒绝；缺少平台后端或权限不足时返回可诊断错误。
+- Given native serial monitor 观察到 UPS 进入 `backup`，Then devd 必须按授权状态发起 `power_saver` dry-run/真实 host power action；Given UPS 从 `backup` 退出，Then devd 必须发起 `restore_previous`，缺少 previous profile 时回退 `balanced`。
+- Given transport 为 LAN-only 或 mock，When status mode 进入或退出 `backup`，Then devd 不得自动切换本机 host power profile。
+- Given UPS 处于 `backup` 且 native monitor active，When devd 成功查询当前主机 profile，Then 固件 status `host.power_profile` 与前面板 BACKUP policy tag 必须在刷新 TTL 内反映 `power_saver|balanced|performance`；查询失败、TTL 过期或非 BACKUP 时必须回退 `null` / `POL --`。
 - `tools/firmware-artifact/build-catalog-entry.py` 能为 ELF 生成 manifest、catalog 和 `SHA256SUMS`。
 - 固件 identity JSON 包含 features/protocol/defmt 字段。
 - 固件 USB CDC 支持 `get_diag_snapshot`，devd `GET /api/v1/devices/{id}/diag-snapshot` 能返回并缓存结构化 `packages/errors` 诊断快照。
@@ -213,10 +223,12 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - `tools/mains-aegis-host`: native serial reset 使用 in-process DTR/RTS app-boot 复位，并保持 boot 释放线为实测 app-boot 电平；monitor attach 不隐式复位也不主动改写 DTR/RTS，且 monitor 已运行时 `/reset` 复用 monitor 线程持有的串口，避免外部 reset 进程和重枚举前 monitor fd 争抢同一串口。
 - `firmware/src/net_contract.rs`: `diag-snapshot.charger` 已暴露 `vac2_adc_mv`，用于定位 BQ25792 AC2/DC IN 实际采样。
 - `tools/mains-aegis-host`: 提供 host power control surface；低功耗运行、suspend、shutdown 默认 dry-run，真实动作受启动参数保护。
+- `tools/mains-aegis-host`: native serial monitor 自动在 UPS BACKUP 进入/退出边沿触发 host profile 切换，并通过 USB CDC `set_host_power_profile` 同步当前 host profile 给固件 runtime overlay；LAN/mock transport 不参与该自动策略。
 - `schemas/firmware-catalog.schema.json`: v1 catalog schema。
 - `tools/firmware-artifact/build-catalog-entry.py`: local manifest/catalog generator。
 - `web/src/api/*`: devd mode client contracts。
 - `firmware/src/net_contract.rs`: firmware identity/status/power diagnostic JSON contract。
+- `firmware/src/net_contract.rs`、`firmware/src/usb_cdc_protocol.rs` 与 `firmware/src/output/mod.rs`: status JSON 新增 `host.power_profile`，USB CDC 新增 `set_host_power_profile`，前面板 BACKUP status 页把 fresh profile 显示为 `SAVER/BAL/PERF`，否则显示 `POL --`。
 - `firmware/src/net_contract.rs`: `diag-snapshot.bms` 已暴露 `op_status_raw_len`、`op_status_raw_bytes`、`emshut`、`pres`、`xdsg` 与 EMSHUT 退出配置字段，供 host 直接核对 BQ40 `OperationStatus()` raw payload 与恢复门禁。
 - `firmware/src/net_contract.rs`: `diag-snapshot.bms` 已暴露 BQ40 AFE FET status/control/latch、logical `op_*` FET flags、SafetyAlert 派生位、discharge path contradiction 字段；`diag-snapshot.charger` 已暴露 BQ25792 `ctrl2`、`ctrl5`、`sfet_present` 与 `sdrv_ctrl`。
 - `firmware/src/output/mod.rs`、`firmware/src/net.rs` 与 `firmware/src/usb_cdc_protocol.rs`: 提供受限 BMS 放电授权恢复链路，覆盖 USB CDC `recover_bms_discharge_authorization` 与设备本体 LAN HTTP `POST /api/v1/recovery/bms-discharge-authorization`，并让前面板自检恢复操作复用同一个固件恢复事务。
@@ -232,3 +244,4 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - 2026-06-07: `devices/scan` 与 `devices` 响应中的 `binding.logical_device_id` 成为 Web 归并 USB identity-pending candidate 与 Fleet 混合视图的 canonical 键；旧绑定若缺失该字段，Connect 仍可继续显式补绑到已有 logical device。
 - 2026-07-01: `diag-snapshot.bms` 增加 `OperationStatus()` raw payload、`emshut` / `pres` 解码与 EMSHUT 退出配置字段，现场可区分 `EMSHUT` 与普通 `XDSG` 阻断并确认恢复路径配置。
 - 2026-07-05: 增加受限 BMS 放电授权恢复 API，覆盖固件 CDC、设备 LAN HTTP、devd HTTP 与 host cache refresh；同时补充 BQ40 AFE FET 与 charger ship-FET 诊断字段，用于解释 `pack_output_path_open` 与前面板恢复结果。
+- 2026-07-20: host power 自动策略限定为 native serial monitor；BACKUP 进入切 `power_saver`、退出 `restore_previous`/`balanced`，并通过 USB CDC `set_host_power_profile` 把当前主机 profile 同步到固件 status/front-panel runtime overlay。

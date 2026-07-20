@@ -35,11 +35,9 @@ users:
 packages:
   - curl
   - jq
-  - power-profiles-daemon
 package_update: true
 runcmd:
   - systemctl enable --now ssh
-  - systemctl enable --now power-profiles-daemon || true
 EOF
 cat > "${work_dir}/meta-data" <<EOF
 instance-id: mains-aegis-host-power-test
@@ -96,14 +94,17 @@ done
 "${ssh_base[@]}" true
 "${ssh_base[@]}" 'sudo cloud-init status --wait || true'
 "${ssh_base[@]}" 'sudo apt-get update'
-"${ssh_base[@]}" 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y power-profiles-daemon'
+"${ssh_base[@]}" 'sudo mkdir -p /etc/pve'
+"${ssh_base[@]}" 'sudo mkdir -p /run/mains-aegis-pve-cpufreq/cpu0/cpufreq /run/mains-aegis-pve-cpufreq/cpufreq/policy0'
+"${ssh_base[@]}" "printf '%s\n' performance | sudo tee /run/mains-aegis-pve-cpufreq/cpu0/cpufreq/scaling_governor /run/mains-aegis-pve-cpufreq/cpufreq/policy0/scaling_governor >/dev/null"
+"${ssh_base[@]}" "printf '%s\n' 'powersave schedutil performance' | sudo tee /run/mains-aegis-pve-cpufreq/cpu0/cpufreq/scaling_available_governors /run/mains-aegis-pve-cpufreq/cpufreq/policy0/scaling_available_governors >/dev/null"
+"${ssh_base[@]}" 'sudo mount --bind /run/mains-aegis-pve-cpufreq /sys/devices/system/cpu'
 
 scp -q -i "${ssh_key}" -P "${ssh_port}" \
   -o StrictHostKeyChecking=no \
   -o UserKnownHostsFile=/dev/null \
   "${devd_bin}" ci@127.0.0.1:/home/ci/mains-aegis-devd
 
-"${ssh_base[@]}" 'sudo systemctl restart power-profiles-daemon || true'
 "${ssh_base[@]}" 'sudo install -m 0755 /home/ci/mains-aegis-devd /usr/local/bin/mains-aegis-devd'
 "${ssh_base[@]}" "printf '%s\n' '${bridge_token}' > /home/ci/mains-aegis-devd.token"
 "${ssh_base[@]}" 'rm -f /tmp/mains-aegis-devd-linux.sock'
@@ -122,20 +123,24 @@ curl -fsS -X POST "http://127.0.0.1:${api_port}/api/v1/host/power/profile" \
   -H 'content-type: application/json' \
   -d '{"profile":"power_saver","dry_run":false}' | jq -e '.ok == true and .dispatch != "not_dispatched"'
 
-profile="$("${ssh_base[@]}" "busctl --system get-property net.hadess.PowerProfiles /net/hadess/PowerProfiles net.hadess.PowerProfiles ActiveProfile")"
-case "${profile}" in
-  *'"power-saver"'*) ;;
-  *)
-    echo "Expected Linux guest power profile to become power-saver, got: ${profile}" >&2
-    "${ssh_base[@]}" 'cat /tmp/mains-aegis-devd.log' >&2 || true
-    exit 1
-    ;;
-esac
+governor="$("${ssh_base[@]}" "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")"
+if [[ "${governor}" != "powersave" ]]; then
+  echo "Expected Linux guest cpufreq governor to become powersave, got: ${governor}" >&2
+  "${ssh_base[@]}" 'cat /tmp/mains-aegis-devd.log' >&2 || true
+  exit 1
+fi
 
 curl -fsS -X POST "http://127.0.0.1:${api_port}/api/v1/host/power/profile" \
   "${auth_header[@]}" \
   -H 'content-type: application/json' \
   -d '{"profile":"balanced","dry_run":false}' | jq -e '.ok == true'
+
+governor="$("${ssh_base[@]}" "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")"
+if [[ "${governor}" != "schedutil" ]]; then
+  echo "Expected Linux guest cpufreq governor to become schedutil, got: ${governor}" >&2
+  "${ssh_base[@]}" 'cat /tmp/mains-aegis-devd.log' >&2 || true
+  exit 1
+fi
 
 set +e
 curl --max-time 10 -fsS -X POST "http://127.0.0.1:${api_port}/api/v1/host/power/shutdown" \
