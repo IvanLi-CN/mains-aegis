@@ -28,6 +28,7 @@ This folder stores project documentation and offline-renderable datasheets.
 - Audio alert output (buzzer -> TDM speaker): `docs/audio-design.md`
 - Audio cue comparison and preview: `docs-site/docs/design/audio-cues.mdx`
 - Speaker cue previews (status/warning/error): `docs/audio-cues-preview/README.md`
+- Marketing product render, social preview, and poster assets: `docs/marketing/mains-aegis/README.md`
 - ESP32-S3 GPIO assignment: `docs/hardware-selection/esp32-s3-fh4r2-gpio.md`
 - Solutions index: `docs/solutions/README.md`
 
