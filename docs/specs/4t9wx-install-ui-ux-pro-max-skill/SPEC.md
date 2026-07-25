@@ -30,6 +30,12 @@
 - `.gitignore` 不包含该 Skill 的专用路径。
 - `.codex/skills/` 中的项目专属 Skill 保持可用。
 
+## Visual Evidence
+
+PR: none
+
+该变更不影响产品界面或其他视觉交付面。
+
 ## 关联文档
 
 - `docs/specs/README.md`
