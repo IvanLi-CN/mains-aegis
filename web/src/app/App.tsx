@@ -254,6 +254,27 @@ const rawEnvDevdTarget = (
 ).trim();
 const envDevdTarget = rawEnvDevdTarget || "same-origin";
 const docsHref = `${appBasePath}docs/`;
+const defaultBrandLogoColorway = "theme-light";
+const defaultDarkBrandLogoColorway = "theme-dark";
+const brandLogoAssets = {
+  "theme-light": "mains-aegis-06-theme-light.svg",
+  "theme-dark": "mains-aegis-06-theme-dark.svg",
+  "01-graphite-cobalt": "variants/01-graphite-cobalt.svg",
+  "02-navy-slate": "variants/02-navy-slate.svg",
+  "03-teal-aqua": "variants/03-teal-aqua.svg",
+  "04-deep-teal-mint": "variants/04-deep-teal-mint.svg",
+  "05-blue-graphite": "variants/05-blue-graphite.svg",
+  "06-graphite-amber": "variants/06-graphite-amber.svg",
+  "07-navy-cyan": "variants/07-navy-cyan.svg",
+  "08-emerald-slate": "variants/08-emerald-slate.svg",
+  "09-graphite-coral": "variants/09-graphite-coral.svg",
+  "app-flow-mint": "variants/app-flow-mint.svg",
+  "app-flow-amber": "variants/app-flow-amber.svg",
+  "app-teal-flow": "variants/app-teal-flow.svg",
+  "dark-flow-amber": "variants/dark-flow-amber.svg",
+  "dark-flow-mint": "variants/dark-flow-mint.svg",
+  "dark-flow-cyan": "variants/dark-flow-cyan.svg",
+} as const;
 const credentiallessInputProps = {
   autoComplete: "off",
   autoCorrect: "off",
@@ -272,12 +293,28 @@ export function App({
   const route = useRoute(initialPath);
   const searchParams = new URLSearchParams(window.location.search);
   const demoMode = registry.demoSeed !== null || isDemoQueryEnabled();
+  const demoTheme = resolveDemoTheme(searchParams, demoMode);
+  useEffect(() => {
+    if (!demoTheme) return;
+    const root = document.documentElement;
+    const previousTheme = root.getAttribute("data-theme");
+    root.setAttribute("data-theme", demoTheme);
+    return () => {
+      if (previousTheme === null) root.removeAttribute("data-theme");
+      else root.setAttribute("data-theme", previousTheme);
+    };
+  }, [demoTheme]);
   const queryDevdTarget = resolveStartupDevdTarget(searchParams, demoMode);
   const queryHostedHttpServiceApp =
     demoMode && searchParams.get("mock_hosted") === "1";
   const queryBindLogicalDeviceId = demoMode
     ? (searchParams.get("mock_bind_logical_device_id")?.trim() || "")
     : "";
+  const brandLogoSrc = `${appBasePath}brand/mains-aegis/${resolveBrandLogoAsset(
+    searchParams,
+    demoMode,
+    demoTheme,
+  )}`;
   const resolvedInitialDevdTarget = initialDevdTarget ?? queryDevdTarget;
   const hostedHttpServiceApp =
     forceHostedHttpServiceApp ??
@@ -383,11 +420,14 @@ export function App({
             {demoMode ? (
               <DemoControlPanel
                 seed={registry.demoSeed ?? "default"}
+                brandLogoSrc={brandLogoSrc}
                 onSeedChange={registry.setDemoSeed}
                 onReset={registry.resetDemo}
               />
             ) : (
-              <span className="brand-mark">MA</span>
+              <span className="brand-mark" aria-hidden="true">
+                <img src={brandLogoSrc} alt="" />
+              </span>
             )}
             <div>
               <strong>Mains Aegis</strong>
@@ -819,14 +859,42 @@ function parseRoute(path: string): Route {
 function navigate(path: string) {
   const next = new URL(withBasePath(path), window.location.origin);
   const currentSearch = new URLSearchParams(window.location.search);
-  if (!next.search && currentSearch.get("demo") === "true")
+  if (!next.search && currentSearch.get("demo") === "true") {
     next.searchParams.set("demo", "true");
+    const brandLogo = currentSearch.get("brand_logo")?.trim();
+    if (brandLogo) next.searchParams.set("brand_logo", brandLogo);
+    const theme = currentSearch.get("theme")?.trim();
+    if (theme) next.searchParams.set("theme", theme);
+  }
   window.history.pushState(
     null,
     "",
     `${next.pathname}${next.search}${next.hash}`,
   );
   window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
+export function resolveBrandLogoAsset(
+  searchParams: URLSearchParams,
+  demoMode: boolean,
+  demoTheme: "light" | "dark" | null = null,
+): string {
+  const requested = demoMode ? searchParams.get("brand_logo")?.trim() : null;
+  if (requested && requested in brandLogoAssets) {
+    return brandLogoAssets[requested as keyof typeof brandLogoAssets];
+  }
+  return brandLogoAssets[
+    demoTheme === "dark" ? defaultDarkBrandLogoColorway : defaultBrandLogoColorway
+  ];
+}
+
+export function resolveDemoTheme(
+  searchParams: URLSearchParams,
+  demoMode: boolean,
+): "light" | "dark" | null {
+  if (!demoMode) return null;
+  const requested = searchParams.get("theme")?.trim();
+  return requested === "light" || requested === "dark" ? requested : null;
 }
 
 export function normalizeBasePath(
@@ -927,10 +995,12 @@ export function resolveSelectedRecord(
 
 function DemoControlPanel({
   seed,
+  brandLogoSrc,
   onSeedChange,
   onReset,
 }: {
   seed: DemoSeed;
+  brandLogoSrc: string;
   onSeedChange: (seed: DemoSeed) => void;
   onReset: () => void;
 }) {
@@ -977,7 +1047,7 @@ function DemoControlPanel({
         aria-label="Open demo control panel"
         onClick={() => setOpen((current) => !current)}
       >
-        DEMO
+        <img src={brandLogoSrc} alt="" aria-hidden="true" />
       </button>
       {open ? (
         <section

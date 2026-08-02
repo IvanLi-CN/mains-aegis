@@ -1,0 +1,202 @@
+{
+  "geometry_source": "output/imagegen/mains-aegis-logo-round-4/06-continuous-ribbon-low-wide.png",
+  "palette_source": "output/imagegen/mains-aegis-logo-06-light-color-model-grid-r2/mains-aegis-logo-06-light-color-model-grid-r2.png",
+  "source_crop": [
+    141,
+    361,
+    884,
+    661
+  ],
+  "view_box": [
+    743,
+    300
+  ],
+  "geometry_sha256": "f04a010fc6f77b8b921889eef48b623e1e790b2f833d39272b01005fb92345d4",
+  "semantic_paths": [
+    {
+      "id": "left-main",
+      "ribbon": "left"
+    },
+    {
+      "id": "left-tail",
+      "ribbon": "left"
+    },
+    {
+      "id": "right-ribbon",
+      "ribbon": "right"
+    }
+  ],
+  "construction": {
+    "curve_model": "tangent-continuous cubic Bezier sequences",
+    "commands": [
+      "M",
+      "L",
+      "C",
+      "Z"
+    ],
+    "raster_role": "fixed visual reference; antialiasing is not path geometry"
+  },
+  "light_theme": {
+    "incoming": "#07251C",
+    "handoff": "#A86300",
+    "outgoing": "#0B7258"
+  },
+  "dark_theme": {
+    "name": "dark-flow-amber",
+    "incoming_color": "#D6F0E1",
+    "handoff_color": "#E6A326",
+    "outgoing_color": "#66D1A0"
+  },
+  "square_lockup": {
+    "canvas": [
+      1024,
+      1024
+    ],
+    "status": "approved 09 source-normalized square logo master",
+    "purpose": "brand lockup; not a PWA or App icon",
+    "geometry": {
+      "mark_x": 152.0,
+      "mark_y": 252.0,
+      "mark_width": 720.0,
+      "wordmark_x": 192.0,
+      "wordmark_y": 704.0,
+      "wordmark_width": 640.0,
+      "wordmark_height": 69.0,
+      "minimum_clear_gap": 128.0
+    },
+    "wordmark": {
+      "content": "MAINS AEGIS",
+      "line_count": 1,
+      "source": "fixed vector contour normalized from the selected 09 raster reference",
+      "font_dependency": null,
+      "style": "rounded instrument-panel capitals",
+      "alpha_threshold": 128,
+      "trace_settings": {
+        "turn_policy": "minority",
+        "turd_size": 0,
+        "alpha_max": 0.2,
+        "optimization_tolerance": 0.2
+      },
+      "reference": {
+        "asset": "output/imagegen/mains-aegis-wordmark-grid-r1/mains-aegis-wordmark-grid-r1.png",
+        "lockup": "output/imagegen/mains-aegis-wordmark-lockup-r1/mains-aegis-06-wordmark-09-review.png",
+        "cell": [
+          3,
+          3
+        ],
+        "selection": "09"
+      }
+    },
+    "approved_asset": "web/public/brand/mains-aegis/mains-aegis-logo-square.svg",
+    "delivery_variants": [
+      {
+        "asset": "web/public/brand/mains-aegis/mains-aegis-logo-square-color-light.svg",
+        "mark_colors": [
+          "#07251C",
+          "#A86300",
+          "#0B7258"
+        ],
+        "wordmark_color": "#161B20",
+        "proof_surface": "#FCFBF7"
+      },
+      {
+        "asset": "web/public/brand/mains-aegis/mains-aegis-logo-square-color-dark.svg",
+        "mark_colors": [
+          "#D6F0E1",
+          "#E6A326",
+          "#66D1A0"
+        ],
+        "wordmark_color": "#EAF7F0",
+        "proof_surface": "#0F141A"
+      }
+    ],
+    "wordmark_geometry_sha256": "4f73b97d2afd31374ae4fe6af22cabd0a3cc7eba702c129e3a1a27121b06cd53"
+  },
+  "variants": [
+    {
+      "name": "01-graphite-cobalt",
+      "left_color": "#313639",
+      "right_color": "#005BB2"
+    },
+    {
+      "name": "02-navy-slate",
+      "left_color": "#092E5E",
+      "right_color": "#57656E"
+    },
+    {
+      "name": "03-teal-aqua",
+      "left_color": "#005557",
+      "right_color": "#46B1B0"
+    },
+    {
+      "name": "04-deep-teal-mint",
+      "left_color": "#005654",
+      "right_color": "#6CB699"
+    },
+    {
+      "name": "05-blue-graphite",
+      "left_color": "#005BB1",
+      "right_color": "#33383B"
+    },
+    {
+      "name": "06-graphite-amber",
+      "left_color": "#45515B",
+      "right_color": "#F89F27"
+    },
+    {
+      "name": "07-navy-cyan",
+      "left_color": "#092E5D",
+      "right_color": "#22BAEE"
+    },
+    {
+      "name": "08-emerald-slate",
+      "left_color": "#007E65",
+      "right_color": "#535E66"
+    },
+    {
+      "name": "09-graphite-coral",
+      "left_color": "#33383B",
+      "right_color": "#F26D56"
+    }
+  ],
+  "app_variants": [
+    {
+      "name": "app-flow-mint",
+      "incoming_color": "#07251C",
+      "handoff_color": "#3AA57D",
+      "outgoing_color": "#0B7258"
+    },
+    {
+      "name": "app-flow-amber",
+      "incoming_color": "#07251C",
+      "handoff_color": "#A86300",
+      "outgoing_color": "#0B7258"
+    },
+    {
+      "name": "app-teal-flow",
+      "incoming_color": "#07251C",
+      "handoff_color": "#7D9F35",
+      "outgoing_color": "#006C73"
+    }
+  ],
+  "dark_app_variants": [
+    {
+      "name": "dark-flow-amber",
+      "incoming_color": "#D6F0E1",
+      "handoff_color": "#E6A326",
+      "outgoing_color": "#66D1A0"
+    },
+    {
+      "name": "dark-flow-mint",
+      "incoming_color": "#EAF7F0",
+      "handoff_color": "#72D5AE",
+      "outgoing_color": "#39AA7C"
+    },
+    {
+      "name": "dark-flow-cyan",
+      "incoming_color": "#D7F3EF",
+      "handoff_color": "#82D7CA",
+      "outgoing_color": "#60BCEB"
+    }
+  ]
+}

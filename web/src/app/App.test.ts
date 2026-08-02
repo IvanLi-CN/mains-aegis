@@ -14,6 +14,8 @@ import {
   deviceSettingsAvailable,
   normalizeBasePath,
   resolveManualHttpRememberedChannel,
+  resolveBrandLogoAsset,
+  resolveDemoTheme,
   resolveDevdTarget,
   resolveOwnerFacingDevdTarget,
   resolveStartupDevdTarget,
@@ -174,6 +176,57 @@ describe("normalizeBasePath", () => {
 
   test("normalizes bare path overrides", () => {
     expect(normalizeBasePath("mains-aegis")).toBe("/mains-aegis/");
+  });
+});
+
+describe("resolveBrandLogoAsset", () => {
+  test("uses the light-theme mark by default", () => {
+    expect(resolveBrandLogoAsset(new URLSearchParams(), true)).toBe(
+      "mains-aegis-06-theme-light.svg",
+    );
+  });
+
+  test("allows a known colorway in demo mode", () => {
+    const params = new URLSearchParams({ brand_logo: "08-emerald-slate" });
+    expect(resolveBrandLogoAsset(params, true)).toBe(
+      "variants/08-emerald-slate.svg",
+    );
+  });
+
+  test("ignores colorway overrides outside demo mode", () => {
+    const params = new URLSearchParams({ brand_logo: "01-graphite-cobalt" });
+    expect(resolveBrandLogoAsset(params, false)).toBe(
+      "mains-aegis-06-theme-light.svg",
+    );
+  });
+
+  test("falls back when a demo colorway is unknown", () => {
+    const params = new URLSearchParams({ brand_logo: "unknown" });
+    expect(resolveBrandLogoAsset(params, true)).toBe(
+      "mains-aegis-06-theme-light.svg",
+    );
+  });
+
+  test("uses the dark-theme default mark for a dark demo", () => {
+    expect(resolveBrandLogoAsset(new URLSearchParams(), true, "dark")).toBe(
+      "mains-aegis-06-theme-dark.svg",
+    );
+  });
+});
+
+describe("resolveDemoTheme", () => {
+  test("allows only explicit demo light and dark themes", () => {
+    expect(resolveDemoTheme(new URLSearchParams({ theme: "dark" }), true)).toBe(
+      "dark",
+    );
+    expect(resolveDemoTheme(new URLSearchParams({ theme: "light" }), true)).toBe(
+      "light",
+    );
+    expect(resolveDemoTheme(new URLSearchParams({ theme: "system" }), true)).toBeNull();
+  });
+
+  test("does not expose demo theme overrides outside demo mode", () => {
+    expect(resolveDemoTheme(new URLSearchParams({ theme: "dark" }), false)).toBeNull();
   });
 });
 
