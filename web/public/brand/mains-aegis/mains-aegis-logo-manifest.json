@@ -53,7 +53,7 @@
       1024
     ],
     "status": "approved 09 source-normalized square logo master",
-    "purpose": "brand lockup; not a PWA or App icon",
+    "purpose": "brand lockup and sole geometry source for platform application icons",
     "geometry": {
       "mark_x": 152.0,
       "mark_y": 252.0,
@@ -111,6 +111,31 @@
       }
     ],
     "wordmark_geometry_sha256": "4f73b97d2afd31374ae4fe6af22cabd0a3cc7eba702c129e3a1a27121b06cd53"
+  },
+  "platform_assets": {
+    "source": "web/public/brand/mains-aegis/mains-aegis-logo-square.svg",
+    "foreground": "approved 09 multi-color square lockup",
+    "favicon": {
+      "light": "web/public/favicon.svg",
+      "dark": "web/public/favicon-dark.svg",
+      "mode": "single-color foreground with transparent canvas"
+    },
+    "application_icons": {
+      "manifest_default": "light",
+      "maskable_scale": 0.9,
+      "light": {
+        "icon_192": "web/public/pwa/mains-aegis-icon-192.png",
+        "icon_512": "web/public/pwa/mains-aegis-icon-512.png",
+        "maskable_512": "web/public/pwa/mains-aegis-icon-maskable-512.png",
+        "apple_touch_180": "web/public/pwa/mains-aegis-icon-apple-touch-180.png"
+      },
+      "dark": {
+        "icon_192": "web/public/pwa/mains-aegis-icon-dark-192.png",
+        "icon_512": "web/public/pwa/mains-aegis-icon-dark-512.png",
+        "maskable_512": "web/public/pwa/mains-aegis-icon-dark-maskable-512.png",
+        "apple_touch_180": "web/public/pwa/mains-aegis-icon-dark-apple-touch-180.png"
+      }
+    }
   },
   "wide_logo": {
     "status": "site banner master",

@@ -36,12 +36,17 @@ describe("PWA manifest", () => {
         expect.objectContaining({
           src: "./pwa/mains-aegis-icon-192.png",
           sizes: "192x192",
-          purpose: "any maskable",
+          purpose: "any",
         }),
         expect.objectContaining({
           src: "./pwa/mains-aegis-icon-512.png",
           sizes: "512x512",
-          purpose: "any maskable",
+          purpose: "any",
+        }),
+        expect.objectContaining({
+          src: "./pwa/mains-aegis-icon-maskable-512.png",
+          sizes: "512x512",
+          purpose: "maskable",
         }),
       ]),
     );
@@ -62,6 +67,18 @@ describe("PWA workbox contract", () => {
     expect(options.injectRegister).toBe(false);
     expect(options.workbox?.globPatterns).toContain("**/*");
     expect(options.workbox?.importScripts).toContain("pwa-navigation-fallback.js");
+    expect(options.includeAssets).toEqual(
+      expect.arrayContaining([
+        "favicon.svg",
+        "favicon-dark.svg",
+        "pwa/mains-aegis-icon-192.png",
+        "pwa/mains-aegis-icon-512.png",
+        "pwa/mains-aegis-icon-maskable-512.png",
+        "pwa/mains-aegis-icon-dark-192.png",
+        "pwa/mains-aegis-icon-dark-512.png",
+        "pwa/mains-aegis-icon-dark-maskable-512.png",
+      ]),
+    );
     expect(options.workbox?.navigateFallback).toBe("index.html");
     expect(options.workbox?.maximumFileSizeToCacheInBytes).toBeGreaterThan(7 * 1024 * 1024);
     expect(options.workbox?.navigateFallbackDenylist).toHaveLength(3);

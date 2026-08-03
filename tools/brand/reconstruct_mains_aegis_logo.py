@@ -47,8 +47,12 @@ COLOR_REFERENCE = ROOT / (
     "mains-aegis-logo-06-light-color-model-grid-r2.png"
 )
 ASSET_DIR = ROOT / "web/public/brand/mains-aegis"
+PWA_DIR = ROOT / "web/public/pwa"
+FAVICON_ASSET = ROOT / "web/public/favicon.svg"
+DARK_FAVICON_ASSET = ROOT / "web/public/favicon-dark.svg"
 VALIDATION_DIR = ROOT / "output/logo-vector-validation"
 SQUARE_LOCKUP_VALIDATION_DIR = ROOT / "output/logo-square-lockup-validation"
+PLATFORM_VALIDATION_DIR = ROOT / "output/logo-platform-validation"
 MARK_LOGO_ASSET = ASSET_DIR / "mains-aegis-logo-mark.svg"
 MARK_COLOR_LIGHT_ASSET = ASSET_DIR / "mains-aegis-logo-mark-color-light.svg"
 MARK_COLOR_DARK_ASSET = ASSET_DIR / "mains-aegis-logo-mark-color-dark.svg"
@@ -153,6 +157,7 @@ WIDE_MARK_SCALE = 0.55
 WIDE_WORDMARK_X = 513.7
 WIDE_WORDMARK_Y = 74.11
 WIDE_WORDMARK_SCALE = 1.62
+PLATFORM_MASKABLE_SCALE = 0.9
 FINAL_WORDMARK_NAME = "09-source-normalized"
 FINAL_WORDMARK_ALPHA_THRESHOLD = 128
 FINAL_WORDMARK_TRACE_SETTINGS = {
@@ -271,6 +276,21 @@ WIDE_LOGO_VARIANTS = (
         DARK_CANVAS,
     ),
 )
+
+PLATFORM_ASSET_NAMES = {
+    "light": {
+        "icon_192": "mains-aegis-icon-192.png",
+        "icon_512": "mains-aegis-icon-512.png",
+        "maskable_512": "mains-aegis-icon-maskable-512.png",
+        "apple_touch_180": "mains-aegis-icon-apple-touch-180.png",
+    },
+    "dark": {
+        "icon_192": "mains-aegis-icon-dark-192.png",
+        "icon_512": "mains-aegis-icon-dark-512.png",
+        "maskable_512": "mains-aegis-icon-dark-maskable-512.png",
+        "apple_touch_180": "mains-aegis-icon-dark-apple-touch-180.png",
+    },
+}
 
 # These paths are deliberately separated by meaning, not by color or pixels:
 # - left-main: incoming continuous power ribbon and its central handoff.
@@ -579,6 +599,89 @@ def wide_logo_svg(
     )
 
 
+def platform_lockup_svg(
+    *,
+    mark_colors: tuple[str, str, str],
+    wordmark_color: str,
+    background: str,
+    title: str,
+    maskable: bool = False,
+) -> str:
+    """Wrap the approved 09 Lockup in a flat platform-icon surface.
+
+    The platform export may add one solid background and one uniform outer
+    scale for the maskable safe zone. The four foreground paths remain the
+    exact square-lockup geometry and are never redrawn or rearranged.
+    """
+    outer_transform = (
+        f' transform="translate(512 512) scale({PLATFORM_MASKABLE_SCALE:.4f}) '
+        'translate(-512 -512)"'
+        if maskable
+        else ""
+    )
+    return "\n".join(
+        (
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img"',
+            '  aria-labelledby="title">',
+            f'  <title id="title">{title}</title>',
+            f'  <rect id="platform-background" width="1024" height="1024" fill="{background}"/>',
+            f'  <g id="platform-lockup"{outer_transform}>',
+            f'    <g id="mark-06" transform="{square_mark_transform()}">',
+            square_mark_paths(include_ids=True, indent="      ", fills=mark_colors),
+            "    </g>",
+            f'    <path id="wordmark-mains-aegis" d="{final_wordmark_09_path()}" '
+            f'fill="{wordmark_color}"/>',
+            "  </g>",
+            "</svg>",
+            "",
+        )
+    )
+
+
+def platform_variant_definitions() -> tuple[tuple[str, SquareLogoVariant], ...]:
+    return (("light", SQUARE_LOGO_VARIANTS[0]), ("dark", SQUARE_LOGO_VARIANTS[1]))
+
+
+def platform_svg_path(theme: str, kind: str) -> Path:
+    return PLATFORM_VALIDATION_DIR / f"mains-aegis-{theme}-{kind}.svg"
+
+
+def platform_png_path(theme: str, kind: str) -> Path:
+    return PWA_DIR / PLATFORM_ASSET_NAMES[theme][kind]
+
+
+def write_platform_assets() -> None:
+    """Rasterize both approved 09 colorways for install surfaces."""
+    require_renderer()
+    PWA_DIR.mkdir(parents=True, exist_ok=True)
+    PLATFORM_VALIDATION_DIR.mkdir(parents=True, exist_ok=True)
+    for stale_path in PLATFORM_VALIDATION_DIR.glob("*"):
+        if stale_path.is_file():
+            stale_path.unlink()
+    for theme, variant in platform_variant_definitions():
+        standard_svg = platform_lockup_svg(
+            mark_colors=variant.mark_colors,
+            wordmark_color=variant.wordmark_color,
+            background=variant.proof_surface,
+            title=f"Mains Aegis {theme} application icon",
+        )
+        maskable_svg = platform_lockup_svg(
+            mark_colors=variant.mark_colors,
+            wordmark_color=variant.wordmark_color,
+            background=variant.proof_surface,
+            title=f"Mains Aegis {theme} maskable application icon",
+            maskable=True,
+        )
+        standard_source = platform_svg_path(theme, "standard")
+        maskable_source = platform_svg_path(theme, "maskable")
+        standard_source.write_text(standard_svg, encoding="utf-8")
+        maskable_source.write_text(maskable_svg, encoding="utf-8")
+        render_svg(standard_source, platform_png_path(theme, "icon_192"), 192, 192, background=None)
+        render_svg(standard_source, platform_png_path(theme, "icon_512"), 512, 512, background=None)
+        render_svg(maskable_source, platform_png_path(theme, "maskable_512"), 512, 512, background=None)
+        render_svg(standard_source, platform_png_path(theme, "apple_touch_180"), 180, 180, background=None)
+
+
 def colorways_svg() -> str:
     tile_width = 500
     tile_height = 390
@@ -660,13 +763,13 @@ def require_renderer() -> None:
 
 
 def render_svg(
-    svg: Path, output: Path, width: int, height: int, *, background: str = "white"
+    svg: Path, output: Path, width: int, height: int, *, background: str | None = "white"
 ) -> None:
-    subprocess.run(
+    command = ["rsvg-convert"]
+    if background is not None:
+        command.extend(("--background-color", background))
+    command.extend(
         (
-            "rsvg-convert",
-            "--background-color",
-            background,
             "--width",
             str(width),
             "--height",
@@ -674,9 +777,9 @@ def render_svg(
             "--output",
             str(output),
             str(svg),
-        ),
-        check=True,
+        )
     )
+    subprocess.run(command, check=True)
 
 
 def source_crop() -> np.ndarray:
@@ -798,8 +901,11 @@ def landmark_metrics(
 
 def write_assets() -> None:
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
+    PWA_DIR.mkdir(parents=True, exist_ok=True)
     for stale_asset in LEGACY_MARK_ASSETS:
         stale_asset.unlink(missing_ok=True)
+    (ASSET_DIR / "mains-aegis-app-icon.svg").unlink(missing_ok=True)
+    DARK_FAVICON_ASSET.unlink(missing_ok=True)
     if LEGACY_VARIANT_DIR.exists():
         shutil.rmtree(LEGACY_VARIANT_DIR)
     MARK_LOGO_ASSET.write_text(
@@ -848,6 +954,21 @@ def write_assets() -> None:
             ),
             encoding="utf-8",
         )
+    FAVICON_ASSET.write_text(
+        final_square_lockup_svg(
+            color="#161B20",
+            title="Mains Aegis monochrome favicon",
+        ),
+        encoding="utf-8",
+    )
+    DARK_FAVICON_ASSET.write_text(
+        final_square_lockup_svg(
+            color="#EAF7F0",
+            title="Mains Aegis monochrome favicon for dark surfaces",
+        ),
+        encoding="utf-8",
+    )
+    write_platform_assets()
     manifest = {
         "geometry_source": str(MONO_REFERENCE.relative_to(ROOT)),
         "palette_source": str(COLOR_REFERENCE.relative_to(ROOT)),
@@ -871,7 +992,7 @@ def write_assets() -> None:
         "square_lockup": {
             "canvas": [SQUARE_LOCKUP_CANVAS, SQUARE_LOCKUP_CANVAS],
             "status": "approved 09 source-normalized square logo master",
-            "purpose": "brand lockup; not a PWA or App icon",
+            "purpose": "brand lockup and sole geometry source for platform application icons",
             "geometry": {
                 "mark_x": SQUARE_LOCKUP_MARK_X,
                 "mark_y": SQUARE_LOCKUP_MARK_Y,
@@ -912,6 +1033,27 @@ def write_assets() -> None:
             "wordmark_geometry_sha256": hashlib.sha256(
                 final_wordmark_09_path().encode("utf-8")
             ).hexdigest(),
+        },
+        "platform_assets": {
+            "source": str(FINAL_SQUARE_LOCKUP_ASSET.relative_to(ROOT)),
+            "foreground": "approved 09 multi-color square lockup",
+            "favicon": {
+                "light": str(FAVICON_ASSET.relative_to(ROOT)),
+                "dark": str(DARK_FAVICON_ASSET.relative_to(ROOT)),
+                "mode": "single-color foreground with transparent canvas",
+            },
+            "application_icons": {
+                "manifest_default": "light",
+                "maskable_scale": PLATFORM_MASKABLE_SCALE,
+                "light": {
+                    key: str(platform_png_path("light", key).relative_to(ROOT))
+                    for key in PLATFORM_ASSET_NAMES["light"]
+                },
+                "dark": {
+                    key: str(platform_png_path("dark", key).relative_to(ROOT))
+                    for key in PLATFORM_ASSET_NAMES["dark"]
+                },
+            },
         },
         "wide_logo": {
             "status": "site banner master",
@@ -1630,6 +1772,158 @@ def make_wide_logo_proof() -> Path:
     return proof_path
 
 
+def platform_asset_integrity() -> dict[str, object]:
+    """Validate exact 09 geometry, palette, dimensions, and maskable bounds."""
+    expected_ids = [entry.element_id for entry in GEOMETRY] + ["wordmark-mains-aegis"]
+    expected_paths = [entry.d for entry in GEOMETRY] + [final_wordmark_09_path()]
+    violations: list[str] = []
+    favicon_results: list[dict[str, object]] = []
+    for favicon, color in ((FAVICON_ASSET, "#161B20"), (DARK_FAVICON_ASSET, "#EAF7F0")):
+        favicon_violations: list[str] = []
+        if not favicon.exists():
+            favicon_violations.append("favicon is missing")
+        else:
+            raw = favicon.read_text(encoding="utf-8")
+            root = ET.parse(favicon).getroot()
+            paths = parse_paths(favicon)
+            if root.attrib.get("viewBox") != "0 0 1024 1024":
+                favicon_violations.append("favicon does not use the square 09 viewBox")
+            if root.attrib.get("color") != color:
+                favicon_violations.append("favicon foreground color differs from the selected monochrome color")
+            if [path.attrib.get("id") for path in paths] != expected_ids:
+                favicon_violations.append("favicon path ids/order differ from 09")
+            if [path.attrib.get("d", "") for path in paths] != expected_paths:
+                favicon_violations.append("favicon geometry differs from 09")
+            if [path.attrib.get("fill") for path in paths] != ["currentColor"] * 4:
+                favicon_violations.append("favicon is not single-color currentColor geometry")
+            if any(element.tag.rsplit("}", 1)[-1] in {"rect", "image", "filter", "mask", "pattern", "text"} for element in root.iter()):
+                favicon_violations.append("favicon contains a background or raster feature")
+            if "M18 42V20" in raw:
+                favicon_violations.append("favicon contains the retired M monogram")
+        favicon_results.append(
+            {
+                "asset": str(favicon.relative_to(ROOT)),
+                "color": color,
+                "passed": not favicon_violations,
+                "violations": favicon_violations,
+            }
+        )
+        violations.extend(f"{favicon.name}: {item}" for item in favicon_violations)
+
+    platform_results: list[dict[str, object]] = []
+    for theme, variant in platform_variant_definitions():
+        expected_fills = [*variant.mark_colors, variant.wordmark_color]
+        theme_violations: list[str] = []
+        for kind in ("standard", "maskable"):
+            source = platform_svg_path(theme, kind)
+            if not source.exists():
+                theme_violations.append(f"missing platform SVG source: {source.name}")
+                continue
+            root = ET.parse(source).getroot()
+            paths = parse_paths(source)
+            raw = source.read_text(encoding="utf-8")
+            if root.attrib.get("viewBox") != "0 0 1024 1024":
+                theme_violations.append(f"{source.name}: wrong viewBox")
+            if [path.attrib.get("id") for path in paths] != expected_ids:
+                theme_violations.append(f"{source.name}: path ids/order differ from 09")
+            if [path.attrib.get("d", "") for path in paths] != expected_paths:
+                theme_violations.append(f"{source.name}: path geometry differs from 09")
+            if [path.attrib.get("fill") for path in paths] != expected_fills:
+                theme_violations.append(f"{source.name}: multicolor fills differ")
+            if "M18 42V20" in raw:
+                theme_violations.append(f"{source.name}: contains the retired M monogram")
+            if any(token in raw.lower() for token in ("<image", "data:", "<filter", "<mask", "<pattern", "gradient", "<text")):
+                theme_violations.append(f"{source.name}: contains a forbidden asset feature")
+
+        image_results: list[dict[str, object]] = []
+        for kind, size in (("icon_192", 192), ("icon_512", 512), ("maskable_512", 512), ("apple_touch_180", 180)):
+            image_path = platform_png_path(theme, kind)
+            image_violations: list[str] = []
+            if not image_path.exists():
+                image_violations.append("platform PNG is missing")
+                image_results.append({"asset": str(image_path.relative_to(ROOT)), "passed": False, "violations": image_violations})
+                theme_violations.extend(f"{image_path.name}: {item}" for item in image_violations)
+                continue
+            image = Image.open(image_path).convert("RGB")
+            if image.size != (size, size):
+                image_violations.append(f"expected {size}x{size}, received {image.size}")
+            background_rgb = tuple(int(variant.proof_surface[offset : offset + 2], 16) for offset in (1, 3, 5))
+            colors_present = {
+                color: any(
+                    pixel == tuple(int(color[offset : offset + 2], 16) for offset in (1, 3, 5))
+                    for pixel in image.getdata()
+                )
+                for color in expected_fills
+            }
+            if not all(colors_present.values()):
+                image_violations.append(f"missing exact multicolor interior pixels: {colors_present}")
+            bounds = mask_bounds(np.any(np.asarray(image) != background_rgb, axis=2))
+            if kind == "maskable_512":
+                safe_inset = round(size / 6)
+                safe_limit = size - safe_inset
+                if bounds is None or bounds[0] < safe_inset or bounds[1] < safe_inset or bounds[2] > safe_limit or bounds[3] > safe_limit:
+                    image_violations.append(f"foreground escapes 66% maskable safe zone: {bounds}")
+            image_results.append(
+                {
+                    "asset": str(image_path.relative_to(ROOT)),
+                    "size": list(image.size),
+                    "background": variant.proof_surface,
+                    "foreground_bounds": list(bounds) if bounds else None,
+                    "colors_present": colors_present,
+                    "passed": not image_violations,
+                    "violations": image_violations,
+                }
+            )
+            theme_violations.extend(f"{image_path.name}: {item}" for item in image_violations)
+        platform_results.append(
+            {
+                "theme": theme,
+                "background": variant.proof_surface,
+                "foreground_colors": expected_fills,
+                "images": image_results,
+                "passed": not theme_violations,
+                "violations": theme_violations,
+            }
+        )
+        violations.extend(f"{theme}: {item}" for item in theme_violations)
+    return {
+        "passed": not violations,
+        "favicons": favicon_results,
+        "application_icons": platform_results,
+        "violations": violations,
+    }
+
+
+def make_platform_proof() -> Path:
+    """Create a three-group proof: light app, dark app, monochrome favicon."""
+    proof_path = PLATFORM_VALIDATION_DIR / "mains-aegis-platform-assets.png"
+    panel_width = 520
+    panel_height = 420
+    gutter = 24
+    canvas = Image.new("RGB", (panel_width * 3 + gutter * 4, panel_height + gutter * 2), "#D9DEDB")
+    entries = (
+        ("LIGHT MULTICOLOR APP", platform_png_path("light", "icon_512"), LIGHT_CANVAS),
+        ("DARK MULTICOLOR APP", platform_png_path("dark", "icon_512"), DARK_CANVAS),
+        ("MONOCHROME FAVICON", FAVICON_ASSET, "#FFFFFF"),
+    )
+    for index, (label, source, surface) in enumerate(entries):
+        x = gutter + index * (panel_width + gutter)
+        panel = Image.new("RGB", (panel_width, panel_height), surface)
+        if source.suffix.lower() == ".svg":
+            rendered = PLATFORM_VALIDATION_DIR / f"proof-favicon-{index}.png"
+            render_svg(source, rendered, 320, 320, background=surface)
+            image = Image.open(rendered).convert("RGB")
+        else:
+            image = Image.open(source).convert("RGB")
+            image.thumbnail((320, 320), Image.Resampling.LANCZOS)
+        panel.paste(image, ((panel_width - image.width) // 2, 70))
+        label_color = "#161B20" if relative_luminance(surface) > 0.5 else "#EAF7F0"
+        ImageDraw.Draw(panel).text((20, 22), label, fill=label_color, font=sheet_font(18))
+        canvas.paste(panel, (x, gutter))
+    canvas.save(proof_path)
+    return proof_path
+
+
 def square_lockup_render_validation() -> dict[str, object]:
     """Render the approved 09 lockup at fixed sizes and theme surfaces."""
     output_dir = SQUARE_LOCKUP_VALIDATION_DIR / "final-renders"
@@ -2020,9 +2314,11 @@ def validate() -> dict[str, object]:
     square_lockup = square_lockup_integrity()
     square_logo_variants = square_logo_variant_integrity()
     wide_logo = wide_logo_integrity()
+    platform_assets = platform_asset_integrity()
     square_lockup_renders = square_lockup_render_validation()
     square_logo_variant_proof = make_square_logo_variant_proof()
     wide_logo_proof = make_wide_logo_proof()
+    platform_proof = make_platform_proof()
     square_lockup_report = {
         "canvas": [SQUARE_LOCKUP_CANVAS, SQUARE_LOCKUP_CANVAS],
         "layout": {
@@ -2053,6 +2349,10 @@ def validate() -> dict[str, object]:
         "wide_logo": {
             "integrity": wide_logo,
             "proof": str(wide_logo_proof.relative_to(ROOT)),
+        },
+        "platform_assets": {
+            "integrity": platform_assets,
+            "proof": str(platform_proof.relative_to(ROOT)),
         },
     }
     SQUARE_LOCKUP_VALIDATION_DIR.mkdir(parents=True, exist_ok=True)
@@ -2162,6 +2462,7 @@ def validate() -> dict[str, object]:
             "square_lockup_integrity_passed": square_lockup["passed"],
             "square_logo_variants_passed": square_logo_variants["passed"],
             "wide_logo_passed": wide_logo["passed"],
+            "platform_assets_passed": platform_assets["passed"],
             "square_lockup_render_passed": square_lockup_renders["passed"],
             "curve_smoothness_passed": smoothness["passed"],
             "color_passed": colors_passed,
@@ -2174,6 +2475,7 @@ def validate() -> dict[str, object]:
                 and square_lockup["passed"]
                 and square_logo_variants["passed"]
                 and wide_logo["passed"]
+                and platform_assets["passed"]
                 and square_lockup_renders["passed"]
                 and smoothness["passed"]
                 and colors_passed
