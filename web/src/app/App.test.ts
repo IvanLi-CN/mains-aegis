@@ -182,34 +182,20 @@ describe("normalizeBasePath", () => {
 describe("resolveBrandLogoAsset", () => {
   test("uses the light-theme mark by default", () => {
     expect(resolveBrandLogoAsset(new URLSearchParams(), true)).toBe(
-      "mains-aegis-06-theme-light.svg",
+      "mains-aegis-logo-mark-color-light.svg",
     );
   });
 
-  test("allows a known colorway in demo mode", () => {
+  test("does not expose review palette overrides", () => {
     const params = new URLSearchParams({ brand_logo: "08-emerald-slate" });
     expect(resolveBrandLogoAsset(params, true)).toBe(
-      "variants/08-emerald-slate.svg",
-    );
-  });
-
-  test("ignores colorway overrides outside demo mode", () => {
-    const params = new URLSearchParams({ brand_logo: "01-graphite-cobalt" });
-    expect(resolveBrandLogoAsset(params, false)).toBe(
-      "mains-aegis-06-theme-light.svg",
-    );
-  });
-
-  test("falls back when a demo colorway is unknown", () => {
-    const params = new URLSearchParams({ brand_logo: "unknown" });
-    expect(resolveBrandLogoAsset(params, true)).toBe(
-      "mains-aegis-06-theme-light.svg",
+      "mains-aegis-logo-mark-color-light.svg",
     );
   });
 
   test("uses the dark-theme default mark for a dark demo", () => {
     expect(resolveBrandLogoAsset(new URLSearchParams(), true, "dark")).toBe(
-      "mains-aegis-06-theme-dark.svg",
+      "mains-aegis-logo-mark-color-dark.svg",
     );
   });
 });

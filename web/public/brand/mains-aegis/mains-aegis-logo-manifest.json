@@ -112,6 +112,38 @@
     ],
     "wordmark_geometry_sha256": "4f73b97d2afd31374ae4fe6af22cabd0a3cc7eba702c129e3a1a27121b06cd53"
   },
+  "wide_logo": {
+    "status": "site banner master",
+    "canvas": [
+      1600,
+      260
+    ],
+    "master_asset": "web/public/brand/mains-aegis/mains-aegis-logo-wide.svg",
+    "mark_transform": "translate(50.0000 47.5000) scale(0.55000000)",
+    "wordmark_transform": "translate(513.7000 74.1100) scale(1.62000000) translate(-192.0000 -704.0000)",
+    "delivery_variants": [
+      {
+        "asset": "web/public/brand/mains-aegis/mains-aegis-logo-wide-color-light.svg",
+        "mark_colors": [
+          "#07251C",
+          "#A86300",
+          "#0B7258"
+        ],
+        "wordmark_color": "#161B20",
+        "proof_surface": "#FCFBF7"
+      },
+      {
+        "asset": "web/public/brand/mains-aegis/mains-aegis-logo-wide-color-dark.svg",
+        "mark_colors": [
+          "#D6F0E1",
+          "#E6A326",
+          "#66D1A0"
+        ],
+        "wordmark_color": "#EAF7F0",
+        "proof_surface": "#0F141A"
+      }
+    ]
+  },
   "variants": [
     {
       "name": "01-graphite-cobalt",
@@ -157,46 +189,6 @@
       "name": "09-graphite-coral",
       "left_color": "#33383B",
       "right_color": "#F26D56"
-    }
-  ],
-  "app_variants": [
-    {
-      "name": "app-flow-mint",
-      "incoming_color": "#07251C",
-      "handoff_color": "#3AA57D",
-      "outgoing_color": "#0B7258"
-    },
-    {
-      "name": "app-flow-amber",
-      "incoming_color": "#07251C",
-      "handoff_color": "#A86300",
-      "outgoing_color": "#0B7258"
-    },
-    {
-      "name": "app-teal-flow",
-      "incoming_color": "#07251C",
-      "handoff_color": "#7D9F35",
-      "outgoing_color": "#006C73"
-    }
-  ],
-  "dark_app_variants": [
-    {
-      "name": "dark-flow-amber",
-      "incoming_color": "#D6F0E1",
-      "handoff_color": "#E6A326",
-      "outgoing_color": "#66D1A0"
-    },
-    {
-      "name": "dark-flow-mint",
-      "incoming_color": "#EAF7F0",
-      "handoff_color": "#72D5AE",
-      "outgoing_color": "#39AA7C"
-    },
-    {
-      "name": "dark-flow-cyan",
-      "incoming_color": "#D7F3EF",
-      "handoff_color": "#82D7CA",
-      "outgoing_color": "#60BCEB"
     }
   ]
 }

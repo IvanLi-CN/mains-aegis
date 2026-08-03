@@ -254,27 +254,8 @@ const rawEnvDevdTarget = (
 ).trim();
 const envDevdTarget = rawEnvDevdTarget || "same-origin";
 const docsHref = `${appBasePath}docs/`;
-const defaultBrandLogoColorway = "theme-light";
-const defaultDarkBrandLogoColorway = "theme-dark";
-const brandLogoAssets = {
-  "theme-light": "mains-aegis-06-theme-light.svg",
-  "theme-dark": "mains-aegis-06-theme-dark.svg",
-  "01-graphite-cobalt": "variants/01-graphite-cobalt.svg",
-  "02-navy-slate": "variants/02-navy-slate.svg",
-  "03-teal-aqua": "variants/03-teal-aqua.svg",
-  "04-deep-teal-mint": "variants/04-deep-teal-mint.svg",
-  "05-blue-graphite": "variants/05-blue-graphite.svg",
-  "06-graphite-amber": "variants/06-graphite-amber.svg",
-  "07-navy-cyan": "variants/07-navy-cyan.svg",
-  "08-emerald-slate": "variants/08-emerald-slate.svg",
-  "09-graphite-coral": "variants/09-graphite-coral.svg",
-  "app-flow-mint": "variants/app-flow-mint.svg",
-  "app-flow-amber": "variants/app-flow-amber.svg",
-  "app-teal-flow": "variants/app-teal-flow.svg",
-  "dark-flow-amber": "variants/dark-flow-amber.svg",
-  "dark-flow-mint": "variants/dark-flow-mint.svg",
-  "dark-flow-cyan": "variants/dark-flow-cyan.svg",
-} as const;
+const lightBrandLogoAsset = "mains-aegis-logo-mark-color-light.svg";
+const darkBrandLogoAsset = "mains-aegis-logo-mark-color-dark.svg";
 const credentiallessInputProps = {
   autoComplete: "off",
   autoCorrect: "off",
@@ -861,8 +842,6 @@ function navigate(path: string) {
   const currentSearch = new URLSearchParams(window.location.search);
   if (!next.search && currentSearch.get("demo") === "true") {
     next.searchParams.set("demo", "true");
-    const brandLogo = currentSearch.get("brand_logo")?.trim();
-    if (brandLogo) next.searchParams.set("brand_logo", brandLogo);
     const theme = currentSearch.get("theme")?.trim();
     if (theme) next.searchParams.set("theme", theme);
   }
@@ -875,17 +854,11 @@ function navigate(path: string) {
 }
 
 export function resolveBrandLogoAsset(
-  searchParams: URLSearchParams,
-  demoMode: boolean,
+  _searchParams: URLSearchParams,
+  _demoMode: boolean,
   demoTheme: "light" | "dark" | null = null,
 ): string {
-  const requested = demoMode ? searchParams.get("brand_logo")?.trim() : null;
-  if (requested && requested in brandLogoAssets) {
-    return brandLogoAssets[requested as keyof typeof brandLogoAssets];
-  }
-  return brandLogoAssets[
-    demoTheme === "dark" ? defaultDarkBrandLogoColorway : defaultBrandLogoColorway
-  ];
+  return demoTheme === "dark" ? darkBrandLogoAsset : lightBrandLogoAsset;
 }
 
 export function resolveDemoTheme(

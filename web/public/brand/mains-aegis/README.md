@@ -1,4 +1,4 @@
-# Mains Aegis 06 Brand Mark
+# Mains Aegis Brand Assets
 
 ## Authority
 
@@ -16,20 +16,20 @@ The mark is not an infinity glyph, a letterform, or a mirrored emblem. It is rea
 2. `left-tail` is the deliberately detached lower termination wedge.
 3. `right-ribbon` is the outgoing ribbon and right terminal.
 
-`mains-aegis-06-master.svg` contains exactly those three named closed paths. They are ordinary SVG vector paths, with no embedded raster, filter, mask, pattern, or gradient. The curves use a small tangent-continuous cubic Bezier construction; the deliberate cut edges remain straight. The colored derivatives use byte-identical `d` data and change only flat fills.
+`mains-aegis-logo-mark.svg` contains exactly those three named closed paths. It is an ordinary SVG vector asset, with no embedded raster, filter, mask, pattern, or gradient. The curves use a small tangent-continuous cubic Bezier construction; the deliberate cut edges remain straight. The colored derivatives use byte-identical `d` data and change only flat fills.
 
 ## Assets
 
-- `mains-aegis-06-master.svg`: geometry master using `currentColor`.
-- `mains-aegis-06-monochrome.svg`: portable monochrome delivery asset.
-- `mains-aegis-06-theme-light.svg`: Web App light-theme mark: deep green, amber handoff, and green output.
-- `mains-aegis-06-theme-dark.svg`: approved Web App dark-theme mark, with a pale-green input, amber handoff, and green output.
-- `variants/*.svg`: nine flat r2 palette pairs.
+- `mains-aegis-logo-mark.svg`: transparent monochrome mark master using `currentColor`.
+- `mains-aegis-logo-mark-color-light.svg`: colored mark for light surfaces.
+- `mains-aegis-logo-mark-color-dark.svg`: colored mark for dark surfaces.
 - `mains-aegis-logo-square.svg`: approved transparent `1024 x 1024` monochrome master; set its color through CSS `color`/`currentColor`.
 - `mains-aegis-logo-square-color-light.svg`: colored square logo for light surfaces.
 - `mains-aegis-logo-square-color-dark.svg`: colored square logo for dark surfaces.
-- `mains-aegis-06-colorways.svg`: visual contact sheet of the nine color pairs.
-- `mains-aegis-06-manifest.json`: source, construction, palette, and geometry hash.
+- `mains-aegis-logo-wide.svg`: transparent horizontal Banner Logo master using CSS `color`/`currentColor`.
+- `mains-aegis-logo-wide-color-light.svg`: colored horizontal Banner Logo for light surfaces.
+- `mains-aegis-logo-wide-color-dark.svg`: colored horizontal Banner Logo for dark surfaces.
+- `mains-aegis-logo-manifest.json`: source, construction, palette, and geometry hash.
 
 ## Selected Square Lockup
 

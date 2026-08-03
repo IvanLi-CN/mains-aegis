@@ -47,9 +47,21 @@ COLOR_REFERENCE = ROOT / (
     "mains-aegis-logo-06-light-color-model-grid-r2.png"
 )
 ASSET_DIR = ROOT / "web/public/brand/mains-aegis"
-VARIANT_DIR = ASSET_DIR / "variants"
 VALIDATION_DIR = ROOT / "output/logo-vector-validation"
 SQUARE_LOCKUP_VALIDATION_DIR = ROOT / "output/logo-square-lockup-validation"
+MARK_LOGO_ASSET = ASSET_DIR / "mains-aegis-logo-mark.svg"
+MARK_COLOR_LIGHT_ASSET = ASSET_DIR / "mains-aegis-logo-mark-color-light.svg"
+MARK_COLOR_DARK_ASSET = ASSET_DIR / "mains-aegis-logo-mark-color-dark.svg"
+MANIFEST_ASSET = ASSET_DIR / "mains-aegis-logo-manifest.json"
+LEGACY_MARK_ASSETS = (
+    ASSET_DIR / "mains-aegis-06-master.svg",
+    ASSET_DIR / "mains-aegis-06-monochrome.svg",
+    ASSET_DIR / "mains-aegis-06-theme-light.svg",
+    ASSET_DIR / "mains-aegis-06-theme-dark.svg",
+    ASSET_DIR / "mains-aegis-06-colorways.svg",
+    ASSET_DIR / "mains-aegis-06-manifest.json",
+)
+LEGACY_VARIANT_DIR = ASSET_DIR / "variants"
 FINAL_SQUARE_LOCKUP_ASSET = ASSET_DIR / "mains-aegis-logo-square.svg"
 LEGACY_SQUARE_LOCKUP_ASSET = ASSET_DIR / "mains-aegis-06-square-lockup.svg"
 SQUARE_COLOR_LIGHT_ASSET = ASSET_DIR / "mains-aegis-logo-square-color-light.svg"
@@ -58,6 +70,9 @@ STALE_SQUARE_MONO_ASSETS = (
     ASSET_DIR / "mains-aegis-logo-square-monochrome-dark.svg",
     ASSET_DIR / "mains-aegis-logo-square-monochrome-light.svg",
 )
+WIDE_LOGO_ASSET = ASSET_DIR / "mains-aegis-logo-wide.svg"
+WIDE_COLOR_LIGHT_ASSET = ASSET_DIR / "mains-aegis-logo-wide-color-light.svg"
+WIDE_COLOR_DARK_ASSET = ASSET_DIR / "mains-aegis-logo-wide-color-dark.svg"
 APPROVED_WORDMARK_REFERENCE = ROOT / (
     "output/imagegen/mains-aegis-wordmark-grid-r1/"
     "mains-aegis-wordmark-grid-r1.png"
@@ -130,6 +145,14 @@ SQUARE_LOCKUP_WORD_HEIGHT = 69.0
 SQUARE_LOCKUP_WORD_X = 192.0
 SQUARE_LOCKUP_WORD_Y = 704.0
 SQUARE_LOCKUP_MIN_GAP = 128.0
+WIDE_LOGO_WIDTH = 1600
+WIDE_LOGO_HEIGHT = 260
+WIDE_MARK_X = 50.0
+WIDE_MARK_Y = 47.5
+WIDE_MARK_SCALE = 0.55
+WIDE_WORDMARK_X = 513.7
+WIDE_WORDMARK_Y = 74.11
+WIDE_WORDMARK_SCALE = 1.62
 FINAL_WORDMARK_NAME = "09-source-normalized"
 FINAL_WORDMARK_ALPHA_THRESHOLD = 128
 FINAL_WORDMARK_TRACE_SETTINGS = {
@@ -226,6 +249,23 @@ SQUARE_LOGO_VARIANTS = (
     SquareLogoVariant(
         SQUARE_COLOR_DARK_ASSET,
         "Mains Aegis square logo, color for dark surfaces",
+        ("#D6F0E1", "#E6A326", "#66D1A0"),
+        "#EAF7F0",
+        DARK_CANVAS,
+    ),
+)
+
+WIDE_LOGO_VARIANTS = (
+    SquareLogoVariant(
+        WIDE_COLOR_LIGHT_ASSET,
+        "Mains Aegis wide logo, color for light surfaces",
+        (LIGHT_THEME_LEFT, LIGHT_THEME_HANDOFF, LIGHT_THEME_RIGHT),
+        "#161B20",
+        LIGHT_CANVAS,
+    ),
+    SquareLogoVariant(
+        WIDE_COLOR_DARK_ASSET,
+        "Mains Aegis wide logo, color for dark surfaces",
         ("#D6F0E1", "#E6A326", "#66D1A0"),
         "#EAF7F0",
         DARK_CANVAS,
@@ -504,6 +544,41 @@ def final_square_lockup_svg(
     )
 
 
+def wide_mark_transform() -> str:
+    return f"translate({WIDE_MARK_X:.4f} {WIDE_MARK_Y:.4f}) scale({WIDE_MARK_SCALE:.8f})"
+
+
+def wide_wordmark_transform() -> str:
+    return (
+        f"translate({WIDE_WORDMARK_X:.4f} {WIDE_WORDMARK_Y:.4f}) "
+        f"scale({WIDE_WORDMARK_SCALE:.8f}) "
+        f"translate({-SQUARE_LOCKUP_WORD_X:.4f} {-SQUARE_LOCKUP_WORD_Y:.4f})"
+    )
+
+
+def wide_logo_svg(
+    *,
+    title: str = "Mains Aegis wide logo",
+    mark_colors: tuple[str, str, str] | None = None,
+    wordmark_color: str | None = None,
+) -> str:
+    """Emit the horizontal site-banner lockup from the approved vector master."""
+    return "\n".join(
+        (
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {WIDE_LOGO_WIDTH} {WIDE_LOGO_HEIGHT}" role="img"',
+            '  aria-labelledby="title">',
+            f'  <title id="title">{title}</title>',
+            f'  <g id="mark-06" transform="{wide_mark_transform()}">',
+            square_mark_paths(include_ids=True, indent="    ", fills=mark_colors),
+            "  </g>",
+            f'  <path id="wordmark-mains-aegis" transform="{wide_wordmark_transform()}" '
+            f'd="{final_wordmark_09_path()}" fill="{wordmark_color or "currentColor"}"/>',
+            "</svg>",
+            "",
+        )
+    )
+
+
 def colorways_svg() -> str:
     tile_width = 500
     tile_height = 390
@@ -723,59 +798,33 @@ def landmark_metrics(
 
 def write_assets() -> None:
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
-    VARIANT_DIR.mkdir(parents=True, exist_ok=True)
-    (ASSET_DIR / "mains-aegis-06-master.svg").write_text(
-        mark_svg("currentColor", "currentColor", "Mains Aegis 06 continuous power ribbon"),
+    for stale_asset in LEGACY_MARK_ASSETS:
+        stale_asset.unlink(missing_ok=True)
+    if LEGACY_VARIANT_DIR.exists():
+        shutil.rmtree(LEGACY_VARIANT_DIR)
+    MARK_LOGO_ASSET.write_text(
+        mark_svg("currentColor", "currentColor", "Mains Aegis mark"),
         encoding="utf-8",
     )
-    (ASSET_DIR / "mains-aegis-06-monochrome.svg").write_text(
-        mark_svg("currentColor", "currentColor", "Mains Aegis 06 continuous power ribbon"),
-        encoding="utf-8",
-    )
-    (ASSET_DIR / "mains-aegis-06-theme-light.svg").write_text(
+    MARK_COLOR_LIGHT_ASSET.write_text(
         app_mark_svg(
             LIGHT_THEME_LEFT,
             LIGHT_THEME_HANDOFF,
             LIGHT_THEME_RIGHT,
-            "Mains Aegis 06 ribbon, light theme",
+            "Mains Aegis mark, color for light surfaces",
         ),
         encoding="utf-8",
     )
     selected_dark_variant = DARK_APP_VARIANTS[0]
-    (ASSET_DIR / "mains-aegis-06-theme-dark.svg").write_text(
+    MARK_COLOR_DARK_ASSET.write_text(
         app_mark_svg(
             selected_dark_variant.incoming_color,
             selected_dark_variant.handoff_color,
             selected_dark_variant.outgoing_color,
-            "Mains Aegis 06 ribbon, dark theme",
+            "Mains Aegis mark, color for dark surfaces",
         ),
         encoding="utf-8",
     )
-    for variant in VARIANTS:
-        (VARIANT_DIR / f"{variant.name}.svg").write_text(
-            mark_svg(variant.left_color, variant.right_color, f"Mains Aegis 06, {variant.name}"),
-            encoding="utf-8",
-        )
-    for variant in APP_VARIANTS:
-        (VARIANT_DIR / f"{variant.name}.svg").write_text(
-            app_mark_svg(
-                variant.incoming_color,
-                variant.handoff_color,
-                variant.outgoing_color,
-                f"Mains Aegis 06, {variant.name}",
-            ),
-            encoding="utf-8",
-        )
-    for variant in DARK_APP_VARIANTS:
-        (VARIANT_DIR / f"{variant.name}.svg").write_text(
-            app_mark_svg(
-                variant.incoming_color,
-                variant.handoff_color,
-                variant.outgoing_color,
-                f"Mains Aegis 06, {variant.name}",
-            ),
-            encoding="utf-8",
-        )
     LEGACY_SQUARE_LOCKUP_ASSET.unlink(missing_ok=True)
     for stale_asset in STALE_SQUARE_MONO_ASSETS:
         stale_asset.unlink(missing_ok=True)
@@ -789,7 +838,16 @@ def write_assets() -> None:
             ),
             encoding="utf-8",
         )
-    (ASSET_DIR / "mains-aegis-06-colorways.svg").write_text(colorways_svg(), encoding="utf-8")
+    WIDE_LOGO_ASSET.write_text(wide_logo_svg(), encoding="utf-8")
+    for variant in WIDE_LOGO_VARIANTS:
+        variant.asset.write_text(
+            wide_logo_svg(
+                title=variant.title,
+                mark_colors=variant.mark_colors,
+                wordmark_color=variant.wordmark_color,
+            ),
+            encoding="utf-8",
+        )
     manifest = {
         "geometry_source": str(MONO_REFERENCE.relative_to(ROOT)),
         "palette_source": str(COLOR_REFERENCE.relative_to(ROOT)),
@@ -855,11 +913,25 @@ def write_assets() -> None:
                 final_wordmark_09_path().encode("utf-8")
             ).hexdigest(),
         },
+        "wide_logo": {
+            "status": "site banner master",
+            "canvas": [WIDE_LOGO_WIDTH, WIDE_LOGO_HEIGHT],
+            "master_asset": str(WIDE_LOGO_ASSET.relative_to(ROOT)),
+            "mark_transform": wide_mark_transform(),
+            "wordmark_transform": wide_wordmark_transform(),
+            "delivery_variants": [
+                {
+                    "asset": str(variant.asset.relative_to(ROOT)),
+                    "mark_colors": list(variant.mark_colors),
+                    "wordmark_color": variant.wordmark_color,
+                    "proof_surface": variant.proof_surface,
+                }
+                for variant in WIDE_LOGO_VARIANTS
+            ],
+        },
         "variants": [variant.__dict__ for variant in VARIANTS],
-        "app_variants": [variant.__dict__ for variant in APP_VARIANTS],
-        "dark_app_variants": [variant.__dict__ for variant in DARK_APP_VARIANTS],
     }
-    (ASSET_DIR / "mains-aegis-06-manifest.json").write_text(
+    MANIFEST_ASSET.write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
 
@@ -1012,13 +1084,9 @@ def curve_smoothness() -> dict[str, object]:
 
 def vector_integrity() -> dict[str, object]:
     main_assets = [
-        ASSET_DIR / "mains-aegis-06-master.svg",
-        ASSET_DIR / "mains-aegis-06-monochrome.svg",
-        ASSET_DIR / "mains-aegis-06-theme-light.svg",
-        ASSET_DIR / "mains-aegis-06-theme-dark.svg",
-        *(VARIANT_DIR / f"{variant.name}.svg" for variant in VARIANTS),
-        *(VARIANT_DIR / f"{variant.name}.svg" for variant in APP_VARIANTS),
-        *(VARIANT_DIR / f"{variant.name}.svg" for variant in DARK_APP_VARIANTS),
+        MARK_LOGO_ASSET,
+        MARK_COLOR_LIGHT_ASSET,
+        MARK_COLOR_DARK_ASSET,
     ]
     expected_d = [entry.d for entry in GEOMETRY]
     banned_tags = {"image", "filter", "mask", "pattern", "linearGradient", "radialGradient"}
@@ -1039,7 +1107,7 @@ def vector_integrity() -> dict[str, object]:
         if found_d != expected_d:
             violations.append(f"{asset.name}: geometry differs from master")
         hashes[asset.name] = hashlib.sha256("\n".join(found_d).encode("utf-8")).hexdigest()
-    master_paths = parse_paths(ASSET_DIR / "mains-aegis-06-master.svg")
+    master_paths = parse_paths(MARK_LOGO_ASSET)
     expected_ids = [entry.element_id for entry in GEOMETRY]
     actual_ids = [path.attrib.get("id") for path in master_paths]
     if actual_ids != expected_ids:
@@ -1050,7 +1118,7 @@ def vector_integrity() -> dict[str, object]:
         selected_dark_variant.handoff_color,
         selected_dark_variant.outgoing_color,
     ]
-    dark_theme_paths = parse_paths(ASSET_DIR / "mains-aegis-06-theme-dark.svg")
+    dark_theme_paths = parse_paths(MARK_COLOR_DARK_ASSET)
     actual_dark_fills = [path.attrib.get("fill") for path in dark_theme_paths]
     if actual_dark_fills != expected_dark_fills:
         violations.append(
@@ -1423,6 +1491,145 @@ def make_square_logo_variant_proof() -> Path:
     return proof_path
 
 
+def wide_logo_integrity() -> dict[str, object]:
+    """Validate the wide master and its theme color variants."""
+    expected_ids = [entry.element_id for entry in GEOMETRY] + ["wordmark-mains-aegis"]
+    expected_paths = [entry.d for entry in GEOMETRY] + [final_wordmark_09_path()]
+    definitions: list[tuple[Path, list[str], str]] = [
+        (WIDE_LOGO_ASSET, ["currentColor"] * 4, "#FFFFFF"),
+        *[
+            (
+                variant.asset,
+                [*variant.mark_colors, variant.wordmark_color],
+                variant.proof_surface,
+            )
+            for variant in WIDE_LOGO_VARIANTS
+        ],
+    ]
+    results: list[dict[str, object]] = []
+    all_passed = True
+    for asset, expected_fills, proof_surface in definitions:
+        violations: list[str] = []
+        if not asset.exists():
+            results.append(
+                {
+                    "asset": str(asset.relative_to(ROOT)),
+                    "passed": False,
+                    "violations": ["wide logo asset is missing"],
+                }
+            )
+            all_passed = False
+            continue
+        raw = asset.read_text(encoding="utf-8")
+        root = ET.parse(asset).getroot()
+        paths = parse_paths(asset)
+        ids = [path.attrib.get("id") for path in paths]
+        path_data = [path.attrib.get("d", "") for path in paths]
+        fills = [path.attrib.get("fill") for path in paths]
+        groups = list(root.iter("{http://www.w3.org/2000/svg}g"))
+        if root.attrib.get("viewBox") != f"0 0 {WIDE_LOGO_WIDTH} {WIDE_LOGO_HEIGHT}":
+            violations.append("wide logo viewBox differs from the banner master")
+        if ids != expected_ids or path_data != expected_paths:
+            violations.append("wide logo path ids, order, or geometry differ from the master")
+        if fills != expected_fills:
+            violations.append(f"wide logo fills differ: {fills}")
+        if len(groups) != 1 or groups[0].attrib.get("transform") != wide_mark_transform():
+            violations.append("wide logo mark transform differs from the fixed layout")
+        if len(paths) != 4 or paths[-1].attrib.get("transform") != wide_wordmark_transform():
+            violations.append("wide logo wordmark transform differs from the fixed layout")
+        if any(token in raw.lower() for token in ("<rect", "<image", "data:", "<style", "filter", "mask")):
+            violations.append("wide logo contains a background, raster, style, filter, or mask")
+        contrast: dict[str, float] = {}
+        if "currentColor" not in expected_fills:
+            contrast = {
+                color: contrast_ratio(color, proof_surface)
+                for color in dict.fromkeys(expected_fills)
+            }
+            if min(contrast.values()) < 4.5:
+                violations.append("wide logo contrast is below 4.5:1 on its target surface")
+        render_sizes: dict[str, dict[str, object]] = {}
+        bounds: tuple[int, int, int, int] | None = None
+        for render_width in (1600, 800, 400, 300, 200):
+            render_height = render_width * WIDE_LOGO_HEIGHT // WIDE_LOGO_WIDTH
+            render_path = SQUARE_LOCKUP_VALIDATION_DIR / f"{asset.stem}-{render_width}.png"
+            render_svg(
+                asset,
+                render_path,
+                render_width,
+                render_height,
+                background=proof_surface,
+            )
+            image = np.asarray(Image.open(render_path).convert("RGB"))
+            foreground = foreground_mask_against(image, proof_surface)
+            current_bounds = mask_bounds(foreground)
+            split = round(render_width * 650 / WIDE_LOGO_WIDTH)
+            both_parts_visible = bool(foreground[:, :split].any() and foreground[:, split:].any())
+            size_passed = current_bounds is not None and both_parts_visible
+            if not size_passed:
+                violations.append(
+                    f"wide logo mark or wordmark is empty at {render_width}x{render_height}"
+                )
+            render_sizes[str(render_width)] = {
+                "height": render_height,
+                "bounds": list(current_bounds) if current_bounds is not None else None,
+                "mark_and_wordmark_visible": both_parts_visible,
+                "passed": size_passed,
+            }
+            if render_width == WIDE_LOGO_WIDTH:
+                bounds = current_bounds
+        if bounds is not None:
+            x0, y0, x1, y1 = bounds
+            if x0 < 45 or y0 < 45 or x1 > WIDE_LOGO_WIDTH - 45 or y1 > WIDE_LOGO_HEIGHT - 45:
+                violations.append(f"wide logo violates the fixed optical margins: {bounds}")
+        passed = not violations
+        all_passed = all_passed and passed
+        results.append(
+            {
+                "asset": str(asset.relative_to(ROOT)),
+                "passed": passed,
+                "fills": expected_fills,
+                "proof_surface": proof_surface,
+                "contrast_ratios": contrast,
+                "bounds": list(bounds) if bounds is not None else None,
+                "render_sizes": render_sizes,
+                "path_data_sha256": hashlib.sha256(
+                    "\n".join(path_data).encode("utf-8")
+                ).hexdigest(),
+                "violations": violations,
+            }
+        )
+    return {"passed": all_passed, "assets": results}
+
+
+def make_wide_logo_proof() -> Path:
+    proof_path = SQUARE_LOCKUP_VALIDATION_DIR / "mains-aegis-logo-wide-variants.png"
+    panel_width = 1200
+    panel_height = 195
+    label_height = 42
+    gutter = 20
+    entries = (
+        (WIDE_LOGO_ASSET, "MONO / CURRENTCOLOR", "#FFFFFF"),
+        (WIDE_COLOR_LIGHT_ASSET, "COLOR / LIGHT", LIGHT_CANVAS),
+        (WIDE_COLOR_DARK_ASSET, "COLOR / DARK", DARK_CANVAS),
+    )
+    canvas = Image.new(
+        "RGB",
+        (panel_width + gutter * 2, (panel_height + label_height) * len(entries) + gutter * 4),
+        "#D9DEDB",
+    )
+    for index, (asset, label, surface) in enumerate(entries):
+        y = gutter + index * (panel_height + label_height + gutter)
+        panel = Image.new("RGB", (panel_width, panel_height + label_height), surface)
+        rendered_path = SQUARE_LOCKUP_VALIDATION_DIR / f"{asset.stem}-proof.png"
+        render_svg(asset, rendered_path, panel_width, panel_height, background=surface)
+        panel.paste(Image.open(rendered_path).convert("RGB"), (0, label_height))
+        label_color = "#161B20" if relative_luminance(surface) > 0.5 else "#EAF7F0"
+        ImageDraw.Draw(panel).text((18, 11), label, fill=label_color, font=sheet_font(18))
+        canvas.paste(panel, (gutter, y))
+    canvas.save(proof_path)
+    return proof_path
+
+
 def square_lockup_render_validation() -> dict[str, object]:
     """Render the approved 09 lockup at fixed sizes and theme surfaces."""
     output_dir = SQUARE_LOCKUP_VALIDATION_DIR / "final-renders"
@@ -1576,8 +1783,13 @@ def square_lockup_render_validation() -> dict[str, object]:
 def color_metrics() -> list[dict[str, int | str]]:
     result = []
     for variant in VARIANTS:
+        source_path = VALIDATION_DIR / f"color-source-{variant.name}.svg"
         rendered_path = VALIDATION_DIR / f"{variant.name}.png"
-        render_svg(VARIANT_DIR / f"{variant.name}.svg", rendered_path, VIEWBOX_WIDTH, VIEWBOX_HEIGHT)
+        source_path.write_text(
+            mark_svg(variant.left_color, variant.right_color, f"palette validation {variant.name}"),
+            encoding="utf-8",
+        )
+        render_svg(source_path, rendered_path, VIEWBOX_WIDTH, VIEWBOX_HEIGHT)
         image = np.asarray(Image.open(rendered_path).convert("RGB"))
         # At three pixels from an edge, SVG flat fills must be byte-exact.
         image_mask = mask_from_rgb(image)
@@ -1775,13 +1987,13 @@ def validate() -> dict[str, object]:
             stale_path.unlink(missing_ok=True)
     reference = source_crop()
     render_svg(
-        ASSET_DIR / "mains-aegis-06-monochrome.svg",
+        MARK_LOGO_ASSET,
         VALIDATION_DIR / "rendered-monochrome.png",
         VIEWBOX_WIDTH,
         VIEWBOX_HEIGHT,
     )
     render_svg(
-        ASSET_DIR / "mains-aegis-06-monochrome.svg",
+        MARK_LOGO_ASSET,
         VALIDATION_DIR / "smoothness-8x.png",
         VIEWBOX_WIDTH * 8,
         VIEWBOX_HEIGHT * 8,
@@ -1795,12 +2007,6 @@ def validate() -> dict[str, object]:
     make_native_overlay(reference, rendered, VALIDATION_DIR / "native-overlay.png")
     make_eight_x_overlay(reference, rendered, VALIDATION_DIR / "eight-x-overlay.png")
     make_construction_sheet(reference, VALIDATION_DIR / "construction-sheet.png")
-    render_svg(
-        ASSET_DIR / "mains-aegis-06-colorways.svg",
-        VALIDATION_DIR / "light-theme-colorways.png",
-        1608,
-        1278,
-    )
     theme_preview_path = VALIDATION_DIR / "theme-light-preview.svg"
     theme_preview_path.write_text(theme_preview_svg(), encoding="utf-8")
     render_svg(
@@ -1813,8 +2019,10 @@ def validate() -> dict[str, object]:
     integrity = vector_integrity()
     square_lockup = square_lockup_integrity()
     square_logo_variants = square_logo_variant_integrity()
+    wide_logo = wide_logo_integrity()
     square_lockup_renders = square_lockup_render_validation()
     square_logo_variant_proof = make_square_logo_variant_proof()
+    wide_logo_proof = make_wide_logo_proof()
     square_lockup_report = {
         "canvas": [SQUARE_LOCKUP_CANVAS, SQUARE_LOCKUP_CANVAS],
         "layout": {
@@ -1842,6 +2050,10 @@ def validate() -> dict[str, object]:
         ),
         "canonical_asset": str(FINAL_SQUARE_LOCKUP_ASSET.relative_to(ROOT)),
         "selection": "09 instrument reference",
+        "wide_logo": {
+            "integrity": wide_logo,
+            "proof": str(wide_logo_proof.relative_to(ROOT)),
+        },
     }
     SQUARE_LOCKUP_VALIDATION_DIR.mkdir(parents=True, exist_ok=True)
     (SQUARE_LOCKUP_VALIDATION_DIR / "report.json").write_text(
@@ -1919,6 +2131,10 @@ def validate() -> dict[str, object]:
             "renders": square_lockup_renders,
             "variant_proof": str(square_logo_variant_proof.relative_to(ROOT)),
         },
+        "wide_logo": {
+            "integrity": wide_logo,
+            "proof": str(wide_logo_proof.relative_to(ROOT)),
+        },
         "curve_smoothness": smoothness,
         "raw_source_overlay": raw_metrics,
         "landmarks": landmarks,
@@ -1945,6 +2161,7 @@ def validate() -> dict[str, object]:
             "vector_integrity_passed": integrity["passed"],
             "square_lockup_integrity_passed": square_lockup["passed"],
             "square_logo_variants_passed": square_logo_variants["passed"],
+            "wide_logo_passed": wide_logo["passed"],
             "square_lockup_render_passed": square_lockup_renders["passed"],
             "curve_smoothness_passed": smoothness["passed"],
             "color_passed": colors_passed,
@@ -1956,6 +2173,7 @@ def validate() -> dict[str, object]:
                 integrity["passed"]
                 and square_lockup["passed"]
                 and square_logo_variants["passed"]
+                and wide_logo["passed"]
                 and square_lockup_renders["passed"]
                 and smoothness["passed"]
                 and colors_passed
