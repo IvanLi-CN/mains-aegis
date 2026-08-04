@@ -4,8 +4,8 @@
 
 ## 1. 基线
 
-- 运行语义基线：[../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md](../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md)
-- 视觉冻结基线：[../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md](../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md)
+- 运行语义基线：[../../docs/specs/mcu-self-check-live-panel/SPEC.md](../../docs/specs/mcu-self-check-live-panel/SPEC.md)
+- 视觉冻结基线：[../../docs/specs/front-panel-industrial-ui-preview/SPEC.md](../../docs/specs/front-panel-industrial-ui-preview/SPEC.md)
 - 视觉规范来源：[design-language.md](design-language.md)
 - 组件契约来源：[component-contracts.md](component-contracts.md)
 - 分辨率：`320x172`

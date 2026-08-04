@@ -11,9 +11,9 @@ tags:
   - diag-snapshot
 status: active
 related_specs:
-  - docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md
-  - docs/specs/cqd8u-regulated-output-module/SPEC.md
-  - docs/specs/p8k3d-mains-aegis-devd/SPEC.md
+  - docs/specs/bq40-self-check-result-dialogs/SPEC.md
+  - docs/specs/regulated-output-module/SPEC.md
+  - docs/specs/mains-aegis-devd/SPEC.md
 ---
 
 # BQ40 discharge path diagnostics must separate OperationStatus, AFE state, and charger BAT

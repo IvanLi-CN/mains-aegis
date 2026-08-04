@@ -155,7 +155,7 @@ bash scripts/run-host-unit-tests.sh
 
 > `cd firmware && cargo test` 不是权威路径。`firmware` crate 默认 target 固定为 `xtensa-esp32s3-none-elf`，因此 CI 中的纯逻辑验证统一走 host test script；设备侧 `firmware` 只做 `fmt` / `clippy` / `build`。
 
-## 运行时音效服务（Plan #h43mk）
+## 运行时音效服务（Plan main-firmware-runtime-audio-cues）
 
 主固件已改为常驻运行时音效服务；上电进入自检后就会请求一次 `boot_startup`，音频播放与自检并行推进，后续由主循环按电源/BMS/保护状态驱动 cue 播放，不再阻塞播放 6 段 Demo playlist。
 
@@ -205,7 +205,7 @@ mcu-agentd monitor esp --reset
 - 上电后只请求一次 `boot_startup`，允许在自检期间开始播放。
 - 在市电丢失/恢复、充电开始/完成、低电/保护/过压/过流等状态切换时，能听到对应 cue。
 
-## TPS55288 双路输出控制（Plan #0005）
+## TPS55288 双路输出控制（Plan tps55288-control）
 
 本固件在启动时会通过 `I2C1` 对两颗 `TPS55288` 做最小 bring-up，并冻结一个“默认 profile”（用于上板联调与回归）。模块 SoT 见 `docs/modules/regulated-output.md`。
 
@@ -246,7 +246,7 @@ mcu-agentd monitor esp --reset
 - 超出预算后会锁存为运行期 `tps_config_failed`，停止无限整套重配，等待显式 restore
 - `invalid_config / out_of_range` 这类非瞬态错误不进入延迟重试，直接锁存
 
-## INA3221 遥测（Plan #0005）
+## INA3221 遥测（Plan tps55288-control）
 
 固件会初始化 `INA3221 (addr=0x40)` 并每 `500ms` 输出两行遥测（`out_a/out_b` 各一行）。`CH1/CH2` 属于稳压输出模块，`CH3` 只作为输入侧 `VIN` 共享观测，不改变输出模块的通道契约。
 
@@ -279,7 +279,7 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0
 
 若某个字段读取失败，该字段会变为 `err(<kind>)`（例如 `err(i2c_nack)`），但该行仍会输出。
 
-## TMP112A 温度采样（Plan #0006）
+## TMP112A 温度采样（Plan tps-tmp112-temperature-reading）
 
 固件会在每行 `telemetry ...` 末尾追加 TPS 热点温度与 `THERM_KILL_N` 电平，用于 bring-up 与回归时快速对齐“电压/电流/温度”。
 
@@ -364,7 +364,7 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
 
 - Dashboard 模块设计：`firmware/ui/dashboard-design.md`
 - Self-check 模块设计：`firmware/ui/self-check-design.md`
-- 规格追溯：`docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md` 与 `docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`
+- 规格追溯：`docs/specs/mcu-self-check-live-panel/SPEC.md` 与 `docs/specs/front-panel-industrial-ui-preview/SPEC.md`
 - Dashboard 工作模式（项目口径）：
   - `BYPASS`（关闭）：不提供 UPS 功能，输入直通输出（bypass）
   - `STANDBY`（待机）：输入存在，TPS55288 无实际输出电流
@@ -401,7 +401,7 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
   - `GC9307`、`TCA6408A`、`FUSB302`、`INA3221`、`BQ25792`
   - `BQ40Z50`、`TPS55288-A`、`TPS55288-B`、`TMP112-A`、`TMP112-B`
 - Dashboard 当前验收口径固定为 `Variant B = Neutral`；`Variant A/D` 仅保留为历史参考样式
-- Dashboard 间距与行距冻结参数见：`firmware/ui/dashboard-design.md`（来源追溯仍在 `docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`）
+- Dashboard 间距与行距冻结参数见：`firmware/ui/dashboard-design.md`（来源追溯仍在 `docs/specs/front-panel-industrial-ui-preview/SPEC.md`）
 
 固件 UI 渲染图（文档内直显）：
 
@@ -672,7 +672,7 @@ devd API 流程是 `scan -> bind -> connect -> identity -> artifact/select -> mo
 
 ## 烧录与监视（legacy/fallback：`mcu-agentd`，从仓库根目录运行）
 
-## 风扇温控与故障保护（Spec #ygmqn）
+## 风扇温控与故障保护（Spec fan-control）
 
 固件会在运行期接管 `GPIO35(FAN_EN)`、`GPIO36(FAN_VSET_PWM)` 与 `GPIO34(FAN_TACH)`，形成一个以 `TMP112A/B + BQ40 board/battery/TS1..TS4` 最高温为输入的闭环风扇策略；同时支持 `tmp-hw-protect-test` 测试构建，用于专测 TMP 硬件温度保护链路。
 

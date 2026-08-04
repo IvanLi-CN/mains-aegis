@@ -599,7 +599,7 @@ where
         (_, TelemetryValue::Err(e)) => TelemetryValue::Err(e),
     };
 
-    // Keep the first fields stable per docs/plan/0005:tps55288-control/contracts/cli.md.
+    // Keep the first fields stable per docs/specs/tps55288-control/contracts/cli.md.
     // Extra fields are appended for bring-up/debugging.
     let tmp_addr = ch.tmp_addr();
     let tmp_addr_value = TelemetryU8::Value(tmp_addr);

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Generate PCM-only demo playlist WAV assets for Plan #0004.
+Generate PCM-only demo playlist WAV assets for the firmware-audio-playback-demo spec.
 
 Decision:
 - We only accept WAV(PCM16LE) on the target chain (audible-quality-first).
 
 Outputs:
-- docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist/{02,03,06}_*.wav
+- docs/specs/firmware-audio-playback-demo/assets/demo-playlist/{02,03,06}_*.wav
 - firmware/assets/audio/demo-playlist/{02,03,06}_*.wav
 """
 
@@ -107,7 +107,7 @@ def main() -> None:
     }
 
     targets = [
-        Path("docs/plan/0004:firmware-audio-playback-demo/assets/demo-playlist"),
+        Path("docs/specs/firmware-audio-playback-demo/assets/demo-playlist"),
         Path("firmware/assets/audio/demo-playlist"),
     ]
 
@@ -121,4 +121,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

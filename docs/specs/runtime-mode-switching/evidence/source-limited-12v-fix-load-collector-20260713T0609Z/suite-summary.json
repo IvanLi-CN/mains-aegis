@@ -1,0 +1,548 @@
+{
+  "suite_id": "source-limited-12v-fix-load-collector-20260713T0609Z",
+  "suite_contract": "source_limited_12v",
+  "created_at": "2026-07-13T05:56:12.333312+00:00",
+  "transport": {
+    "ups": "mains-aegis CLI + native IPC + USB",
+    "power_source": "Isolapurr:cli+url",
+    "electronic_load": "Loadlynx:cli+ipc+usb"
+  },
+  "thresholds": {
+    "engineering_sample_rate_hz": 3.0,
+    "minimum_sample_rate_hz": 2.0,
+    "max_sample_gap_s": 0.5,
+    "sample_interval_ms": 200,
+    "ups_watch_freshness_ms": 750
+  },
+  "load_protection": {
+    "load_min_v_mv": 3000,
+    "load_max_i_ma_total": 4000,
+    "load_max_p_mw": 80000
+  },
+  "profiles": [
+    {
+      "output_profile": "12v",
+      "source_voltage_mv": 12000,
+      "source_current_limit_ma": 3000,
+      "rated_vout_mv": 12000
+    }
+  ],
+  "reports": [
+    {
+      "output_profile": "12v",
+      "scene_type": "backup_only",
+      "target_ma": 1000,
+      "include_backup": true,
+      "report_dir": "docs/specs/runtime-mode-switching/evidence/source-limited-12v-fix-load-collector-20260713T0609Z/12v-backup_only-1000ma",
+      "source_voltage_mv": 12000,
+      "source_current_limit_ma": 3000,
+      "load_min_v_mv": 3000,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "commands": {
+        "power_capabilities": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "show",
+          "--url",
+          "http://192.168.31.224"
+        ],
+        "load_capabilities": [
+          "/Users/ivan/Projects/Ivan/loadlynx/tools/loadlynx-devd/target/debug/loadlynx",
+          "--ipc",
+          "/tmp/loadlynx-19v-collapse.sock",
+          "--help"
+        ],
+        "load_disable": [
+          "/Users/ivan/Projects/Ivan/loadlynx/tools/loadlynx-devd/target/debug/loadlynx",
+          "--ipc",
+          "/tmp/loadlynx-19v-collapse.sock",
+          "--json",
+          "control",
+          "set",
+          "--device",
+          "loadlynx-d68638",
+          "--disable"
+        ],
+        "power_disable": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "runtime",
+          "output",
+          "--url",
+          "http://192.168.31.224",
+          "--enabled",
+          "false"
+        ],
+        "ups_artifact_select": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "artifact",
+          "select",
+          "--manifest-path",
+          "<required-12v-manifest.json>"
+        ],
+        "ups_flash": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "flash",
+          "--real"
+        ],
+        "ups_identity": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "identity"
+        ],
+        "ups_settings": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "settings"
+        ],
+        "power_configure_off": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "config",
+          "set",
+          "--url",
+          "http://192.168.31.224",
+          "--tps-mode",
+          "manual",
+          "--voltage-mv",
+          "12000",
+          "--current-limit-ma",
+          "3000",
+          "--usb-c-path",
+          "disconnected"
+        ],
+        "power_enable": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "runtime",
+          "output",
+          "--url",
+          "http://192.168.31.224",
+          "--enabled",
+          "true"
+        ],
+        "power_port_enable": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "runtime",
+          "output",
+          "--url",
+          "http://192.168.31.224",
+          "--enabled",
+          "true"
+        ],
+        "load_cc": [
+          "/Users/ivan/Projects/Ivan/loadlynx/tools/loadlynx-devd/target/debug/loadlynx",
+          "--ipc",
+          "/tmp/loadlynx-19v-collapse.sock",
+          "--json",
+          "cc",
+          "1000",
+          "--device",
+          "loadlynx-d68638",
+          "--min-v-mv",
+          "3000",
+          "--max-i-ma-total",
+          "4000",
+          "--max-p-mw",
+          "80000"
+        ],
+        "ups_status_watch": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "status",
+          "--watch",
+          "--interval-ms",
+          "200",
+          "--watch-freshness-ms",
+          "750",
+          "--include-meta"
+        ],
+        "load_stream": [
+          "/Users/ivan/Projects/Ivan/loadlynx/tools/loadlynx-devd/target/debug/loadlynx",
+          "--ipc",
+          "/tmp/loadlynx-19v-collapse.sock",
+          "--json",
+          "status",
+          "--device",
+          "loadlynx-d68638"
+        ],
+        "power_stream": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "telemetry",
+          "--url",
+          "http://192.168.31.224"
+        ]
+      }
+    },
+    {
+      "output_profile": "12v",
+      "scene_type": "source_limited_online",
+      "target_ma": 3900,
+      "include_backup": false,
+      "report_dir": "docs/specs/runtime-mode-switching/evidence/source-limited-12v-fix-load-collector-20260713T0609Z/12v-source_limited_online-3900ma",
+      "source_voltage_mv": 12000,
+      "source_current_limit_ma": 3000,
+      "load_min_v_mv": 3000,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "commands": {
+        "power_capabilities": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "show",
+          "--url",
+          "http://192.168.31.224"
+        ],
+        "load_capabilities": [
+          "/Users/ivan/Projects/Ivan/loadlynx/tools/loadlynx-devd/target/debug/loadlynx",
+          "--ipc",
+          "/tmp/loadlynx-19v-collapse.sock",
+          "--help"
+        ],
+        "load_disable": [
+          "/Users/ivan/Projects/Ivan/loadlynx/tools/loadlynx-devd/target/debug/loadlynx",
+          "--ipc",
+          "/tmp/loadlynx-19v-collapse.sock",
+          "--json",
+          "control",
+          "set",
+          "--device",
+          "loadlynx-d68638",
+          "--disable"
+        ],
+        "power_disable": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "runtime",
+          "output",
+          "--url",
+          "http://192.168.31.224",
+          "--enabled",
+          "false"
+        ],
+        "ups_artifact_select": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "artifact",
+          "select",
+          "--manifest-path",
+          "<required-12v-manifest.json>"
+        ],
+        "ups_flash": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "flash",
+          "--real"
+        ],
+        "ups_identity": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "identity"
+        ],
+        "ups_settings": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "settings"
+        ],
+        "power_configure_off": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "config",
+          "set",
+          "--url",
+          "http://192.168.31.224",
+          "--tps-mode",
+          "manual",
+          "--voltage-mv",
+          "12000",
+          "--current-limit-ma",
+          "3000",
+          "--usb-c-path",
+          "disconnected"
+        ],
+        "power_enable": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "runtime",
+          "output",
+          "--url",
+          "http://192.168.31.224",
+          "--enabled",
+          "true"
+        ],
+        "power_port_enable": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "runtime",
+          "output",
+          "--url",
+          "http://192.168.31.224",
+          "--enabled",
+          "true"
+        ],
+        "load_cc": [
+          "/Users/ivan/Projects/Ivan/loadlynx/tools/loadlynx-devd/target/debug/loadlynx",
+          "--ipc",
+          "/tmp/loadlynx-19v-collapse.sock",
+          "--json",
+          "cc",
+          "3900",
+          "--device",
+          "loadlynx-d68638",
+          "--min-v-mv",
+          "3000",
+          "--max-i-ma-total",
+          "4000",
+          "--max-p-mw",
+          "80000"
+        ],
+        "ups_status_watch": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "status",
+          "--watch",
+          "--interval-ms",
+          "200",
+          "--watch-freshness-ms",
+          "750",
+          "--include-meta"
+        ],
+        "load_stream": [
+          "/Users/ivan/Projects/Ivan/loadlynx/tools/loadlynx-devd/target/debug/loadlynx",
+          "--ipc",
+          "/tmp/loadlynx-19v-collapse.sock",
+          "--json",
+          "status",
+          "--device",
+          "loadlynx-d68638"
+        ],
+        "power_stream": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "telemetry",
+          "--url",
+          "http://192.168.31.224"
+        ]
+      }
+    },
+    {
+      "output_profile": "12v",
+      "scene_type": "source_limited_cut",
+      "target_ma": 3900,
+      "include_backup": true,
+      "report_dir": "docs/specs/runtime-mode-switching/evidence/source-limited-12v-fix-load-collector-20260713T0609Z/12v-source_limited_cut-3900ma",
+      "source_voltage_mv": 12000,
+      "source_current_limit_ma": 3000,
+      "load_min_v_mv": 3000,
+      "load_max_i_ma_total": 4000,
+      "load_max_p_mw": 80000,
+      "commands": {
+        "power_capabilities": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "show",
+          "--url",
+          "http://192.168.31.224"
+        ],
+        "load_capabilities": [
+          "/Users/ivan/Projects/Ivan/loadlynx/tools/loadlynx-devd/target/debug/loadlynx",
+          "--ipc",
+          "/tmp/loadlynx-19v-collapse.sock",
+          "--help"
+        ],
+        "load_disable": [
+          "/Users/ivan/Projects/Ivan/loadlynx/tools/loadlynx-devd/target/debug/loadlynx",
+          "--ipc",
+          "/tmp/loadlynx-19v-collapse.sock",
+          "--json",
+          "control",
+          "set",
+          "--device",
+          "loadlynx-d68638",
+          "--disable"
+        ],
+        "power_disable": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "runtime",
+          "output",
+          "--url",
+          "http://192.168.31.224",
+          "--enabled",
+          "false"
+        ],
+        "ups_artifact_select": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "artifact",
+          "select",
+          "--manifest-path",
+          "<required-12v-manifest.json>"
+        ],
+        "ups_flash": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "flash",
+          "--real"
+        ],
+        "ups_identity": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "identity"
+        ],
+        "ups_settings": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "settings"
+        ],
+        "power_configure_off": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "config",
+          "set",
+          "--url",
+          "http://192.168.31.224",
+          "--tps-mode",
+          "manual",
+          "--voltage-mv",
+          "12000",
+          "--current-limit-ma",
+          "3000",
+          "--usb-c-path",
+          "disconnected"
+        ],
+        "power_enable": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "runtime",
+          "output",
+          "--url",
+          "http://192.168.31.224",
+          "--enabled",
+          "true"
+        ],
+        "power_port_enable": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "runtime",
+          "output",
+          "--url",
+          "http://192.168.31.224",
+          "--enabled",
+          "true"
+        ],
+        "load_cc": [
+          "/Users/ivan/Projects/Ivan/loadlynx/tools/loadlynx-devd/target/debug/loadlynx",
+          "--ipc",
+          "/tmp/loadlynx-19v-collapse.sock",
+          "--json",
+          "cc",
+          "3900",
+          "--device",
+          "loadlynx-d68638",
+          "--min-v-mv",
+          "3000",
+          "--max-i-ma-total",
+          "4000",
+          "--max-p-mw",
+          "80000"
+        ],
+        "ups_status_watch": [
+          "/Users/ivan/.codex/worktrees/d81b/mains-aegis/tools/mains-aegis-host/target/debug/mains-aegis",
+          "--ipc",
+          ".tmp/devd.sock",
+          "device",
+          "serial-04f3bb3f5367",
+          "status",
+          "--watch",
+          "--interval-ms",
+          "200",
+          "--watch-freshness-ms",
+          "750",
+          "--include-meta"
+        ],
+        "load_stream": [
+          "/Users/ivan/Projects/Ivan/loadlynx/tools/loadlynx-devd/target/debug/loadlynx",
+          "--ipc",
+          "/tmp/loadlynx-19v-collapse.sock",
+          "--json",
+          "status",
+          "--device",
+          "loadlynx-d68638"
+        ],
+        "power_stream": [
+          "/Users/ivan/Projects/Ivan/isolapurr-usb-hub-wt-devd-power-timeout/tools/isolapurr-host/target/aarch64-apple-darwin/debug/isolapurr",
+          "--json",
+          "power",
+          "telemetry",
+          "--url",
+          "http://192.168.31.224"
+        ]
+      }
+    }
+  ]
+}

@@ -53,8 +53,8 @@
 ### VR-D-05 Dashboard focus overlay
 
 - Assets:
-  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-home-focus-output.png`
-  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-home-focus-battery-flow.png`
+  - `../../docs/specs/front-panel-industrial-ui-preview/assets/dashboard-home-focus-output.png`
+  - `../../docs/specs/front-panel-industrial-ui-preview/assets/dashboard-home-focus-battery-flow.png`
 - Pass criteria:
   - `DashboardHomeFocus` 仅高亮 5 张首页卡片之一，不得把 `WiFi` 图标并入焦点环。
   - 选中态使用局部 focus tint + ring，不改动原有卡片指标与首页布局。
@@ -64,8 +64,8 @@
 ### VR-M-01 Menu rail centering
 
 - Assets:
-  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-menu-dashboard.png`
-  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-menu-beeper.png`
+  - `../../docs/specs/front-panel-industrial-ui-preview/assets/dashboard-menu-dashboard.png`
+  - `../../docs/specs/front-panel-industrial-ui-preview/assets/dashboard-menu-beeper.png`
 - Pass criteria:
   - 选中 icon 始终停在屏幕水平中心，未选中项通过 rail 平移进入/离开视窗。
   - 底部只显示当前选中项 label，不额外重复非选中项文案。
@@ -73,8 +73,8 @@
 ### VR-M-02 Dashboard to menu stack motion
 
 - Assets:
-  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-menu-transition-mid.png`
-  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-menu-transition-end.png`
+  - `../../docs/specs/front-panel-industrial-ui-preview/assets/dashboard-menu-transition-mid.png`
+  - `../../docs/specs/front-panel-industrial-ui-preview/assets/dashboard-menu-transition-end.png`
 - Pass criteria:
   - 中间帧能同时看到 dashboard 底部与 menu 顶部，体现纵向连续滑动。
   - 完成帧中 menu 占满视口，dashboard 不再残留可见边框噪声。
@@ -82,9 +82,9 @@
 ### VR-M-03 Audio settings split controls
 
 - Assets:
-  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-audio-action-focus.png`
-  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-audio-system-focus.png`
-  - `../../docs/specs/6qrjs-front-panel-industrial-ui-preview/assets/dashboard-audio-system-off.png`
+  - `../../docs/specs/front-panel-industrial-ui-preview/assets/dashboard-audio-action-focus.png`
+  - `../../docs/specs/front-panel-industrial-ui-preview/assets/dashboard-audio-system-focus.png`
+  - `../../docs/specs/front-panel-industrial-ui-preview/assets/dashboard-audio-system-off.png`
 - Pass criteria:
   - `AUDIO` 页必须同时显示 `ACTION` 与 `SYSTEM` 两行；共享刻度仅允许 `0 + 1..6`，右侧 value badge 仅允许 `OFF / 1..6`，不出现额外列表、slider 或 `MUTE` 别名。
   - 共享刻度、两行轨道与右侧 value badge 在三档场景下保持几何稳定；切换编辑分组只能改变高亮，不得导致 relayout。
@@ -144,10 +144,10 @@
 ### VR-O-03 Manual USB-C loopback confirmation
 
 - Assets:
-  - `../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-loopback-confirm.png`
-  - `../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-loopback-confirmed.png`
-  - `../../docs/specs/eu2b8-bq25792-charge-policy/assets/charger-backup-usb-output-high-latched.png`
-  - `../../docs/specs/eu2b8-bq25792-charge-policy/assets/charger-backup-usb-telemetry-lost-latched.png`
+  - `../../docs/specs/manual-charge-dashboard/assets/manual-charge-loopback-confirm.png`
+  - `../../docs/specs/manual-charge-dashboard/assets/manual-charge-loopback-confirmed.png`
+  - `../../docs/specs/bq25792-charge-policy/assets/charger-backup-usb-output-high-latched.png`
+  - `../../docs/specs/bq25792-charge-policy/assets/charger-backup-usb-telemetry-lost-latched.png`
 - Pass criteria:
   - `START` 前必须可见 `USB-C LOOP CHECK`、两行确认内容、`CANCEL` 与 `CONFIRM`；取消不能切换到 active 手动状态。
   - 已确认会话 action bar 显示 `LOOP OK`，但 `LOAD` 的 `LOAD: CHG PAUSED` 与 `LOCK` 的 `LOAD DATA LOST` 仍以独立 detail 状态可见。
@@ -184,8 +184,8 @@
 ### VR-G-04 Preview artifacts reachable
 
 - Targets:
-  - `docs/specs/hg3dw-front-panel-visual-language/assets/color-preview.svg`
-  - `docs/specs/hg3dw-front-panel-visual-language/assets/typography-preview.svg`
+  - `docs/specs/front-panel-visual-language/assets/color-preview.svg`
+  - `docs/specs/front-panel-visual-language/assets/typography-preview.svg`
   - `firmware/ui/design-language.md`
 - Pass criteria:
   - 预览图文件存在且可由 `design-language.md` 直接访问。

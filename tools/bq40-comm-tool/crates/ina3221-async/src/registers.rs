@@ -18,7 +18,7 @@ pub mod addr {
     pub const DIE_ID: u8 = 0xFF;
 }
 
-/// Frozen by docs/plan/0005:tps55288-control/contracts/config.md.
+/// Frozen by docs/specs/tps55288-control/contracts/config.md.
 pub const CONFIG_VALUE_CH12: u16 = 0x6527;
 pub const CONFIG_VALUE_CH123: u16 = 0x7527;
 

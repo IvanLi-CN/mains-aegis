@@ -889,7 +889,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         defmt::warn!("fan: pwm unavailable; forcing fan_en high + vset low for fail-safe cooling");
     }
 
-    // Front panel: I2C2 + SPI display bring-up (Plan #3kz8p).
+    // Front panel: I2C2 + SPI display bring-up (Plan front-panel-industrial-ui-preview).
     // Keep these variables alive for the whole program.
     let i2c2_config = I2cConfig::default()
         .with_frequency(Rate::from_khz(400))

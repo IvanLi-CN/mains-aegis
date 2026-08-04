@@ -180,7 +180,7 @@ When changing this area, validate in this order:
 - `/Users/ivan/Projects/Ivan/mains-aegis/firmware/src/usb_pd/mod.rs`
 - `/Users/ivan/Projects/Ivan/mains-aegis/firmware/src/usb_pd/fusb302.rs`
 - `/Users/ivan/Projects/Ivan/mains-aegis/firmware/src/main.rs`
-- `/Users/ivan/Projects/Ivan/mains-aegis/docs/specs/hn29u-usb-c-pd-sink-pps/SPEC.md`
+- `/Users/ivan/Projects/Ivan/mains-aegis/docs/specs/usb-c-pd-sink-pps/SPEC.md`
 
 ## What to avoid in future edits
 

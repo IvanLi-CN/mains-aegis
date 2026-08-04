@@ -11,7 +11,7 @@ tags:
   - assist
 status: active
 related_specs:
-  - docs/specs/xjpvj-runtime-mode-switching/SPEC.md
+  - docs/specs/runtime-mode-switching/SPEC.md
 ---
 
 # Source-limited backup takeover
@@ -217,7 +217,7 @@ IsolaPurr also passed all three scenes. With IsolaPurr still configured for
 manual `12V / 3A`, a `3900mA` CC load latched source-limited in `0.400s` and
 `0.406s`; the respective post-latch minimum load voltages were `11743mV` and
 `11731mV`, with no interval below `11000mV`. The retained evidence is
-`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-20260712T0759Z/`.
+`docs/specs/runtime-mode-switching/evidence/source-limited-12v-20260712T0759Z/`.
 The test runner preserved IsolaPurr `tps_cdc_rise_mv=300` before and after the
 run.
 
@@ -226,7 +226,7 @@ and LoadLynx at `3900mA` CC, online source limitation latched in `0.097s`; the
 following source-cut case latched in `0.203s`, stayed in backup, and changed
 the cause to `input_absent`. Both post-latch minima were `18732mV`, above the
 19V acceptance floor of `18000mV`. The retained evidence is
-`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-20260712T1020Z/`.
+`docs/specs/runtime-mode-switching/evidence/source-limited-19v-20260712T1020Z/`.
 
 The 19V input drop was `168mV` at `2760mA` input current and `1368mA` TPS
 output current. That is just below the percentage-derived drop threshold after
@@ -238,7 +238,7 @@ into backup.
 ## 19V Input-Collapse Evidence
 
 The dedicated `19V / 3A source + 1000mA load` VIN-cut evidence is retained under
-`docs/specs/xjpvj-runtime-mode-switching/evidence/input-collapse-19v-backup-only-r7-20260712T1320Z/`.
+`docs/specs/runtime-mode-switching/evidence/input-collapse-19v-backup-only-r7-20260712T1320Z/`.
 It uses the 19V `main-vout-19v` build with the input-collapse rule above.
 
 The final run is `valid_for_signoff` at `4.967Hz` with a maximum sample gap of
@@ -260,7 +260,7 @@ disabled after completion.
 ## Final 19V Revalidation
 
 The final three-scene 19V suite is retained at
-`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-final-r7-20260712T1441Z/`.
+`docs/specs/runtime-mode-switching/evidence/source-limited-19v-final-r7-20260712T1441Z/`.
 It used the `main-vout-19v` build `0c98fe9d-dirty-fee0c84b3135d707`, manual
 `19000mV / 3000mA` source, and `3900mA` CC overload scenes. The suite verifier returned
 `signoff_valid=true`.
@@ -289,7 +289,7 @@ implicit battery contribution into an explicit `source_limited` Backup decision 
 normal 1000mA operation to latch Backup.
 
 The composed suite is retained at
-`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-tuned-final-20260713T0020Z/`.
+`docs/specs/runtime-mode-switching/evidence/source-limited-19v-tuned-final-20260713T0020Z/`.
 It passed the voltage and reason checks available at generation time, but is diagnostic-only after
 adding the missing hold-power contract. In its ordinary-load hold, `137/158` samples exceeded
 `2W` TPS output; the overload holds had `73/80` and `71/79` samples above `2W`. Those samples prove
@@ -316,12 +316,12 @@ into Backup. The corrected threshold is `2.3A`: below the observed 3900mA limite
 consecutive fresh samples remain mandatory.
 
 The final suite at
-`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-optimized-cut-r3-20260713T0155Z/`
+`docs/specs/runtime-mode-switching/evidence/source-limited-19v-optimized-cut-r3-20260713T0155Z/`
 passes the recomputed 2W hold gate. Its three hold maxima are `1089mW`, `1089mW`, and `1016mW`;
 the normal VIN-cut minimum is `18049mV`, and both overload post-latch minima are `18744mV`.
 
 The 12V follow-up exposed a second false-positive path. The diagnostic suite at
-`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0320Z/`
+`docs/specs/runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0320Z/`
 showed that a normal `1000mA` online hold could still be mis-latched into
 `backup_reason=source_limited`, driving `12.607W` TPS output in what should
 have remained ordinary standby. The source-limited cut continuity bug was
@@ -338,7 +338,7 @@ TPS-only source-limited admission now requires either:
   threshold window.
 
 The verified 12V rerun at
-`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0335Z/`
+`docs/specs/runtime-mode-switching/evidence/source-limited-12v-c22bf968-20260713T0335Z/`
 confirms the fix: `backup_only`, `source_limited_online`, and
 `source_limited_cut` are all `valid_for_signoff`, and the ordinary `1000mA`
 hold stays below the `2W` TPS gate with a maximum of `391mW`.
@@ -347,7 +347,7 @@ hold stays below the `2W` TPS gate with a maximum of `391mW`.
 
 Keep complete rerun evidence with the implementation, even when a collection
 gate prevents sign-off. The 12V three-scene rerun is archived at
-`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-20260712T0300Z/`.
+`docs/specs/runtime-mode-switching/evidence/source-limited-12v-20260712T0300Z/`.
 It includes the suite overview, each scene's raw result, full time series, and
 interactive voltage chart.
 
@@ -363,14 +363,14 @@ control regressions from telemetry-completeness regressions.
 ## 12V Final Validation Pattern
 
 The repaired-hardware current result is archived at
-`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-ce343924-uvlo-preboost-final-20260714T1206Z/`.
+`docs/specs/runtime-mode-switching/evidence/source-limited-12v-ce343924-uvlo-preboost-final-20260714T1206Z/`.
 All four scenes are sign-off valid. The 2500mA guard produced no Backup samples.
 The 3900mA online and cut scenes both held at least `11790mV` after latch; their
 entry delays were `0.601s` and `1.002s`, and the cut scene remained continuously
 in Backup before changing reason to `input_absent`.
 
 The subsequent `93aadc61` EEPROM-backed UVLO sweep is archived at
-`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-93aadc61-uvlo-sweep-20260714T1636Z/`.
+`docs/specs/runtime-mode-switching/evidence/source-limited-12v-93aadc61-uvlo-sweep-20260714T1636Z/`.
 Candidate A (`11.3V / 11.5V`) and candidate C (`11.5V / 11.7V`) both passed the
 four-scene 12V contract, while candidate B (`11.4V / 11.6V`) falsely entered
 Backup during the `2500mA` in-budget scene. The practical rule is therefore:
@@ -394,9 +394,9 @@ All three candidates were written to EEPROM, read back immediately, reset, and
 read back again before running the then-current three-scene
 `source-limited-19v` contract. The retained sweep evidence is:
 
-- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18100-20260715T0310Z/`
-- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18200-20260715T0317Z/`
-- `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18300-r3-20260715T0332Z/`
+- `docs/specs/runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18100-20260715T0310Z/`
+- `docs/specs/runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18200-20260715T0317Z/`
+- `docs/specs/runtime-mode-switching/evidence/source-limited-19v-6bc1a374-uvlo18300-r3-20260715T0332Z/`
 
 The contract now requires four scenes for both 12V and 19V, including
 `source_in_budget / 2500mA`. These three directories therefore remain useful
@@ -440,7 +440,7 @@ The earlier 62179e3c report below remains the pre-repair baseline. Do not use
 its PCB voltage drop or 2900mA guard result as current hardware truth.
 
 The final 12V evidence is archived at
-`docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-62179e3c-final-r6-20260714T0010Z/`.
+`docs/specs/runtime-mode-switching/evidence/source-limited-12v-62179e3c-final-r6-20260714T0010Z/`.
 It contains four signed-off scenes: 1000mA input-absent cut, 2900mA in-budget online,
 3900mA source-limited online, and 3900mA source-limited cut. The suite used USB for all
 three devices, retained `tps_cdc_rise_mv=300`, and reported only `load_i_total_ma`.
@@ -513,9 +513,9 @@ The practical acceptance rule is simple:
 The retained c8bd8130 final evidence follows that rule:
 
 - 12V final suite:
-  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-12v-c8bd8130-rerun-20260715T0838Z/`
+  `docs/specs/runtime-mode-switching/evidence/source-limited-12v-c8bd8130-rerun-20260715T0838Z/`
 - 19V final suite:
-  `docs/specs/xjpvj-runtime-mode-switching/evidence/source-limited-19v-c8bd8130-r2-20260715T0817Z/`
+  `docs/specs/runtime-mode-switching/evidence/source-limited-19v-c8bd8130-r2-20260715T0817Z/`
 
 For the 19V rerun that replaced the polluted in-budget scene, hold samples had
 `charger_allow_charge=false` and `battery_current_ma=0` throughout. Keep that

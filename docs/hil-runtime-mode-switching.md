@@ -1,6 +1,6 @@
 # Runtime-Mode Power Path Validation
 
-This page is the current truth source for `#xjpvj` runtime-mode Power Path Validation on the approved `12V / 3A` and `19V / 3A` benches.
+This page is the current truth source for `runtime-mode-switching` runtime-mode Power Path Validation on the approved `12V / 3A` and `19V / 3A` benches.
 
 **Power Path Validation** / **电源路径验证** is the owner-facing name. `HIL`
 only remains in some historical file and directory names.
@@ -560,8 +560,8 @@ components.
 
 ## References
 
-- `docs/specs/xjpvj-runtime-mode-switching/SPEC.md`
-- `docs/specs/xjpvj-runtime-mode-switching/IMPLEMENTATION.md`
+- `docs/specs/runtime-mode-switching/SPEC.md`
+- `docs/specs/runtime-mode-switching/IMPLEMENTATION.md`
 - `docs/solutions/firmware/runtime-mode-hil-with-isolapurr-loadlynx.md`
 - `tools/hil/README.md`
 - `tools/hil/advanced_power_12v_runner.py`

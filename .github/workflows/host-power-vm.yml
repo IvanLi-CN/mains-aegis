@@ -6,8 +6,8 @@ on:
       - "tools/mains-aegis-host/**"
       - "scripts/ci/host_power_*"
       - ".github/workflows/host-power-vm.yml"
-      - "docs/specs/7jqrq-mains-aegis-cli-devd-alignment/**"
-      - "docs/specs/p8k3d-mains-aegis-devd/**"
+      - "docs/specs/mains-aegis-cli-devd-alignment/**"
+      - "docs/specs/mains-aegis-devd/**"
       - "docs/usb-cdc-web-serial-protocol.md"
       - "docs/web-management-ui.md"
   push:
@@ -16,8 +16,8 @@ on:
       - "tools/mains-aegis-host/**"
       - "scripts/ci/host_power_*"
       - ".github/workflows/host-power-vm.yml"
-      - "docs/specs/7jqrq-mains-aegis-cli-devd-alignment/**"
-      - "docs/specs/p8k3d-mains-aegis-devd/**"
+      - "docs/specs/mains-aegis-cli-devd-alignment/**"
+      - "docs/specs/mains-aegis-devd/**"
       - "docs/usb-cdc-web-serial-protocol.md"
       - "docs/web-management-ui.md"
   workflow_dispatch:

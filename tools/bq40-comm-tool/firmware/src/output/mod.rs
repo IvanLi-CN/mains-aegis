@@ -5319,7 +5319,7 @@ where
                 let start = Instant::now();
                 while start.elapsed() < Duration::from_millis(500) {}
 
-                // NOTE: `INA3221 VBUS` is known to read high on some boards (see Plan #0007).
+                // NOTE: `INA3221 VBUS` is known to read high on some boards (see Plan ina3221-vbus-offset).
                 // Temporary policy: allow ±20% window for bring-up, but only enforce the lower-bound
                 // to avoid false negatives caused by VBUS offset.
                 const VBUS_TOL_PCT: u32 = 20;

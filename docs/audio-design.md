@@ -102,7 +102,7 @@
 - 共享播放核心：`../firmware/src/audio.rs`
 - 运行时信号快照：`../firmware/src/output/mod.rs`
 - 运行时资产（固件侧打包）：`../firmware/assets/audio/test-fw-cues/`
-- 验证步骤：`../firmware/README.md`（见“运行时音效服务（Plan #h43mk）”章节）
+- 验证步骤：`../firmware/README.md`（见“运行时音效服务（Plan main-firmware-runtime-audio-cues）”章节）
 
 运行时调度冻结为：
 
