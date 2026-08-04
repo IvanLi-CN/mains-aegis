@@ -393,7 +393,7 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
 - 自检页只有在本模式必需模块全部 clear 时才会切到 Dashboard；若 `BMS` 仍为 `LIMIT`，页面继续停留在 `Variant C` 并显示运行期真实数据。
 - 页面切换：本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard
 - 显示链路诊断：前面板 ready 后，全局按住 `CENTER` 约 `800ms` 会打印 `ui: display_diag ...` 并立即重走一次 `TCA_RESET# -> TCA6408A -> RES/TP_RESET/CS -> GC9307` 初始化链路；若当前位于 Dashboard 详情页，短按返回 Home 仍会先触发，继续按住才会进入长按诊断。
-- 自动熄屏：测试版空闲 `30s` 写 GC9307 `0x53/0x51` 辅助亮度寄存器，并通过 `BLK(GPIO13)` LEDC PWM 降到 `12%` 背光；`35s` 将背光 PWM 降到 `0%`，`40s` 发送 `Display OFF + Sleep IN`；触摸或任意按键唤醒并恢复 `100%` 背光后重绘。正式默认目标为 `180s / 240s / 245s`，待硬件确认后恢复。
+- 自动熄屏：主固件空闲 `180s` 写 GC9307 `0x53/0x51` 辅助亮度寄存器，并通过 `BLK(GPIO13)` LEDC PWM 降到 `12%` 背光；`240s` 将背光 PWM 降到 `0%`，`245s` 发送 `Display OFF + Sleep IN`；触摸或任意按键唤醒并恢复 `100%` 背光后重绘。`30s / 35s / 40s` 压缩时序仅用于纯逻辑测试。
 - 异常保持亮屏：低电、热压力、保护、模块故障、过压/过流等运行时用户可处理或需要避险的状态会设置 `attention_hold`，保持或恢复全亮并重置 idle 计时；USB-PD recovery、充电策略等待、单纯输入源缺失不阻断熄屏。
 - Dashboard 视觉基线：`Variant B`（仅用于 Dashboard 场景）
 - `Variant C` 重定位为“高级设置/自检页”风格，不作为默认 Dashboard
@@ -695,8 +695,19 @@ devd API 流程是 `scan -> bind -> connect -> identity -> artifact/select -> mo
 - 温度退化：`TMP` 缺失时可退化到 `BQ40` 温度；若 `TMP + BQ40` 全部缺失才直接 `high(100%)`
 - `tach` 看门狗：命令为运行态且 `2s` 内没有 `FAN_TACH` 脉冲时，记录故障并强制 `high`
 - `tach` 故障恢复：需要确认到连续脉冲活动，单个毛刺边沿不会解除强制 `high`
+- `tach` 每转脉冲数：风扇配件相关的构建期参数；默认 `2 PPR`，可用 `--features fan-tach-1-ppr` 或 `--features fan-tach-2-ppr` 显式选择，两者不可同时启用
 - RPM 显示：前面板使用更长采样窗 + 平滑后的显示值，避免短窗脉冲把 `RPM` 放大成失真尖峰
 - PWM 失败兜底：若 `FAN_VSET_PWM` 的 LEDC 初始化失败，或运行期 duty 更新失败，固件会直接拉高 `FAN_EN`，并把 `FAN_VSET_PWM` 切到低电平 fail-safe，避免“日志还在跑但风扇硬件失效”
+
+风扇配件确定后按其 tach 规格选择构建参数：
+
+```bash
+# 1 pulse per revolution
+cargo build --release --bin esp-firmware --features fan-tach-1-ppr
+
+# 2 pulses per revolution（与未指定 feature 的默认构建等价）
+cargo build --release --bin esp-firmware --features fan-tach-2-ppr
+```
 
 ### 主动热保护（正常构建）
 

@@ -168,8 +168,7 @@ const FAN_STEP_UP_LARGE_PWM_PCT: u8 = 15;
 const FAN_CONTROL_INTERVAL: Duration = Duration::from_millis(500);
 const FAN_TACH_TIMEOUT: Duration = Duration::from_secs(2);
 const TMP_HW_PROTECT_TEST_MODE: bool = cfg!(feature = "tmp-hw-protect-test");
-// Temporary hardware assumption until the exact fan tach characteristics are confirmed.
-const FAN_TACH_PULSES_PER_REV: u8 = 2;
+const FAN_TACH_PULSES_PER_REV: u8 = esp_firmware::fan::tach_pulses_per_rev_from_features();
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct AppliedFanOutput {

@@ -13,7 +13,7 @@
 - 无操作后自动进入低亮、关背光、显示控制器 sleep 三段状态。
 - 任意触摸或五向按键可唤醒，唤醒后恢复全亮并重绘当前页面。
 - 运行时 warning/error 类用户关注状态保持全亮，不进入 idle 降级。
-- 当前实现采用测试时序：`30s` 低亮、`35s` 关背光、`40s` sleep；硬件确认后恢复正式默认 `180s / 240s / 245s`。
+- 当前主固件采用正式时序：`180s` 低亮、`240s` 关背光、`245s` sleep；压缩的 `30s / 35s / 40s` 时序仅用于纯逻辑测试。
 
 ### Non-goals
 
@@ -38,9 +38,9 @@
 ## 行为规格
 
 - `Awake`：正常全亮，GC9307 `0x53` 使能 brightness block/backlight，DBV `0x51=0xFF`，`BLK(GPIO13)` 通过 LEDC PWM 输出 `100%` 亮度。
-- `Dimmed`：空闲 `30s` 后写 GC9307 `0x53` 使能 dimming/backlight，DBV `0x51=0x40` 作为辅助；实际低亮由 `BLK(GPIO13)` LEDC PWM 输出 `12%` 亮度。
-- `BacklightOff`：空闲 `35s` 后将 `BLK(GPIO13)` LEDC PWM 输出降到 `0%` 亮度。
-- `Sleeping`：空闲 `40s` 后发送 `Display OFF (0x28)` 和 `Sleep IN (0x10)`。
+- `Dimmed`：空闲 `180s` 后写 GC9307 `0x53` 使能 dimming/backlight，DBV `0x51=0x40` 作为辅助；实际低亮由 `BLK(GPIO13)` LEDC PWM 输出 `12%` 亮度。
+- `BacklightOff`：空闲 `240s` 后将 `BLK(GPIO13)` LEDC PWM 输出降到 `0%` 亮度。
+- `Sleeping`：空闲 `245s` 后发送 `Display OFF (0x28)` 和 `Sleep IN (0x10)`。
 - 唤醒：触摸或任意按键在非 `Awake` 状态下只负责唤醒，不透传为业务点击；从 sleep 唤醒时发送 `Sleep OUT (0x11)`，等待 `120ms` 后发送 `Display ON (0x29)`，再恢复 DBV/背光并重绘。
 - `attention_hold=true` 时立即保持/恢复 `Awake`，并把 idle 计时重置到当前时刻；解除后重新从完整阈值开始计时。
 - 自检页因硬件未就绪、BMS 恢复未完成或其他进入 dashboard 条件不满足而停留时，必须视为 `attention_hold=true`，避免自检页仍需用户查看/处理时进入 dim/backlight-off/sleep；进入 dashboard 后，后续自检快照阻塞条件不得继续覆盖正常 dashboard idle 熄屏。
@@ -48,9 +48,9 @@
 
 ## 验收标准
 
-- Host unit tests 覆盖 `30s / 35s / 40s` 三段阈值、触摸/按键唤醒、attention hold 阻断与解除后重新计时。
+- Host unit tests 使用压缩的 `30s / 35s / 40s` 时序覆盖三段状态、触摸/按键唤醒、attention hold 阻断与解除后重新计时，并断言正式默认值为 `180s / 240s / 245s`。
 - 主固件 compile check 通过。
-- 代码中保留正式默认常量 `180s / 240s / 245s`，后续恢复时只需替换策略常量。
+- 主固件构造 `DisplayPowerController` 时必须使用正式默认时序。
 
 ## References
 

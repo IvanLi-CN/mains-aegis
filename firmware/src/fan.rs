@@ -1,9 +1,22 @@
+#[cfg(all(feature = "fan-tach-1-ppr", feature = "fan-tach-2-ppr"))]
+compile_error!("Select only one fan tach feature: fan-tach-1-ppr or fan-tach-2-ppr.");
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FanLevel {
     Off,
     Low,
     Mid,
     High,
+}
+
+pub const FAN_TACH_DEFAULT_PULSES_PER_REV: u8 = 2;
+
+pub const fn tach_pulses_per_rev_from_features() -> u8 {
+    if cfg!(feature = "fan-tach-1-ppr") {
+        1
+    } else {
+        FAN_TACH_DEFAULT_PULSES_PER_REV
+    }
 }
 
 impl FanLevel {
@@ -346,7 +359,21 @@ fn select_control_temp(
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, Controller, FanLevel, Input, TempSource};
+    use super::{
+        tach_pulses_per_rev_from_features, Config, Controller, FanLevel, Input, TempSource,
+        FAN_TACH_DEFAULT_PULSES_PER_REV,
+    };
+
+    #[test]
+    fn tach_pulses_per_rev_matches_build_features() {
+        assert_eq!(FAN_TACH_DEFAULT_PULSES_PER_REV, 2);
+
+        #[cfg(feature = "fan-tach-1-ppr")]
+        assert_eq!(tach_pulses_per_rev_from_features(), 1);
+
+        #[cfg(not(feature = "fan-tach-1-ppr"))]
+        assert_eq!(tach_pulses_per_rev_from_features(), 2);
+    }
 
     fn cfg() -> Config {
         Config {
