@@ -10,8 +10,8 @@ tags:
   - diag-snapshot
 status: active
 related_specs:
-  - docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md
-  - docs/specs/p8k3d-mains-aegis-devd/SPEC.md
+  - docs/specs/bq40-self-check-result-dialogs/SPEC.md
+  - docs/specs/mains-aegis-devd/SPEC.md
 ---
 
 # BQ40 EMSHUT recovery must be decoded before XDSG
@@ -61,5 +61,5 @@ BQ40Z50 can exit EMSHUT through documented mechanisms, including a valid SMBus c
 ## References
 
 - `docs/manuals/BQ40Z50-R2-TRM/BQ40Z50-R2-TRM.md`
-- `docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md`
-- `docs/specs/p8k3d-mains-aegis-devd/SPEC.md`
+- `docs/specs/bq40-self-check-result-dialogs/SPEC.md`
+- `docs/specs/mains-aegis-devd/SPEC.md`

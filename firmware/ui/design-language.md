@@ -118,11 +118,11 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 
 ### 3.5 Visual previews
 
-- Color preview: `../../docs/specs/hg3dw-front-panel-visual-language/assets/color-preview.svg`
-- Typography preview: `../../docs/specs/hg3dw-front-panel-visual-language/assets/typography-preview.svg`
+- Color preview: `../../docs/specs/front-panel-visual-language/assets/color-preview.svg`
+- Typography preview: `../../docs/specs/front-panel-visual-language/assets/typography-preview.svg`
 
-![Front panel color preview](../../docs/specs/hg3dw-front-panel-visual-language/assets/color-preview.svg)
-![Front panel typography preview](../../docs/specs/hg3dw-front-panel-visual-language/assets/typography-preview.svg)
+![Front panel color preview](../../docs/specs/front-panel-visual-language/assets/color-preview.svg)
+![Front panel typography preview](../../docs/specs/front-panel-visual-language/assets/typography-preview.svg)
 
 ## 4. State mapping contract
 
@@ -181,4 +181,4 @@ Color token 采用语义命名；具体值由变体 palette 提供。
 - 页面布局与模块划分：`dashboard-design.md`、`self-check-design.md`
 - 组件职责边界：`component-contracts.md`
 - 视觉验收执行：`visual-regression-checklist.md`
-- 规格追踪：`../../docs/specs/hg3dw-front-panel-visual-language/SPEC.md`
+- 规格追踪：`../../docs/specs/front-panel-visual-language/SPEC.md`

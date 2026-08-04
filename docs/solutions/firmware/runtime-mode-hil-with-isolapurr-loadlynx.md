@@ -11,15 +11,15 @@ tags:
   - loadlynx
 status: active
 related_specs:
-  - docs/specs/xjpvj-runtime-mode-switching/SPEC.md
-  - docs/specs/p8k3d-mains-aegis-devd/SPEC.md
+  - docs/specs/runtime-mode-switching/SPEC.md
+  - docs/specs/mains-aegis-devd/SPEC.md
 ---
 
 # Runtime-mode Power Path Validation with IsolaPurr and LoadLynx
 
 ## Context
 
-`#xjpvj` runtime-mode work needs one bench that can independently stimulate:
+`runtime-mode-switching` runtime-mode work needs one bench that can independently stimulate:
 
 - UPS input side
 - UPS output load side
@@ -535,7 +535,7 @@ Current focused live proof:
 ## References
 
 - `docs/hil-runtime-mode-switching.md`
-- `docs/specs/xjpvj-runtime-mode-switching/SPEC.md`
-- `docs/specs/xjpvj-runtime-mode-switching/IMPLEMENTATION.md`
+- `docs/specs/runtime-mode-switching/SPEC.md`
+- `docs/specs/runtime-mode-switching/IMPLEMENTATION.md`
 - `tools/hil/advanced_power_12v_runner.py`
 - `tools/hil/render_voltage_chart_html.py`

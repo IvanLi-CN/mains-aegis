@@ -1,0 +1,19 @@
+# BQ40 主板 DF 保护基线 实现状态
+
+> 当前有效规范仍以 `./SPEC.md` 为准；这里记录实现覆盖、交付进度与 rollout 相关事实。
+
+## Current Status
+
+- Lifecycle: archived
+- Implementation: 见下方迁移状态与覆盖记录。
+
+## Migrated Implementation Record
+
+- Status: 已完成
+- Created: 2026-04-03
+- Last: 2026-06-04
+
+## References
+
+- `./SPEC.md`
+- `./HISTORY.md`

@@ -71,7 +71,7 @@ def detail_review_images() -> tuple[ReviewImage, ...]:
 
 
 def menu_beeper_review_images() -> tuple[ReviewImage, ...]:
-    base = repo_root() / "docs" / "specs" / "6qrjs-front-panel-industrial-ui-preview" / "assets"
+    base = repo_root() / "docs" / "specs" / "front-panel-industrial-ui-preview" / "assets"
     return (
         ReviewImage("Home Focus / Output", base / "dashboard-home-focus-output.png"),
         ReviewImage("Home Focus / Dischg", base / "dashboard-home-focus-battery-flow.png"),
@@ -86,7 +86,7 @@ def menu_beeper_review_images() -> tuple[ReviewImage, ...]:
 
 
 def menu_concept_review_images() -> tuple[ReviewImage, ...]:
-    base = repo_root() / "docs" / "specs" / "6qrjs-front-panel-industrial-ui-preview" / "assets"
+    base = repo_root() / "docs" / "specs" / "front-panel-industrial-ui-preview" / "assets"
     return (
         ReviewImage("A. Plate", base / "dashboard-menu-concept-dense-badge.png"),
         ReviewImage("B. Bar", base / "dashboard-menu-concept-dock-bar.png"),
@@ -118,7 +118,7 @@ def review_profile(name: str) -> ReviewProfile:
 
 
 def menu_beeper_storyboard_rows() -> tuple[StoryboardRow, ...]:
-    base = repo_root() / "docs" / "specs" / "6qrjs-front-panel-industrial-ui-preview" / "assets"
+    base = repo_root() / "docs" / "specs" / "front-panel-industrial-ui-preview" / "assets"
     return (
         StoryboardRow(
             title="1. DOWN on the bottom card opens MENU",

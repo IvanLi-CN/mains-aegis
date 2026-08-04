@@ -46,7 +46,7 @@ Use `$mains-aegis-user-operations` instead only when the owner explicitly asks f
 
 ## Documentation requirements
 
-- Update `docs/specs/p8k3d-mains-aegis-devd/SPEC.md` when changing devd contracts.
-- Update `docs/specs/7jqrq-mains-aegis-cli-devd-alignment/SPEC.md` when changing CLI/devd/IPC/bridge/release alignment.
+- Update `docs/specs/mains-aegis-devd/SPEC.md` when changing devd contracts.
+- Update `docs/specs/mains-aegis-cli-devd-alignment/SPEC.md` when changing CLI/devd/IPC/bridge/release alignment.
 - Update `docs/firmware-catalog.md` when changing manifest semantics.
 - Update `AGENTS.md` if device operation permissions or denials change.

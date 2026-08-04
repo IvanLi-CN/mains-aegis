@@ -1,6 +1,6 @@
 # mcu-agentd project config (repo root)
 #
-# Requirement (Plan #0001): `mcu-agentd.toml` must live in the project root so running
+# Requirement (Spec esp-rs-no-std-firmware-bootstrap): `mcu-agentd.toml` must live in the project root so running
 # `mcu-agentd ...` from the root works without extra flags.
 
 [project]

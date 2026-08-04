@@ -18,6 +18,10 @@ force-min-charge = []
 bms-dual-probe-diag = []
 # Disable MCU-driven fan and software thermal derating/shutdown while keeping TMP/THERM_KILL_N observation active.
 tmp-hw-protect-test = []
+# Optional fan tach calibration. When neither selector is set, firmware defaults to 2 pulses per
+# revolution. Enabling both selectors is forbidden at compile time.
+fan-tach-1-ppr = []
+fan-tach-2-ppr = []
 # Test firmware gate (prevents default cargo build/check from forcing test-fw feature selection).
 test-fw = []
 tps-test-fw = []

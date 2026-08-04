@@ -135,7 +135,7 @@ const FRONT_PANEL_BACKLIGHT_PWM_OFF_OUTPUT_HIGH_PCT: u8 = 100;
 // Do not assert THERM_KILL_N during normal bring-up.
 const FORCE_THERM_KILL_N_ASSERTED: bool = false;
 
-// TMP112A alert settings (Plan v5hze).
+// TMP112A alert settings (Spec tps-tmp112-alert-overtemp-hold).
 const TMP112_OUT_A_ADDR: u8 = 0x48;
 const TMP112_OUT_B_ADDR: u8 = 0x49;
 const TMP112_THIGH_C_X16: i16 = 62 * 16;
@@ -168,8 +168,7 @@ const FAN_STEP_UP_LARGE_PWM_PCT: u8 = 15;
 const FAN_CONTROL_INTERVAL: Duration = Duration::from_millis(500);
 const FAN_TACH_TIMEOUT: Duration = Duration::from_secs(2);
 const TMP_HW_PROTECT_TEST_MODE: bool = cfg!(feature = "tmp-hw-protect-test");
-// Temporary hardware assumption until the exact fan tach characteristics are confirmed.
-const FAN_TACH_PULSES_PER_REV: u8 = 2;
+const FAN_TACH_PULSES_PER_REV: u8 = esp_firmware::fan::tach_pulses_per_rev_from_features();
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct AppliedFanOutput {
@@ -889,7 +888,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         defmt::warn!("fan: pwm unavailable; forcing fan_en high + vset low for fail-safe cooling");
     }
 
-    // Front panel: I2C2 + SPI display bring-up (Plan #3kz8p).
+    // Front panel: I2C2 + SPI display bring-up (Spec front-panel-industrial-ui-preview).
     // Keep these variables alive for the whole program.
     let i2c2_config = I2cConfig::default()
         .with_frequency(Rate::from_khz(400))

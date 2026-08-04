@@ -10,8 +10,8 @@ tags:
   - usb-pd
 status: active
 related_specs:
-  - docs/specs/eu2b8-bq25792-charge-policy/SPEC.md
-  - docs/specs/zp4cg-manual-charge-dashboard/SPEC.md
+  - docs/specs/bq25792-charge-policy/SPEC.md
+  - docs/specs/manual-charge-dashboard/SPEC.md
 ---
 
 # Charger under-delivery diagnostics

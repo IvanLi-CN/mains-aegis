@@ -10,6 +10,8 @@ path = "src/lib.rs"
 [features]
 default = []
 net_http = []
+fan-tach-1-ppr = []
+fan-tach-2-ppr = []
 no-pd-sink-5v = []
 no-pd-sink-9v = []
 no-pd-sink-12v = []

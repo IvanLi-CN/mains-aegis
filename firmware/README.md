@@ -98,7 +98,7 @@ cargo build --release --bin esp-firmware --features tmp-hw-protect-test
 > 注意：本工程将 target / toolchain 配置隔离在 `firmware/` 内，不要求仓库根目录存在 Rust workspace。
 
 > 备注：当前固件将 CPU 频率固定为 `160MHz`（early bring-up 更稳），避免上电初始化阶段的偶发异常影响验证。
-> 备注：本计划的音频素材已收敛为 PCM-only（`WAV(PCM16LE)`），固件侧不再包含 ADPCM 解码路径。
+> 备注：本规格的音频素材已收敛为 PCM-only（`WAV(PCM16LE)`），固件侧不再包含 ADPCM 解码路径。
 
 ## USB CDC / Web Serial 控制通道
 
@@ -155,7 +155,7 @@ bash scripts/run-host-unit-tests.sh
 
 > `cd firmware && cargo test` 不是权威路径。`firmware` crate 默认 target 固定为 `xtensa-esp32s3-none-elf`，因此 CI 中的纯逻辑验证统一走 host test script；设备侧 `firmware` 只做 `fmt` / `clippy` / `build`。
 
-## 运行时音效服务（Plan #h43mk）
+## 运行时音效服务（Spec main-firmware-runtime-audio-cues）
 
 主固件已改为常驻运行时音效服务；上电进入自检后就会请求一次 `boot_startup`，音频播放与自检并行推进，后续由主循环按电源/BMS/保护状态驱动 cue 播放，不再阻塞播放 6 段 Demo playlist。
 
@@ -205,7 +205,7 @@ mcu-agentd monitor esp --reset
 - 上电后只请求一次 `boot_startup`，允许在自检期间开始播放。
 - 在市电丢失/恢复、充电开始/完成、低电/保护/过压/过流等状态切换时，能听到对应 cue。
 
-## TPS55288 双路输出控制（Plan #0005）
+## TPS55288 双路输出控制（Spec tps55288-control）
 
 本固件在启动时会通过 `I2C1` 对两颗 `TPS55288` 做最小 bring-up，并冻结一个“默认 profile”（用于上板联调与回归）。模块 SoT 见 `docs/modules/regulated-output.md`。
 
@@ -246,7 +246,7 @@ mcu-agentd monitor esp --reset
 - 超出预算后会锁存为运行期 `tps_config_failed`，停止无限整套重配，等待显式 restore
 - `invalid_config / out_of_range` 这类非瞬态错误不进入延迟重试，直接锁存
 
-## INA3221 遥测（Plan #0005）
+## INA3221 遥测（Spec tps55288-control）
 
 固件会初始化 `INA3221 (addr=0x40)` 并每 `500ms` 输出两行遥测（`out_a/out_b` 各一行）。`CH1/CH2` 属于稳压输出模块，`CH3` 只作为输入侧 `VIN` 共享观测，不改变输出模块的通道契约。
 
@@ -279,7 +279,7 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0
 
 若某个字段读取失败，该字段会变为 `err(<kind>)`（例如 `err(i2c_nack)`），但该行仍会输出。
 
-## TMP112A 温度采样（Plan #0006）
+## TMP112A 温度采样（Spec tps-tmp112-temperature-reading）
 
 固件会在每行 `telemetry ...` 末尾追加 TPS 热点温度与 `THERM_KILL_N` 电平，用于 bring-up 与回归时快速对齐“电压/电流/温度”。
 
@@ -310,7 +310,7 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
 1) 正常路径：`tmp_addr/temp_c_x16/therm_kill_n` 均可见，且 `temp_c_x16/16` 与环境温度趋势一致。
 2) 断开/缺件路径：拔掉/不焊其中一颗 `TMP112A` 后，固件不 panic；对应通道输出 `temp_c_x16=err(i2c_...)`，但仍保持 `500ms` 两行 `telemetry ...` 稳定输出。
 
-## TMP112A 过温告警（Plan v5hze）
+## TMP112A 过温告警（Spec tps-tmp112-alert-overtemp-hold）
 
 固件会在启动阶段对两颗 `TMP112A(0x48/0x49)` 写入 `ALERT` 配置，使 `ALERT -> THERM_KILL_N` 满足“过温时保持输出（电平型）”的硬件级保护语义：
 
@@ -358,13 +358,13 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
 
 若确需改动冻结项，必须先在开发文档中记录变更目的、范围、回退方式与批准结论，然后才能执行。
 
-## 前面板屏幕显示（Spec 6qrjs / 7n4qd）
+## 前面板屏幕显示（Spec front-panel-industrial-ui-preview / mcu-self-check-live-panel）
 
 固件会在启动阶段尝试 bring-up 前面板 TFT 屏幕（`GC9307`，有效显示区 `320x172`，横屏，SPI）并渲染工业仪表风 UI：
 
 - Dashboard 模块设计：`firmware/ui/dashboard-design.md`
 - Self-check 模块设计：`firmware/ui/self-check-design.md`
-- 规格追溯：`docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md` 与 `docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`
+- 规格追溯：`docs/specs/mcu-self-check-live-panel/SPEC.md` 与 `docs/specs/front-panel-industrial-ui-preview/SPEC.md`
 - Dashboard 工作模式（项目口径）：
   - `BYPASS`（关闭）：不提供 UPS 功能，输入直通输出（bypass）
   - `STANDBY`（待机）：输入存在，TPS55288 无实际输出电流
@@ -393,7 +393,7 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
 - 自检页只有在本模式必需模块全部 clear 时才会切到 Dashboard；若 `BMS` 仍为 `LIMIT`，页面继续停留在 `Variant C` 并显示运行期真实数据。
 - 页面切换：本版本禁用 `CENTER` 长按切页，不再从自检页切回 Dashboard
 - 显示链路诊断：前面板 ready 后，全局按住 `CENTER` 约 `800ms` 会打印 `ui: display_diag ...` 并立即重走一次 `TCA_RESET# -> TCA6408A -> RES/TP_RESET/CS -> GC9307` 初始化链路；若当前位于 Dashboard 详情页，短按返回 Home 仍会先触发，继续按住才会进入长按诊断。
-- 自动熄屏：测试版空闲 `30s` 写 GC9307 `0x53/0x51` 辅助亮度寄存器，并通过 `BLK(GPIO13)` LEDC PWM 降到 `12%` 背光；`35s` 将背光 PWM 降到 `0%`，`40s` 发送 `Display OFF + Sleep IN`；触摸或任意按键唤醒并恢复 `100%` 背光后重绘。正式默认目标为 `180s / 240s / 245s`，待硬件确认后恢复。
+- 自动熄屏：主固件空闲 `180s` 写 GC9307 `0x53/0x51` 辅助亮度寄存器，并通过 `BLK(GPIO13)` LEDC PWM 降到 `12%` 背光；`240s` 将背光 PWM 降到 `0%`，`245s` 发送 `Display OFF + Sleep IN`；触摸或任意按键唤醒并恢复 `100%` 背光后重绘。`30s / 35s / 40s` 压缩时序仅用于纯逻辑测试。
 - 异常保持亮屏：低电、热压力、保护、模块故障、过压/过流等运行时用户可处理或需要避险的状态会设置 `attention_hold`，保持或恢复全亮并重置 idle 计时；USB-PD recovery、充电策略等待、单纯输入源缺失不阻断熄屏。
 - Dashboard 视觉基线：`Variant B`（仅用于 Dashboard 场景）
 - `Variant C` 重定位为“高级设置/自检页”风格，不作为默认 Dashboard
@@ -401,7 +401,7 @@ telemetry ch=out_b addr=0x75 vset_mv=12000 vbus_mv=12000 current_ma=0 ... tmp_ad
   - `GC9307`、`TCA6408A`、`FUSB302`、`INA3221`、`BQ25792`
   - `BQ40Z50`、`TPS55288-A`、`TPS55288-B`、`TMP112-A`、`TMP112-B`
 - Dashboard 当前验收口径固定为 `Variant B = Neutral`；`Variant A/D` 仅保留为历史参考样式
-- Dashboard 间距与行距冻结参数见：`firmware/ui/dashboard-design.md`（来源追溯仍在 `docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md`）
+- Dashboard 间距与行距冻结参数见：`firmware/ui/dashboard-design.md`（来源追溯仍在 `docs/specs/front-panel-industrial-ui-preview/SPEC.md`）
 
 固件 UI 渲染图（文档内直显）：
 
@@ -672,7 +672,7 @@ devd API 流程是 `scan -> bind -> connect -> identity -> artifact/select -> mo
 
 ## 烧录与监视（legacy/fallback：`mcu-agentd`，从仓库根目录运行）
 
-## 风扇温控与故障保护（Spec #ygmqn）
+## 风扇温控与故障保护（Spec fan-control）
 
 固件会在运行期接管 `GPIO35(FAN_EN)`、`GPIO36(FAN_VSET_PWM)` 与 `GPIO34(FAN_TACH)`，形成一个以 `TMP112A/B + BQ40 board/battery/TS1..TS4` 最高温为输入的闭环风扇策略；同时支持 `tmp-hw-protect-test` 测试构建，用于专测 TMP 硬件温度保护链路。
 
@@ -695,8 +695,19 @@ devd API 流程是 `scan -> bind -> connect -> identity -> artifact/select -> mo
 - 温度退化：`TMP` 缺失时可退化到 `BQ40` 温度；若 `TMP + BQ40` 全部缺失才直接 `high(100%)`
 - `tach` 看门狗：命令为运行态且 `2s` 内没有 `FAN_TACH` 脉冲时，记录故障并强制 `high`
 - `tach` 故障恢复：需要确认到连续脉冲活动，单个毛刺边沿不会解除强制 `high`
+- `tach` 每转脉冲数：风扇配件相关的构建期参数；默认 `2 PPR`，可用 `--features fan-tach-1-ppr` 或 `--features fan-tach-2-ppr` 显式选择，两者不可同时启用
 - RPM 显示：前面板使用更长采样窗 + 平滑后的显示值，避免短窗脉冲把 `RPM` 放大成失真尖峰
 - PWM 失败兜底：若 `FAN_VSET_PWM` 的 LEDC 初始化失败，或运行期 duty 更新失败，固件会直接拉高 `FAN_EN`，并把 `FAN_VSET_PWM` 切到低电平 fail-safe，避免“日志还在跑但风扇硬件失效”
+
+风扇配件确定后按其 tach 规格选择构建参数：
+
+```bash
+# 1 pulse per revolution
+cargo build --release --bin esp-firmware --features fan-tach-1-ppr
+
+# 2 pulses per revolution（与未指定 feature 的默认构建等价）
+cargo build --release --bin esp-firmware --features fan-tach-2-ppr
+```
 
 ### 主动热保护（正常构建）
 

@@ -13,9 +13,9 @@ This directory consolidates the current confirmed front panel UI design view fro
   - Dashboard detail design: [dashboard-detail-design.md](dashboard-detail-design.md)
   - Self-check module design: [self-check-design.md](self-check-design.md)
 - Host-side UI (future implementation): reserved, not frozen in this directory yet
-- Runtime behavior baseline: [../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md](../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md)
-- Visual freeze baseline: [../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md](../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md)
-- BQ40 result dialog baseline: [../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md](../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md)
+- Runtime behavior baseline: [../../docs/specs/mcu-self-check-live-panel/SPEC.md](../../docs/specs/mcu-self-check-live-panel/SPEC.md)
+- Visual freeze baseline: [../../docs/specs/front-panel-industrial-ui-preview/SPEC.md](../../docs/specs/front-panel-industrial-ui-preview/SPEC.md)
+- BQ40 result dialog baseline: [../../docs/specs/bq40-self-check-result-dialogs/SPEC.md](../../docs/specs/bq40-self-check-result-dialogs/SPEC.md)
 
 ## Assets
 
@@ -29,8 +29,8 @@ This directory consolidates the current confirmed front panel UI design view fro
   - `assets/self-check-c-module-map.png`
   - Used in module-level docs (`dashboard-design.md`, `self-check-design.md`)
 - Design-language previews (2):
-  - `../../docs/specs/hg3dw-front-panel-visual-language/assets/color-preview.svg`
-  - `../../docs/specs/hg3dw-front-panel-visual-language/assets/typography-preview.svg`
+  - `../../docs/specs/front-panel-visual-language/assets/color-preview.svg`
+  - `../../docs/specs/front-panel-visual-language/assets/typography-preview.svg`
 - All assets are `320x172` and offline-readable.
 
 ## Preview (representative final renders)
@@ -48,11 +48,11 @@ This directory consolidates the current confirmed front panel UI design view fro
 6. [self-check-design.md](self-check-design.md)
 7. [visual-regression-checklist.md](visual-regression-checklist.md)
 8. Source specs for traceability:
-   - [../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md](../../docs/specs/7n4qd-mcu-self-check-live-panel/SPEC.md)
-   - [../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md](../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md)
-   - [../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md](../../docs/specs/5cvrj-bq40-self-check-result-dialogs/SPEC.md)
-   - [../../docs/specs/hg3dw-front-panel-visual-language/SPEC.md](../../docs/specs/hg3dw-front-panel-visual-language/SPEC.md)
-   - [../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md](../../docs/specs/6qrjs-front-panel-industrial-ui-preview/SPEC.md)
+   - [../../docs/specs/mcu-self-check-live-panel/SPEC.md](../../docs/specs/mcu-self-check-live-panel/SPEC.md)
+   - [../../docs/specs/bq40-self-check-result-dialogs/SPEC.md](../../docs/specs/bq40-self-check-result-dialogs/SPEC.md)
+   - [../../docs/specs/bq40-self-check-result-dialogs/SPEC.md](../../docs/specs/bq40-self-check-result-dialogs/SPEC.md)
+   - [../../docs/specs/front-panel-visual-language/SPEC.md](../../docs/specs/front-panel-visual-language/SPEC.md)
+   - [../../docs/specs/front-panel-industrial-ui-preview/SPEC.md](../../docs/specs/front-panel-industrial-ui-preview/SPEC.md)
 
 ## Notes
 

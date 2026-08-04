@@ -633,9 +633,9 @@ Current accepted suite:
 - summary: `tools/hil/reports/formal-12v-19v-four-scenes-current-20260629T024800Z/suite-summary.json`
 - overview: `tools/hil/reports/formal-12v-19v-four-scenes-current-20260629T024800Z/suite-overview.html`
 - tracked evidence summary:
-  `docs/specs/xjpvj-runtime-mode-switching/evidence/formal-12v-19v-four-scenes-current-20260629T024800Z-suite-summary.json`
+  `docs/specs/runtime-mode-switching/evidence/formal-12v-19v-four-scenes-current-20260629T024800Z-suite-summary.json`
 - tracked evidence overview:
-  `docs/specs/xjpvj-runtime-mode-switching/evidence/formal-12v-19v-four-scenes-current-20260629T024800Z-suite-overview.html`
+  `docs/specs/runtime-mode-switching/evidence/formal-12v-19v-four-scenes-current-20260629T024800Z-suite-overview.html`
 - transport: UPS `cli+ipc+usb`, LoadLynx `cli+ipc+usb`, IsolaPurr `cli+ipc+usb`
 - `12V assist_path`: `3900mA`, `valid_for_signoff`, `5.103Hz`,
   max gap `0.227s`
@@ -662,9 +662,9 @@ Historical accepted suite retained for comparison:
 - summary: `tools/hil/reports/formal-12v-19v-four-scenes-cli-r4/suite-summary.json`
 - overview: `tools/hil/reports/formal-12v-19v-four-scenes-cli-r4/suite-overview.html`
 - tracked evidence summary:
-  `docs/specs/xjpvj-runtime-mode-switching/evidence/formal-12v-19v-four-scenes-cli-r4-suite-summary.json`
+  `docs/specs/runtime-mode-switching/evidence/formal-12v-19v-four-scenes-cli-r4-suite-summary.json`
 - tracked evidence overview:
-  `docs/specs/xjpvj-runtime-mode-switching/evidence/formal-12v-19v-four-scenes-cli-r4-suite-overview.html`
+  `docs/specs/runtime-mode-switching/evidence/formal-12v-19v-four-scenes-cli-r4-suite-overview.html`
 
 The current accepted suite also proves the safety fix that `DCIN` stays
 unpowered until the live UPS `output_profile` and `rated_vout_mv` are read from

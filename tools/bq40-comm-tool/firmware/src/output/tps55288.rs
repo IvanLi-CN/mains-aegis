@@ -44,7 +44,7 @@ impl OutputChannel {
     }
 
     pub const fn ina_ch(self) -> ina3221::Channel {
-        // Frozen by docs/plan/0005:tps55288-control/contracts/config.md:
+        // Frozen by docs/specs/tps55288-control/contracts/config.md:
         // INA3221 CH2 -> OUT-A, CH1 -> OUT-B
         match self {
             OutputChannel::OutA => ina3221::Channel::Ch2,
@@ -473,7 +473,7 @@ pub fn print_telemetry_line<I2C>(
         (_, TelemetryValue::Err(e)) => TelemetryValue::Err(e),
     };
 
-    // Keep the first fields stable per docs/plan/0005:tps55288-control/contracts/cli.md.
+    // Keep the first fields stable per docs/specs/tps55288-control/contracts/cli.md.
     // Extra fields are appended for bring-up/debugging.
     let tmp_addr = ch.tmp_addr();
     let tmp_addr_value = TelemetryU8::Value(tmp_addr);

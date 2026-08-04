@@ -136,7 +136,7 @@
 
 ![Dashboard Detail - Home](assets/dashboard-b-detail-home.png)
 ![Dashboard Detail - Cells](assets/dashboard-b-detail-cells.png)
-![Dashboard Detail - BMS](../../docs/specs/f3c2g-dashboard-detail-drilldown/assets/dashboard-detail-bms.png)
+![Dashboard Detail - BMS](../../docs/specs/dashboard-detail-drilldown/assets/dashboard-detail-bms.png)
 ![Dashboard Detail - Battery Flow](assets/dashboard-b-detail-battery-flow.png)
 ![Dashboard Detail - Output](assets/dashboard-b-detail-output.png)
 ![Dashboard Detail - Charger](assets/dashboard-b-detail-charger.png)
@@ -148,8 +148,8 @@
 
 ## 7. Manual charge 冻结渲染图
 
-![Manual Charge - Default](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-default.png)
-![Manual Charge - Active](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-active.png)
-![Manual Charge - Stop Hold](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-stop-hold.png)
-![Manual Charge - Reset Auto](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-reset-auto.png)
-![Manual Charge - Blocked](../../docs/specs/zp4cg-manual-charge-dashboard/assets/manual-charge-blocked.png)
+![Manual Charge - Default](../../docs/specs/manual-charge-dashboard/assets/manual-charge-default.png)
+![Manual Charge - Active](../../docs/specs/manual-charge-dashboard/assets/manual-charge-active.png)
+![Manual Charge - Stop Hold](../../docs/specs/manual-charge-dashboard/assets/manual-charge-stop-hold.png)
+![Manual Charge - Reset Auto](../../docs/specs/manual-charge-dashboard/assets/manual-charge-reset-auto.png)
+![Manual Charge - Blocked](../../docs/specs/manual-charge-dashboard/assets/manual-charge-blocked.png)
