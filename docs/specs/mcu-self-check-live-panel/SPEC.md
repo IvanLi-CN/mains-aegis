@@ -71,13 +71,6 @@
   - `cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --mode standby --focus idle --out-dir <ABS_PATH>` 通过。
   - 预览产物 `preview.png` 分辨率为 `320x172`，`framebuffer.bin` 大小为 `110080` bytes。
 
-## 里程碑（Milestones）
-
-- [x] M1: 自检快照模型与进度回调落地。
-- [x] M2: `Variant C` 渲染切换到真实数据分支。
-- [x] M3: 启动顺序调整为“先显示自检页，再执行自检”。
-- [x] M4: 自检完成后常驻显示 + 运行期实时刷新。
-- [x] M5: 文档与构建验证同步完成。
 
 ## 关联规格
 

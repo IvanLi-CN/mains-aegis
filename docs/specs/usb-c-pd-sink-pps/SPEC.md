@@ -168,22 +168,6 @@ None。
 - 风险：当前完成态依赖 plain-serial + EEPROM breadcrumb 双证据链；若后续改动再次让 monitor 只停在 `boot: stage=main_loop_enter`，必须先修复观测链再判断 PPS 恢复行为。
 - 假设：USB-C 输入安全窗按 `20.5V`（`20V + 500mV ADC 容差窗`）执行；若后续硬件校准数据表明需要更窄或更宽，允许在不改 feature 口径的前提下微调实现常量。
 
-## 当前实机状态（2026-04-23）
-
-- 当前 `usb-c-pd-sink-pps` 已完成闭环：实机冷启动与真实 USB 热插拔后，`PPS` 都能在秒级恢复，不再出现“随机卡在 `CAP? + 5V` 或需要十几秒以上才恢复”的主故障。
-- 最新板上证据：
-  - reset 基线日志：`/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260422_204331_570.mon.ndjson`
-    - `2026-04-22T20:43:34.370942Z attach`
-    - `2026-04-22T20:43:36.036427Z contract active kind=pps`
-    - `attach -> PPS ≈ 1.67s`
-  - 主人实机热插拔复测：已确认“重新插拔已经能秒协商成功”，不再出现此前 3s / 10s / 45s 的双稳态恢复。
-- 最终根因收敛为两层：
-  - 协议恢复正确性：`partial RX` 被过早读取/flush、`retry/hard reset` 与 `missing source caps` 恢复链交叉打断，导致同一条会话里不断重复 `Get_Source_Cap / reset / rearm`。
-  - 主循环调度：`attached && contract=None` 窗口里，`usb_pd.tick()` 之前被 `power.tick()`、BMS/charger/UI 轮询拖慢，导致明明配置了 `400ms` 的恢复超时，却经常要到 `~1s` 之后才真正执行。
-- 最终修复由两部分组成：
-  - 协议层：只在完整帧 ready 后读取 RX；`partial RX + hard reset` 先 defer；`no-contract` 恢复维持 `PD_RESET + 等 Source Caps`，避免把协议层 reset 当作物理 detach 乱拆。
-  - 调度层：在 `/Users/ivan/Projects/Ivan/mains-aegis/firmware/src/main.rs` 为 `attached && contract=None` 增加短时间片协商优先窗口，优先连续服务 `usb_pd.tick()` 与 IRQ 收敛，但每个时间片必须很快回到 `power.tick()`、前面板触摸轮询等其它周期任务。
-- 结果：`SOURCE_CAPS_WAIT_TIMEOUT_MS = 400ms` 现在能按预期生效，reset 基线已从约 `2.41s` 压到约 `1.67s`，真实热插拔也回到秒级恢复。
 
 ## 参考（References）
 

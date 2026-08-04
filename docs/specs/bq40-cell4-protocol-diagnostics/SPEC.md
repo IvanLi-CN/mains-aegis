@@ -84,12 +84,6 @@
 - 已确认关键读取链路已补上 reply `PEC` 探测，`MD23 DeviceType/FW`、`AFE Register`、`DAStatus1`、`DA Configuration` 的关键结论不再依赖无校验块读。
 - 已确认诊断结论最终收敛为：`CellVoltage4() = 0` 的第一阶段根因不是工具协议、不是诊断写扰动、也不是 `3S/4S` 判断污染。
 
-## 里程碑（Milestones）
-
-- [x] M1: 修正 `0x00 -> 0x23` 读取实现并完成实机验证。
-- [x] M2: 去除常规诊断对 `GAUGING/CAL` 的主动扰动。
-- [x] M3: 为 `flash/monitor` 增加互斥并完成干净 monitor 验证。
-- [x] M4: 在所有关键读路径上补齐 reply PEC 校验，并重新验证 `DA Configuration` / `DAStatus1`。
 
 ## 质量门槛（Quality Gates）
 

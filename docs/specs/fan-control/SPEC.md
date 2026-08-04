@@ -80,13 +80,6 @@
   - tach 恢复。
 - 若板卡可用，`mcu-agentd monitor esp --reset` 可观察到温度驱动的档位变化与 tach 故障保护日志。
 
-## 里程碑（Milestones）
-
-- [x] M1: 新增风扇 spec 与索引。
-- [x] M2: 接入 GPIO/PWM/tach 中断初始化。
-- [x] M3: 完成风扇状态机与 `PowerManager` 集成。
-- [x] M4: 补充测试、README 与日志契约。
-- [ ] M5: 验证、PR 与 review-loop 收敛。
 
 ## Visual Evidence
 

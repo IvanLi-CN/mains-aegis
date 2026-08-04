@@ -91,13 +91,6 @@
   - `RSOC=19`、VIN 离线、`discharge_ready=false`、`RCA=true`、`no_battery=true`、`CUV/CUVC=true` 任一成立时不释放低电 hold
   - 低电 hold 释放谓词不覆盖 `tps_fault / therm_kill / active_protection / tps_config_failed` 来源
 
-## 里程碑（Milestones）
-
-- [x] M1: 新建 spec 与 `docs/modules/` 索引。
-- [x] M2: 整理稳压输出模块 SoT 文档，并同步 README / boot flow 口径。
-- [x] M3: 落地统一输出状态机与恢复 API。
-- [x] M4: 补测试与本地验证，达到 local PR-ready。
-- [x] M5: 对齐启动期放电授权决策与自检页 `LIMIT / HOLD / RECOVER / IDLE` 语义。
 
 ## Visual Evidence
 
