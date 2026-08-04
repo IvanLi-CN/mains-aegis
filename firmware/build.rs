@@ -280,6 +280,8 @@ const FEATURE_ENV_CANDIDATES: &[(&str, &str)] = &[
     ("CARGO_FEATURE_FORCE_MIN_CHARGE", "force-min-charge"),
     ("CARGO_FEATURE_BMS_DUAL_PROBE_DIAG", "bms-dual-probe-diag"),
     ("CARGO_FEATURE_TMP_HW_PROTECT_TEST", "tmp-hw-protect-test"),
+    ("CARGO_FEATURE_FAN_TACH_1_PPR", "fan-tach-1-ppr"),
+    ("CARGO_FEATURE_FAN_TACH_2_PPR", "fan-tach-2-ppr"),
     ("CARGO_FEATURE_TEST_FW", "test-fw"),
     ("CARGO_FEATURE_TPS_TEST_FW", "tps-test-fw"),
     ("CARGO_FEATURE_TPS_TEST_OUT_A", "tps-test-out-a"),
