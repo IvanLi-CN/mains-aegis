@@ -64,7 +64,7 @@ Notes:
 
 ## Power-up defaults (FYI)
 
-实现不得依赖上电默认值满足本计划阈值要求；这里仅记录默认值用于 bring-up 对齐与故障定位：
+实现不得依赖上电默认值满足本规格阈值要求；这里仅记录默认值用于 bring-up 对齐与故障定位：
 
 - Default conversion rate: `4 Hz`
 - Reset thresholds: `THIGH=+80°C`, `TLOW=+75°C`

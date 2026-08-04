@@ -14,7 +14,7 @@
 - Last: 2026-03-02
 
 - Directory: `docs/specs/front-panel-visual-language/assets/`
-- In-plan references:
+- In-spec references:
   - `assets/color-preview.svg`
   - `assets/typography-preview.svg`
 

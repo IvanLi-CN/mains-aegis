@@ -30,7 +30,7 @@ mcu-agentd monitor esp --reset
 
 备注：
 
-- `esp` 为本计划固定的 `mcu_id`（实现在仓库根目录 `mcu-agentd.toml` 中固定）。
+- `esp` 为本规格固定的 `mcu_id`（实现在仓库根目录 `mcu-agentd.toml` 中固定）。
 - `mcu-agentd.toml` 固定在仓库根目录（满足 root 直接运行的要求）。
 - 首次 `mcu-agentd monitor esp` 可能会提示绑定设备 MAC（用于防止“串口节点复用导致连错设备”）；确认后会在 `firmware/.esp32-port` 追加 `mac=<MAC>` 行（见 `contracts/file-formats.md`）。
 - 该流程不依赖 `cargo espflash` 的 CLI 参数口径：底层由 `mcu-agentd` 读取仓库根目录 `mcu-agentd.toml` 决定 `chip/artifact_elf/log_format` 等。
@@ -84,4 +84,4 @@ DEFMT_LOG=info cargo espflash flash --release --monitor --baud 115200 --log-form
 
 - 若后续迁移到 `probe-rs`/RTT 或 USB Serial-JTAG 工作流，需要：
   - 在此文档新增对应命令小节
-  - 并在 `../PLAN.md` 的接口清单中将该 CLI 接口标注为 `Modify`，说明旧→新的差异与迁移建议
+  - 并在 `../SPEC.md` 的接口清单中将该 CLI 接口标注为 `Modify`，说明旧→新的差异与迁移建议

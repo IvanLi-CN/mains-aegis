@@ -18,9 +18,9 @@
 
 ### Non-goals
 
-- 不在本计划内实现任何具体业务功能（PD 策略、BMS 通信、UPS 输出控制、音频播放等）。
+- 不在本规格内实现任何具体业务功能（PD 策略、BMS 通信、UPS 输出控制、音频播放等）。
 - 不追求生产级（量产、OTA、完整电源管理、性能/功耗优化、全套诊断与崩溃上报）。
-- 不在本计划内引入或迁移到 `std` / ESP-IDF（本计划固定 `no_std`）。
+- 不在本规格内引入或迁移到 `std` / ESP-IDF（本规格固定 `no_std`）。
 
 ## 范围（Scope）
 
@@ -30,7 +30,7 @@
 - 明确并记录工具链与依赖（例如：`espup`、`cargo-espflash` 或 `probe-rs`）的安装与版本策略（以“可复现”为目标）。
 - 提供最小示例程序：
   - 串口输出（用于确认运行与基本日志路径）
-  - 不包含 LED/GPIO 闪烁（本计划 bring-up 闭环仅依赖串口可观测）
+  - 不包含 LED/GPIO 闪烁（本规格 bring-up 闭环仅依赖串口可观测）
 - 集成 `mcu-agentd` 作为默认烧录/监视入口（底层后端为 `espflash`，并在 monitor 侧解码 `defmt`），同时保留 `cargo espflash` 作为兜底路径。
 - 明确仓库层面的 Git hygiene（例如需要忽略哪些构建产物目录），并在实现阶段落地。
 
@@ -56,7 +56,7 @@
   - 上电后可稳定输出可辨识的启动信息（日志/标识串）
   - 不要求 LED/外设可视化输出（仅“串口启动信息”作为 bring-up 闭环）
 - 串口日志格式使用 `defmt`，并由 `espflash` 在监视器侧完成解码（对齐既有项目实践）。
-- 本计划涉及的“跨边界接口”均有可实现、可测试的契约文档（见下一节）。
+- 本规格涉及的“跨边界接口”均有可实现、可测试的契约文档（见下一节）。
 
 ## 接口契约（Interfaces & Contracts）
 
@@ -89,7 +89,7 @@
 
 ## 实现前置条件（Definition of Ready / Preconditions）
 
-（本计划当前 `Status: 已完成` 表示以下前置条件已冻结并满足；若后续发现不满足，应将 `Status` 回退为 `待设计` 并更新 `Last`。）
+（本规格当前 `Status: 已完成` 表示以下前置条件已冻结并满足；若后续发现不满足，应将 `Status` 回退为 `待设计` 并更新 `Last`。）
 
 - 目标/非目标、范围（in/out）、约束已明确
 - 验收标准覆盖 core path + 关键边界/异常
@@ -102,7 +102,7 @@
 
 ### Testing
 
-- Unit tests: 本计划默认不要求（`no_std` bring-up 以集成验证为主）。
+- Unit tests: 本规格默认不要求（`no_std` bring-up 以集成验证为主）。
 - Integration tests: 至少包含一次“可烧录 + 可观测”的手工验证流程，并将步骤固化到 `firmware/README.md`。
 
 ### Quality checks
@@ -122,7 +122,7 @@
 
 - 参考既有 `esp-hal`（`esp32s3`）`no_std` 项目的成功落地形态：使用 `rust-toolchain.toml` 的 `channel = "esp"`，并在 `.cargo/config.toml` 固定 `target = "xtensa-esp32s3-none-elf"` 与 `build-std = ["core", "alloc"]`，降低工具链漂移风险。
 - 采用 `esp-hal` 文档推荐的工程生成工具 `esp-generate` 作为起点，减少手工拼装 linker/runner 配置的风险。
-- 默认以“串口可观测 + 最小外设”作为 bring-up 验证闭环；把具体外设驱动与业务策略拆到后续计划。
+- 默认以“串口可观测 + 最小外设”作为 bring-up 验证闭环；把具体外设驱动与业务策略拆到后续规格。
 - 工程配置（如 `rust-toolchain.toml`、`.cargo/config.toml`）尽量放在 `firmware/` 内，避免对仓库其它内容产生副作用。
 
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）

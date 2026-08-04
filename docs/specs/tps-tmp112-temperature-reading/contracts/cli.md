@@ -4,7 +4,7 @@
 
 ## Frequency
 
-- Period: `500ms`（与 `tps55288-control` 已冻结的 `telemetry` 周期一致；本计划不改变 cadence）
+- Period: `500ms`（与 `tps55288-control` 已冻结的 `telemetry` 周期一致；本规格不改变 cadence）
 - Each period prints: **2 lines**（沿用既有 `telemetry`：`out_a` 与 `out_b` 各 1 行）
 
 ## Output format

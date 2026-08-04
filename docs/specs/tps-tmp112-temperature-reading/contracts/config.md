@@ -20,10 +20,10 @@
 
 ## Sampling（fixed）
 
-本计划**不引入可配置的 telemetry 周期**，避免与既有冻结口径发生漂移。
+本规格**不引入可配置的 telemetry 周期**，避免与既有冻结口径发生漂移。
 
 - Period: `500ms`
-- Binding: 与 `tps55288-control` 已冻结的 `telemetry` 周期一致；本计划只追加字段，不改变 cadence。
+- Binding: 与 `tps55288-control` 已冻结的 `telemetry` 周期一致；本规格只追加字段，不改变 cadence。
 
 ## Units（required）
 

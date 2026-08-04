@@ -5,19 +5,19 @@
 ## Current Status
 
 - Lifecycle: archived
-- Implementation: 见下方迁移状态与覆盖记录。
+- Implementation: complete；固件已写入并回读两颗 TMP112A 的 comparator、阈值与去抖配置，并保留 `THERM_KILL_N` 可观测性。
 
 ## Migrated Implementation Record
 
-- Status: 待实现
+- Status: 已实现
 - Created: 2026-01-27
 - Last: 2026-01-27
 
 None
 
-- [ ] M1: `TMP112A` 配置与阈值写入/回读 API（两地址 `0x48/0x49`；按 `./contracts/config.md`）
-- [ ] M2: 启动阶段应用配置 + fail-safe 落地（配置失败则不使能 TPS 输出；日志可定位）
-- [ ] M3: 上板验证步骤与“过温来源提示（日志）”落地到文档（`firmware/README.md`）
+- [x] M1: `TMP112A` 配置与阈值写入/回读 API（两地址 `0x48/0x49`；按 `./contracts/config.md`）
+- [x] M2: 启动阶段应用配置 + fail-safe 落地（配置失败则不使能 TPS 输出；日志可定位）
+- [x] M3: 上板验证步骤与“过温来源提示（日志）”落地到文档（`firmware/README.md`）
 
 ## References
 

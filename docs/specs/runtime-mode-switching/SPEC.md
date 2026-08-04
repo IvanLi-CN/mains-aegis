@@ -24,7 +24,7 @@
 
 ### Non-goals
 
-- 不重写 `eu2b8` 中完整的 `CHG500 / CHG100 / RECOV / FULL / WARM / TEMP / WAIT30` 状态机。
+- 不重写 `bq25792-charge-policy` 中完整的 `CHG500 / CHG100 / RECOV / FULL / WARM / TEMP / WAIT30` 状态机。
 - 不新增 owner-facing 的“强制切换 UPS 模式”控制命令。
 - 不把 `BYPASS` 重新纳入自动运行态切换。
 - 不覆盖 UI 视觉资产、Dashboard layout 或音频 cue 优先级本身。
@@ -111,7 +111,7 @@
     - `source_limited`: 输入仍在线，但 MCU 判定上级电源不可继续承担当前负载。
   - 输出由电池侧供能。
   - TPS 目标保持额定输出档位。
-  - 默认 non-charging；只有 `eu2b8` 定义的 USB-C PD 低输出例外可改变 charger allow，不能改变 `BACKUP` 本身的 VIN/运行态定义。
+  - 默认 non-charging；只有 `bq25792-charge-policy` 定义的 USB-C PD 低输出例外可改变 charger allow，不能改变 `BACKUP` 本身的 VIN/运行态定义。
 - `BLOCKED`
   - owner-facing 阻断态，不是新的内部供电阶段。
   - 当自动状态机候选结果为 `STANDBY / ASSIST / BACKUP`，但本轮请求的 TPS 输出没有全部进入
@@ -231,7 +231,7 @@
 ## 与 charger policy 的硬联动
 
 - `STANDBY`
-  - charger 是否允许工作，继续由 `eu2b8` 主线策略决定。
+  - charger 是否允许工作，继续由 `bq25792-charge-policy` 主线策略决定。
   - `CHG / WAIT / FULL / WARM / TEMP / CHG100 / RECOV` 等语义只在此模式内讨论。
 - `ASSIST`
   - 必须视为 non-charging mode。
@@ -240,12 +240,12 @@
 - `BACKUP`
   - `backup_reason=source_limited` 必须视为 non-charging mode，`charger.allow_charge=false`，token/notice 收敛到 `LOAD` 与 source-limited backup notice。
   - `backup_reason=input_absent` 默认视为 non-charging mode，`charger.allow_charge=false`，token/notice 收敛到 `NOAC`。
-  - 唯一例外由 `eu2b8` 定义：当 `backup_reason=input_absent`、VIN 已确认无市电、USB-C PD 可充电、既有安全门通过且输出功率满足专用回环门时，可发布 `CHG500`；其 `LOAD/LOCK` 锁存、TPS 采样、手动确认与会话重置均不属于 mode state machine。
+  - 唯一例外由 `bq25792-charge-policy` 定义：当 `backup_reason=input_absent`、VIN 已确认无市电、USB-C PD 可充电、既有安全门通过且输出功率满足专用回环门时，可发布 `CHG500`；其 `LOAD/LOCK` 锁存、TPS 采样、手动确认与会话重置均不属于 mode state machine。
 - `BLOCKED`
   - 必须视为 non-charging mode。
   - `charger.allow_charge=false`
   - owner-facing charger token/notice 收敛到 `LOCK` 语义边界。
-- 本联动只定义模式与 charger 的边界，不覆盖 `eu2b8` 内部关于 `DC IN` 压力、cooldown、recovery ramp 或手动 charge 的全部细节。
+- 本联动只定义模式与 charger 的边界，不覆盖 `bq25792-charge-policy` 内部关于 `DC IN` 压力、cooldown、recovery ramp 或手动 charge 的全部细节。
 
 ## owner-facing 可观测性要求
 
@@ -301,9 +301,9 @@
 - Given 输入仍在线、`TPS total output current` 超过 source-limited 进入门槛、`VIN` 低于合理工作电压或 `VIN drop + VIN input current` 显示上级限流，When 连续 fresh 样本满足，Then 结果为 `BACKUP` 且 `backup_reason=source_limited`，TPS 目标切到额定输出。
 - Given 已处于 `backup_reason=source_limited`，When `VIN` 与 `vin_drop_mv` 恢复到回差内且输出电流低于退出门槛，Then 必须连续满足样本数后才退出 `BACKUP`，不得在阈值附近抖动。
 - Given `ASSIST` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD`。
-- Given `backup_reason=input_absent` 已锁存且不满足 `eu2b8` 的 USB-C 例外，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
+- Given `backup_reason=input_absent` 已锁存且不满足 `bq25792-charge-policy` 的 USB-C 例外，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
 - Given `backup_reason=source_limited` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD` / source-limited backup notice。
-- Given `mode=backup`、`backup_reason=input_absent`、VIN 已确认无市电且 `eu2b8` 已以新鲜 `<2W` USB-C 输出样本放行，When 查看 mode，Then mode 仍为 `backup`，但 charger 可显示 `CHG500`；该例外不得把 mode 改写为 `standby`。
+- Given `mode=backup`、`backup_reason=input_absent`、VIN 已确认无市电且 `bq25792-charge-policy` 已以新鲜 `<2W` USB-C 输出样本放行，When 查看 mode，Then mode 仍为 `backup`，但 charger 可显示 `CHG500`；该例外不得把 mode 改写为 `standby`。
 - Given 执行 `--suite-contract source-limited-12v`，When Power Path Validation 生成执行计划，Then 必须只生成 `12V backup_only / 1000mA`、`12V source_in_budget / 2500mA`、`12V source_limited_online / 3900mA`、`12V source_limited_cut / 3900mA` 四个独立 scene；不得复用 dual-voltage 四场景的签核合同。
 - Given `source_limited_online` 的 `3900mA` 负载已下发，When hold phase 开始，Then UPS 必须在 `2s` 内发布 `mode=backup`、`assist_power_stage=backup`、`backup_reason=source_limited`，并观察到额定 `assist_target_vout_mv`。
 - Given `source_limited_online` 已锁存，When VIN 仍在线，Then LoadLynx 电压必须保持不低于 `11000mV`；锁存前的低于 `11000mV` 连续时间不得超过 `1s`。

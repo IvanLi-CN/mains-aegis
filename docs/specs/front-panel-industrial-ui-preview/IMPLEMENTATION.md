@@ -14,7 +14,7 @@
 - Last: 2026-03-01
 
 - Directory: `docs/specs/front-panel-industrial-ui-preview/assets/`
-- In-plan references:
+- In-spec references:
   - `assets/dashboard-b-off-mode.png`
   - `assets/dashboard-b-standby-mode.png`
   - `assets/dashboard-b-supplement-mode.png`

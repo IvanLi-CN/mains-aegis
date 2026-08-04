@@ -105,7 +105,7 @@
 - 当任一路输出已开启但聚合输出功率不可可信计算时，策略进入保守禁充分支；前台 token 继续显示 `LOAD`，notice/log 使用 `blocked_output_power_unknown`。
 - 在 `BACKUP` 中，只有 VIN 已确认无市电、USB-C PD 已可充电且主线 policy 已允许时才评估 USB 例外。输出关闭立即按 `0W` 放行；输出开启时必须等待本会话内新鲜的 `<2.0W` 聚合 TPS 样本，放行后保持自动 `500mA`。
 - USB 例外保持期间，`2.0W <= P <= 3.0W` 不改变充电；一个新鲜 `P > 3.0W` 样本立刻停充、状态为 `LOAD`、notice 为 `backup_usb_output_high_latched`。两次不同 TPS 遥测采样尝试缺失则状态为 `LOCK`、notice 为 `backup_usb_telemetry_lost_latched`。
-- USB-C detach 创建新判断周期而不恢复旧会话；只在 detach 或确认后的新手动 `START` 清除上述锁存。确认手动会话由 `zp4cg` 拥有，但在它有效时可绕过本段三个新回环门。
+- USB-C detach 创建新判断周期而不恢复旧会话；只在 detach 或确认后的新手动 `START` 清除上述锁存。确认手动会话由 `manual-charge-dashboard` 拥有，但在它有效时可绕过本段三个新回环门。
 - 前面板的 charger 电流显示优先取 `BQ25792 IBAT_ADC`，不再把 `ICHG` 设定值伪装成实测电流。
 - `BQ25792` 16-bit 配置/限流寄存器和只读 ADC word 都必须按 datasheet 的 `MSB-first` 顺序读写；日志中的 `REG03/REG06` 读回必须能解码成已写入的 `ICHG/IINDPM` 目标值，禁止把字节序写反后只记录软件期望值。
 - 充电保持期间若目标 `ICHG` 与实测电流出现稳定差异，固件必须把它记录为 delivery diagnostic，而不是把目标电流当作实际充电结果；当 `IINDPM/VINDPM` 正在调节时，诊断原因应指向输入 DPM 限流。负的 `IBAT/BMS current` 表示放电，在 under-delivery 判定中必须按 `0mA` 已交付充电电流处理。
@@ -211,7 +211,7 @@ None。
 ## 参考（References）
 
 - `docs/charger-design.md`
-- `docs/specs/bq25792-charging-enable/PLAN.md`
+- `docs/specs/bq25792-charging-enable/SPEC.md`
 - `firmware/src/output/mod.rs`
 - `firmware/src/front_panel_scene.rs`
 - `tools/front-panel-preview/src/main.rs`

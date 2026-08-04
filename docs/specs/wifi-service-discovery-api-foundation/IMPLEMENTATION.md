@@ -14,7 +14,7 @@
 - Last: 2026-06-03
 
 - Directory: `docs/specs/wifi-service-discovery-api-foundation/assets/`
-- In-plan references: `![...](./assets/<file>.png)`
+- In-spec references: `![...](./assets/<file>.png)`
 - Visual evidence source: maintain `## Visual Evidence` in this spec when owner-facing or PR-facing screenshots are needed.
 
 None。

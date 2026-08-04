@@ -26,7 +26,7 @@
   - `self-check-c-bq40-discharge-recovery-dialog.png`
   - `self-check-c-bq40-discharge-recovering.png`
 
-| Asset | Plan source (path) | Used by (runtime/test/docs) | Promote method (copy/derive/export) | Target (project path) | References to update | Notes |
+| Asset | Spec source (path) | Used by (runtime/test/docs) | Promote method (copy/derive/export) | Target (project path) | References to update | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | Result dialog PNG set | `docs/specs/bq40-self-check-result-dialogs/assets/*.png` | docs | copy | `firmware/ui/assets/*.png` | `firmware/ui/*.md`, `firmware/README.md` | PR 展示与项目文档共用同一批冻结图 |
 

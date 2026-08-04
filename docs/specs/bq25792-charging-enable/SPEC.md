@@ -1,4 +1,4 @@
-# Plan: BQ25792 charging enable + status capture
+# BQ25792 charging enable + status capture
 
 > 当前有效规范以本文为准；实现覆盖与当前状态见 `./IMPLEMENTATION.md`，关键演进原因见 `./HISTORY.md`。
 

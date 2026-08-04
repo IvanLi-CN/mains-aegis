@@ -33,7 +33,7 @@ Exit:
 - 在 firmware 侧补齐 `GET /api/v1/settings`。
 - 设备本体 LAN 写接口落地为 `POST|DELETE /api/v1/wifi-config`、`POST /api/v1/settings/log-level`、`POST /api/v1/settings/manual-charge`、`POST /api/v1/reset`。
 - LAN 写接口由 HTTP worker 接收并进入主循环 pending command 队列，真实执行复用现有 USB CDC / PowerManager 写入路径，避免在 HTTP worker 里直接触碰硬件资源。
-- 更新 `amc32` 契约文档与 host-side tests。
+- 更新 `wifi-service-discovery-api-foundation` 契约文档与 host-side tests。
 
 Exit:
 

@@ -19,9 +19,9 @@
 
 ### Non-goals
 
-- 不在本计划内实现温度闭环降额（限流/限功率/限输出电压）或复杂热管理策略。
-- 不在本计划内更改硬件链路（`ALERT` 汇总方式、`THERM_KILL_N`/`TPS_EN` 连接关系、器件选型与布局）。
-- 不在本计划内新增更多温度采样点或引入其它温度器件。
+- 不在本规格内实现温度闭环降额（限流/限功率/限输出电压）或复杂热管理策略。
+- 不在本规格内更改硬件链路（`ALERT` 汇总方式、`THERM_KILL_N`/`TPS_EN` 连接关系、器件选型与布局）。
+- 不在本规格内新增更多温度采样点或引入其它温度器件。
 
 ## 范围（Scope）
 
@@ -34,7 +34,7 @@
 ### Out of scope
 
 - 上位机联动（HTTP/RPC/落盘）与远程清故障流程。
-- “自动恢复/自动重试”策略的完整状态机（本计划只冻结硬停机链路的告警/释放语义与最小可观测性）。
+- “自动恢复/自动重试”策略的完整状态机（本规格只冻结硬停机链路的告警/释放语义与最小可观测性）。
 
 ## 需求（Requirements）
 
@@ -87,7 +87,7 @@
 - 已确认 `TMP112A` 配置失败时策略为 fail-safe：**不允许使能 TPS 输出，并打印错误信息**（见 `./contracts/config.md`）。
 - 已完成最小代码定位：
   - `firmware/src/tmp112.rs`：现有仅读温度寄存器；需扩展为可写配置/阈值寄存器并提供回读
-  - `firmware/src/main.rs`：已存在 `THERM_KILL_N` 默认不拉低的约束；需与本计划策略一致
+  - `firmware/src/main.rs`：已存在 `THERM_KILL_N` 默认不拉低的约束；需与本规格策略一致
   - `firmware/src/output/tps55288.rs`：现有读取温度与 `therm_kill_n` 上报链路可作为验收观测入口
 
 ## 非功能性验收 / 质量门槛（Quality Gates）
@@ -103,13 +103,13 @@
 
 ## 文档更新（Docs to Update）
 
-- `docs/power-monitoring-design.md`: 补齐并冻结 `TMP112A.ALERT` 的阈值、去抖与“保持输出”语义引用（指向本计划契约）。
+- `docs/power-monitoring-design.md`: 补齐并冻结 `TMP112A.ALERT` 的阈值、去抖与“保持输出”语义引用（指向本规格契约）。
 - `docs/i2c-address-map.md`: 补充“TMP112A 除读温度外还会被固件写入告警配置”的说明（避免仅凭地址表推断默认行为）。
 - `firmware/README.md`: 增加“过温硬停机链路验证（TMP112A.ALERT / THERM_KILL_N / TPS_EN）”章节。
 
 ## 方案概述（Approach, high-level）
 
-- 以“硬件链路可独立完成停机”为前提：固件主要负责配置 `TMP112A` 告警语义与提供可观测性；控制闭环（降额/恢复）留给后续计划。
+- 以“硬件链路可独立完成停机”为前提：固件主要负责配置 `TMP112A` 告警语义与提供可观测性；控制闭环（降额/恢复）留给后续规格。
 - 配置与阈值应做到可追溯：固件在启动阶段记录配置摘要（或回读值），便于 bring-up 与回归对齐。
 
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）
@@ -120,14 +120,14 @@
 - 开放问题（需要决策）：
   - 见 `./contracts/config.md` 的 `T(HIGH)/T(LOW)` 与失败策略条目。
 - 假设（需主人确认）：
-  - 本计划的“保持输出”语义以 Comparator 模式 + 滞回释放为准（`TM=0`）。
+  - 本规格的“保持输出”语义以 Comparator 模式 + 滞回释放为准（`TM=0`）。
 
 ## 参考（References）
 
 - `docs/power-monitoring-design.md`（4.3 节：TMP112A + `THERM_KILL_N` 链路与 Comparator 模式建议）
 - `docs/i2c-address-map.md`
 - `docs/hardware-selection/esp32-s3-fh4r2-gpio.md`（GPIO40：`THERM_KILL_N`）
-- `docs/specs/tps-tmp112-temperature-reading/PLAN.md`（温度读数与 `THERM_KILL_N` 可见性）
+- `docs/specs/tps-tmp112-temperature-reading/SPEC.md`（温度读数与 `THERM_KILL_N` 可见性）
 
 ## Visual Evidence
 

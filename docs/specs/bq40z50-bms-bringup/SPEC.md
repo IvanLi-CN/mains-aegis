@@ -1,4 +1,4 @@
-# Plan: BQ40Z50 BMS bring-up (SMBus poll + fault expectations)
+# BQ40Z50 BMS bring-up (SMBus poll + fault expectations)
 
 > 当前有效规范以本文为准；实现覆盖与当前状态见 `./IMPLEMENTATION.md`，关键演进原因见 `./HISTORY.md`。
 

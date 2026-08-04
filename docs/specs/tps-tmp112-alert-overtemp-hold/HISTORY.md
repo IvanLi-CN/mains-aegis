@@ -4,6 +4,10 @@
 
 ## Decision Trace
 
+- 固件已实现两颗 TMP112A 的 comparator 配置、阈值写入与回读，并在启动路径保留 fail-safe 与 `THERM_KILL_N` 诊断；该主题因此按完成态归档。
+
+## Decision Trace
+
 - 2026-01-27: 初始化计划骨架与契约入口
 
 ## References

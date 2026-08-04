@@ -14,7 +14,7 @@
 - Last: 2026-04-13
 
 - Directory: `docs/specs/bq40-lock-root-cause/assets/`
-- In-plan references: `![...](./assets/<file>.png)`
+- In-spec references: `![...](./assets/<file>.png)`
 - Visual evidence source: maintain `## Visual Evidence` in this spec when owner-facing or PR-facing screenshots are needed.
 - If an asset must be used in impl (runtime/test/official docs), list it in `资产晋升（Asset promotion）` and promote it to a stable project path during implementation.
 

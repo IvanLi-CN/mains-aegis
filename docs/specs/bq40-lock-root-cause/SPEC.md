@@ -189,4 +189,4 @@ None
 
 PR: none
 
-本计划默认以日志/证据包为主；若后续需要 owner-facing 图片，只允许写入 `./assets/`。
+本规格默认以日志/证据包为主；若后续需要 owner-facing 图片，只允许写入 `./assets/`。

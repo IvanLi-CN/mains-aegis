@@ -12,7 +12,7 @@
 - Features:
   - `default`（无默认 features）
   - 可选：`defmt`（如需更友好的日志输出）
-  - 可选：`async`（如后续选择 async I2C；本计划默认走 sync）
+  - 可选：`async`（如后续选择 async I2C；本规格默认走 sync）
 
 ### I2C 总线（fixed）
 
@@ -28,7 +28,7 @@
 - Channel mapping (source of truth: `docs/power-monitoring-design.md`):
   - INA3221 `CH2` → `TPS55288 OUT-A`（`RSHUNT = 10 mΩ`）
   - INA3221 `CH1` → `TPS55288 OUT-B`（`RSHUNT = 10 mΩ`）
-  - INA3221 `CH3` → `UPS VIN`（`RSHUNT = 7 mΩ`，本计划默认不启用）
+  - INA3221 `CH3` → `UPS VIN`（`RSHUNT = 7 mΩ`，本规格默认不启用）
 
 ### INA3221 初始化配置（fixed）
 
@@ -107,7 +107,7 @@
 必须在实现前明确以下策略之一（用于满足“默认仅启用一路输出”的 MUST）：
 
 - Strategy A（preferred, if supported by IC）: 通过 `TPS55288` 的寄存器将非默认通道置于 disable/standby，不主动稳压输出。
-- Strategy B（fallback）: 若器件不支持独立 disable，且硬件 `EN/UVLO` 实际共网（`TPS_EN`），则本计划的“默认仅启用一路输出”需改口径（例如：两路都启用但把其中一路配置为“不会接管负载”的安全档位），并同步更新 `docs/specs/tps55288-control/PLAN.md` 的 MUST 与验收标准。
+- Strategy B（fallback）: 若器件不支持独立 disable，且硬件 `EN/UVLO` 实际共网（`TPS_EN`），则本规格的“默认仅启用一路输出”需改口径（例如：两路都启用但把其中一路配置为“不会接管负载”的安全档位），并同步更新 `docs/specs/tps55288-control/SPEC.md` 的 MUST 与验收标准。
 
 Decision (confirmed): 采用 Strategy A（通过 I2C/寄存器实现每颗芯片的独立控制；`TPS_EN` 仅作为系统级使能网）。
 

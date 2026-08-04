@@ -200,7 +200,7 @@ None
 
 - `firmware/README.md`：前面板章节更新为工业仪表风 + 同源预览流程。
 - `docs/specs/README.md`：新增规格索引行。
-- `docs/specs/front-panel-industrial-ui-preview/PLAN.md`：标记为重新设计。
+- `docs/specs/front-panel-industrial-ui-preview/SPEC.md`：标记为重新设计。
 
 ## 方案概述（Approach, high-level）
 

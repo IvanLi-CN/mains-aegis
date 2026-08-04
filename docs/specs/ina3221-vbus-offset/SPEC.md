@@ -4,7 +4,7 @@
 
 ## 背景 / 问题陈述
 
-- 现状：`TPS55288` 双路输出功能已稳定（见 Plan tps55288-control），`VOUT` 设定值与万用表/示波器测量一致（误差约 `10mV` 量级）。
+- 现状：`TPS55288` 双路输出功能已稳定（见 Spec tps55288-control），`VOUT` 设定值与万用表/示波器测量一致（误差约 `10mV` 量级）。
 - 新问题：`INA3221` 的 `VBUS`（bus voltage）读数异常偏高：
   - 以 `19V` 档为例：固件日志 `vset_mv=19000`，但 `vbus_mv≈20000`（偏高 `~0.5–1.0V`）；且 `vbus_reg` 原始寄存器值与 `vbus_mv` 对应一致，说明不是固件“缩放系数写错”的低级问题。
 - 已排除一类常见问题：本板 `IN+/IN-` RC 串阻（`10Ω`）曾误贴为 `10kΩ` 导致读数异常，该问题已修正，**但 `VBUS` 偏高仍存在**。
@@ -21,8 +21,8 @@
 
 ### Non-goals
 
-- 不在本计划内重新设计整套电源监测链路（更换架构/更换芯片）。
-- 不在本计划内推进 TPS55288 输出策略与并联控制策略（继续沿用 Plan tps55288-control 既有实现）。
+- 不在本规格内重新设计整套电源监测链路（更换架构/更换芯片）。
+- 不在本规格内推进 TPS55288 输出策略与并联控制策略（继续沿用 Spec tps55288-control 既有实现）。
 
 ## 范围（Scope）
 
@@ -88,7 +88,7 @@ None
 
 ## 参考（References）
 
-- `docs/specs/tps55288-control/PLAN.md`
+- `docs/specs/tps55288-control/SPEC.md`
 - `docs/power-monitoring-design.md`
 - `docs/pcbs/mainboard/netlist.enet`
 - `docs/datasheets/INA3221/`

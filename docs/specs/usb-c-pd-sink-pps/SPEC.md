@@ -170,7 +170,7 @@ None。
 
 ## 当前实机状态（2026-04-23）
 
-- 当前 `hn29u` 已完成闭环：实机冷启动与真实 USB 热插拔后，`PPS` 都能在秒级恢复，不再出现“随机卡在 `CAP? + 5V` 或需要十几秒以上才恢复”的主故障。
+- 当前 `usb-c-pd-sink-pps` 已完成闭环：实机冷启动与真实 USB 热插拔后，`PPS` 都能在秒级恢复，不再出现“随机卡在 `CAP? + 5V` 或需要十几秒以上才恢复”的主故障。
 - 最新板上证据：
   - reset 基线日志：`/Users/ivan/Projects/Ivan/mains-aegis/.mcu-agentd/monitor/esp/20260422_204331_570.mon.ndjson`
     - `2026-04-22T20:43:34.370942Z attach`

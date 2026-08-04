@@ -4,7 +4,7 @@
 
 ## 背景 / 问题陈述
 
-- 现有 `amc32` 把设备本体 HTTP API 定义为 LAN 只读底座，`ypfpu` Web 管理端也据此把 LAN 作为只读状态源；但当前产品边界已改为：**Web 无 devd 场景也必须通过 LAN 提供与 devd LAN 路径同等的已支持功能覆盖**。
+- 现有 `wifi-service-discovery-api-foundation` 把设备本体 HTTP API 定义为 LAN 只读底座，`web-management-ui` Web 管理端也据此把 LAN 作为只读状态源；但当前产品边界已改为：**Web 无 devd 场景也必须通过 LAN 提供与 devd LAN 路径同等的已支持功能覆盖**。
 - `mains-aegis-devd` 与 CLI 仍然保留 `session` / `safeSettings` 这类历史兼容概念；这些接口把“当前连接状态”“控制台尾巴”“设置态回填”混在一起，既不适合作为用户可见 CLI 命令，也不适合作为后续 LAN / USB / Web 统一信息架构。
 - 当前仓库已经有 LAN 只读状态面、USB/devd 写控制面、Web Serial 烧录与 devd 代理烧录，但这几条链路的真相源和用户心智并不统一。若不先冻结新的真相层与迁移顺序，后续实现会继续在 firmware、devd、CLI、Web 四处堆兼容分叉。
 
@@ -125,7 +125,7 @@
 
 | 接口（Name） | 类型（Kind） | 范围（Scope） | 变更（Change） | 契约文档（Contract Doc） | Owner | Consumers | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `GET /api/v1/settings` | http | external | New | follow-up in `amc32` contract docs | firmware | Web, devd LAN client, CLI via devd | 完整设置快照真相源 |
+| `GET /api/v1/settings` | http | external | New | follow-up in `wifi-service-discovery-api-foundation` contract docs | firmware | Web, devd LAN client, CLI via devd | 完整设置快照真相源 |
 | `POST|DELETE /api/v1/wifi-config` | http | external | Modify | existing contract updated in follow-up | firmware | Web, devd LAN client, CLI via devd | 从 USB/localhost 专属提升为设备本体 API |
 | `POST /api/v1/settings/log-level` | http | external | Modify | same as above | firmware | Web, devd LAN client, CLI via devd | 同上 |
 | `POST /api/v1/settings/manual-charge` | http | external | Modify | same as above | firmware | Web, devd LAN client, CLI via devd | 同上 |

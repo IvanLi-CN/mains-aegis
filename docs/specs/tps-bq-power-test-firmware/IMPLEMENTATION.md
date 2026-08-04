@@ -14,7 +14,7 @@
 - Last: 2026-03-27
 
 - Directory: `docs/specs/tps-bq-power-test-firmware/assets/`
-- In-plan references: `![...](./assets/<file>.png)`
+- In-spec references: `![...](./assets/<file>.png)`
 - PR visual evidence source: maintain `## Visual Evidence (PR)` in this spec when PR screenshots are needed.
 - If an asset must be used in impl (runtime/test/official docs), list it in `资产晋升（Asset promotion）` and promote it to a stable project path during implementation.
 

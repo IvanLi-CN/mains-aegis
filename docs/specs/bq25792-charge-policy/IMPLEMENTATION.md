@@ -14,7 +14,7 @@
 - Last: 2026-06-04
 
 - Directory: `docs/specs/bq25792-charge-policy/assets/`
-- In-plan references: `![...](./assets/<file>.png)`
+- In-spec references: `![...](./assets/<file>.png)`
 - Visual evidence source: maintain `## Visual Evidence` in this spec when owner-facing or PR-facing screenshots are needed.
 
 None。

@@ -34,7 +34,7 @@ Schema（结构）：
 
 Schema（结构）：
 
-- `package.json` 仅用于本计划的开发者工具（commitlint），最小字段集合：
+- `package.json` 仅用于本规格的开发者工具（commitlint），最小字段集合：
   - `private: true`
   - `engines.bun: ">=1.3.5"`（与参考工程对齐；并冻结为生成 `bun.lock` 的版本线）
   - `devDependencies`: `@commitlint/cli` / `@commitlint/config-conventional` / `commitlint-plugin-function-rules`

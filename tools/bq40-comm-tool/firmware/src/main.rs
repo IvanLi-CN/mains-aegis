@@ -89,7 +89,7 @@ const TPS_SYNC_PHASE_TICKS: u16 = 64; // 180° at Duty7Bit => 128 ticks/period.
 // Do not assert THERM_KILL_N during normal bring-up.
 const FORCE_THERM_KILL_N_ASSERTED: bool = false;
 
-// TMP112A alert settings (Plan v5hze).
+// TMP112A alert settings (Spec tps-tmp112-alert-overtemp-hold).
 const TMP112_OUT_A_ADDR: u8 = 0x48;
 const TMP112_OUT_B_ADDR: u8 = 0x49;
 const TMP112_THIGH_C_X16: i16 = 50 * 16;
