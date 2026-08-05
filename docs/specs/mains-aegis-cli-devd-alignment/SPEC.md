@@ -59,6 +59,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - CLI 全局支持 `--no-auto-start`。默认情况下，任何需要 IPC 的业务命令先连接目标 endpoint；若连接失败且未传 `--no-auto-start`，CLI 从自身旁边定位 sibling `mains-aegis-devd`，以同一 endpoint 启动 IPC daemon，等待 `devd.health` 后重试原请求。
 - `--ipc <endpoint>` 只接受系统原生 IPC endpoint：Unix socket path 或 Windows named pipe name。它不得接受 `http://`、`https://`、`tcp://`、`localhost:<port>`、`127.0.0.1:<port>` 或其它 TCP/URL 形式。
 - CLI 发起 newline JSON native IPC 请求，不直接枚举串口、不直接切换端口、不直接调用 espflash。
+- 固件通过 USB Serial/JTAG CDC 返回的每条 newline-delimited response 必须是可独立解析的合法 JSON，并携带与请求一致的 `request_id`；compact status 同样适用，不得输出尾逗号或截断对象。
 - CLI 不得为了执行设备、artifact、flash/reset/monitor、settings 或 host power 命令而启动、依赖或要求 HTTP service。
 - CLI 的 flash 与 host power state-changing 命令默认发送 dry-run；真实动作必须显式传入 `--real`。
 - `mains-aegis device <id> bind` 在交互式 TTY 场景下，若 devd 返回可确认的 `companion_lan_candidate`，必须就地提示是否同时绑定 LAN companion；非交互场景不得弹提示、不得自动持久化，只返回候选详情与后续显式命令。
