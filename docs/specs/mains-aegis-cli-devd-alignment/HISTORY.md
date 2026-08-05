@@ -1,5 +1,10 @@
 # History（mains-aegis-cli-devd-alignment）
 
+## USB CDC compact status JSON
+
+- `status --fresh` 曾因 compact status 的 charger 对象带尾逗号而超时：固件已发送响应，但 devd 按协议拒绝了无效 JSON。
+- renderer 将 charger 的 `limit_threshold_ma` 作为对象末字段输出，并以真实 JSON parser 覆盖完整 compact payload，防止字段增减再次引入无效分隔符。
+
 ## 2026-06-02
 
 - 决定采用 host-tools single-crate 结构：`tools/mains-aegis-host` 产出 CLI 与 devd。

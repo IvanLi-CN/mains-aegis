@@ -102,7 +102,7 @@ cargo build --release --bin esp-firmware --features tmp-hw-protect-test
 
 ## USB CDC / Web Serial 控制通道
 
-`web_serial` feature 会在 ESP32-S3 USB Serial/JTAG CDC 口上启用 Web App structured protocol。浏览器端使用 Web Serial 连接 CDC 设备；同一时刻该 CDC 口只能被一个消费者占用，因此 Web App 直连期间不并发使用 `mains-aegis-devd monitor` 或 `mcu-agentd monitor`。
+`web_serial` feature 会在 ESP32-S3 USB Serial/JTAG CDC 口上启用 Web App structured protocol。浏览器端使用 Web Serial 连接 CDC 设备；同一时刻该 CDC 口只能被一个消费者占用，因此 Web App 直连期间不并发使用 `mains-aegis-devd monitor`。所有 newline-delimited response 必须是可独立解析的合法 JSON；host 会忽略无法解析或 `request_id` 不匹配的帧。
 
 协议口径：
 
