@@ -8,7 +8,7 @@
 
 - Bus: `I2C1`
 - Pins: `GPIO48=I2C1_SDA`，`GPIO47=I2C1_SCL`
-- Frequency: `400kHz`
+- Frequency: `25kHz`
 - Source of truth: `docs/i2c-address-map.md`
 
 ### 设备与通道映射（fixed）

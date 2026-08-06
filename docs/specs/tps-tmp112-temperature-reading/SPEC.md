@@ -42,7 +42,7 @@
 - 固件必须支持读取两颗 `TMP112A`（7-bit I2C 地址）：
   - `TMP112A(OUT-A 热点 / TPS-A 热点)`：`0x48`
   - `TMP112A(OUT-B 热点 / TPS-B 热点)`：`0x49`
-  - 总线：`I2C1`（`GPIO48=I2C1_SDA`，`GPIO47=I2C1_SCL`；目标速率 `400kHz`；见 `docs/i2c-address-map.md`）
+  - 总线：`I2C1`（`GPIO48=I2C1_SDA`，`GPIO47=I2C1_SCL`；目标速率 `25kHz`；见 `docs/i2c-address-map.md`）
 - 固件必须按固定周期输出 `telemetry ...`（温度字段作为追加字段）：
   - 周期与通道映射见 `./contracts/config.md`
   - 追加字段与错误占位见 `./contracts/cli.md`
