@@ -845,22 +845,6 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         .with_scl(i2c1_scl.into_peripheral_output());
     log_boot_stage("i2c1_ready");
 
-    let boot_requested_outputs = if boot_record.safe_mode() {
-        for channel in [output::OutputChannel::OutA, output::OutputChannel::OutB] {
-            if let Err((stage, err)) = output::tps55288::disable_output_only(&mut i2c, channel) {
-                defmt::warn!(
-                    "boot: safe_mode earliest output disable channel={} stage={} err={}",
-                    channel.name(),
-                    stage.as_str(),
-                    output::tps_error_kind(err)
-                );
-            }
-        }
-        output::EnabledOutputs::None
-    } else {
-        DEFAULT_ENABLED_OUTPUTS
-    };
-
     let i2c1_int_cfg = InputConfig::default().with_pull(Pull::Up);
     let mut i2c1_int = Input::new(peripherals.GPIO33, i2c1_int_cfg);
     i2c1_int.clear_interrupt();
@@ -1477,6 +1461,21 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     }
 
     log_boot_stage("boot_self_test_begin");
+    let boot_requested_outputs = if boot_record.safe_mode() {
+        for channel in [output::OutputChannel::OutA, output::OutputChannel::OutB] {
+            if let Err((stage, err)) = output::tps55288::disable_output_only(&mut i2c, channel) {
+                defmt::warn!(
+                    "boot: safe_mode output disable channel={} stage={} err={}",
+                    channel.name(),
+                    stage.as_str(),
+                    output::tps_error_kind(err)
+                );
+            }
+        }
+        output::EnabledOutputs::None
+    } else {
+        DEFAULT_ENABLED_OUTPUTS
+    };
     let mut self_test_audio_late_logged = false;
     let self_test = output::boot_self_test_with_report(
         &mut i2c,
