@@ -20,7 +20,7 @@
 
 ### Non-goals
 
-- 不在本规格内冻结 UPS OUT 的最终系统策略（例如 `12V/19V` 两固件版本、并联策略、限流分工策略等）；本规格仅定义“可控能力 + 默认 profile”。
+- UPS OUT 的运行态门控与双路启动契约由 `../runtime-mode-switching/SPEC.md` 定义；本文冻结 TPS 器件可控能力与主固件默认 profile。
 - 不在本规格内设计/修改硬件（跳线、并联、反馈网络等）与其验证闭环（示波器波形、EMI 等）。
 - 不在本规格内引入复杂的交互控制面（例如屏幕菜单、持久化配置、完整命令行控制台）。
 
@@ -47,10 +47,10 @@
   - `TPS55288 OUT-B`：I2C 地址 `0x75`
   - 总线：`I2C1`（`GPIO48=I2C1_SDA`，`GPIO47=I2C1_SCL`；目标速率 `400kHz`；见 `docs/i2c-address-map.md`）
 - 固件在启动后必须应用默认 profile：
-  - 默认启用一路输出（由 `default_enabled_channel` 决定）
-  - 默认输出电压目标：`5V`
-  - 默认电流限制目标：`1A`
-- 非默认输出路在默认 profile 下必须处于“不会主动驱动负载”的状态（具体实现形态见 `./contracts/config.md`；允许因器件/硬件拓扑导致的被动电压存在，但不得主动稳压输出）。
+  - 正常主固件默认启用 `out_a+out_b`
+  - 正常主固件默认输出电压目标：`12V`
+  - 正常主固件默认电流限制目标：`3.5A`
+  - 显式诊断/测试 profile 可独立选择单路与临时电气参数
 - 任一 `TPS55288` I2C 通信失败（NACK/timeout/CRC 等）时，固件不得 panic；必须输出可定位日志（包含：地址、步骤、错误类别），并进入“保守策略”（不得继续对该器件反复写寄存器刷屏；允许周期性重试但需限频）。
 - 固件侧 `TPS55288` 驱动必须明确使用 `tps55288` 这个 crate（crates.io，`0.2.0`）。
 - 固件必须初始化 `INA3221 (0x40)`，并按 `./contracts/config.md` 的映射仅启用 OUT-A/OUT-B 的采样通道（CH2/CH1）。
@@ -65,7 +65,7 @@
 
 | 接口（Name） | 类型（Kind） | 范围（Scope） | 变更（Change） | 契约文档（Contract Doc） | 负责人（Owner） | 使用方（Consumers） | 备注（Notes） |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| TPS55288 默认 profile 与通道/地址映射 | Config | internal | New | ./contracts/config.md | firmware | firmware | 冻结默认启用通道与 `5V/1A` 目标 |
+| TPS55288 默认 profile 与通道/地址映射 | Config | internal | New | ./contracts/config.md | firmware | firmware | 冻结正常主固件双路默认 profile |
 | 遥测日志输出（串口/日志） | CLI | internal | New | ./contracts/cli.md | firmware | developers | 每 `500ms` 输出两路 `vset/vbus/current` |
 
 ### 契约文档（按 Kind 拆分）
@@ -78,7 +78,7 @@
 
 - Given 主板已供电且 `I2C1` 可用，
   When 固件启动运行并完成初始化，
-  Then 日志中能看到对 `0x74/0x75` 的配置结果，且默认启用的输出路被设置为 `5V/1A` 目标（临时测试），并且每 `500ms` 打印一次 OUT-A/OUT-B 的遥测日志（见 `./contracts/cli.md`）。
+  Then 日志中能看到对 `0x74/0x75` 的配置结果，且两路被设置为正常主固件默认目标，并且每 `500ms` 打印一次 OUT-A/OUT-B 的遥测日志（见 `./contracts/cli.md`）。
 
 - Given 两颗 `TPS55288` 仅有一颗可响应（另一颗缺件/焊接异常/总线故障），
   When 固件启动并尝试配置两颗器件，

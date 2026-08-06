@@ -3742,6 +3742,7 @@ pub struct PowerManager<'d, I2C> {
     output_state: OutputRuntimeState,
     recoverable_output_source: OutputGateReason,
     output_bypass_active: bool,
+    bypass_requested_outputs: EnabledOutputs,
     output_restore_after_bms_recovery: bool,
     output_protection: output_protection::ProtectionRuntime,
     fan: fan::Controller,
@@ -4562,6 +4563,7 @@ where
             output_state,
             recoverable_output_source,
             output_bypass_active: false,
+            bypass_requested_outputs: EnabledOutputs::None,
             output_restore_after_bms_recovery: false,
             output_protection: output_protection::ProtectionRuntime::new(cfg.ilimit_ma),
             fan: fan::Controller::new(cfg.fan_config),
@@ -4749,6 +4751,7 @@ where
             self.output_state.requested_outputs
         };
         self.output_state.recoverable_outputs = recoverable;
+        self.bypass_requested_outputs = self.output_state.requested_outputs;
         self.output_state.requested_outputs = EnabledOutputs::None;
         self.output_state.gate_reason = OutputGateReason::ManualBypass;
         self.recoverable_output_source = OutputGateReason::ManualBypass;
@@ -4766,14 +4769,16 @@ where
             return;
         }
         let restore = self.output_state.recoverable_outputs;
+        let requested = self.bypass_requested_outputs;
         self.output_bypass_active = false;
-        self.output_state.requested_outputs = restore;
+        self.bypass_requested_outputs = EnabledOutputs::None;
+        self.output_state.requested_outputs = bypass_restore_requested_outputs(requested);
         self.output_state.active_outputs = EnabledOutputs::None;
         self.output_state.gate_reason = OutputGateReason::None;
         self.recoverable_output_source = OutputGateReason::None;
         defmt::info!(
             "power: output bypass restored requested_outputs={}",
-            restore.describe()
+            requested.describe()
         );
         self.reconcile_output_state();
     }

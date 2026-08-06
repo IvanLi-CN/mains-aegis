@@ -741,6 +741,14 @@ pub mod output {
     }
 
     #[test]
+    fn output_bypass_restore_preserves_original_requested_contract() {
+        assert_eq!(
+            pure::bypass_restore_requested_outputs(pure::EnabledOutputs::Both),
+            pure::EnabledOutputs::Both
+        );
+    }
+
+    #[test]
     fn runtime_charge_override_blocks_charging_in_output_and_blocked_modes() {
         assert_eq!(
             runtime_charge_override(UpsMode::Supplement),

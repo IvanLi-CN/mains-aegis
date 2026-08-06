@@ -64,7 +64,7 @@
 ## 验收标准（Acceptance Criteria）
 
 - Given 屏幕链路可用，When 开机进入主固件，Then 首屏仍为 `SELF CHECK`。
-- Given 自检结束且 `PowerManager` 已产出运行态快照，When UI 进入 steady state，Then 自动切换到 `UPS DASHBOARD`，且运行中不再回切自检页。
+- Given 自检结束且 `PowerManager` 已产出运行态快照，When UI 进入 steady state 且输出契约完整，Then 自动切换到 `UPS DASHBOARD`；若契约随后失效则回到自检/阻断页。
 - Given Dashboard 某个真实字段缺失，When 渲染对应区域，Then 显示 `N/A`，meter 归零，且不显示任何演示波动数值。
 - Given 运行态 `VIN` 遥测存在，When Dashboard 显示 `PIN W`，Then 读数来自 `INA3221 CH3` 的 `vin_vbus_mv * vin_iin_ma`。
 - Given `vin_iin_ma<=0` 但 `VIN` 仍在线，When Dashboard 计算 `PIN W`，Then 显示 `0.0W`，不再把逆流/空载样本转成正功率。

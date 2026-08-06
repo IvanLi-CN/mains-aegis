@@ -3194,6 +3194,12 @@ pub fn boot_output_contract(
     }
 }
 
+pub const fn bypass_restore_requested_outputs(
+    requested_before_bypass: EnabledOutputs,
+) -> EnabledOutputs {
+    requested_before_bypass
+}
+
 impl EnabledOutputs {
     pub fn is_enabled(self, ch: OutputChannel) -> bool {
         match self {
