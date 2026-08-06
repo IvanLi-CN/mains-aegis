@@ -1,6 +1,6 @@
 # TPS55288 默认 profile 与通道/地址映射（Config）
 
-本契约定义固件在控制 `TPS55288`（双路）时需要冻结的最小配置形状：**通道命名、I2C 地址、默认启用通道、默认输出电压与电流限制**。
+本契约定义固件控制双路 `TPS55288` 时的通道命名、I2C 地址、正常主固件默认 profile，以及显式诊断/测试 profile 边界。
 
 ## Inputs
 
@@ -18,7 +18,7 @@
 
 - Bus: `I2C1`
 - Pins: `GPIO48=I2C1_SDA`，`GPIO47=I2C1_SCL`
-- Frequency: `400kHz`
+- Frequency: `25kHz`
 - Source of truth: `docs/i2c-address-map.md`
 
 ### INA3221 采样映射（fixed）
@@ -102,14 +102,11 @@
   - Meaning: 目标电流限制（mA）；实现以 `TPS55288` 的寄存器能力为准（可能是近似值/档位值）
   - Default: `3500`
 
-### 非默认通道关闭策略（required）
+### 诊断/测试单通道策略（required）
 
-必须在实现前明确以下策略之一（用于满足“默认仅启用一路输出”的 MUST）：
-
-- Strategy A（preferred, if supported by IC）: 通过 `TPS55288` 的寄存器将非默认通道置于 disable/standby，不主动稳压输出。
-- Strategy B（fallback）: 若器件不支持独立 disable，且硬件 `EN/UVLO` 实际共网（`TPS_EN`），则本规格的“默认仅启用一路输出”需改口径（例如：两路都启用但把其中一路配置为“不会接管负载”的安全档位），并同步更新 `docs/specs/tps55288-control/SPEC.md` 的 MUST 与验收标准。
-
-Decision (confirmed): 采用 Strategy A（通过 I2C/寄存器实现每颗芯片的独立控制；`TPS_EN` 仅作为系统级使能网）。
+正常主固件必须请求 `out_a+out_b`。只有显式诊断/测试 profile 可通过 `TPS55288`
+寄存器把未选通道置于 disable/standby；`TPS_EN` 仅作为系统级使能网。运行时健康子集、
+active 或 recoverable 状态均不得反向选择单通道 profile。
 
 ### Telemetry（required）
 
@@ -125,7 +122,7 @@ Decision (confirmed): 采用 Strategy A（通过 I2C/寄存器实现每颗芯片
 
 ## Validation rules
 
-- 若 `default_enabled_channel` 对应器件 I2C 不可达（NACK/timeout），固件必须进入保守策略：
+- 若正常主固件任一默认通道 I2C 不可达（NACK/timeout），固件必须进入保守策略：
   - 不得反复高速重试刷屏日志
   - 不得假设另一颗一定可用（可尝试但需清晰记录并按策略处理）
 - 若两颗均不可达：固件必须保持可运行（不 panic），并避免对输出产生不可控的“反复开关”行为（具体行为以实现策略冻结为准）。
