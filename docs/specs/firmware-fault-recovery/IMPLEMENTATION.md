@@ -7,6 +7,7 @@
 - Repeated abnormal early boots hold controllable outputs and charger policy off and render a dedicated front-panel recovery surface.
 - `status` and `mcu.runtime` diagnostics expose reset, boot health, safe mode, candidate state, and rollback capability/blocker.
 - Candidate confirmation/failed-boot transitions are host-tested, but activation remains prohibited until the release pipeline ships a rollback-enabled bootloader and dual-slot partition bundle.
+- The compile-time `hil-watchdog-stall` profile provides deterministic real-device watchdog and repeated-abnormal-boot injection. It is excluded from normal artifacts and automatically stops injecting once safe mode is active.
 
 ## Architecture blocker
 

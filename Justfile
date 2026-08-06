@@ -99,6 +99,10 @@ firmware-build-hil-19v:
     # Keep USB CDC reserved for IPC frames; warnings can starve validation sampling.
     cd firmware && DEFMT_LOG=error cargo +esp build --release --bin esp-firmware --features net_http,web_serial,main-vout-19v
 
+# Build the deterministic watchdog-stall HIL firmware. This profile never belongs in release artifacts.
+firmware-build-watchdog-hil:
+    cd firmware && DEFMT_LOG=error cargo +esp build --release --bin esp-firmware --features net_http,web_serial,hil-watchdog-stall
+
 # Build the Web Serial flash image from the current release ELF.
 firmware-web-image: firmware-build
     python3 -m esptool --chip esp32s3 elf2image --flash-mode dio --flash-freq 80m --flash-size 4MB --output {{ firmware_image }} {{ firmware_elf }}

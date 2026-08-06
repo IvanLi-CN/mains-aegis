@@ -1745,6 +1745,21 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let mut last_web_serial_service_at: Option<Instant> = None;
     log_boot_stage("main_loop_enter");
 
+    #[cfg(feature = "hil-watchdog-stall")]
+    if !boot_record.safe_mode() {
+        defmt::error!(
+            "hil: watchdog stall injected abnormal_boots={=u8}",
+            boot_record.abnormal_boots
+        );
+        esp_println::println!(
+            "hil: WATCHDOG STALL INJECTED abnormal_boots={}",
+            boot_record.abnormal_boots
+        );
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+
     loop {
         defmt::info!("esp: heartbeat");
         if last_audio_diag_at.is_none_or(|last| last.elapsed() >= Duration::from_secs(10)) {
