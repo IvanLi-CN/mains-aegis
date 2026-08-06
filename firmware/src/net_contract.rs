@@ -438,47 +438,6 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
         status.network.ipv4,
         status.network.last_error.map(|err| err.as_str()),
     );
-    let boot = crate::boot_recovery::diagnostics();
-    let _ = buf.push_str(",\"boot\":{");
-    json_field_str(buf, "reset_cause", boot.reset.as_str(), true);
-    json_field_str(buf, "phase", boot.phase_str(), true);
-    json_field_u32(buf, "abnormal_boots", boot.abnormal_boots as u32, true);
-    json_field_bool(
-        buf,
-        "safe_mode",
-        matches!(boot.phase, crate::boot_recovery::BootPhase::SafeMode),
-        true,
-    );
-    json_field_str(
-        buf,
-        "safe_mode_reason",
-        if matches!(boot.phase, crate::boot_recovery::BootPhase::SafeMode) {
-            "repeated_abnormal_boot"
-        } else {
-            "none"
-        },
-        true,
-    );
-    json_field_str(buf, "active_slot", "single_image", true);
-    json_field_str(buf, "candidate_state", boot.candidate.as_str(), true);
-    json_field_str(buf, "confirmation_state", boot.candidate.as_str(), true);
-    json_field_bool(
-        buf,
-        "confirmed",
-        matches!(
-            boot.candidate,
-            crate::boot_recovery::CandidateState::Confirmed
-        ),
-        true,
-    );
-    json_field_bool(buf, "rollback_capable", false, true);
-    json_field_str(
-        buf,
-        "rollback_blocker",
-        "missing_rollback_bootloader_otadata_ota_slots",
-        false,
-    );
-    let _ = buf.push('}');
     let _ = buf.push('}');
 }
 
@@ -588,37 +547,6 @@ pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: U
         buf,
         "attention_hold",
         status.front_panel.attention_hold,
-        false,
-    );
-    let boot = crate::boot_recovery::diagnostics();
-    let _ = buf.push_str("},\"boot\":{");
-    json_field_str(buf, "reset_cause", boot.reset.as_str(), true);
-    json_field_str(buf, "phase", boot.phase_str(), true);
-    json_field_u32(buf, "abnormal_boots", boot.abnormal_boots as u32, true);
-    json_field_bool(
-        buf,
-        "safe_mode",
-        matches!(boot.phase, crate::boot_recovery::BootPhase::SafeMode),
-        true,
-    );
-    json_field_str(buf, "candidate_state", boot.candidate.as_str(), true);
-    json_field_str(buf, "confirmation_state", boot.candidate.as_str(), true);
-    json_field_str(
-        buf,
-        "safe_mode_reason",
-        if matches!(boot.phase, crate::boot_recovery::BootPhase::SafeMode) {
-            "repeated_abnormal_boot"
-        } else {
-            "none"
-        },
-        true,
-    );
-    json_field_str(buf, "active_slot", "single_image", true);
-    json_field_bool(buf, "rollback_capable", false, true);
-    json_field_str(
-        buf,
-        "rollback_blocker",
-        "missing_rollback_bootloader_otadata_ota_slots",
         false,
     );
     let _ = buf.push_str("}}");
@@ -1113,31 +1041,13 @@ fn render_diag_package_header<'a, const N: usize>(
 }
 
 fn render_diag_mcu_runtime_payload<const N: usize>(buf: &mut String<N>, status: UpsStatusSnapshot) {
-    let boot = crate::boot_recovery::diagnostics();
     let _ = buf.push('{');
     json_field_str(buf, "mode", status.mode, true);
     json_field_str(buf, "requested_outputs", status.requested_outputs, true);
     json_field_str(buf, "active_outputs", status.active_outputs, true);
     json_field_str(buf, "recoverable_outputs", status.recoverable_outputs, true);
     json_field_str(buf, "output_gate_reason", status.output_gate_reason, true);
-    json_field_str(buf, "input_source", status.input_source, true);
-    json_field_str(buf, "reset_cause", boot.reset.as_str(), true);
-    json_field_str(buf, "boot_phase", boot.phase_str(), true);
-    json_field_u32(buf, "abnormal_boots", boot.abnormal_boots as u32, true);
-    json_field_bool(
-        buf,
-        "safe_mode",
-        matches!(boot.phase, crate::boot_recovery::BootPhase::SafeMode),
-        true,
-    );
-    json_field_str(buf, "candidate_state", boot.candidate.as_str(), true);
-    json_field_bool(buf, "rollback_capable", false, true);
-    json_field_str(
-        buf,
-        "rollback_blocker",
-        "missing_rollback_bootloader_otadata_ota_slots",
-        false,
-    );
+    json_field_str(buf, "input_source", status.input_source, false);
     let _ = buf.push('}');
 }
 
@@ -2055,7 +1965,7 @@ mod tests {
 
     #[test]
     fn compact_status_json_keeps_hil_observation_fields() {
-        let mut body = String::<4096>::new();
+        let mut body = String::<1536>::new();
         let mut status = UpsStatusSnapshot::empty();
         status.mode = "supplement";
         status.input_source = "dcin";
@@ -2086,9 +1996,9 @@ mod tests {
 
         render_compact_status_json(&mut body, status);
 
-        serde_json::from_str::<Value>(body.as_str())
-            .unwrap_or_else(|error| panic!("compact status JSON should be valid: {error}: {body}"));
-        assert!(body.len() < body.capacity());
+        if let Err(error) = serde_json::from_str::<serde_json::Value>(body.as_str()) {
+            panic!("compact status must be valid JSON: {error}: {body}");
+        }
         assert!(body.as_str().contains("\"mode\":\"supplement\""));
         assert!(body.as_str().contains("\"vin_vbus_mv\":11920"));
         assert!(body.as_str().contains("\"vin_iin_ma\":2900"));
@@ -2103,17 +2013,6 @@ mod tests {
         assert!(body.as_str().contains("\"current_ma\":-720"));
         assert!(!body.as_str().contains("\"cell_mv\""));
         assert!(!body.as_str().contains("\"network\""));
-        assert!(body.as_str().contains("\"boot\":{"));
-        assert!(body.as_str().contains("\"reset_cause\":"));
-        assert!(body.as_str().contains("\"safe_mode_reason\":\"none\""));
-        assert!(body.as_str().contains("\"active_slot\":\"single_image\""));
-        assert!(body
-            .as_str()
-            .contains("\"confirmation_state\":\"unsupported_layout\""));
-        assert!(body.as_str().contains("\"rollback_capable\":false"));
-        assert!(body
-            .as_str()
-            .contains("\"rollback_blocker\":\"missing_rollback_bootloader_otadata_ota_slots\""));
     }
 
     #[test]

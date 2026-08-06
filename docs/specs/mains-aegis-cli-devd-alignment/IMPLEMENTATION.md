@@ -2,6 +2,7 @@
 
 ## 当前实现
 
+- compact status renderer 在 charger 对象末字段后直接闭合对象，并由 host-side JSON parser 回归测试验证完整 payload，保证 `status --fresh` 可被 devd 匹配。
 - `tools/mains-aegis-host` 统一产出 `mains-aegis` CLI 与 `mains-aegis-devd` daemon。
 - `mains-aegis` CLI 业务命令默认通过系统原生 IPC 复用 singleton daemon；连接失败时会定位 packaged sibling `mains-aegis-devd` 并按需 auto-start IPC daemon。`--no-auto-start` 会保持纯连接失败语义。
 - `mains-aegis daemon serve` 为 developer/debug foreground IPC daemon；`mains-aegis daemon http` 为显式 HTTP/Web 服务，并在同一进程内启动共享状态的 IPC listener，供 CLI 与 Web 观察同一个 daemon 状态。
