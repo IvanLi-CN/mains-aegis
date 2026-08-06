@@ -17,9 +17,9 @@
 ## Hardware validation
 
 - Device `mains-aegis-198840` on the owner-specified `/dev/cu.usbmodem21141401` was flashed only through the bound devd path.
-- Normal release `f8ace5f5-clean-9e88121a12918e22` returned a fresh native-CDC status with `reset_cause=power_on`, `abnormal_boots=0`, `safe_mode=false`, and live input/output measurements.
+- Normal release `bb6b8072-clean-86f1d250334cfcb7` returned a parseable fresh native-CDC status with `reset_cause=power_on`, `abnormal_boots=0`, `safe_mode=false`, truthful single-image rollback diagnostics, and live input/output measurements.
 - The matching `hil-watchdog-stall` image produced three consecutive runtime-watchdog resets and then returned `reset_cause=watchdog`, `abnormal_boots=3`, `phase=safe_mode`, `output.active=none`, both output enables false, and `charger.allow_charge=false`.
-- The matching `hil-clear-boot-health` image cleared retained test state. The normal release was restored, its exact build id and feature set were verified, fresh status again reported `abnormal_boots=0` and `safe_mode=false`, and the devd session was disconnected.
+- The matching `hil-clear-boot-health` image cleared retained test state while preserving `candidate_state=unsupported_layout` and `confirmation_state=unsupported_layout`. The normal release was restored, its exact build id and feature set were verified, and fresh status again reported `abnormal_boots=0` and `safe_mode=false`.
 
 ## Architecture blocker
 
