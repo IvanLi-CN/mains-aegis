@@ -554,7 +554,7 @@ pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: U
         buf,
         "limit_threshold_ma",
         status.charger_limit_threshold_ma,
-        true,
+        false,
     );
     let _ = buf.push_str("},\"charge_control\":{");
     render_charge_control_summary_object_fields(buf, status.charge_control);
@@ -2067,6 +2067,9 @@ mod tests {
 
         render_compact_status_json(&mut body, status);
 
+        serde_json::from_str::<Value>(body.as_str())
+            .unwrap_or_else(|error| panic!("compact status JSON should be valid: {error}: {body}"));
+        assert!(body.len() < body.capacity());
         assert!(body.as_str().contains("\"mode\":\"supplement\""));
         assert!(body.as_str().contains("\"vin_vbus_mv\":11920"));
         assert!(body.as_str().contains("\"vin_iin_ma\":2900"));

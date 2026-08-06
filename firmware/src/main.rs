@@ -2744,10 +2744,8 @@ fn diag_snapshot_response_complete(body: &str) -> bool {
 
 #[cfg(feature = "web_serial")]
 fn write_web_serial_line(serial: &mut UsbSerialJtag<'static, Blocking>, line: &str) {
-    let _ = esp_firmware::usb_cdc_protocol::write_all_with(line.as_bytes(), |bytes| {
-        serial.write(bytes)
-    });
-    let _ = esp_firmware::usb_cdc_protocol::write_all_with(b"\n", |bytes| serial.write(bytes));
+    let _ = serial.write(line.as_bytes());
+    let _ = serial.write(b"\n");
 }
 
 #[cfg(feature = "net_http")]
