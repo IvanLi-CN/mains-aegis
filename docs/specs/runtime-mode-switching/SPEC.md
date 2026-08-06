@@ -357,10 +357,10 @@ PR: none
   evidence_note: 根目录是候选 A `11.3V / 11.5V` 的正式 sign-off suite；同目录 `comparison.json` 记录 B/C 两个 `100mV` 候选点，其中 B `11.4V / 11.6V` 在 `2500mA` 误判 Backup，C `11.5V / 11.7V` 虽通过但不优于 A 的更低 cutoff 规则。四张嵌入图已在浏览器真实渲染并导出 `.mhtml`。
 
 - source_type: firmware_preview
-  evidence_scope: normal firmware keeps `requested_outputs=both` and blocks Dashboard when only OUT-B is active
-  command: `cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario self-check-out-a-failed --out-dir /tmp/mains-aegis-output-self-check-preview`
+  evidence_scope: requested output blocked before Dashboard entry
+  command: `cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --scenario bq40-discharge-blocked --out-dir /tmp/mains-aegis-self-check-blocked-preview`
   image: `assets/front-panel-self-check-output-blocked.png`
-  evidence_note: 同源固件渲染入口显示 `BLOCKED` 自检态；OUT-A 为 `ERR`、OUT-B 保持 `RUN`，健康单路不会把正常固件自检降级为成功。
+  evidence_note: 同源固件渲染入口显示自检阻断态；TPS 未 active 的状态不得渲染为 `BACKUP`、`STANDBY`、`SUPPLEMENT` 或 `BLOCKED` Dashboard。
 
 ![Front panel self-check output blocked](assets/front-panel-self-check-output-blocked.png)
 
