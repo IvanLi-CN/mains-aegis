@@ -8,6 +8,7 @@
 - `status` and `mcu.runtime` diagnostics expose reset, boot health, safe mode, candidate state, and rollback capability/blocker.
 - Candidate confirmation/failed-boot transitions are host-tested, but activation remains prohibited until the release pipeline ships a rollback-enabled bootloader and dual-slot partition bundle.
 - The compile-time `hil-watchdog-stall` profile provides deterministic real-device watchdog and repeated-abnormal-boot injection. It is excluded from normal artifacts and automatically stops injecting once safe mode is active.
+- The compile-time `hil-clear-boot-health` cleanup profile clears retained HIL safe-mode state before restoring the normal release image; it is not a production recovery or rollback mechanism.
 
 ## Architecture blocker
 

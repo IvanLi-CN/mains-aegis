@@ -747,6 +747,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let previous_boot = esp_firmware::boot_recovery::newest_valid(read_boot_recovery_slots());
     let mut boot_record =
         esp_firmware::boot_recovery::BootRecord::begin_boot(previous_boot, reset_cause);
+    #[cfg(feature = "hil-clear-boot-health")]
+    if boot_record.safe_mode() {
+        boot_record = boot_record.clear_safe_mode_for_confirmed_recovery();
+    }
     write_boot_recovery_record(boot_record);
     esp_firmware::boot_recovery::publish_diagnostics(boot_record);
 

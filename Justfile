@@ -103,6 +103,10 @@ firmware-build-hil-19v:
 firmware-build-watchdog-hil:
     cd firmware && DEFMT_LOG=error cargo +esp build --release --bin esp-firmware --features net_http,web_serial,hil-watchdog-stall
 
+# Build the one-shot retained boot-health cleanup image used after watchdog HIL validation.
+firmware-build-boot-health-cleanup-hil:
+    cd firmware && DEFMT_LOG=error cargo +esp build --release --bin esp-firmware --features net_http,web_serial,hil-clear-boot-health
+
 # Build the Web Serial flash image from the current release ELF.
 firmware-web-image: firmware-build
     python3 -m esptool --chip esp32s3 elf2image --flash-mode dio --flash-freq 80m --flash-size 4MB --output {{ firmware_image }} {{ firmware_elf }}
