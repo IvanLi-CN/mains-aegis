@@ -3473,10 +3473,10 @@ pub fn render_frame<P: UiPainter>(
 
 pub fn render_firmware_safe_mode<P: UiPainter>(
     painter: &mut P,
+    variant: UiVariant,
     reset_cause: &str,
     abnormal_boots: u8,
 ) -> Result<(), P::Error> {
-    let variant = UiVariant::InstrumentB;
     let palette = palette_for(variant);
     fill(painter, 0, 0, UI_W, UI_H, palette.bg)?;
     draw_background_grid(painter, palette)?;

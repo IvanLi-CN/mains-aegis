@@ -1356,8 +1356,13 @@ fn run() -> Result<(), String> {
 
     match args.scenario {
         ScenarioArg::FirmwareSafeMode => {
-            front_panel_scene::render_firmware_safe_mode(&mut framebuffer, "watchdog", 3)
-                .map_err(|_| "render failed unexpectedly".to_string())?;
+            front_panel_scene::render_firmware_safe_mode(
+                &mut framebuffer,
+                args.variant.into_scene(),
+                "watchdog",
+                3,
+            )
+            .map_err(|_| "render failed unexpectedly".to_string())?;
         }
         ScenarioArg::Default => {
             front_panel_scene::render_frame_with_dashboard_route_overlay(

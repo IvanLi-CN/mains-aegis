@@ -461,6 +461,7 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
     );
     json_field_str(buf, "active_slot", "single_image", true);
     json_field_str(buf, "candidate_state", boot.candidate.as_str(), true);
+    json_field_str(buf, "confirmation_state", boot.candidate.as_str(), true);
     json_field_bool(
         buf,
         "confirmed",
@@ -601,7 +602,25 @@ pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: U
         true,
     );
     json_field_str(buf, "candidate_state", boot.candidate.as_str(), true);
-    json_field_bool(buf, "rollback_capable", false, false);
+    json_field_str(buf, "confirmation_state", boot.candidate.as_str(), true);
+    json_field_str(
+        buf,
+        "safe_mode_reason",
+        if matches!(boot.phase, crate::boot_recovery::BootPhase::SafeMode) {
+            "repeated_abnormal_boot"
+        } else {
+            "none"
+        },
+        true,
+    );
+    json_field_str(buf, "active_slot", "single_image", true);
+    json_field_bool(buf, "rollback_capable", false, true);
+    json_field_str(
+        buf,
+        "rollback_blocker",
+        "missing_rollback_bootloader_otadata_ota_slots",
+        false,
+    );
     let _ = buf.push_str("}}");
 }
 
@@ -2086,7 +2105,15 @@ mod tests {
         assert!(!body.as_str().contains("\"network\""));
         assert!(body.as_str().contains("\"boot\":{"));
         assert!(body.as_str().contains("\"reset_cause\":"));
+        assert!(body.as_str().contains("\"safe_mode_reason\":\"none\""));
+        assert!(body.as_str().contains("\"active_slot\":\"single_image\""));
+        assert!(body
+            .as_str()
+            .contains("\"confirmation_state\":\"unsupported_layout\""));
         assert!(body.as_str().contains("\"rollback_capable\":false"));
+        assert!(body
+            .as_str()
+            .contains("\"rollback_blocker\":\"missing_rollback_bootloader_otadata_ota_slots\""));
     }
 
     #[test]

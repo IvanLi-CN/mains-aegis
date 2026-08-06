@@ -113,11 +113,10 @@ impl BootRecord {
         self
     }
 
-    pub fn clear_safe_mode_for_confirmed_recovery(mut self) -> Self {
+    pub fn clear_safe_mode_for_recovery(mut self) -> Self {
         self.generation = self.generation.wrapping_add(1);
         self.abnormal_boots = 0;
         self.phase = BootPhase::Stabilizing;
-        self.candidate = CandidateState::Confirmed;
         self
     }
 
@@ -332,14 +331,26 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_recovery_exits_safe_mode_through_stabilization() {
+    fn newest_valid_falls_back_to_previous_slot_after_any_torn_write() {
+        let previous = BootRecord::fresh(ResetCause::PowerOn);
+        let next = BootRecord::begin_boot(Some(previous), ResetCause::Watchdog);
+        let encoded = next.encode();
+        for written in 0..RECORD_LEN {
+            let mut torn = [0u8; RECORD_LEN];
+            torn[..written].copy_from_slice(&encoded[..written]);
+            assert_eq!(newest_valid([previous.encode(), torn]), Some(previous));
+        }
+    }
+
+    #[test]
+    fn recovery_clear_exits_safe_mode_without_claiming_candidate_confirmation() {
         let mut record = BootRecord::fresh(ResetCause::PowerOn);
         record.phase = BootPhase::SafeMode;
         record.abnormal_boots = ABNORMAL_BOOT_THRESHOLD;
-        record = record.clear_safe_mode_for_confirmed_recovery();
+        record = record.clear_safe_mode_for_recovery();
         assert_eq!(record.phase, BootPhase::Stabilizing);
         assert_eq!(record.abnormal_boots, 0);
-        assert_eq!(record.candidate, CandidateState::Confirmed);
+        assert_eq!(record.candidate, CandidateState::UnsupportedLayout);
     }
 
     #[test]

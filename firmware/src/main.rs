@@ -749,7 +749,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         esp_firmware::boot_recovery::BootRecord::begin_boot(previous_boot, reset_cause);
     #[cfg(feature = "hil-clear-boot-health")]
     if boot_record.safe_mode() {
-        boot_record = boot_record.clear_safe_mode_for_confirmed_recovery();
+        boot_record = boot_record.clear_safe_mode_for_recovery();
     }
     write_boot_recovery_record(boot_record);
     esp_firmware::boot_recovery::publish_diagnostics(boot_record);
@@ -1461,10 +1461,25 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     }
 
     log_boot_stage("boot_self_test_begin");
+    let boot_requested_outputs = if boot_record.safe_mode() {
+        for channel in [output::OutputChannel::OutA, output::OutputChannel::OutB] {
+            if let Err((stage, err)) = output::tps55288::disable_output_only(&mut i2c, channel) {
+                defmt::warn!(
+                    "boot: safe_mode early output disable channel={} stage={} err={}",
+                    channel.name(),
+                    stage.as_str(),
+                    output::tps_error_kind(err)
+                );
+            }
+        }
+        output::EnabledOutputs::None
+    } else {
+        DEFAULT_ENABLED_OUTPUTS
+    };
     let mut self_test_audio_late_logged = false;
     let self_test = output::boot_self_test_with_report(
         &mut i2c,
-        DEFAULT_ENABLED_OUTPUTS,
+        boot_requested_outputs,
         DEFAULT_VOUT_MV,
         DEFAULT_ILIMIT_MA,
         TELEMETRY_INCLUDE_VIN_CH3,

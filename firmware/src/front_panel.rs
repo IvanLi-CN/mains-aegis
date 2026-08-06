@@ -581,8 +581,14 @@ where
         self.attention_hold = true;
         self.dashboard_page = DashboardPrimaryPage::DashboardHome;
         self.needs_redraw = true;
+        let variant = self.ui_variant;
         let _ = self.render_scene(|painter| {
-            front_panel_scene::render_firmware_safe_mode(painter, reset_cause, abnormal_boots)
+            front_panel_scene::render_firmware_safe_mode(
+                painter,
+                variant,
+                reset_cause,
+                abnormal_boots,
+            )
         });
     }
 
@@ -1396,8 +1402,14 @@ where
         };
         self.next_frame_deadline = now + frame_interval;
         if let Some((reset_cause, abnormal_boots)) = self.firmware_safe_mode {
+            let variant = self.ui_variant;
             if let Err(err) = self.render_scene(|painter| {
-                front_panel_scene::render_firmware_safe_mode(painter, reset_cause, abnormal_boots)
+                front_panel_scene::render_firmware_safe_mode(
+                    painter,
+                    variant,
+                    reset_cause,
+                    abnormal_boots,
+                )
             }) {
                 defmt::error!("ui: safe-mode render failed err={=?}", err);
             }
@@ -2786,8 +2798,14 @@ where
 
     fn render_inputs(&mut self, snapshot: InputSnapshot) -> Result<(), esp_hal::spi::Error> {
         if let Some((reset_cause, abnormal_boots)) = self.firmware_safe_mode {
+            let variant = self.ui_variant;
             return self.render_scene(|painter| {
-                front_panel_scene::render_firmware_safe_mode(painter, reset_cause, abnormal_boots)
+                front_panel_scene::render_firmware_safe_mode(
+                    painter,
+                    variant,
+                    reset_cause,
+                    abnormal_boots,
+                )
             });
         }
         let model = self.snapshot_to_model(snapshot);
