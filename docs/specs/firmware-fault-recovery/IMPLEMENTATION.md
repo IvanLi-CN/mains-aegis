@@ -11,6 +11,13 @@
 - The compile-time `hil-clear-boot-health` cleanup profile clears retained HIL safe-mode state before restoring the normal release image; it is not a production recovery or rollback mechanism.
 - The devd compact status includes reset cause, boot phase, abnormal count, safe-mode state, candidate state, and rollback capability. Its host test parses the rendered body as JSON so a trailing field delimiter cannot regress into a devd `native_cdc_timeout`.
 
+## Hardware validation
+
+- Device `mains-aegis-198840` on the owner-specified `/dev/cu.usbmodem21141401` was flashed only through the bound devd path.
+- Normal release `f8ace5f5-clean-9e88121a12918e22` returned a fresh native-CDC status with `reset_cause=power_on`, `abnormal_boots=0`, `safe_mode=false`, and live input/output measurements.
+- The matching `hil-watchdog-stall` image produced three consecutive runtime-watchdog resets and then returned `reset_cause=watchdog`, `abnormal_boots=3`, `phase=safe_mode`, `output.active=none`, both output enables false, and `charger.allow_charge=false`.
+- The matching `hil-clear-boot-health` image cleared retained test state. The normal release was restored, its exact build id and feature set were verified, fresh status again reported `abnormal_boots=0` and `safe_mode=false`, and the devd session was disconnected.
+
 ## Architecture blocker
 
 The current artifact is one application image flashed at `0x10000`. It contains no partition table, OTA data partition, alternate application slot, or project-built ESP-IDF bootloader with `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`. The `esp-bootloader-esp-idf` application crate can manipulate OTA metadata, but cannot add rollback semantics to the bootloader already installed on a device. End-to-end failed-boot rollback therefore cannot truthfully be enabled on this baseline.
