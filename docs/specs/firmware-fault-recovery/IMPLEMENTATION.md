@@ -9,6 +9,7 @@
 - Candidate confirmation/failed-boot transitions are host-tested, but activation remains prohibited until the release pipeline ships a rollback-enabled bootloader and dual-slot partition bundle.
 - The compile-time `hil-watchdog-stall` profile provides deterministic real-device watchdog and repeated-abnormal-boot injection. It is excluded from normal artifacts and automatically stops injecting once safe mode is active.
 - The compile-time `hil-clear-boot-health` cleanup profile clears retained HIL safe-mode state before restoring the normal release image; it is not a production recovery or rollback mechanism.
+- USB CDC responses retry partial device writes until the complete JSONL frame is transmitted. The devd compact status includes reset cause, boot phase, abnormal count, safe-mode state, candidate state, and rollback capability.
 
 ## Architecture blocker
 

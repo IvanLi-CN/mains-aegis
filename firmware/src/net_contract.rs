@@ -589,6 +589,19 @@ pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: U
         status.front_panel.attention_hold,
         false,
     );
+    let boot = crate::boot_recovery::diagnostics();
+    let _ = buf.push_str("},\"boot\":{");
+    json_field_str(buf, "reset_cause", boot.reset.as_str(), true);
+    json_field_str(buf, "phase", boot.phase_str(), true);
+    json_field_u32(buf, "abnormal_boots", boot.abnormal_boots as u32, true);
+    json_field_bool(
+        buf,
+        "safe_mode",
+        matches!(boot.phase, crate::boot_recovery::BootPhase::SafeMode),
+        true,
+    );
+    json_field_str(buf, "candidate_state", boot.candidate.as_str(), true);
+    json_field_bool(buf, "rollback_capable", false, false);
     let _ = buf.push_str("}}");
 }
 
@@ -2023,7 +2036,7 @@ mod tests {
 
     #[test]
     fn compact_status_json_keeps_hil_observation_fields() {
-        let mut body = String::<1536>::new();
+        let mut body = String::<4096>::new();
         let mut status = UpsStatusSnapshot::empty();
         status.mode = "supplement";
         status.input_source = "dcin";
@@ -2068,6 +2081,9 @@ mod tests {
         assert!(body.as_str().contains("\"current_ma\":-720"));
         assert!(!body.as_str().contains("\"cell_mv\""));
         assert!(!body.as_str().contains("\"network\""));
+        assert!(body.as_str().contains("\"boot\":{"));
+        assert!(body.as_str().contains("\"reset_cause\":"));
+        assert!(body.as_str().contains("\"rollback_capable\":false"));
     }
 
     #[test]

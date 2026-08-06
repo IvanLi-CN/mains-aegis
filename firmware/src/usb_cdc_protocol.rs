@@ -16,6 +16,21 @@ pub const WIFI_SSID_MAX_LEN: usize = 32;
 pub const WIFI_PSK_MAX_LEN: usize = 63;
 pub const WEB_SERIAL_RESPONSE_BODY_CAP: usize = 4096;
 pub const WEB_SERIAL_RESPONSE_FRAME_CAP: usize = 4608;
+
+pub fn write_all_with<E>(
+    bytes: &[u8],
+    mut write: impl FnMut(&[u8]) -> Result<usize, E>,
+) -> Result<(), E> {
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let written = write(&bytes[offset..])?;
+        if written == 0 {
+            continue;
+        }
+        offset += written;
+    }
+    Ok(())
+}
 pub const WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP: usize = 8192;
 pub const WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP: usize = 8704;
 pub const DIAG_SNAPSHOT_MAX_PACKAGES: usize = 8;
@@ -1530,5 +1545,19 @@ mod tests {
             parse_frame(frame.as_str()).unwrap(),
             UsbCdcFrame::WifiConfig { .. }
         ));
+    }
+
+    #[test]
+    fn cdc_line_writer_retries_short_writes_until_frame_is_complete() {
+        let mut bytes = std::vec::Vec::new();
+        let mut short_write = |buf: &[u8]| -> Result<usize, core::convert::Infallible> {
+            let count = buf.len().min(7);
+            bytes.extend_from_slice(&buf[..count]);
+            Ok(count)
+        };
+
+        let payload = "{\"type\":\"response\",\"result\":{\"boot\":{\"safe_mode\":true}}}";
+        write_all_with(format!("{payload}\n").as_bytes(), &mut short_write).unwrap();
+        assert_eq!(bytes, format!("{payload}\n").as_bytes());
     }
 }
