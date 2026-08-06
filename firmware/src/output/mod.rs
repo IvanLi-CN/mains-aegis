@@ -3628,12 +3628,7 @@ where
         ina_detected: ina_ready,
         detected_tmp_outputs,
         detected_tps_outputs,
-        requested_outputs: enabled_outputs_from_flags(
-            enabled_outputs.is_enabled(OutputChannel::OutA)
-                || recoverable_outputs.is_enabled(OutputChannel::OutA),
-            enabled_outputs.is_enabled(OutputChannel::OutB)
-                || recoverable_outputs.is_enabled(OutputChannel::OutB),
-        ),
+        requested_outputs: normal_boot_requested_outputs(desired_outputs),
         active_outputs: enabled_outputs,
         recoverable_outputs,
         output_gate_reason,

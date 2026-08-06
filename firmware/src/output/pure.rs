@@ -3152,6 +3152,12 @@ pub enum EnabledOutputs {
     Both,
 }
 
+/// Preserve the configured boot contract independently from the subset that is
+/// currently active or recoverable.
+pub const fn normal_boot_requested_outputs(desired: EnabledOutputs) -> EnabledOutputs {
+    desired
+}
+
 impl EnabledOutputs {
     pub fn is_enabled(self, ch: OutputChannel) -> bool {
         match self {

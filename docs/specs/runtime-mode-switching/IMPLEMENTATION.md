@@ -20,6 +20,8 @@
   - 且 `requested_outputs` 中存在未进入 `active_outputs` 的通道
   - 则 API / diag 发布 `mode=blocked`
   - front-panel 保持或退回自检/阻断界面，不渲染 Dashboard
+- 正常主固件启动自检始终保留配置请求 `both`；输出健康与可恢复集合只写入
+  `active_outputs / recoverable_outputs`，不再反向缩窄 `requested_outputs`。
 - staged assist 已经落地：
   - `standby` 使用低于额定输出的热备目标
   - `assist_low` 通过运行时双判据进入，并按 `assist_ramp_step_mv / assist_ramp_interval_ms` 限速爬升

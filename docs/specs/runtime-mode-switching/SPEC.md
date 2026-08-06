@@ -217,6 +217,9 @@
 
 ### 5. TPS 输出活跃发布门槛
 
+- 正常主固件的 `requested_outputs` 固定保留启动配置 `both`，不得由启动自检得到的
+  `active_outputs / recoverable_outputs` 健康子集重建或缩窄。
+- 只有显式诊断/测试固件 profile 可以把 `requested_outputs` 配置为单通道。
 - `STANDBY / ASSIST / BACKUP` 都属于需要 TPS 输出契约成立后才可对外发布的运行态。
 - 若 `requested_outputs != none`，则 `requested_outputs` 中每一路都必须同时存在于
   `active_outputs`。
@@ -291,6 +294,11 @@
 - Given `input_source` 不是 `dcin`，When 输入仍确认在线，Then 内部阶段不得仅因在线输入存在而进入 `assist_low` 或 `assist_rated`。
 - Given `requested_outputs=both` 且 `active_outputs=none`，When 内部候选 mode 为 `backup`，Then
   owner-facing `mode=blocked`，不得发布 `mode=backup`。
+- Given 正常主固件配置 `requested_outputs=both`，When 自检只有 OUT-A 或只有 OUT-B 通过，Then
+  `requested_outputs` 仍为 `both`、`active_outputs` 只反映健康子集、owner-facing
+  `mode=blocked`，且前面板不得进入 Dashboard。
+- Given 显式选择独立诊断/测试固件的单通道 profile，When 该通道通过自身安全门槛，Then
+  允许该专用固件按单通道运行；该例外不得由正常主固件根据健康子集自动推断。
 - Given `requested_outputs` 包含某路输出且 `active_outputs` 不包含该路，When 内部候选 mode 为
   `standby` 或 `supplement`，Then owner-facing `mode=blocked`。
 - Given 输入状态未知，When `TPS` 仍在输出，Then 模式保持上一确认态，不得仅因输出活跃直接进入 `BACKUP`。
@@ -349,10 +357,10 @@ PR: none
   evidence_note: 根目录是候选 A `11.3V / 11.5V` 的正式 sign-off suite；同目录 `comparison.json` 记录 B/C 两个 `100mV` 候选点，其中 B `11.4V / 11.6V` 在 `2500mA` 误判 Backup，C `11.5V / 11.7V` 虽通过但不优于 A 的更低 cutoff 规则。四张嵌入图已在浏览器真实渲染并导出 `.mhtml`。
 
 - source_type: firmware_preview
-  evidence_scope: requested output blocked before Dashboard entry
-  command: `cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --scenario bq40-discharge-blocked --out-dir /tmp/mains-aegis-self-check-blocked-preview`
+  evidence_scope: normal firmware keeps `requested_outputs=both` and blocks Dashboard when only OUT-B is active
+  command: `cargo run --manifest-path tools/front-panel-preview/Cargo.toml -- --variant C --focus idle --mode standby --scenario self-check-out-a-failed --out-dir /tmp/mains-aegis-output-self-check-preview`
   image: `assets/front-panel-self-check-output-blocked.png`
-  evidence_note: 同源固件渲染入口显示自检阻断态；TPS 未 active 的状态不得渲染为 `BACKUP`、`STANDBY`、`SUPPLEMENT` 或 `BLOCKED` Dashboard。
+  evidence_note: 同源固件渲染入口显示 `BLOCKED` 自检态；OUT-A 为 `ERR`、OUT-B 保持 `RUN`，健康单路不会把正常固件自检降级为成功。
 
 ![Front panel self-check output blocked](assets/front-panel-self-check-output-blocked.png)
 

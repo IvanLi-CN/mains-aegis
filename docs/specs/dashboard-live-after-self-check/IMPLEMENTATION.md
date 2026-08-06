@@ -6,6 +6,7 @@
 
 - Lifecycle: archived
 - Implementation: 见下方迁移状态与覆盖记录。
+- Dashboard eligibility 已覆盖正常主固件双路输出要求；任一路未 active 时保持/退回自检页。
 
 ## Migrated Implementation Record
 

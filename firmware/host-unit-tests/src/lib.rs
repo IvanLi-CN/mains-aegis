@@ -701,6 +701,50 @@ pub mod output {
     }
 
     #[test]
+    fn normal_boot_preserves_required_outputs_independently_of_healthy_subset() {
+        use channel::OutputChannel::{OutA, OutB};
+
+        let cases = [
+            (
+                pure::EnabledOutputs::Both,
+                pure::EnabledOutputs::Only(OutB),
+                UpsMode::Blocked,
+            ),
+            (
+                pure::EnabledOutputs::Both,
+                pure::EnabledOutputs::Only(OutA),
+                UpsMode::Blocked,
+            ),
+            (
+                pure::EnabledOutputs::Both,
+                pure::EnabledOutputs::Both,
+                UpsMode::Standby,
+            ),
+        ];
+
+        for (desired, active, expected_mode) in cases {
+            let requested = pure::normal_boot_requested_outputs(desired);
+            assert_eq!(requested, pure::EnabledOutputs::Both);
+            assert_eq!(
+                gate_owner_mode_on_active_outputs(UpsMode::Standby, requested, active),
+                expected_mode
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_diagnostic_single_channel_request_remains_single_channel() {
+        let desired = pure::EnabledOutputs::Only(channel::OutputChannel::OutB);
+        let requested = pure::normal_boot_requested_outputs(desired);
+
+        assert_eq!(requested, desired);
+        assert_eq!(
+            gate_owner_mode_on_active_outputs(UpsMode::Standby, requested, desired),
+            UpsMode::Standby
+        );
+    }
+
+    #[test]
     fn runtime_charge_override_blocks_charging_in_output_and_blocked_modes() {
         assert_eq!(
             runtime_charge_override(UpsMode::Supplement),
