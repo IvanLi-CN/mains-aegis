@@ -27,7 +27,7 @@ The normal firmware previously disabled both timer-group watchdogs. Peripheral r
 - After that initialization checkpoint, feeding occurs only after one complete critical-loop slice has serviced power policy, fan output, front-panel state, status publication, and enabled transport work.
 - Focused USB-PD negotiation and other bounded subloops do not feed independently. A wedged subloop therefore remains recoverable.
 - Explicit diagnostic firmware variants may use a different policy only behind a compile-time feature and must not silently disable the normal-firmware contract.
-- The HIL-only `hil-watchdog-stall` feature deliberately stops before the first runtime feed while the boot is not in safe mode. Once repeated abnormal boots enter safe mode, injection is bypassed so diagnostics and the recovery surface remain reachable.
+- The HIL-only `hil-watchdog-stall` feature deliberately stops after the one-time feed that arms the runtime window and before any completed-loop feed while the boot is not in safe mode. Once repeated abnormal boots enter safe mode, injection is bypassed so diagnostics and the recovery surface remain reachable.
 
 ### Reset taxonomy
 
