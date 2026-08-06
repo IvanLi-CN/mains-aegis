@@ -741,11 +741,19 @@ pub mod output {
     }
 
     #[test]
-    fn output_bypass_restore_preserves_original_requested_contract() {
-        assert_eq!(
-            pure::bypass_restore_requested_outputs(pure::EnabledOutputs::Both),
-            pure::EnabledOutputs::Both
-        );
+    fn output_bypass_restore_preserves_contract_and_restarts_admission() {
+        let state = pure::bypass_restore_output_state(pure::EnabledOutputs::Both);
+
+        assert_eq!(state.requested_outputs, pure::EnabledOutputs::Both);
+        assert_eq!(state.active_outputs, pure::EnabledOutputs::None);
+        assert_eq!(state.recoverable_outputs, pure::EnabledOutputs::None);
+        assert_eq!(state.gate_reason, OutputGateReason::None);
+        assert!(pure::output_admission_retry_needed(
+            state.requested_outputs,
+            state.active_outputs,
+            state.recoverable_outputs,
+            state.gate_reason,
+        ));
     }
 
     #[test]

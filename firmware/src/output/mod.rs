@@ -4768,13 +4768,10 @@ where
         if !self.output_bypass_active {
             return;
         }
-        let restore = self.output_state.recoverable_outputs;
         let requested = self.bypass_requested_outputs;
         self.output_bypass_active = false;
         self.bypass_requested_outputs = EnabledOutputs::None;
-        self.output_state.requested_outputs = bypass_restore_requested_outputs(requested);
-        self.output_state.active_outputs = EnabledOutputs::None;
-        self.output_state.gate_reason = OutputGateReason::None;
+        self.output_state = bypass_restore_output_state(requested);
         self.recoverable_output_source = OutputGateReason::None;
         defmt::info!(
             "power: output bypass restored requested_outputs={}",

@@ -25,6 +25,8 @@
 - `output::pure::boot_output_contract` 是启动结果与 owner-facing mode 的单一派生入口；标准
   `just firmware-host-test` 会覆盖完整 host suite，前面板预览 crate 通过自身 build script
   生成同源 profile 后可直接复现单路失败阻断场景。
+- 手动 output bypass 恢复时还原 bypass 前的完整请求，并清空 active/recoverable 子集，使
+  admission retry 按原契约重新准入所有要求通道。
 - staged assist 已经落地：
   - `standby` 使用低于额定输出的热备目标
   - `assist_low` 通过运行时双判据进入，并按 `assist_ramp_step_mv / assist_ramp_interval_ms` 限速爬升

@@ -3194,10 +3194,15 @@ pub fn boot_output_contract(
     }
 }
 
-pub const fn bypass_restore_requested_outputs(
+pub const fn bypass_restore_output_state(
     requested_before_bypass: EnabledOutputs,
-) -> EnabledOutputs {
-    requested_before_bypass
+) -> OutputRuntimeState {
+    OutputRuntimeState::new(
+        requested_before_bypass,
+        EnabledOutputs::None,
+        EnabledOutputs::None,
+        OutputGateReason::None,
+    )
 }
 
 impl EnabledOutputs {
