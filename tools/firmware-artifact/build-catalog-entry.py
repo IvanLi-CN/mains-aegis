@@ -151,6 +151,13 @@ def main() -> int:
         "profile": args.profile,
         "features": features,
         "protocol": "mains-aegis.cdc.v1",
+        "fault_recovery": {
+            "mcu_watchdog": True,
+            "boot_health": True,
+            "rollback_capable": False,
+            "rollback_blocker": "missing_rollback_bootloader_otadata_ota_slots",
+            "layout": "single_image_0x10000",
+        },
         "defmt": {
             "enabled": True,
             "encoding": "defmt-espflash",

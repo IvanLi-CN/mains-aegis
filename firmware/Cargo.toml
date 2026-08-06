@@ -18,6 +18,12 @@ force-min-charge = []
 bms-dual-probe-diag = []
 # Disable MCU-driven fan and software thermal derating/shutdown while keeping TMP/THERM_KILL_N observation active.
 tmp-hw-protect-test = []
+# HIL-only fault injection: stop servicing the runtime watchdog until repeated abnormal boots
+# enter safe mode. Safe mode itself skips the stall so diagnostics remain reachable.
+hil-watchdog-stall = []
+# HIL-only cleanup after watchdog-loop validation. Clears retained safe-mode state once, then
+# runs the normal firmware path.
+hil-clear-boot-health = []
 # Optional fan tach calibration. When neither selector is set, firmware defaults to 2 pulses per
 # revolution. Enabling both selectors is forbidden at compile time.
 fan-tach-1-ppr = []

@@ -961,6 +961,7 @@ fn bq40_snapshot_for_scenario(
 ) -> (SelfCheckUiSnapshot, SelfCheckOverlay) {
     let mut snapshot = base_bq40_snapshot(mode);
     let overlay = match scenario {
+        ScenarioArg::FirmwareSafeMode => SelfCheckOverlay::None,
         ScenarioArg::SelfCheckBmsMissingTpsWarn => {
             snapshot.bq25792 = SelfCheckCommState::Ok;
             snapshot.bq25792_allow_charge = Some(false);
@@ -1354,6 +1355,15 @@ fn run() -> Result<(), String> {
     };
 
     match args.scenario {
+        ScenarioArg::FirmwareSafeMode => {
+            front_panel_scene::render_firmware_safe_mode(
+                &mut framebuffer,
+                args.variant.into_scene(),
+                "watchdog",
+                3,
+            )
+            .map_err(|_| "render failed unexpectedly".to_string())?;
+        }
         ScenarioArg::Default => {
             front_panel_scene::render_frame_with_dashboard_route_overlay(
                 &mut framebuffer,
@@ -2088,6 +2098,7 @@ impl ModeArg {
 #[derive(Clone, Copy, Debug)]
 enum ScenarioArg {
     Default,
+    FirmwareSafeMode,
     DisplayDiag,
     DashboardRuntimeStandby,
     DashboardRuntimeStandbyTouchZones,
@@ -2176,6 +2187,7 @@ impl ScenarioArg {
     fn parse(raw: &str) -> Result<Self, String> {
         match raw.to_ascii_lowercase().as_str() {
             "default" => Ok(Self::Default),
+            "firmware-safe-mode" => Ok(Self::FirmwareSafeMode),
             "display-diag" => Ok(Self::DisplayDiag),
             "dashboard-runtime-standby" => Ok(Self::DashboardRuntimeStandby),
             "dashboard-runtime-standby-touch-zones" => Ok(Self::DashboardRuntimeStandbyTouchZones),
@@ -2303,6 +2315,7 @@ impl ScenarioArg {
     fn as_tag(self) -> &'static str {
         match self {
             ScenarioArg::Default => "default",
+            ScenarioArg::FirmwareSafeMode => "firmware-safe-mode",
             ScenarioArg::DisplayDiag => "display-diag",
             ScenarioArg::DashboardRuntimeStandby => "dashboard-runtime-standby",
             ScenarioArg::DashboardRuntimeStandbyTouchZones => {

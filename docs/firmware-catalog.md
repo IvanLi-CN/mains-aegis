@@ -10,6 +10,8 @@ Firmware Catalog is the shared firmware artifact contract for Mains Aegis Web Di
 
 Each catalog has `schema_version=1` and an `artifacts` array. Each artifact describes one ESP32-S3 firmware build:
 
+The `fault_recovery` object is authoritative for update recovery. Current single-image artifacts declare `mcu_watchdog=true`, `boot_health=true`, and `rollback_capable=false` with blocker `missing_rollback_bootloader_otadata_ota_slots`. Tooling must not offer candidate activation or describe manual reflashing as rollback until the catalog ships a rollback-enabled bootloader, `otadata`, and two OTA application slots as one verified bundle.
+
 - `artifact_id`: stable catalog identifier derived from name, chip, profile, features, and `build_id`.
 - `git_sha`, `git_dirty`, `build_id`: provenance used for device identity matching.
 - `target_chip`: always `esp32s3`.

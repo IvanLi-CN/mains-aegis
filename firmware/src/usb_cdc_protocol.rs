@@ -16,6 +16,7 @@ pub const WIFI_SSID_MAX_LEN: usize = 32;
 pub const WIFI_PSK_MAX_LEN: usize = 63;
 pub const WEB_SERIAL_RESPONSE_BODY_CAP: usize = 4096;
 pub const WEB_SERIAL_RESPONSE_FRAME_CAP: usize = 4608;
+
 pub const WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP: usize = 8192;
 pub const WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP: usize = 8704;
 pub const DIAG_SNAPSHOT_MAX_PACKAGES: usize = 8;
