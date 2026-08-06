@@ -2514,34 +2514,12 @@ fn stable_mains_present(
     stable_mains_state(vin_mains_present, vin_vbus_mv, charger_present).present
 }
 
-fn requested_outputs_active(requested: EnabledOutputs, active: EnabledOutputs) -> bool {
-    match requested {
-        EnabledOutputs::None => true,
-        EnabledOutputs::Only(ch) => active.is_enabled(ch),
-        EnabledOutputs::Both => active == EnabledOutputs::Both,
-    }
-}
-
-fn mode_requires_active_tps_outputs(mode: UpsMode, requested: EnabledOutputs) -> bool {
-    requested != EnabledOutputs::None
-        && matches!(
-            mode,
-            UpsMode::Standby | UpsMode::Supplement | UpsMode::Backup
-        )
-}
-
 fn gate_owner_mode_on_active_outputs(
     mode: UpsMode,
     requested: EnabledOutputs,
     active: EnabledOutputs,
 ) -> UpsMode {
-    if mode_requires_active_tps_outputs(mode, requested)
-        && !requested_outputs_active(requested, active)
-    {
-        UpsMode::Blocked
-    } else {
-        mode
-    }
+    boot_output_contract(requested, active, mode).owner_mode
 }
 
 fn discharge_authorization_input_ready(
@@ -3610,7 +3588,8 @@ where
         Some(false) => UpsMode::Backup,
         _ => UpsMode::Standby,
     };
-    ui.mode = gate_owner_mode_on_active_outputs(candidate_mode, desired_outputs, enabled_outputs);
+    let boot_outputs = boot_output_contract(desired_outputs, enabled_outputs, candidate_mode);
+    ui.mode = boot_outputs.owner_mode;
 
     defmt::info!(
         "self_test: done requested_outputs={} active_outputs={} recoverable_outputs={} gate_reason={} charger_enabled={=bool} bms_present={=bool}",
@@ -3628,8 +3607,8 @@ where
         ina_detected: ina_ready,
         detected_tmp_outputs,
         detected_tps_outputs,
-        requested_outputs: normal_boot_requested_outputs(desired_outputs),
-        active_outputs: enabled_outputs,
+        requested_outputs: boot_outputs.requested_outputs,
+        active_outputs: boot_outputs.active_outputs,
         recoverable_outputs,
         output_gate_reason,
         charger_probe_ok,

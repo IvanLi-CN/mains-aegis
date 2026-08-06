@@ -723,25 +723,21 @@ pub mod output {
         ];
 
         for (desired, active, expected_mode) in cases {
-            let requested = pure::normal_boot_requested_outputs(desired);
-            assert_eq!(requested, pure::EnabledOutputs::Both);
-            assert_eq!(
-                gate_owner_mode_on_active_outputs(UpsMode::Standby, requested, active),
-                expected_mode
-            );
+            let contract = pure::boot_output_contract(desired, active, UpsMode::Standby);
+            assert_eq!(contract.requested_outputs, pure::EnabledOutputs::Both);
+            assert_eq!(contract.active_outputs, active);
+            assert_eq!(contract.owner_mode, expected_mode);
         }
     }
 
     #[test]
     fn explicit_diagnostic_single_channel_request_remains_single_channel() {
         let desired = pure::EnabledOutputs::Only(channel::OutputChannel::OutB);
-        let requested = pure::normal_boot_requested_outputs(desired);
+        let contract = pure::boot_output_contract(desired, desired, UpsMode::Standby);
 
-        assert_eq!(requested, desired);
-        assert_eq!(
-            gate_owner_mode_on_active_outputs(UpsMode::Standby, requested, desired),
-            UpsMode::Standby
-        );
+        assert_eq!(contract.requested_outputs, desired);
+        assert_eq!(contract.active_outputs, desired);
+        assert_eq!(contract.owner_mode, UpsMode::Standby);
     }
 
     #[test]

@@ -214,10 +214,10 @@ mcu-agentd monitor esp --reset
 - I2C 总线：`I2C1`（`GPIO48=SDA`，`GPIO47=SCL`），`25kHz`
 - OUT-A：`addr=0x74`（`TPS55288 OUT-A` / `VOUT_TPSA`）
 - OUT-B：`addr=0x75`（`TPS55288 OUT-B` / `VOUT_TPSB`）
-- 默认启用：`out_a`
+- 正常主固件默认启用：`out_a+out_b`
 - 目标输出：默认 `12V`；启用 `main-vout-19v` 时切到 `19V`
 - 目标限流：`3.5A`
-- 非默认输出路：通过寄存器关闭输出（`OE=0`），不主动稳压输出
+- 任一要求输出路未通过自检时，保留 `requested_outputs=out_a+out_b` 并发布 `mode=blocked`
 - 运行态软保护：温度/电流超阈值时会逐步下调 `IOUT_LIMIT`，若降额期间 `VOUT < 14V` 持续则进入 `active_protection` 关断
 
 > 以上默认 profile 由主固件 Cargo feature 决定：未显式选择时回落到 `12V`，启用 `main-vout-19v` 时切到 `19V`。`main-vout-12v` 与 `main-vout-19v` 不允许同时启用（不要在上电状态下频繁刷写造成误判）。
@@ -226,11 +226,11 @@ mcu-agentd monitor esp --reset
 
 启动阶段（配置结果）：
 
-- 默认 12V：`power: requested_outputs=out_a active_outputs=out_a recoverable_outputs=none gate_reason=none target_vout_mv=12000 target_ilimit_ma=3500`
-- 19V feature：`power: requested_outputs=out_a active_outputs=out_a recoverable_outputs=none gate_reason=none target_vout_mv=19000 target_ilimit_ma=3500`
+- 默认 12V：`power: requested_outputs=out_a+out_b active_outputs=out_a+out_b recoverable_outputs=none gate_reason=none target_vout_mv=12000 target_ilimit_ma=3500`
+- 19V feature：`power: requested_outputs=out_a+out_b active_outputs=out_a+out_b recoverable_outputs=none gate_reason=none target_vout_mv=19000 target_ilimit_ma=3500`
 - `power: ina3221 ok ...`
 - `power: tps addr=0x74 configured enabled=true ...`
-- `power: tps addr=0x75 configured enabled=false ...`
+- `power: tps addr=0x75 configured enabled=true ...`
 
 故障/告警（`I2C1_INT(GPIO33)` 触发时，最小可观测口径）：
 

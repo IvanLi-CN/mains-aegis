@@ -79,7 +79,7 @@ host-test:
 
 # Run firmware host-side unit tests.
 firmware-host-test:
-    cargo test --manifest-path firmware/host-unit-tests/Cargo.toml usb_cdc_protocol
+    cargo test --manifest-path firmware/host-unit-tests/Cargo.toml
 
 # Check ESP firmware.
 firmware-check:
