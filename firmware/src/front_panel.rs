@@ -420,6 +420,7 @@ where
     display_power_epoch: Instant,
     display_power: DisplayPowerController,
     attention_hold: bool,
+    firmware_safe_mode: Option<(&'static str, u8)>,
 }
 
 impl<I2C> FrontPanel<I2C>
@@ -525,6 +526,7 @@ where
             display_power_epoch: Instant::now(),
             display_power: DisplayPowerController::new(DisplayPowerPolicy::release_default(), 0),
             attention_hold: false,
+            firmware_safe_mode: None,
         }
     }
 
@@ -572,6 +574,16 @@ where
             PANEL_ORIENTATION as u8
         );
         esp_println::println!("ui: boot splash -> self-check");
+    }
+
+    pub fn enter_firmware_safe_mode(&mut self, reset_cause: &'static str, abnormal_boots: u8) {
+        self.firmware_safe_mode = Some((reset_cause, abnormal_boots));
+        self.attention_hold = true;
+        self.dashboard_page = DashboardPrimaryPage::DashboardHome;
+        self.needs_redraw = true;
+        let _ = self.render_scene(|painter| {
+            front_panel_scene::render_firmware_safe_mode(painter, reset_cause, abnormal_boots)
+        });
     }
 
     fn reinitialize_display_path(&mut self, trigger: &'static str) -> Result<(), ()> {
@@ -1241,6 +1253,9 @@ where
     }
 
     pub fn enter_dashboard(&mut self) {
+        if self.firmware_safe_mode.is_some() {
+            return;
+        }
         if !dashboard_allowed(&self.self_check_snapshot) {
             defmt::warn!(
                 "ui: enter_dashboard denied reason=dashboard_not_allowed mode={}",
@@ -1380,6 +1395,14 @@ where
             FRAME_INTERVAL
         };
         self.next_frame_deadline = now + frame_interval;
+        if let Some((reset_cause, abnormal_boots)) = self.firmware_safe_mode {
+            if let Err(err) = self.render_scene(|painter| {
+                front_panel_scene::render_firmware_safe_mode(painter, reset_cause, abnormal_boots)
+            }) {
+                defmt::error!("ui: safe-mode render failed err={=?}", err);
+            }
+            return None;
+        }
 
         let mut ui_action = None;
         match self.read_inputs() {
@@ -2762,6 +2785,11 @@ where
     }
 
     fn render_inputs(&mut self, snapshot: InputSnapshot) -> Result<(), esp_hal::spi::Error> {
+        if let Some((reset_cause, abnormal_boots)) = self.firmware_safe_mode {
+            return self.render_scene(|painter| {
+                front_panel_scene::render_firmware_safe_mode(painter, reset_cause, abnormal_boots)
+            });
+        }
         let model = self.snapshot_to_model(snapshot);
         let variant = self.ui_variant;
         let dashboard_shell = self.dashboard_shell_state();

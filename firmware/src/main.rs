@@ -4,7 +4,7 @@
 #[cfg(feature = "net_http")]
 extern crate alloc;
 
-use core::{cell::RefCell, fmt::Write as _};
+use core::{cell::RefCell, fmt::Write as _, ptr};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -60,7 +60,10 @@ use esp_hal::main;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::spi::Mode as SpiMode;
 use esp_hal::time::{Duration, Instant, Rate};
-use esp_hal::timer::{systimer::SystemTimer, timg::TimerGroup};
+use esp_hal::timer::{
+    systimer::SystemTimer,
+    timg::{MwdtStage, TimerGroup},
+};
 #[cfg(feature = "web_serial")]
 use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_hal::Blocking;
@@ -120,6 +123,47 @@ const USB_PD_FIXED_20V_ENABLED: bool = !cfg!(feature = "no-pd-sink-20v");
 const USB_PD_PPS_ENABLED: bool = !cfg!(feature = "no-pps");
 const USB_PD_NEGOTIATION_FOCUS_SLICE: Duration = Duration::from_millis(25);
 const WEB_SERIAL_SERVICE_INTERVAL: Duration = Duration::from_millis(100);
+const MCU_WATCHDOG_BOOT_TIMEOUT: Duration = Duration::from_secs(60);
+const MCU_WATCHDOG_RUNTIME_TIMEOUT: Duration = Duration::from_secs(8);
+
+#[unsafe(link_section = ".rtc_slow.persistent.boot_recovery")]
+static mut BOOT_RECOVERY_SLOTS: [[u8; esp_firmware::boot_recovery::RECORD_LEN]; 2] =
+    [[0; esp_firmware::boot_recovery::RECORD_LEN]; 2];
+
+fn read_boot_recovery_slots() -> [[u8; esp_firmware::boot_recovery::RECORD_LEN]; 2] {
+    unsafe { ptr::read_volatile(ptr::addr_of!(BOOT_RECOVERY_SLOTS)) }
+}
+
+fn write_boot_recovery_record(record: esp_firmware::boot_recovery::BootRecord) {
+    let slot = esp_firmware::boot_recovery::next_slot(record);
+    let encoded = record.encode();
+    unsafe {
+        ptr::write_volatile(ptr::addr_of_mut!(BOOT_RECOVERY_SLOTS[slot]), encoded);
+    }
+}
+
+fn normalized_reset_cause() -> esp_firmware::boot_recovery::ResetCause {
+    use esp_firmware::boot_recovery::ResetCause;
+    use esp_hal::rtc_cntl::SocResetReason;
+    match esp_hal::system::reset_reason() {
+        Some(SocResetReason::ChipPowerOn) => ResetCause::PowerOn,
+        Some(SocResetReason::CoreSw | SocResetReason::CpuSw) => ResetCause::Software,
+        Some(
+            SocResetReason::CoreMwdt0
+            | SocResetReason::CoreMwdt1
+            | SocResetReason::CoreRtcWdt
+            | SocResetReason::CpuMwdt0
+            | SocResetReason::CpuMwdt1
+            | SocResetReason::CpuRtcWdt
+            | SocResetReason::SysRtcWdt,
+        ) => ResetCause::Watchdog,
+        Some(SocResetReason::SysBrownOut | SocResetReason::CorePwrGlitch) => ResetCause::Brownout,
+        Some(SocResetReason::CoreUsbJtag | SocResetReason::CoreUsbUart) => {
+            ResetCause::ExternalDebug
+        }
+        _ => ResetCause::Unknown,
+    }
+}
 
 // External SYNC for TPS55288 DITH/SYNC pins (SYNCA=0°, SYNCB=180°).
 // RFSW on board is 43kΩ (U17/U18 pin 8), so nominal fSW ≈ 20MHz / 43kΩ ≈ 465kHz.
@@ -699,14 +743,22 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     // Ensure the system timer is enabled before calling `Instant::now()`.
     let _systimer = SystemTimer::new(peripherals.SYSTIMER);
 
-    // Disable watchdog timers for the simplest possible bring-up loop.
+    let reset_cause = normalized_reset_cause();
+    let previous_boot = esp_firmware::boot_recovery::newest_valid(read_boot_recovery_slots());
+    let mut boot_record =
+        esp_firmware::boot_recovery::BootRecord::begin_boot(previous_boot, reset_cause);
+    write_boot_recovery_record(boot_record);
+    esp_firmware::boot_recovery::publish_diagnostics(boot_record);
+
+    // TIMG0 timer0 is owned by esp-rtos; the watchdog remains an independent resource.
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     #[cfg(feature = "net_http")]
     let timg0_timer0 = timg0.timer0;
     let mut wdt0 = timg0.wdt;
     #[cfg(feature = "net_http")]
     esp_rtos::start(timg0_timer0);
-    wdt0.disable();
+    wdt0.set_timeout(MwdtStage::Stage0, MCU_WATCHDOG_BOOT_TIMEOUT);
+    wdt0.enable();
 
     let timg1 = TimerGroup::new(peripherals.TIMG1);
     let mut wdt1 = timg1.wdt;
@@ -1479,6 +1531,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     log_boot_stage("boot_self_test_done");
 
     let cfg = output::Config {
+        firmware_safe_mode: boot_record.safe_mode(),
         ina_detected: self_test.ina_detected,
         detected_tmp_outputs: self_test.detected_tmp_outputs,
         detected_tps_outputs: self_test.detected_tps_outputs,
@@ -1568,7 +1621,23 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         cfg.ilimit_ma
     );
     power.init_best_effort();
+    if boot_record.safe_mode() {
+        power.enter_firmware_safe_mode();
+        defmt::error!(
+            "boot: safe_mode reset={} abnormal_boots={} rollback=unsupported_layout",
+            boot_record.last_reset.as_str(),
+            boot_record.abnormal_boots
+        );
+        esp_println::println!(
+            "boot: RECOVERY SAFE MODE reset={} abnormal_boots={} recovery=install_confirmed_firmware rollback=unsupported_layout",
+            boot_record.last_reset.as_str(),
+            boot_record.abnormal_boots
+        );
+    }
     log_boot_stage("power_init_done");
+    // Arm the short runtime window only after boot self-check and power init completed.
+    wdt0.set_timeout(MwdtStage::Stage0, MCU_WATCHDOG_RUNTIME_TIMEOUT);
+    wdt0.feed();
     power.update_usb_pd_state(initial_pd_state);
     #[cfg(feature = "net_http")]
     {
@@ -1611,6 +1680,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     esp_firmware::net::publish_diag_snapshot(power.derived_power_snapshot());
     front_panel.update_self_check_snapshot(initial_snapshot);
     front_panel.update_bms_activation_state(power.bms_activation_state());
+    if boot_record.safe_mode() {
+        front_panel
+            .enter_firmware_safe_mode(boot_record.last_reset.as_str(), boot_record.abnormal_boots);
+    }
     let mut last_dashboard_block_reason = None;
     if front_panel_scene::self_check_can_enter_dashboard(&initial_snapshot) {
         front_panel.enter_dashboard();
@@ -1659,6 +1732,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
 
     let mut irq_tracker = irq::IrqTracker::new();
     let pd_started_at = Instant::now();
+    let boot_stable_started_at = Instant::now();
+    let mut boot_marked_healthy = false;
     let mut last_irq_log_at: Option<Instant> = None;
     let mut last_fan_tach_log_at: Option<Instant> = None;
     let mut last_audio_diag_at: Option<Instant> = None;
@@ -2168,6 +2243,23 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             #[cfg(feature = "net_http")]
             yield_now().await;
         }
+        if !boot_record.safe_mode()
+            && !boot_marked_healthy
+            && boot_stable_started_at.elapsed()
+                >= Duration::from_millis(esp_firmware::boot_recovery::STABLE_RUNTIME_MS as u64)
+        {
+            boot_record = boot_record.mark_healthy();
+            write_boot_recovery_record(boot_record);
+            esp_firmware::boot_recovery::publish_diagnostics(boot_record);
+            boot_marked_healthy = true;
+            defmt::info!(
+                "boot: healthy reset={} rollback={}",
+                reset_cause.as_str(),
+                boot_record.candidate.as_str()
+            );
+        }
+        // This is the only feed point: every critical loop slice above completed.
+        wdt0.feed();
     }
 }
 

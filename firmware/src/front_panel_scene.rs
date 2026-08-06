@@ -1,3 +1,5 @@
+use core::fmt::Write as _;
+
 use embedded_graphics_core::{
     draw_target::DrawTarget,
     geometry::{OriginDimensions, Point, Size},
@@ -3467,6 +3469,103 @@ pub fn render_frame<P: UiPainter>(
         None,
         SelfCheckOverlay::None,
     )
+}
+
+pub fn render_firmware_safe_mode<P: UiPainter>(
+    painter: &mut P,
+    reset_cause: &str,
+    abnormal_boots: u8,
+) -> Result<(), P::Error> {
+    let variant = UiVariant::InstrumentB;
+    let palette = palette_for(variant);
+    fill(painter, 0, 0, UI_W, UI_H, palette.bg)?;
+    draw_background_grid(painter, palette)?;
+    draw_outline(painter, 0, 0, UI_W, UI_H, ERROR_COLOR)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "RECOVERY SAFE MODE",
+        Point::new(12, 12),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "SAFE",
+        Point::new(304, 12),
+        HorizontalAlignment::Right,
+        ERROR_COLOR,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "BOOT LOOP BLOCKED",
+        Point::new(12, 31),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    fill(painter, 12, 44, 296, 2, ERROR_COLOR)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "OUTPUTS + CHARGER HELD OFF",
+        Point::new(160, 66),
+        HorizontalAlignment::Center,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "RESET",
+        Point::new(28, 91),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        reset_cause,
+        Point::new(108, 91),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    let mut count = heapless::String::<24>::new();
+    let _ = write!(count, "EARLY BOOTS  {} / 3", abnormal_boots);
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        count.as_str(),
+        Point::new(160, 112),
+        HorizontalAlignment::Center,
+        ERROR_COLOR,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "RECOVERY",
+        Point::new(28, 136),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "INSTALL CONFIRMED FIRMWARE",
+        Point::new(28, 155),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    Ok(())
 }
 
 #[allow(dead_code)]

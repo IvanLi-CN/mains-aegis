@@ -438,6 +438,46 @@ pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatus
         status.network.ipv4,
         status.network.last_error.map(|err| err.as_str()),
     );
+    let boot = crate::boot_recovery::diagnostics();
+    let _ = buf.push_str(",\"boot\":{");
+    json_field_str(buf, "reset_cause", boot.reset.as_str(), true);
+    json_field_str(buf, "phase", boot.phase_str(), true);
+    json_field_u32(buf, "abnormal_boots", boot.abnormal_boots as u32, true);
+    json_field_bool(
+        buf,
+        "safe_mode",
+        matches!(boot.phase, crate::boot_recovery::BootPhase::SafeMode),
+        true,
+    );
+    json_field_str(
+        buf,
+        "safe_mode_reason",
+        if matches!(boot.phase, crate::boot_recovery::BootPhase::SafeMode) {
+            "repeated_abnormal_boot"
+        } else {
+            "none"
+        },
+        true,
+    );
+    json_field_str(buf, "active_slot", "single_image", true);
+    json_field_str(buf, "candidate_state", boot.candidate.as_str(), true);
+    json_field_bool(
+        buf,
+        "confirmed",
+        matches!(
+            boot.candidate,
+            crate::boot_recovery::CandidateState::Confirmed
+        ),
+        true,
+    );
+    json_field_bool(buf, "rollback_capable", false, true);
+    json_field_str(
+        buf,
+        "rollback_blocker",
+        "missing_rollback_bootloader_otadata_ota_slots",
+        false,
+    );
+    let _ = buf.push('}');
     let _ = buf.push('}');
 }
 
@@ -1041,13 +1081,31 @@ fn render_diag_package_header<'a, const N: usize>(
 }
 
 fn render_diag_mcu_runtime_payload<const N: usize>(buf: &mut String<N>, status: UpsStatusSnapshot) {
+    let boot = crate::boot_recovery::diagnostics();
     let _ = buf.push('{');
     json_field_str(buf, "mode", status.mode, true);
     json_field_str(buf, "requested_outputs", status.requested_outputs, true);
     json_field_str(buf, "active_outputs", status.active_outputs, true);
     json_field_str(buf, "recoverable_outputs", status.recoverable_outputs, true);
     json_field_str(buf, "output_gate_reason", status.output_gate_reason, true);
-    json_field_str(buf, "input_source", status.input_source, false);
+    json_field_str(buf, "input_source", status.input_source, true);
+    json_field_str(buf, "reset_cause", boot.reset.as_str(), true);
+    json_field_str(buf, "boot_phase", boot.phase_str(), true);
+    json_field_u32(buf, "abnormal_boots", boot.abnormal_boots as u32, true);
+    json_field_bool(
+        buf,
+        "safe_mode",
+        matches!(boot.phase, crate::boot_recovery::BootPhase::SafeMode),
+        true,
+    );
+    json_field_str(buf, "candidate_state", boot.candidate.as_str(), true);
+    json_field_bool(buf, "rollback_capable", false, true);
+    json_field_str(
+        buf,
+        "rollback_blocker",
+        "missing_rollback_bootloader_otadata_ota_slots",
+        false,
+    );
     let _ = buf.push('}');
 }
 

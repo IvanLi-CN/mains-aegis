@@ -4103,6 +4103,7 @@ fn bms_activation_phase_forces_charge_off(phase: BmsActivationPhase) -> bool {
 
 #[derive(Clone, Copy)]
 pub struct Config {
+    pub firmware_safe_mode: bool,
     pub ina_detected: bool,
     pub detected_tmp_outputs: EnabledOutputs,
     pub detected_tps_outputs: EnabledOutputs,
@@ -4388,6 +4389,14 @@ where
                     .unwrap()
             });
         let mut cfg = cfg;
+        if cfg.firmware_safe_mode {
+            cfg.requested_outputs = EnabledOutputs::None;
+            cfg.active_outputs = EnabledOutputs::None;
+            cfg.recoverable_outputs = EnabledOutputs::None;
+            cfg.output_gate_reason = OutputGateReason::ManualBypass;
+            cfg.charger_probe_ok = false;
+            cfg.charger_enabled = false;
+        }
         cfg.standby_vout_mv = runtime_mode_policy.standby_vout_mv();
         cfg.assist_low_vout_mv = runtime_mode_policy.assist_low_vout_mv();
         let output_state = OutputRuntimeState::new(
@@ -4401,7 +4410,7 @@ where
         let outputs_allowed = output_state.requested_outputs != EnabledOutputs::None;
         let out_a_allowed = output_state.active_outputs.is_enabled(OutputChannel::OutA);
         let out_b_allowed = output_state.active_outputs.is_enabled(OutputChannel::OutB);
-        let charger_allowed = cfg.charger_probe_ok;
+        let charger_allowed = cfg.charger_probe_ok && !cfg.firmware_safe_mode;
         let bms_addr = cfg.bms_addr;
         let initial_bms_charge_ready =
             seed_bms_charge_ready_from_self_check(&cfg.self_check_snapshot);
@@ -4743,6 +4752,14 @@ where
             out_b
         );
         self.recompute_ui_mode();
+    }
+
+    pub fn enter_firmware_safe_mode(&mut self) {
+        self.charger_allowed = false;
+        self.force_disable_outputs();
+        self.ui_snapshot.mode = UpsMode::Blocked;
+        self.diag_snapshot.policy.status = "disabled";
+        self.diag_snapshot.policy.notice = "firmware_safe_mode";
     }
 
     pub fn enable_output_bypass(&mut self) -> Result<(), &'static str> {

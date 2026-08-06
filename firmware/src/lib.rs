@@ -29,6 +29,7 @@ pub mod ina3221 {
     pub use ina3221_async::*;
 }
 
+pub mod boot_recovery;
 pub mod bq25792;
 pub mod bq40z50;
 pub mod display_pipeline;
