@@ -1635,9 +1635,6 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         );
     }
     log_boot_stage("power_init_done");
-    // Arm the short runtime window only after boot self-check and power init completed.
-    wdt0.set_timeout(MwdtStage::Stage0, MCU_WATCHDOG_RUNTIME_TIMEOUT);
-    wdt0.feed();
     power.update_usb_pd_state(initial_pd_state);
     #[cfg(feature = "net_http")]
     {
@@ -1743,6 +1740,9 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let mut web_serial_log_state = UsbCdcLogState::new();
     #[cfg(feature = "web_serial")]
     let mut last_web_serial_service_at: Option<Instant> = None;
+    // Arm the short runtime window only after all boot and network initialization completed.
+    wdt0.set_timeout(MwdtStage::Stage0, MCU_WATCHDOG_RUNTIME_TIMEOUT);
+    wdt0.feed();
     log_boot_stage("main_loop_enter");
 
     #[cfg(feature = "hil-watchdog-stall")]
