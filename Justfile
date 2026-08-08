@@ -121,7 +121,7 @@ firmware-web-image-hil-19v: firmware-build-hil-19v
 
 # Generate a devd/Web firmware artifact manifest for the current release ELF and Web Serial image.
 firmware-artifact: firmware-web-image
-    python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release --output-stem mains-aegis-firmware
+    python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release --output-stem mains-aegis-firmware-12v
 
 # Generate a devd artifact manifest for the explicit 19V HIL firmware variant.
 firmware-artifact-hil-19v: firmware-web-image-hil-19v
@@ -145,7 +145,7 @@ flash-dry-run device: host-tools-build
 # Build, select, and dry-run flash for an already-bound devd device.
 flash-current-dry-run device: host-tools-build
     just firmware-web-image
-    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release --output-stem mains-aegis-firmware) && \
+    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release --output-stem mains-aegis-firmware-12v) && \
     bun run firmware:embed-web && \
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} artifact select --manifest-path "$manifest" && \
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --dry-run
@@ -154,7 +154,7 @@ flash-current-dry-run device: host-tools-build
 flash-current-real device confirm: host-tools-build
     [[ "{{ confirm }}" == "flash" ]] || { echo "Refusing real flash: pass confirm=flash"; exit 2; }
     just firmware-web-image
-    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release --output-stem mains-aegis-firmware) && \
+    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release --output-stem mains-aegis-firmware-12v) && \
     bun run firmware:embed-web && \
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} artifact select --manifest-path "$manifest" && \
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --dry-run && \

@@ -43,7 +43,7 @@ just firmware-release
 
 The release flow writes:
 
-- `mains-aegis-firmware.manifest.json` for the normal release, or a short semantic variant such as `mains-aegis-firmware-19v.manifest.json`
+- `mains-aegis-firmware-12v.manifest.json` for the 12V release, or another explicit voltage variant such as `mains-aegis-firmware-19v.manifest.json`
 - `firmware-catalog.json`
 - `SHA256SUMS`
 - any referenced firmware files, including the browser-flashable `image` payload when `web_serial` is enabled
@@ -82,7 +82,7 @@ builds from the same commit do not mask each other.
 
 The firmware workflow builds release variants, generates manifests with this same schema, uploads them as workflow artifacts, and publishes the generated catalog plus artifact files to GitHub Releases on `push` to `main`. The Web App consumes catalogs rather than hard-coded artifact URLs.
 
-The release job publishes a release tagged with the current commit SHA and uploads the full artifact bundle produced by `tools/firmware-artifact/build-catalog-entry.py`. The normal bundle contains `mains-aegis-firmware`, `mains-aegis-firmware.bin`, `mains-aegis-firmware.manifest.json`, `firmware-catalog.json`, and `SHA256SUMS`. The stable owner-facing file names do not replace `artifact_id` or `build_id`; those fields remain the unique machine identity inside the manifest. The Web App resolves the latest release through the GitHub Releases API and reads the `firmware-catalog.json` asset from that release.
+The release job publishes a release tagged with the current commit SHA and uploads the full artifact bundle produced by `tools/firmware-artifact/build-catalog-entry.py`. The normal 12V bundle contains `mains-aegis-firmware-12v`, `mains-aegis-firmware-12v.bin`, `mains-aegis-firmware-12v.manifest.json`, `firmware-catalog.json`, and `SHA256SUMS`. The stable owner-facing file names do not replace `artifact_id` or `build_id`; those fields remain the unique machine identity inside the manifest. The Web App resolves the latest release through the GitHub Releases API and reads the `firmware-catalog.json` asset from that release.
 
 The Web-serialable image is produced from the release ELF with Espressif `elf2image` and is recorded at flash address `0x10000`. That is the `image` file the browser fetches and writes during Web Serial flashing.
 
@@ -116,7 +116,7 @@ During Vite development, the Web dev server serves a dynamic
 Generated artifact files are included only when the referenced files still
 exist and their recorded `sha256` and `size` match. This prevents stale
 manifests in `firmware/target/mains-aegis-artifacts/` from falsely matching a
-newly overwritten `mains-aegis-firmware` file.
+newly overwritten `mains-aegis-firmware-12v` file.
 
 When a dev-only catalog entry needs `mains-aegis-devd` to read files from the
 host filesystem, the dev server adds `devd_manifest_path`. The browser still

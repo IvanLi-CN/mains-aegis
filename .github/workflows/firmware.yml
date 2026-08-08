@@ -86,7 +86,7 @@ jobs:
             --out firmware/target/mains-aegis-artifacts \
             --features net_http,web_serial \
             --profile release \
-            --output-stem mains-aegis-firmware
+            --output-stem mains-aegis-firmware-12v
 
       - name: Validate committed bundled firmware assets
         if: steps.changes.outputs.firmware == 'true'

@@ -666,7 +666,7 @@ python3 tools/firmware-artifact/build-catalog-entry.py \
   --out firmware/target/mains-aegis-artifacts \
   --features net_http,web_serial \
   --profile release \
-  --output-stem mains-aegis-firmware
+  --output-stem mains-aegis-firmware-12v
 ```
 
 devd API 流程是 `scan -> bind -> connect -> identity -> artifact/select -> monitor/reset/flash`。无硬件环境只使用 mock 设备与 `flash dry_run=true`。

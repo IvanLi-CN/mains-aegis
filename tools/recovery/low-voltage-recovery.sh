@@ -361,7 +361,7 @@ run_step "Generate main firmware catalog manifest" \
   --elf "$main_elf" \
   --out "$main_artifact_dir" \
   --features net_http,web_serial \
-  --output-stem mains-aegis-firmware
+  --output-stem mains-aegis-firmware-12v
 
 if [[ "$mode" != "real" ]]; then
   echo "Dry-run completed. Real recovery maintenance would now require an explicit device id and port, start devd, scan that target, flash main firmware, and validate diag-snapshot."

@@ -118,21 +118,24 @@ class CatalogGenerationTests(unittest.TestCase):
         return out, json.loads((out / "firmware-catalog.json").read_text())
 
     def test_normal_release_has_stable_short_asset_names(self) -> None:
-        out, catalog = self.run_generator("mains-aegis-firmware")
+        out, catalog = self.run_generator("mains-aegis-firmware-12v")
 
         self.assertEqual(
             sorted(path.name for path in out.iterdir()),
             [
                 "SHA256SUMS",
                 "firmware-catalog.json",
-                "mains-aegis-firmware",
-                "mains-aegis-firmware.bin",
-                "mains-aegis-firmware.manifest.json",
+                "mains-aegis-firmware-12v",
+                "mains-aegis-firmware-12v.bin",
+                "mains-aegis-firmware-12v.manifest.json",
             ],
         )
         artifact = catalog["artifacts"][0]
         self.assertTrue(artifact["artifact_id"].startswith("mains-aegis-esp32s3-release-net_http-web_serial-"))
-        self.assertEqual([entry["path"] for entry in artifact["files"]], ["mains-aegis-firmware", "mains-aegis-firmware.bin"])
+        self.assertEqual(
+            [entry["path"] for entry in artifact["files"]],
+            ["mains-aegis-firmware-12v", "mains-aegis-firmware-12v.bin"],
+        )
 
     def test_variant_uses_semantic_output_stem(self) -> None:
         out, _ = self.run_generator("mains-aegis-firmware-19v")
@@ -149,21 +152,21 @@ class CatalogGenerationTests(unittest.TestCase):
         self.assertTrue((out / "bq40-comm-tool.manifest.json").is_file())
 
     def test_full_generator_supports_in_place_regeneration(self) -> None:
-        out, _ = self.run_generator("mains-aegis-firmware")
+        out, _ = self.run_generator("mains-aegis-firmware-12v")
         subprocess.run(
             [
                 "python3",
                 str(SCRIPT_PATH),
                 "--elf",
-                str(out / "mains-aegis-firmware"),
+                str(out / "mains-aegis-firmware-12v"),
                 "--image",
-                f"0x10000:{out / 'mains-aegis-firmware.bin'}",
+                f"0x10000:{out / 'mains-aegis-firmware-12v.bin'}",
                 "--out",
                 str(out),
                 "--firmware-dir",
                 str(out.parent / "firmware"),
                 "--output-stem",
-                "mains-aegis-firmware",
+                "mains-aegis-firmware-12v",
             ],
             check=True,
             capture_output=True,
@@ -175,9 +178,9 @@ class CatalogGenerationTests(unittest.TestCase):
             [
                 "SHA256SUMS",
                 "firmware-catalog.json",
-                "mains-aegis-firmware",
-                "mains-aegis-firmware.bin",
-                "mains-aegis-firmware.manifest.json",
+                "mains-aegis-firmware-12v",
+                "mains-aegis-firmware-12v.bin",
+                "mains-aegis-firmware-12v.manifest.json",
             ],
         )
 

@@ -186,7 +186,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - Given transport 为 LAN-only 或 mock，When status mode 进入或退出 `backup`，Then devd 不得自动切换本机 host power profile。
 - Given UPS 处于 `backup` 且 native monitor active，When devd 成功查询当前主机 profile，Then 固件 status `host.power_profile` 与前面板 BACKUP policy tag 必须在刷新 TTL 内反映 `power_saver|balanced|performance`；查询失败、TTL 过期或非 BACKUP 时必须回退 `null` / `POL --`。
 - `tools/firmware-artifact/build-catalog-entry.py` 能为 ELF 生成 manifest、catalog 和 `SHA256SUMS`。
-- 正常固件发布资产固定使用 `mains-aegis-firmware`、`mains-aegis-firmware.bin` 与 `mains-aegis-firmware.manifest.json`；变体使用短语义后缀。文件名不得替代 manifest 内用于精确匹配的 `artifact_id` 与 `build_id`。
+- 12V 正常固件发布资产固定使用 `mains-aegis-firmware-12v`、`mains-aegis-firmware-12v.bin` 与 `mains-aegis-firmware-12v.manifest.json`；其他电压变体使用对应的显式语义后缀。文件名不得替代 manifest 内用于精确匹配的 `artifact_id` 与 `build_id`。
 - 固件 identity JSON 包含 features/protocol/defmt 字段。
 - 固件 USB CDC 支持 `get_diag_snapshot`，devd `GET /api/v1/devices/{id}/diag-snapshot` 能返回并缓存结构化 `packages/errors` 诊断快照。
 - Given DC IN 与 USB-C 同时在线，When charger 实际 VBUS/VAC2 为约 12V 且 VAC1 为约 5V，Then `diag-snapshot` 必须能同时呈现 `input.input_source=dcin`、`charger.vac2_adc_mv≈12V`、`charger.vac1_adc_mv≈5V`、`charger.iindpm_ma=1000`，即使 `charger.vbus_stat` 仍报告 USB SDP 类枚举值。
