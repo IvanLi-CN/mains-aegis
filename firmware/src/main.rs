@@ -2759,15 +2759,8 @@ fn diag_snapshot_response_complete(body: &str) -> bool {
 
 #[cfg(feature = "web_serial")]
 fn write_web_serial_line(serial: &mut UsbSerialJtag<'static, Blocking>, line: &str) {
-    write_web_serial_bytes(serial, line.as_bytes());
-    write_web_serial_bytes(serial, b"\n");
-}
-
-#[cfg(feature = "web_serial")]
-fn write_web_serial_bytes(serial: &mut UsbSerialJtag<'static, Blocking>, bytes: &[u8]) {
-    for chunk in bytes.chunks(64) {
-        let _ = serial.write(chunk);
-    }
+    let _ = serial.write(line.as_bytes());
+    let _ = serial.write(b"\n");
 }
 
 #[cfg(feature = "net_http")]
