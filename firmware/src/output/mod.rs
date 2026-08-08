@@ -170,23 +170,6 @@ const FAN_RPM_MAX_SAMPLE_WINDOW_MS: u64 = 2_000;
 const FAN_RPM_MIN_SAMPLE_REVS: u32 = 2;
 const VIN_MAINS_PRESENT_THRESHOLD_MV: u16 = 3_000;
 const VIN_MAINS_LATCH_FAILURE_LIMIT: u8 = 2;
-const INA3221_ADDR: u8 = 0x40;
-const INA_REG_CH1_CRITICAL: u8 = 0x07;
-const INA_REG_CH1_WARNING: u8 = 0x08;
-const INA_REG_CH2_CRITICAL: u8 = 0x09;
-const INA_REG_CH2_WARNING: u8 = 0x0A;
-const INA_REG_CH3_CRITICAL: u8 = 0x0B;
-const INA_REG_SHUNT_SUM: u8 = 0x0D;
-const INA_REG_SHUNT_SUM_LIMIT: u8 = 0x0E;
-const INA_REG_MASK_ENABLE: u8 = 0x0F;
-const INA_REG_PV_UPPER: u8 = 0x10;
-const INA_REG_PV_LOWER: u8 = 0x11;
-const INA_WARNING_3250MA_RAW: u16 = 0x1960;
-const INA_CH12_CRITICAL_4000MA_RAW: u16 = 0x1F40;
-const INA_CH3_CRITICAL_7000MA_RAW: u16 = 0x2648;
-const INA_SUM_CH12_ENABLE_RAW: u16 = 0x6000;
-const INA_SUM_CRITICAL_6500MA_RAW: u16 = 0x0CB2;
-const INA_ALERT_ENABLE_RAW: u16 = 0x6C00;
 const BMS_DIAG_BREADCRUMB_LEN: usize = 8;
 const BMS_DIAG_BREADCRUMB_VERSION: u8 = 1;
 const BMS_SBS_CONFIGURATION_SMB_CELL_TEMP: u8 = 1 << 6;
@@ -2457,23 +2440,7 @@ fn configure_ina_alerts<I2C>(i2c: &mut I2C, rated_vout_mv: u16) -> Result<(), &'
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let pv_lower_raw = if rated_vout_mv <= 12_000 {
-        11_000
-    } else {
-        18_000
-    };
-    let registers = [
-        (INA_REG_CH1_CRITICAL, INA_CH12_CRITICAL_4000MA_RAW),
-        (INA_REG_CH1_WARNING, INA_WARNING_3250MA_RAW),
-        (INA_REG_CH2_CRITICAL, INA_CH12_CRITICAL_4000MA_RAW),
-        (INA_REG_CH2_WARNING, INA_WARNING_3250MA_RAW),
-        (INA_REG_CH3_CRITICAL, INA_CH3_CRITICAL_7000MA_RAW),
-        (INA_REG_SHUNT_SUM, INA_SUM_CH12_ENABLE_RAW),
-        (INA_REG_SHUNT_SUM_LIMIT, INA_SUM_CRITICAL_6500MA_RAW),
-        (INA_REG_PV_UPPER, pv_lower_raw),
-        (INA_REG_PV_LOWER, pv_lower_raw),
-        (INA_REG_MASK_ENABLE, INA_ALERT_ENABLE_RAW),
-    ];
+    let registers = ina_alert_registers(rated_vout_mv);
     for (register, value) in registers {
         write_i2c_u16_be(i2c, INA3221_ADDR, register, value).map_err(i2c_error_kind)?;
     }

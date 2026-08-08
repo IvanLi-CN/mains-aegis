@@ -18,6 +18,44 @@ use super::{
     ChargerInputSampleIssue, OutputRuntimeState, StableMainsState, CHARGER_INPUT_POWER_ANOMALY_W10,
 };
 
+pub(super) const INA3221_ADDR: u8 = 0x40;
+pub(super) const INA_REG_CH1_CRITICAL: u8 = 0x07;
+pub(super) const INA_REG_CH1_WARNING: u8 = 0x08;
+pub(super) const INA_REG_CH2_CRITICAL: u8 = 0x09;
+pub(super) const INA_REG_CH2_WARNING: u8 = 0x0A;
+pub(super) const INA_REG_CH3_CRITICAL: u8 = 0x0B;
+#[cfg(test)]
+pub(super) const INA_REG_SHUNT_SUM: u8 = 0x0D;
+pub(super) const INA_REG_SHUNT_SUM_LIMIT: u8 = 0x0E;
+pub(super) const INA_REG_MASK_ENABLE: u8 = 0x0F;
+pub(super) const INA_REG_PV_UPPER: u8 = 0x10;
+pub(super) const INA_REG_PV_LOWER: u8 = 0x11;
+pub(super) const INA_WARNING_3250MA_RAW: u16 = 0x1960;
+pub(super) const INA_CH12_CRITICAL_4000MA_RAW: u16 = 0x1F40;
+pub(super) const INA_CH3_CRITICAL_7000MA_RAW: u16 = 0x2648;
+pub(super) const INA_SUM_CH12_ENABLE_RAW: u16 = 0x6000;
+pub(super) const INA_SUM_CRITICAL_6500MA_RAW: u16 = 0x0CB2;
+pub(super) const INA_ALERT_ENABLE_RAW: u16 = INA_SUM_CH12_ENABLE_RAW | 0x0C00;
+
+pub(super) fn ina_alert_registers(rated_vout_mv: u16) -> [(u8, u16); 9] {
+    let pv_lower_raw = if rated_vout_mv <= 12_000 {
+        11_000
+    } else {
+        18_000
+    };
+    [
+        (INA_REG_CH1_CRITICAL, INA_CH12_CRITICAL_4000MA_RAW),
+        (INA_REG_CH1_WARNING, INA_WARNING_3250MA_RAW),
+        (INA_REG_CH2_CRITICAL, INA_CH12_CRITICAL_4000MA_RAW),
+        (INA_REG_CH2_WARNING, INA_WARNING_3250MA_RAW),
+        (INA_REG_CH3_CRITICAL, INA_CH3_CRITICAL_7000MA_RAW),
+        (INA_REG_SHUNT_SUM_LIMIT, INA_SUM_CRITICAL_6500MA_RAW),
+        (INA_REG_PV_UPPER, pv_lower_raw),
+        (INA_REG_PV_LOWER, pv_lower_raw),
+        (INA_REG_MASK_ENABLE, INA_ALERT_ENABLE_RAW),
+    ]
+}
+
 const BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED: bool = false;
 const CHARGE_POLICY_NORMAL_ICHG_MA: u16 = 500;
 const CHARGE_POLICY_TOPOFF_ICHG_MA: u16 = 200;
@@ -3433,6 +3471,21 @@ mod tests {
     use super::*;
 
     const TEST_VIN_DROP_THRESHOLD_PCT: u16 = 4;
+
+    #[test]
+    fn ina_alert_write_plan_never_targets_read_only_sum_register() {
+        let registers = ina_alert_registers(12_000);
+
+        assert!(!registers
+            .iter()
+            .any(|(register, _)| *register == INA_REG_SHUNT_SUM));
+        assert_eq!(
+            registers
+                .iter()
+                .find(|(register, _)| *register == INA_REG_MASK_ENABLE),
+            Some(&(INA_REG_MASK_ENABLE, INA_ALERT_ENABLE_RAW))
+        );
+    }
 
     fn dcin_input_pressure_step(
         tracker: &mut DcinInputPressureTracker,
