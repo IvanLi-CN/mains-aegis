@@ -1,5 +1,5 @@
-use esp_firmware::ina3221;
-use esp_firmware::tmp112;
+use mains_aegis_firmware::ina3221;
+use mains_aegis_firmware::tmp112;
 
 use ::tps55288::data_types::{
     CableCompLevel, CableCompOption, FeedbackSource, InternalFeedbackRatio, OcpDelay, VoutSlewRate,

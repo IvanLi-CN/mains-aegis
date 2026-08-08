@@ -22,8 +22,8 @@ mcu-agentd --version
 
 ```bash
 cd firmware
-cargo build --release --bin esp-firmware
-cargo build --release --bin esp-firmware --features main-vout-19v
+cargo build --release --bin mains-aegis-firmware
+cargo build --release --bin mains-aegis-firmware --features main-vout-19v
 ```
 
 | 构建方式 | 用途 |

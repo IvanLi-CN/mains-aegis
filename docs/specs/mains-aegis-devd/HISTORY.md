@@ -4,6 +4,7 @@
 
 ## Decision Trace
 
+- 2026-08-08: 新固件发布资产采用带显式电压后缀的稳定短文件名，芯片、profile、features、Git SHA 与源码摘要继续由 manifest 的 `artifact_id` / `build_id` 承载；catalog 仍按 `files[].path` 解析，因此历史长文件名资产无需重发或别名副本。
 - 2026-06-14: `power event`、`status` 与 `diag-snapshot` 统一补充 `tps_total_iout_ma` / `tps_limit_threshold_ma`，用于解释 `pressure_tps_output_current`；DC IN profile 的 `iindpm_ma` 基线更新为 `1000mA`。
 - 2026-06-04: `diag-snapshot` 增加 `charger.vbat_lowv_pct_x10`、`charger.iprechg_ma`、`policy.recovery_stage`、`bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg`，支持确认 `REG08=71.4%/120mA` 与 BQ40 `2550mV + CUV_RECOV_CHG=0` baseline。
 - 2026-06-04: `flash` API 与设备事件增加 backend `status/stdout/stderr` 透传，现场可直接确认 `espflash` 是否真正完成以及目标硬件 identity 是否已经切到新 artifact。

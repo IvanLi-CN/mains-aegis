@@ -256,6 +256,27 @@ class FormalHilSuiteTests(unittest.TestCase):
             self.assertEqual(resolved_12, str((bundle / "artifact-12.manifest.json")))
             self.assertEqual(resolved_19, str((bundle / "artifact-19.manifest.json")))
 
+    def test_resolve_manifest_from_bundle_supports_semantic_asset_stems(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp)
+            artifact = {
+                "artifact_id": "artifact-12",
+                "features": ["net_http", "web_serial"],
+            }
+            (bundle / "firmware-catalog.json").write_text(
+                json.dumps({"schema_version": 1, "artifacts": [artifact]}),
+                encoding="utf-8",
+            )
+            manifest = bundle / "mains-aegis-firmware-12v.manifest.json"
+            manifest.write_text(json.dumps(artifact), encoding="utf-8")
+
+            resolved = self.suite.resolve_manifest_from_bundle(
+                bundle_root=bundle,
+                profile_key="12v",
+            )
+
+            self.assertEqual(resolved, str(manifest))
+
     def test_connect_device_with_retry_recovers_after_transient_failure(self) -> None:
         args = SimpleNamespace(
             mains_aegis_cli="mains-aegis",

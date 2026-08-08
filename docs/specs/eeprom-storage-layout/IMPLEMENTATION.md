@@ -25,7 +25,7 @@
 - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml beeper`
 - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml audio`
 - `cargo +stable test --target $(rustc +stable -vV | sed -n 's/^host: //p') --manifest-path firmware/host-unit-tests/Cargo.toml`
-- `cargo +esp build --release --bin esp-firmware`
+- `cargo +esp build --release --bin mains-aegis-firmware`
 
 ## HIL Evidence Expectations
 

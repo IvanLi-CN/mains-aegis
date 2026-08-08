@@ -1,5 +1,5 @@
-use esp_firmware::ina3221;
-use esp_firmware::tmp112;
+use mains_aegis_firmware::ina3221;
+use mains_aegis_firmware::tmp112;
 
 use super::channel::OutputChannel;
 use esp_hal::time::{Duration, Instant};

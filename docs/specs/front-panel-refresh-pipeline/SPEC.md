@@ -51,7 +51,7 @@
 
 | 接口（Name） | 类型（Kind） | 范围（Scope） | 变更（Change） | 契约文档（Contract Doc） | 负责人（Owner） | 使用方（Consumers） | 备注（Notes） |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `esp_firmware::display_pipeline` | Rust module | internal | New | None | firmware | `front_panel.rs` | 提供 framebuffer/dirty-band 纯逻辑 |
+| `mains_aegis_firmware::display_pipeline` | Rust module | internal | New | None | firmware | `front_panel.rs` | 提供 framebuffer/dirty-band 纯逻辑 |
 | `front_panel::FrontPanel::new(...)` | Rust API | internal | Modify | None | firmware | `main.rs`, `test-fw.rs` | 新增 `DMA_CH1` 与 `PSRAM` 输入 |
 | `display-spi-20mhz` | Cargo feature | internal | New | None | firmware | firmware build | 20MHz 实验开关，默认关闭 |
 | `display-spi-40mhz` | Cargo feature | internal | New | None | firmware | firmware build | 40MHz 默认档位的显式选择，默认关闭 |

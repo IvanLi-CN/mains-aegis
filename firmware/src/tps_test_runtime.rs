@@ -7,13 +7,13 @@ use crate::tps55288_test::{
     apply_minimal_output, force_disable_output, i2c_error_kind, ina_error_kind, read_diag_snapshot,
     read_status_snapshot, read_telemetry_snapshot, OutputChannel, TestSwitchingMode,
 };
-use esp_firmware::bq25792;
-use esp_firmware::ina3221;
-use esp_firmware::tmp112;
 use esp_hal::gpio::Flex;
 use esp_hal::i2c::master::I2c;
 use esp_hal::time::{Duration, Instant};
 use esp_hal::Blocking;
+use mains_aegis_firmware::bq25792;
+use mains_aegis_firmware::ina3221;
+use mains_aegis_firmware::tmp112;
 
 const INA_REINIT_RESET_CFG: u16 = 0x8000;
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);

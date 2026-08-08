@@ -4,8 +4,8 @@ set shell := ["bash", "-uc"]
 host_manifest := "tools/mains-aegis-host/Cargo.toml"
 devd_ipc := ".tmp/devd.sock"
 artifact_out := "firmware/target/mains-aegis-artifacts"
-firmware_elf := "firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware"
-firmware_image := "firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware.bin"
+firmware_elf := "firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware"
+firmware_image := "firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware.bin"
 
 # List available development commands.
 default:
@@ -87,25 +87,25 @@ firmware-check:
 
 # Build ESP firmware release ELF for the default Web/devd feature set.
 firmware-build:
-    cd firmware && cargo +esp build --release --bin esp-firmware --features net_http,web_serial
+    cd firmware && cargo +esp build --release --bin mains-aegis-firmware --features net_http,web_serial
 
 # Build ESP firmware for Power Path Validation telemetry.
 firmware-build-hil:
     # Keep USB CDC reserved for IPC frames; warnings can starve validation sampling.
-    cd firmware && DEFMT_LOG=error cargo +esp build --release --bin esp-firmware --features net_http,web_serial
+    cd firmware && DEFMT_LOG=error cargo +esp build --release --bin mains-aegis-firmware --features net_http,web_serial
 
 # Build the explicit 19V Power Path Validation firmware variant.
 firmware-build-hil-19v:
     # Keep USB CDC reserved for IPC frames; warnings can starve validation sampling.
-    cd firmware && DEFMT_LOG=error cargo +esp build --release --bin esp-firmware --features net_http,web_serial,main-vout-19v
+    cd firmware && DEFMT_LOG=error cargo +esp build --release --bin mains-aegis-firmware --features net_http,web_serial,main-vout-19v
 
 # Build the deterministic watchdog-stall HIL firmware. This profile never belongs in release artifacts.
 firmware-build-watchdog-hil:
-    cd firmware && DEFMT_LOG=error cargo +esp build --release --bin esp-firmware --features net_http,web_serial,hil-watchdog-stall
+    cd firmware && DEFMT_LOG=error cargo +esp build --release --bin mains-aegis-firmware --features net_http,web_serial,hil-watchdog-stall
 
 # Build the one-shot retained boot-health cleanup image used after watchdog HIL validation.
 firmware-build-boot-health-cleanup-hil:
-    cd firmware && DEFMT_LOG=error cargo +esp build --release --bin esp-firmware --features net_http,web_serial,hil-clear-boot-health
+    cd firmware && DEFMT_LOG=error cargo +esp build --release --bin mains-aegis-firmware --features net_http,web_serial,hil-clear-boot-health
 
 # Build the Web Serial flash image from the current release ELF.
 firmware-web-image: firmware-build
@@ -121,11 +121,11 @@ firmware-web-image-hil-19v: firmware-build-hil-19v
 
 # Generate a devd/Web firmware artifact manifest for the current release ELF and Web Serial image.
 firmware-artifact: firmware-web-image
-    python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release
+    python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release --output-stem mains-aegis-firmware-12v
 
 # Generate a devd artifact manifest for the explicit 19V HIL firmware variant.
 firmware-artifact-hil-19v: firmware-web-image-hil-19v
-    python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial,main-vout-19v --profile release
+    python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial,main-vout-19v --profile release --output-stem mains-aegis-firmware-19v
 
 # Copy the generated firmware catalog into the Web public assets.
 firmware-embed-web:
@@ -145,7 +145,7 @@ flash-dry-run device: host-tools-build
 # Build, select, and dry-run flash for an already-bound devd device.
 flash-current-dry-run device: host-tools-build
     just firmware-web-image
-    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release) && \
+    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release --output-stem mains-aegis-firmware-12v) && \
     bun run firmware:embed-web && \
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} artifact select --manifest-path "$manifest" && \
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --dry-run
@@ -154,7 +154,7 @@ flash-current-dry-run device: host-tools-build
 flash-current-real device confirm: host-tools-build
     [[ "{{ confirm }}" == "flash" ]] || { echo "Refusing real flash: pass confirm=flash"; exit 2; }
     just firmware-web-image
-    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release) && \
+    manifest=$(python3 tools/firmware-artifact/build-catalog-entry.py --elf {{ firmware_elf }} --image 0x10000:{{ firmware_image }} --out {{ artifact_out }} --firmware-dir firmware --features net_http,web_serial --profile release --output-stem mains-aegis-firmware-12v) && \
     bun run firmware:embed-web && \
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} artifact select --manifest-path "$manifest" && \
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --dry-run && \
@@ -164,7 +164,7 @@ flash-current-real device confirm: host-tools-build
 flash-current-real-hil-19v device confirm: host-tools-build
     [[ "{{ confirm }}" == "flash" ]] || { echo "Refusing real flash: pass confirm=flash"; exit 2; }
     just firmware-artifact-hil-19v
-    manifest=$(ls -t {{ artifact_out }}/*main-vout-19v*.manifest.json | head -n 1) && \
+    manifest={{ artifact_out }}/mains-aegis-firmware-19v.manifest.json && \
     test -n "$manifest" && \
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} artifact select --manifest-path "$manifest" && \
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --dry-run && \

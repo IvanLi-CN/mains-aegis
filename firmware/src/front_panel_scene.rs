@@ -7,8 +7,8 @@ use embedded_graphics_core::{
     prelude::RawData,
     Pixel,
 };
-use esp_firmware::net_types::{WifiConnectionState, WifiSnapshot};
-use esp_firmware::output_state::{EnabledOutputs, OutputGateReason, OutputSelector};
+use mains_aegis_firmware::net_types::{WifiConnectionState, WifiSnapshot};
+use mains_aegis_firmware::output_state::{EnabledOutputs, OutputGateReason, OutputSelector};
 use u8g2_fonts::{
     fonts,
     types::{FontColor, HorizontalAlignment, VerticalPosition},
@@ -2994,7 +2994,7 @@ pub fn render_wifi_icon_gallery<P: UiPainter>(
             "ERROR",
             WifiSnapshot {
                 state: WifiConnectionState::Error,
-                last_error: Some(esp_firmware::net_types::WifiErrorKind::DhcpTimeout),
+                last_error: Some(mains_aegis_firmware::net_types::WifiErrorKind::DhcpTimeout),
                 ..WifiSnapshot::disabled()
             },
             0,

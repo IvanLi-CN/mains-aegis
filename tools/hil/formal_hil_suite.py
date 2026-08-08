@@ -630,9 +630,16 @@ def resolve_manifest_from_bundle(
         if features == required_features:
             artifact_id = artifact.get("artifact_id")
             if isinstance(artifact_id, str) and artifact_id:
-                manifest_path = bundle_root / f"{artifact_id}.manifest.json"
-                if manifest_path.is_file():
-                    return str(manifest_path)
+                legacy_manifest = bundle_root / f"{artifact_id}.manifest.json"
+                if legacy_manifest.is_file():
+                    return str(legacy_manifest)
+                for manifest_path in sorted(bundle_root.glob("*.manifest.json")):
+                    try:
+                        manifest = json.loads(manifest_path.read_text())
+                    except (OSError, json.JSONDecodeError):
+                        continue
+                    if manifest.get("artifact_id") == artifact_id:
+                        return str(manifest_path)
     return None
 
 

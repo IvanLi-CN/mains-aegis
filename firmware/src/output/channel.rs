@@ -1,4 +1,4 @@
-use esp_firmware::ina3221;
+use mains_aegis_firmware::ina3221;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputChannel {

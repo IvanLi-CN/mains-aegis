@@ -26,25 +26,6 @@ use embassy_futures::yield_now;
 use embassy_time::Timer;
 use embedded_hal_bus::i2c::RefCellDevice;
 use esp_backtrace as _;
-use esp_firmware::audio::{AudioCue, AudioManager, AudioRoute, PLAYBACK_SAMPLE_RATE_HZ};
-use esp_firmware::usb_pd::UsbPdSinkManager;
-#[cfg(feature = "web_serial")]
-use esp_firmware::{
-    mdns_wire::{derive_device_identity, DeviceIdentity},
-    net_contract::{
-        render_charge_control_result_json, render_compact_status_json, render_diag_snapshot_json,
-        render_identity_json_with_write_controls, render_status_json, BuildInfo,
-    },
-    net_types::{UpsStatusSnapshot, WifiConnectionState, WifiErrorKind},
-    usb_cdc_protocol::{
-        parse_frame, render_error_json, render_error_json_with_details, render_hello_json,
-        render_log_json, render_protocol_error_json, render_response_json,
-        render_status_frame_json, render_wifi_config_ack_json, request_id_hint, LogLevel,
-        UsbCdcFrame, UsbCdcLineBuffer, UsbCdcRequest, WifiConfigCommand,
-        WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP, WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP,
-        WEB_SERIAL_RESPONSE_BODY_CAP, WEB_SERIAL_RESPONSE_FRAME_CAP,
-    },
-};
 use esp_hal::clock::CpuClock;
 use esp_hal::dma::DmaError;
 use esp_hal::gpio::{
@@ -70,6 +51,25 @@ use esp_hal::Blocking;
 use esp_println as _;
 #[cfg(feature = "web_serial")]
 use heapless::String as HeaplessString;
+use mains_aegis_firmware::audio::{AudioCue, AudioManager, AudioRoute, PLAYBACK_SAMPLE_RATE_HZ};
+use mains_aegis_firmware::usb_pd::UsbPdSinkManager;
+#[cfg(feature = "web_serial")]
+use mains_aegis_firmware::{
+    mdns_wire::{derive_device_identity, DeviceIdentity},
+    net_contract::{
+        render_charge_control_result_json, render_compact_status_json, render_diag_snapshot_json,
+        render_identity_json_with_write_controls, render_status_json, BuildInfo,
+    },
+    net_types::{UpsStatusSnapshot, WifiConnectionState, WifiErrorKind},
+    usb_cdc_protocol::{
+        parse_frame, render_error_json, render_error_json_with_details, render_hello_json,
+        render_log_json, render_protocol_error_json, render_response_json,
+        render_status_frame_json, render_wifi_config_ack_json, request_id_hint, LogLevel,
+        UsbCdcFrame, UsbCdcLineBuffer, UsbCdcRequest, WifiConfigCommand,
+        WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP, WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP,
+        WEB_SERIAL_RESPONSE_BODY_CAP, WEB_SERIAL_RESPONSE_FRAME_CAP,
+    },
+};
 use runtime_audio_recovery::{RuntimeAudioRecoveryDecision, RuntimeAudioRecoveryState};
 
 // Bring-up default profile.
@@ -127,24 +127,24 @@ const MCU_WATCHDOG_BOOT_TIMEOUT: Duration = Duration::from_secs(60);
 const MCU_WATCHDOG_RUNTIME_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[unsafe(link_section = ".rtc_slow.persistent.boot_recovery")]
-static mut BOOT_RECOVERY_SLOTS: [[u8; esp_firmware::boot_recovery::RECORD_LEN]; 2] =
-    [[0; esp_firmware::boot_recovery::RECORD_LEN]; 2];
+static mut BOOT_RECOVERY_SLOTS: [[u8; mains_aegis_firmware::boot_recovery::RECORD_LEN]; 2] =
+    [[0; mains_aegis_firmware::boot_recovery::RECORD_LEN]; 2];
 
-fn read_boot_recovery_slots() -> [[u8; esp_firmware::boot_recovery::RECORD_LEN]; 2] {
+fn read_boot_recovery_slots() -> [[u8; mains_aegis_firmware::boot_recovery::RECORD_LEN]; 2] {
     unsafe { ptr::read_volatile(ptr::addr_of!(BOOT_RECOVERY_SLOTS)) }
 }
 
-fn write_boot_recovery_record(record: esp_firmware::boot_recovery::BootRecord) {
-    let slot = esp_firmware::boot_recovery::next_slot(record);
+fn write_boot_recovery_record(record: mains_aegis_firmware::boot_recovery::BootRecord) {
+    let slot = mains_aegis_firmware::boot_recovery::next_slot(record);
     let encoded = record.encode();
     unsafe {
         ptr::write_volatile(ptr::addr_of_mut!(BOOT_RECOVERY_SLOTS[slot]), encoded);
     }
 }
 
-fn normalized_reset_cause() -> esp_firmware::boot_recovery::ResetCause {
-    use esp_firmware::boot_recovery::ResetCause;
+fn normalized_reset_cause() -> mains_aegis_firmware::boot_recovery::ResetCause {
     use esp_hal::rtc_cntl::SocResetReason;
+    use mains_aegis_firmware::boot_recovery::ResetCause;
     match esp_hal::system::reset_reason() {
         Some(SocResetReason::ChipPowerOn) => ResetCause::PowerOn,
         Some(SocResetReason::CoreSw | SocResetReason::CpuSw) => ResetCause::Software,
@@ -212,7 +212,7 @@ const FAN_STEP_UP_LARGE_PWM_PCT: u8 = 15;
 const FAN_CONTROL_INTERVAL: Duration = Duration::from_millis(500);
 const FAN_TACH_TIMEOUT: Duration = Duration::from_secs(2);
 const TMP_HW_PROTECT_TEST_MODE: bool = cfg!(feature = "tmp-hw-protect-test");
-const FAN_TACH_PULSES_PER_REV: u8 = esp_firmware::fan::tach_pulses_per_rev_from_features();
+const FAN_TACH_PULSES_PER_REV: u8 = mains_aegis_firmware::fan::tach_pulses_per_rev_from_features();
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct AppliedFanOutput {
@@ -249,7 +249,7 @@ fn apply_fan_command(
     applied: &mut Option<AppliedFanOutput>,
     pwm_degraded: &mut bool,
     fan_vset_fail_safe: &mut Option<Output<'static>>,
-    status: esp_firmware::fan::Status,
+    status: mains_aegis_firmware::fan::Status,
 ) -> output::AppliedFanState {
     if TMP_HW_PROTECT_TEST_MODE {
         if let Err(err) = fan_pwm.set_duty(0) {
@@ -262,7 +262,7 @@ fn apply_fan_command(
             vset_duty_pct: 0,
         });
         return output::AppliedFanState {
-            command: esp_firmware::fan::FanLevel::Off,
+            command: mains_aegis_firmware::fan::FanLevel::Off,
             pwm_pct: 0,
             vset_duty_pct: 0,
             degraded: false,
@@ -279,7 +279,7 @@ fn apply_fan_command(
         latch_fan_vset_fail_safe(fan_vset_fail_safe);
         fan_en.set_high();
         return output::AppliedFanState {
-            command: esp_firmware::fan::FanLevel::High,
+            command: mains_aegis_firmware::fan::FanLevel::High,
             pwm_pct: 100,
             vset_duty_pct: 0,
             degraded: true,
@@ -308,7 +308,7 @@ fn apply_fan_command(
         latch_fan_vset_fail_safe(fan_vset_fail_safe);
         fan_en.set_high();
         return output::AppliedFanState {
-            command: esp_firmware::fan::FanLevel::High,
+            command: mains_aegis_firmware::fan::FanLevel::High,
             pwm_pct: 100,
             vset_duty_pct: 0,
             degraded: true,
@@ -371,7 +371,7 @@ fn log_usb_pd_feature_summary() {
     );
 }
 
-fn log_usb_pd_port_state(stage: &'static str, state: esp_firmware::usb_pd::UsbPdPortState) {
+fn log_usb_pd_port_state(stage: &'static str, state: mains_aegis_firmware::usb_pd::UsbPdPortState) {
     esp_println::println!(
         "usb_pd: stage={} enabled={} ready={} attached={} charge_ready={} unsafe={} vbus_present={}",
         stage,
@@ -744,15 +744,16 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let _systimer = SystemTimer::new(peripherals.SYSTIMER);
 
     let reset_cause = normalized_reset_cause();
-    let previous_boot = esp_firmware::boot_recovery::newest_valid(read_boot_recovery_slots());
+    let previous_boot =
+        mains_aegis_firmware::boot_recovery::newest_valid(read_boot_recovery_slots());
     let mut boot_record =
-        esp_firmware::boot_recovery::BootRecord::begin_boot(previous_boot, reset_cause);
+        mains_aegis_firmware::boot_recovery::BootRecord::begin_boot(previous_boot, reset_cause);
     #[cfg(feature = "hil-clear-boot-health")]
     if boot_record.safe_mode() {
         boot_record = boot_record.clear_safe_mode_for_recovery();
     }
     write_boot_recovery_record(boot_record);
-    esp_firmware::boot_recovery::publish_diagnostics(boot_record);
+    mains_aegis_firmware::boot_recovery::publish_diagnostics(boot_record);
 
     // TIMG0 timer0 is owned by esp-rtos; the watchdog remains an independent resource.
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -791,7 +792,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         FW_GIT_DIRTY
     );
     #[cfg(feature = "net_http")]
-    esp_firmware::net::log_wifi_config();
+    mains_aegis_firmware::net::log_wifi_config();
     log_usb_pd_feature_summary();
     defmt::info!(
         "fan: policy stop_c_x16={=i16} target_c_x16={=i16} min_pwm_pct={=u8} step_down_pct={=u8} step_up_small_pct={=u8} step_up_medium_pct={=u8} step_up_large_pct={=u8} control_interval_ms={=u64} tach_timeout_ms={=u64} tach_watchdog_enabled={=bool} tach_ppr={=u8} test_mode={=bool}",
@@ -831,8 +832,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         bitbang_touch_bq(
             &mut i2c1_sda,
             &mut i2c1_scl,
-            esp_firmware::bq40z50::I2C_ADDRESS_PRIMARY,
-            esp_firmware::bq40z50::cmd::RELATIVE_STATE_OF_CHARGE,
+            mains_aegis_firmware::bq40z50::I2C_ADDRESS_PRIMARY,
+            mains_aegis_firmware::bq40z50::cmd::RELATIVE_STATE_OF_CHARGE,
         );
     }
 
@@ -1006,16 +1007,16 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     }
 
     // Program TMP112A alert thresholds and debounce.
-    let tmp112_cfg = esp_firmware::tmp112::AlertConfig {
+    let tmp112_cfg = mains_aegis_firmware::tmp112::AlertConfig {
         t_high_c_x16: TMP112_THIGH_C_X16,
         t_low_c_x16: TMP112_TLOW_C_X16,
-        fault_queue: esp_firmware::tmp112::FaultQueue::F4,
-        conversion_rate: esp_firmware::tmp112::ConversionRate::Hz1,
+        fault_queue: mains_aegis_firmware::tmp112::FaultQueue::F4,
+        conversion_rate: mains_aegis_firmware::tmp112::ConversionRate::Hz1,
     };
     let mut tmp_out_a_ok = false;
     let mut tmp_out_b_ok = false;
     for addr in [TMP112_OUT_A_ADDR, TMP112_OUT_B_ADDR] {
-        match esp_firmware::tmp112::program_alert_config(&mut i2c, addr, tmp112_cfg) {
+        match mains_aegis_firmware::tmp112::program_alert_config(&mut i2c, addr, tmp112_cfg) {
             Ok(rb) => {
                 defmt::info!(
                     "power: tmp112 ok addr=0x{=u8:x} cfg=0x{=u16:x} tlow=0x{=u16:x} thigh=0x{=u16:x}",
@@ -1583,7 +1584,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         protect_min_ilim_ma: OUTPUT_PROTECT_MIN_ILIM_MA,
         protect_shutdown_vout_mv: OUTPUT_PROTECT_SHUTDOWN_VOUT_MV,
         protect_shutdown_hold: OUTPUT_PROTECT_SHUTDOWN_HOLD,
-        fan_config: esp_firmware::fan::Config {
+        fan_config: mains_aegis_firmware::fan::Config {
             stop_temp_c_x16: FAN_STOP_TEMP_C_X16,
             target_temp_c_x16: FAN_TARGET_TEMP_C_X16,
             min_run_pwm_pct: FAN_MIN_RUN_PWM_PCT,
@@ -1672,28 +1673,32 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             }
         };
         let prefs = power.manual_charge_prefs_snapshot();
-        esp_firmware::net::set_manual_charge_settings(
+        mains_aegis_firmware::net::set_manual_charge_settings(
             manual_charge_target_api_value(prefs.target),
             manual_charge_speed_api_value(prefs.speed),
             prefs.timer_limit.hours(),
             manual_charge_power_path_api_value(prefs.power_path),
         );
-        esp_firmware::net::publish_charge_control_detail(
+        mains_aegis_firmware::net::publish_charge_control_detail(
             power.current_manual_charge_control_detail_snapshot(),
         );
         sync_advanced_power_net_settings(&power);
-        esp_firmware::net::set_device_log_level("info");
-        esp_firmware::net::spawn_wifi_and_http(&main_entry, peripherals.WIFI, usb_wifi_config);
+        mains_aegis_firmware::net::set_device_log_level("info");
+        mains_aegis_firmware::net::spawn_wifi_and_http(
+            &main_entry,
+            peripherals.WIFI,
+            usb_wifi_config,
+        );
         yield_now().await;
     }
     let initial_snapshot = power.ui_snapshot();
     net_bridge::publish_status_snapshot(initial_snapshot);
     #[cfg(feature = "net_http")]
-    esp_firmware::net::publish_charge_control_detail(
+    mains_aegis_firmware::net::publish_charge_control_detail(
         power.current_manual_charge_control_detail_snapshot(),
     );
     #[cfg(feature = "net_http")]
-    esp_firmware::net::publish_diag_snapshot(power.derived_power_snapshot());
+    mains_aegis_firmware::net::publish_diag_snapshot(power.derived_power_snapshot());
     front_panel.update_self_check_snapshot(initial_snapshot);
     front_panel.update_bms_activation_state(power.bms_activation_state());
     if boot_record.safe_mode() {
@@ -1714,7 +1719,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let mut applied_fan = None;
     let mut fan_pwm_degraded = false;
     let mut applied_fan_state = output::AppliedFanState {
-        command: esp_firmware::fan::FanLevel::Off,
+        command: mains_aegis_firmware::fan::FanLevel::Off,
         pwm_pct: 0,
         vset_duty_pct: 0,
         degraded: false,
@@ -1754,7 +1759,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let mut last_fan_tach_log_at: Option<Instant> = None;
     let mut last_audio_diag_at: Option<Instant> = None;
     let mut usb_c_insert_feedback_tracker =
-        esp_firmware::usb_pd::UsbCInsertFeedbackTracker::new(initial_pd_state);
+        mains_aegis_firmware::usb_pd::UsbCInsertFeedbackTracker::new(initial_pd_state);
     #[cfg(feature = "web_serial")]
     let mut web_serial_log_state = UsbCdcLogState::new();
     #[cfg(feature = "web_serial")]
@@ -1930,20 +1935,20 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             let ui_snapshot = power.ui_snapshot();
             net_bridge::publish_status_snapshot(ui_snapshot);
             #[cfg(feature = "net_http")]
-            esp_firmware::net::publish_charge_control_detail(
+            mains_aegis_firmware::net::publish_charge_control_detail(
                 power.current_manual_charge_control_detail_snapshot(),
             );
             #[cfg(feature = "net_http")]
-            esp_firmware::net::publish_diag_snapshot(power.derived_power_snapshot());
+            mains_aegis_firmware::net::publish_diag_snapshot(power.derived_power_snapshot());
             #[cfg(feature = "net_http")]
             {
-                while let Some(command) = esp_firmware::net::take_pending_lan_command() {
+                while let Some(command) = mains_aegis_firmware::net::take_pending_lan_command() {
                     match command {
-                        esp_firmware::net::LanManagementCommand::SetWifi(secret) => {
+                        mains_aegis_firmware::net::LanManagementCommand::SetWifi(secret) => {
                             let ssid = secret.ssid.clone();
                             match power.write_web_serial_wifi_config(Some(&secret)) {
                                 Ok(()) => {
-                                    esp_firmware::net::set_usb_wifi_config(Some(secret));
+                                    mains_aegis_firmware::net::set_usb_wifi_config(Some(secret));
                                     defmt::info!(
                                         "net: LAN WiFi config accepted ssid={}",
                                         ssid.as_str()
@@ -1954,10 +1959,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                 }
                             }
                         }
-                        esp_firmware::net::LanManagementCommand::ClearWifi => {
+                        mains_aegis_firmware::net::LanManagementCommand::ClearWifi => {
                             match power.write_web_serial_wifi_config(None) {
                                 Ok(()) => {
-                                    esp_firmware::net::set_usb_wifi_config(None);
+                                    mains_aegis_firmware::net::set_usb_wifi_config(None);
                                     defmt::info!("net: LAN WiFi config cleared");
                                 }
                                 Err(_) => {
@@ -1965,63 +1970,63 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                 }
                             }
                         }
-                        esp_firmware::net::LanManagementCommand::SetLogLevel(level) => {
+                        mains_aegis_firmware::net::LanManagementCommand::SetLogLevel(level) => {
                             #[cfg(feature = "web_serial")]
                             web_serial_log_state.set_level(level);
-                            esp_firmware::net::set_device_log_level(level.as_str());
+                            mains_aegis_firmware::net::set_device_log_level(level.as_str());
                             defmt::info!("net: LAN log level updated level={}", level.as_str());
                         }
-                        esp_firmware::net::LanManagementCommand::SetManualCharge(prefs) => {
+                        mains_aegis_firmware::net::LanManagementCommand::SetManualCharge(prefs) => {
                             power.set_web_serial_manual_charge_prefs(prefs);
                             let current = power.manual_charge_prefs_snapshot();
-                            esp_firmware::net::set_manual_charge_settings(
+                            mains_aegis_firmware::net::set_manual_charge_settings(
                                 manual_charge_target_api_value(current.target),
                                 manual_charge_speed_api_value(current.speed),
                                 current.timer_limit.hours(),
                                 manual_charge_power_path_api_value(current.power_path),
                             );
-                            esp_firmware::net::publish_charge_control_detail(
+                            mains_aegis_firmware::net::publish_charge_control_detail(
                                 power.current_manual_charge_control_detail_snapshot(),
                             );
                             defmt::info!("net: LAN manual charge preferences updated");
                         }
-                        esp_firmware::net::LanManagementCommand::PreviewChargeControl(prefs) => {
+                        mains_aegis_firmware::net::LanManagementCommand::PreviewChargeControl(prefs) => {
                             let mut body = heapless::String::<
-                                { esp_firmware::net::HTTP_RESPONSE_BODY_CAP },
+                                { mains_aegis_firmware::net::HTTP_RESPONSE_BODY_CAP },
                             >::new();
                             render_charge_control_result_json(
                                 &mut body,
                                 power.preview_manual_charge_control_detail_snapshot(prefs),
                             );
-                            esp_firmware::net::set_lan_command_result(
-                                esp_firmware::net::LanCommandResult::Json(body),
+                            mains_aegis_firmware::net::set_lan_command_result(
+                                mains_aegis_firmware::net::LanCommandResult::Json(body),
                             );
                         }
-                        esp_firmware::net::LanManagementCommand::ControlManualCharge(command) => {
+                        mains_aegis_firmware::net::LanManagementCommand::ControlManualCharge(command) => {
                             match power.control_manual_charge(command) {
                                 Ok(_) => {
                                     let mut body = heapless::String::<
-                                        { esp_firmware::net::HTTP_RESPONSE_BODY_CAP },
+                                        { mains_aegis_firmware::net::HTTP_RESPONSE_BODY_CAP },
                                     >::new();
                                     let detail =
                                         power.current_manual_charge_control_detail_snapshot();
                                     render_charge_control_result_json(&mut body, detail);
-                                    esp_firmware::net::publish_charge_control_detail(detail);
-                                    esp_firmware::net::set_lan_command_result(
-                                        esp_firmware::net::LanCommandResult::Json(body),
+                                    mains_aegis_firmware::net::publish_charge_control_detail(detail);
+                                    mains_aegis_firmware::net::set_lan_command_result(
+                                        mains_aegis_firmware::net::LanCommandResult::Json(body),
                                     );
                                     defmt::info!("net: LAN manual charge control applied");
                                 }
                                 Err(err) => {
                                     let mut details = heapless::String::<
-                                        { esp_firmware::net::HTTP_RESPONSE_BODY_CAP },
+                                        { mains_aegis_firmware::net::HTTP_RESPONSE_BODY_CAP },
                                     >::new();
                                     render_charge_control_result_json(
                                         &mut details,
                                         power.current_manual_charge_control_detail_snapshot(),
                                     );
-                                    esp_firmware::net::set_lan_command_result(
-                                        esp_firmware::net::LanCommandResult::ManualChargeControlError {
+                                    mains_aegis_firmware::net::set_lan_command_result(
+                                        mains_aegis_firmware::net::LanCommandResult::ManualChargeControlError {
                                             code: err.code,
                                             message: err.message,
                                             details,
@@ -2034,18 +2039,18 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                 }
                             }
                         }
-                        esp_firmware::net::LanManagementCommand::SetAdvancedPower(settings) => {
+                        mains_aegis_firmware::net::LanManagementCommand::SetAdvancedPower(settings) => {
                             match power.apply_advanced_power_settings(settings) {
                                 Ok(()) => {
                                     sync_advanced_power_net_settings(&power);
-                                    esp_firmware::net::set_lan_command_result(
-                                        esp_firmware::net::LanCommandResult::Ok,
+                                    mains_aegis_firmware::net::set_lan_command_result(
+                                        mains_aegis_firmware::net::LanCommandResult::Ok,
                                     );
                                     defmt::info!("net: LAN advanced power settings updated");
                                 }
                                 Err(output::AdvancedPowerApplyError::Validation(err)) => {
-                                    esp_firmware::net::set_lan_command_result(
-                                        esp_firmware::net::LanCommandResult::AdvancedPowerValidation {
+                                    mains_aegis_firmware::net::set_lan_command_result(
+                                        mains_aegis_firmware::net::LanCommandResult::AdvancedPowerValidation {
                                             code: err.code(),
                                             message: err.message(),
                                         },
@@ -2056,8 +2061,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                     );
                                 }
                                 Err(output::AdvancedPowerApplyError::Storage(err)) => {
-                                    esp_firmware::net::set_lan_command_result(
-                                        esp_firmware::net::LanCommandResult::AdvancedPowerStorageFailed,
+                                    mains_aegis_firmware::net::set_lan_command_result(
+                                        mains_aegis_firmware::net::LanCommandResult::AdvancedPowerStorageFailed,
                                     );
                                     defmt::warn!(
                                         "net: LAN advanced power update failed err={=?}",
@@ -2066,18 +2071,18 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                 }
                             }
                         }
-                        esp_firmware::net::LanManagementCommand::ResetAdvancedPower => {
+                        mains_aegis_firmware::net::LanManagementCommand::ResetAdvancedPower => {
                             match power.reset_advanced_power_settings() {
                                 Ok(()) => {
                                     sync_advanced_power_net_settings(&power);
-                                    esp_firmware::net::set_lan_command_result(
-                                        esp_firmware::net::LanCommandResult::Ok,
+                                    mains_aegis_firmware::net::set_lan_command_result(
+                                        mains_aegis_firmware::net::LanCommandResult::Ok,
                                     );
                                     defmt::info!("net: LAN advanced power settings reset");
                                 }
                                 Err(output::AdvancedPowerApplyError::Validation(err)) => {
-                                    esp_firmware::net::set_lan_command_result(
-                                        esp_firmware::net::LanCommandResult::AdvancedPowerValidation {
+                                    mains_aegis_firmware::net::set_lan_command_result(
+                                        mains_aegis_firmware::net::LanCommandResult::AdvancedPowerValidation {
                                             code: err.code(),
                                             message: err.message(),
                                         },
@@ -2088,8 +2093,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                     );
                                 }
                                 Err(output::AdvancedPowerApplyError::Storage(err)) => {
-                                    esp_firmware::net::set_lan_command_result(
-                                        esp_firmware::net::LanCommandResult::AdvancedPowerStorageFailed,
+                                    mains_aegis_firmware::net::set_lan_command_result(
+                                        mains_aegis_firmware::net::LanCommandResult::AdvancedPowerStorageFailed,
                                     );
                                     defmt::warn!(
                                         "net: LAN advanced power reset failed err={=?}",
@@ -2098,12 +2103,12 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                 }
                             }
                         }
-                        esp_firmware::net::LanManagementCommand::RecoverBmsDischargeAuthorization => {
+                        mains_aegis_firmware::net::LanManagementCommand::RecoverBmsDischargeAuthorization => {
                             if let Some(body) = power.begin_bms_discharge_authorization_recovery_json::<
-                                { esp_firmware::net::HTTP_RESPONSE_BODY_CAP },
+                                { mains_aegis_firmware::net::HTTP_RESPONSE_BODY_CAP },
                             >("lan_http") {
-                                esp_firmware::net::set_lan_command_result(
-                                    esp_firmware::net::LanCommandResult::Json(body),
+                                mains_aegis_firmware::net::set_lan_command_result(
+                                    mains_aegis_firmware::net::LanCommandResult::Json(body),
                                 );
                                 defmt::info!(
                                     "net: LAN BMS discharge authorization recovery completed"
@@ -2114,7 +2119,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                 );
                             }
                         }
-                        esp_firmware::net::LanManagementCommand::Reset => {
+                        mains_aegis_firmware::net::LanManagementCommand::Reset => {
                             defmt::warn!("net: LAN reset requested");
                             Timer::after(embassy_time::Duration::from_millis(100)).await;
                             esp_hal::system::software_reset();
@@ -2124,15 +2129,15 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                 let prefs = power.manual_charge_prefs_snapshot();
                 if let Some(body) = power
                     .take_completed_bms_discharge_authorization_recovery_json_for_source::<
-                        { esp_firmware::net::HTTP_RESPONSE_BODY_CAP },
+                        { mains_aegis_firmware::net::HTTP_RESPONSE_BODY_CAP },
                     >("lan_http")
                 {
-                    esp_firmware::net::set_lan_command_result(
-                        esp_firmware::net::LanCommandResult::Json(body),
+                    mains_aegis_firmware::net::set_lan_command_result(
+                        mains_aegis_firmware::net::LanCommandResult::Json(body),
                     );
                     defmt::info!("net: LAN BMS discharge authorization recovery completed");
                 }
-                esp_firmware::net::set_manual_charge_settings(
+                mains_aegis_firmware::net::set_manual_charge_settings(
                     manual_charge_target_api_value(prefs.target),
                     manual_charge_speed_api_value(prefs.speed),
                     prefs.timer_limit.hours(),
@@ -2280,11 +2285,13 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         if !boot_record.safe_mode()
             && !boot_marked_healthy
             && boot_stable_started_at.elapsed()
-                >= Duration::from_millis(esp_firmware::boot_recovery::STABLE_RUNTIME_MS as u64)
+                >= Duration::from_millis(
+                    mains_aegis_firmware::boot_recovery::STABLE_RUNTIME_MS as u64,
+                )
         {
             boot_record = boot_record.mark_healthy();
             write_boot_recovery_record(boot_record);
-            esp_firmware::boot_recovery::publish_diagnostics(boot_record);
+            mains_aegis_firmware::boot_recovery::publish_diagnostics(boot_record);
             boot_marked_healthy = true;
             defmt::info!(
                 "boot: healthy reset={} rollback={}",
@@ -2442,7 +2449,7 @@ fn handle_web_serial_frame<'d, I2C>(
                 let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
                 {
                     let settings = web_serial_settings_snapshot(power, log_state.level());
-                    esp_firmware::net_contract::render_settings_json(&mut body, &settings);
+                    mains_aegis_firmware::net_contract::render_settings_json(&mut body, &settings);
                 }
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
@@ -2495,7 +2502,7 @@ fn handle_web_serial_frame<'d, I2C>(
                 let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
                 log_state.set_level(level);
                 #[cfg(feature = "net_http")]
-                esp_firmware::net::set_device_log_level(level.as_str());
+                mains_aegis_firmware::net::set_device_log_level(level.as_str());
                 let _ = write!(body, r#"{{"log_level":"{}"}}"#, level.as_str());
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
@@ -2513,7 +2520,7 @@ fn handle_web_serial_frame<'d, I2C>(
                 #[cfg(feature = "net_http")]
                 {
                     let current = power.manual_charge_prefs_snapshot();
-                    esp_firmware::net::set_manual_charge_settings(
+                    mains_aegis_firmware::net::set_manual_charge_settings(
                         manual_charge_target_api_value(current.target),
                         manual_charge_speed_api_value(current.speed),
                         current.timer_limit.hours(),
@@ -2546,7 +2553,7 @@ fn handle_web_serial_frame<'d, I2C>(
                 match power.control_manual_charge(command) {
                     Ok(_) => {
                         #[cfg(feature = "net_http")]
-                        esp_firmware::net::publish_charge_control_detail(
+                        mains_aegis_firmware::net::publish_charge_control_detail(
                             power.current_manual_charge_control_detail_snapshot(),
                         );
                         render_charge_control_result_json(
@@ -2688,7 +2695,7 @@ fn handle_web_serial_frame<'d, I2C>(
                 match power.write_web_serial_wifi_config(Some(&secret)) {
                     Ok(()) => {
                         #[cfg(feature = "net_http")]
-                        esp_firmware::net::set_usb_wifi_config(Some(secret.clone()));
+                        mains_aegis_firmware::net::set_usb_wifi_config(Some(secret.clone()));
                         render_wifi_config_ack_json(
                             &mut frame,
                             request_id.as_str(),
@@ -2720,7 +2727,7 @@ fn handle_web_serial_frame<'d, I2C>(
                 match power.write_web_serial_wifi_config(None) {
                     Ok(()) => {
                         #[cfg(feature = "net_http")]
-                        esp_firmware::net::set_usb_wifi_config(None);
+                        mains_aegis_firmware::net::set_usb_wifi_config(None);
                         render_wifi_config_ack_json(&mut frame, request_id.as_str(), false, None);
                         write_web_serial_line(serial, frame.as_str());
                         log_state.emit(
@@ -2803,7 +2810,7 @@ where
 {
     let settings = power.advanced_power_settings_snapshot();
     let capabilities = power.advanced_power_capabilities_snapshot();
-    esp_firmware::net::set_advanced_power_settings(settings, capabilities);
+    mains_aegis_firmware::net::set_advanced_power_settings(settings, capabilities);
 }
 
 const fn beeper_volume_step(level: front_panel_scene::BeeperVolumeLevel) -> u8 {
@@ -3056,15 +3063,17 @@ impl UsbCdcLogState {
 fn web_serial_settings_snapshot<I2C>(
     power: &mut output::PowerManager<'_, I2C>,
     log_level: LogLevel,
-) -> esp_firmware::net_types::DeviceSettingsSnapshot
+) -> mains_aegis_firmware::net_types::DeviceSettingsSnapshot
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
     let rated_vout_mv = power.advanced_power_capabilities_snapshot().rated_vout_mv;
     let mut settings =
-        esp_firmware::net_types::DeviceSettingsSnapshot::defaults_for_rated_vout(rated_vout_mv);
+        mains_aegis_firmware::net_types::DeviceSettingsSnapshot::defaults_for_rated_vout(
+            rated_vout_mv,
+        );
     let wifi = power.read_web_serial_wifi_config().ok().flatten();
-    settings.wifi = esp_firmware::net_types::WifiSettingsSnapshot {
+    settings.wifi = mains_aegis_firmware::net_types::WifiSettingsSnapshot {
         configured: wifi.is_some(),
         ssid: wifi.map(|secret| {
             let mut ssid = HeaplessString::<32>::new();
@@ -3074,7 +3083,7 @@ where
     };
     let prefs = power.manual_charge_prefs_snapshot();
     settings.log_level = log_level.as_str();
-    settings.manual_charge = esp_firmware::net_types::ManualChargeSettingsSnapshot {
+    settings.manual_charge = mains_aegis_firmware::net_types::ManualChargeSettingsSnapshot {
         target: manual_charge_target_api_value(prefs.target),
         speed: manual_charge_speed_api_value(prefs.speed),
         timer_h: prefs.timer_limit.hours(),

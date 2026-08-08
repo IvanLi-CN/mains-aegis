@@ -16,13 +16,6 @@ use crate::front_panel_scene::{
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
-use esp_firmware::display_pipeline::{
-    DirtyRows, DisplayBufferError, DisplayBuffers, DMA_STAGING_BYTES, FRAME_HEIGHT, FRAME_WIDTH,
-};
-use esp_firmware::display_power::{
-    DisplayPowerCommand, DisplayPowerController, DisplayPowerMode, DisplayPowerPolicy,
-};
-use esp_firmware::net_types::FrontPanelRuntimeSnapshot;
 use esp_hal::dma::{DmaChannelFor, DmaRxBuf, DmaTxBuf};
 use esp_hal::gpio::{DriveMode, Flex, Input, OutputConfig, Pull};
 use esp_hal::peripherals::PSRAM;
@@ -34,6 +27,13 @@ use esp_hal::spi::{
 use esp_hal::time::{Duration, Instant, Rate};
 use esp_hal::Blocking;
 use gc9307_async::{Config as GcConfig, Orientation, Timer as GcTimer, GC9307C};
+use mains_aegis_firmware::display_pipeline::{
+    DirtyRows, DisplayBufferError, DisplayBuffers, DMA_STAGING_BYTES, FRAME_HEIGHT, FRAME_WIDTH,
+};
+use mains_aegis_firmware::display_power::{
+    DisplayPowerCommand, DisplayPowerController, DisplayPowerMode, DisplayPowerPolicy,
+};
+use mains_aegis_firmware::net_types::FrontPanelRuntimeSnapshot;
 
 // Front panel: GC9307 over SPI + slow control lines via TCA6408A (I2C2).
 // This module uses gc9307-async (crates.io) for controller init.
@@ -442,7 +442,7 @@ where
     fn publish_runtime_snapshot(&self) {
         #[cfg(feature = "net_http")]
         {
-            esp_firmware::net::set_front_panel_runtime(self.runtime_snapshot());
+            mains_aegis_firmware::net::set_front_panel_runtime(self.runtime_snapshot());
         }
     }
 

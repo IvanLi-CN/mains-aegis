@@ -59,7 +59,7 @@
 
 - 构建通过：
   - `cargo build --release --bin display-diag-fw`
-  - `cargo build --release --bin esp-firmware`
+  - `cargo build --release --bin mains-aegis-firmware`
 - 独立烧录通过：
   - 在 `firmware/display-diag/` 下执行 `mcu-agentd flash esp-diag` 成功。
 - 串口日志包含：

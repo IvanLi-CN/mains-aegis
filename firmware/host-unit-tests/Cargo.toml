@@ -1,5 +1,5 @@
 [package]
-name = "esp-firmware-host-unit-tests"
+name = "mains-aegis-firmware-host-unit-tests"
 version = "0.1.0"
 edition = "2021"
 publish = false

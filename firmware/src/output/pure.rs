@@ -3,11 +3,11 @@ use crate::front_panel_scene::{
     DashboardInputSource, ManualChargePowerPath, ManualChargeSpeed, ManualChargeStopReason,
     SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
 };
-use esp_firmware::bq40z50;
-use esp_firmware::fan;
-use esp_firmware::output_state::{self as output_state_logic, OutputGateReason};
-use esp_firmware::time::Duration;
-use esp_firmware::usb_pd;
+use mains_aegis_firmware::bq40z50;
+use mains_aegis_firmware::fan;
+use mains_aegis_firmware::output_state::{self as output_state_logic, OutputGateReason};
+use mains_aegis_firmware::time::Duration;
+use mains_aegis_firmware::usb_pd;
 
 use super::channel::OutputChannel;
 use super::{

@@ -114,7 +114,7 @@ fresh TPS 样本仍走完整 `VIN drop + TPS output + input current` 判据；�
 
 - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml`
 - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml output_tps55288 -- --nocapture`
-- `cargo +esp build --manifest-path firmware/Cargo.toml --bin esp-firmware --release --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
+- `cargo +esp build --manifest-path firmware/Cargo.toml --bin mains-aegis-firmware --release --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
 
 这些 gate 当前覆盖的核心事实：
 

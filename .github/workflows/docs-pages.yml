@@ -122,7 +122,7 @@ jobs:
           grep -q 'pwa-navigation-fallback.js' web/dist/sw.js
           grep -q 'mains-aegis-icon-192.png' web/dist/manifest.webmanifest
           grep -q 'firmware-catalog.json' web/dist/sw.js
-          grep -q 'esp-firmware.bin' web/dist/sw.js
+          grep -q 'mains-aegis-firmware-12v.bin' web/dist/sw.js
           test -f docs-site/doc_build/index.html
           test -f docs-site/doc_build/404.html
           test -d docs-site/doc_build/static
