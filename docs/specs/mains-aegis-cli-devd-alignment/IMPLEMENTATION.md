@@ -2,6 +2,9 @@
 
 ## 当前实现
 
+- CLI、IPC 与 HTTP 继续返回一个 diagnostic JSON；USB 传输层 begin/package/error/end 分块由 devd 聚合。
+- host/devd 区分 schema v2 与 legacy v1，并保持 v2 package/error、busy 与限频语义。
+
 - compact status renderer 在 charger 对象末字段后直接闭合对象，并由 host-side JSON parser 回归测试验证完整 payload，保证 `status --fresh` 可被 devd 匹配。
 - `tools/mains-aegis-host` 统一产出 `mains-aegis` CLI 与 `mains-aegis-devd` daemon。
 - `mains-aegis` CLI 业务命令默认通过系统原生 IPC 复用 singleton daemon；连接失败时会定位 packaged sibling `mains-aegis-devd` 并按需 auto-start IPC daemon。`--no-auto-start` 会保持纯连接失败语义。

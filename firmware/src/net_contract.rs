@@ -6,7 +6,8 @@ use crate::{
     mdns_wire::DeviceIdentity,
     net_types::{
         format_ipv4, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerSnapshot,
-        DeviceSettingsSnapshot, UpsStatusSnapshot, WifiSnapshot, API_VERSION,
+        DeviceSettingsSnapshot, DiagReadU16, DiagReadU8, Ina3221DiagSnapshot, Tmp112DiagSnapshot,
+        Tps55288DiagSnapshot, UpsStatusSnapshot, WifiSnapshot, API_VERSION,
     },
 };
 
@@ -960,7 +961,7 @@ pub fn render_diag_snapshot_json<'a, const N: usize>(
     diag: DerivedPowerSnapshot,
 ) {
     buf.clear();
-    let _ = buf.push_str("{\"packages\":{");
+    let _ = buf.push_str("{\"schema_version\":2,\"packages\":{");
     let mut emitted = DiagEmitState::<'a>::default();
     if requested_packages.is_empty() {
         render_diag_snapshot_package(buf, &mut emitted, "mcu.runtime", status, diag);
@@ -1030,41 +1031,19 @@ fn render_diag_snapshot_package<'a, const N: usize>(
             let _ = buf.push('}');
         }
         "tps55288.out_a" => {
-            render_diag_package_header(buf, emitted, id, "status_cache", 0);
-            render_diag_output_payload(
-                buf,
-                status.out_a_state,
-                status.out_a_enabled,
-                status.out_a_vbus_mv,
-                status.out_a_iout_ma,
-            );
-            let _ = buf.push('}');
+            render_diag_tps_package(buf, emitted, id, diag.hardware.tps_a);
         }
         "tps55288.out_b" => {
-            render_diag_package_header(buf, emitted, id, "status_cache", 0);
-            render_diag_output_payload(
-                buf,
-                status.out_b_state,
-                status.out_b_enabled,
-                status.out_b_vbus_mv,
-                status.out_b_iout_ma,
-            );
-            let _ = buf.push('}');
+            render_diag_tps_package(buf, emitted, id, diag.hardware.tps_b);
         }
         "ina3221.regs" => {
-            render_diag_package_header(buf, emitted, id, "status_cache", 0);
-            render_diag_ina_payload(buf, status);
-            let _ = buf.push('}');
+            render_diag_ina_package(buf, emitted, id, diag.hardware.ina3221);
         }
         "tmp112.out_a" => {
-            render_diag_package_header(buf, emitted, id, "status_cache", 0);
-            render_diag_tmp_payload(buf, status.tmp_a_state, status.tmp_a_c);
-            let _ = buf.push('}');
+            render_diag_tmp_package(buf, emitted, id, diag.hardware.tmp_a);
         }
         "tmp112.out_b" => {
-            render_diag_package_header(buf, emitted, id, "status_cache", 0);
-            render_diag_tmp_payload(buf, status.tmp_b_state, status.tmp_b_c);
-            let _ = buf.push('}');
+            render_diag_tmp_package(buf, emitted, id, diag.hardware.tmp_b);
         }
         "fusb302.regs" => {
             render_diag_package_header(buf, emitted, id, "power_cache", 0);
@@ -1261,44 +1240,257 @@ fn render_diag_charger_payload<const N: usize>(
     let _ = buf.push('}');
 }
 
-fn render_diag_output_payload<const N: usize>(
+fn begin_diag_v2_package<'a, const N: usize>(
     buf: &mut String<N>,
-    state: &str,
-    enabled: Option<bool>,
-    vbus_mv: Option<u16>,
-    iout_ma: Option<i32>,
+    emitted: &mut DiagEmitState<'a>,
+    id: &'a str,
+    ok: bool,
+    captured_at_ms: u64,
+    duration_ms: u16,
 ) {
-    let _ = buf.push('{');
-    json_field_str(buf, "state", state, true);
-    json_field_opt_bool(buf, "enabled", enabled, true);
-    json_field_opt_u16(buf, "vbus_mv", vbus_mv, true);
-    json_field_opt_i32(buf, "iout_ma", iout_ma, false);
-    let _ = buf.push('}');
+    if !emitted.packages.is_empty() {
+        let _ = buf.push(',');
+    }
+    let _ = emitted.packages.push(id);
+    let _ = buf.push('"');
+    write_json_string_escaped(buf, id);
+    let _ = write!(
+        buf,
+        "\":{{\"ok\":{},\"source\":\"fresh_i2c\",\"captured_at_ms\":{},\"age_ms\":0,\"duration_ms\":{},\"payload\":",
+        ok, captured_at_ms, duration_ms
+    );
 }
 
-fn render_diag_ina_payload<const N: usize>(buf: &mut String<N>, status: UpsStatusSnapshot) {
-    let _ = buf.push('{');
-    json_field_opt_u16(buf, "input_vbus_mv", status.input_vbus_mv, true);
-    json_field_opt_i32(buf, "input_ibus_ma", status.input_ibus_ma, true);
-    json_field_opt_u16(buf, "pre_tps_vin_mv", status.pre_tps_vin_mv, true);
-    json_field_opt_u16(buf, "vin_vbus_mv", status.vin_vbus_mv, true);
-    json_field_opt_str(buf, "input_gate_state", status.input_gate_state, true);
-    json_field_opt_str(buf, "input_gate_reason", status.input_gate_reason, true);
-    json_field_opt_bool(buf, "input_power_good", status.input_power_good, true);
-    json_field_opt_i32(buf, "vin_iin_ma", status.vin_iin_ma, true);
-    json_field_opt_i32(buf, "tps_total_iout_ma", status.tps_total_iout_ma, false);
-    let _ = buf.push('}');
+fn diag_u8_failed(value: DiagReadU8) -> bool {
+    value.error.is_some()
 }
 
-fn render_diag_tmp_payload<const N: usize>(
+fn diag_u16_failed(value: DiagReadU16) -> bool {
+    value.error.is_some()
+}
+
+fn render_diag_register_u8<const N: usize>(
     buf: &mut String<N>,
-    state: &str,
-    temp_c_x16: Option<i16>,
+    name: &str,
+    address: u8,
+    value: DiagReadU8,
+    comma: bool,
 ) {
-    let _ = buf.push('{');
-    json_field_str(buf, "state", state, true);
-    json_field_opt_i16(buf, "temp_c_x16", temp_c_x16, false);
+    let _ = buf.push('"');
+    write_json_string_escaped(buf, name);
+    let _ = write!(buf, "\":{{\"address\":{},\"raw\":", address);
+    match value.raw {
+        Some(raw) => {
+            let _ = write!(buf, "{}", raw);
+        }
+        None => {
+            let _ = buf.push_str("null");
+        }
+    }
     let _ = buf.push('}');
+    if comma {
+        let _ = buf.push(',');
+    }
+}
+
+fn render_diag_register_u16<const N: usize>(
+    buf: &mut String<N>,
+    name: &str,
+    address: u8,
+    value: DiagReadU16,
+    comma: bool,
+) {
+    let _ = buf.push('"');
+    write_json_string_escaped(buf, name);
+    let _ = write!(buf, "\":{{\"address\":{},\"raw\":", address);
+    match value.raw {
+        Some(raw) => {
+            let _ = write!(buf, "{}", raw);
+        }
+        None => {
+            let _ = buf.push_str("null");
+        }
+    }
+    let _ = buf.push('}');
+    if comma {
+        let _ = buf.push(',');
+    }
+}
+
+fn render_diag_read_error<const N: usize>(
+    buf: &mut String<N>,
+    first: &mut bool,
+    register: &str,
+    error: Option<&str>,
+) {
+    let Some(error) = error else { return };
+    if !*first {
+        let _ = buf.push(',');
+    }
+    *first = false;
+    let _ = buf.push_str("{\"register\":\"");
+    write_json_string_escaped(buf, register);
+    let _ = buf.push_str("\",\"phase\":\"read\",\"code\":\"");
+    write_json_string_escaped(buf, error);
+    let retryable = matches!(
+        error,
+        "i2c_timeout" | "i2c_nack" | "i2c_arbitration" | "i2c"
+    );
+    let _ = write!(buf, "\",\"retryable\":{}}}", retryable);
+}
+
+fn render_diag_tps_package<'a, const N: usize>(
+    buf: &mut String<N>,
+    emitted: &mut DiagEmitState<'a>,
+    id: &'a str,
+    snapshot: Tps55288DiagSnapshot,
+) {
+    let ok = !diag_u16_failed(snapshot.vref)
+        && !diag_u8_failed(snapshot.iout_limit)
+        && !diag_u8_failed(snapshot.vout_sr)
+        && !diag_u8_failed(snapshot.vout_fs)
+        && !diag_u8_failed(snapshot.cdc)
+        && !diag_u8_failed(snapshot.mode)
+        && !diag_u8_failed(snapshot.status);
+    begin_diag_v2_package(
+        buf,
+        emitted,
+        id,
+        ok,
+        snapshot.captured_at_ms,
+        snapshot.duration_ms,
+    );
+    let _ = write!(
+        buf,
+        "{{\"device\":{{\"address\":{}}},\"registers\":{{",
+        snapshot.address
+    );
+    render_diag_register_u16(buf, "VREF", 0x00, snapshot.vref, true);
+    render_diag_register_u8(buf, "IOUT_LIMIT", 0x02, snapshot.iout_limit, true);
+    render_diag_register_u8(buf, "VOUT_SR", 0x03, snapshot.vout_sr, true);
+    render_diag_register_u8(buf, "VOUT_FS", 0x04, snapshot.vout_fs, true);
+    render_diag_register_u8(buf, "CDC", 0x05, snapshot.cdc, true);
+    render_diag_register_u8(buf, "MODE", 0x06, snapshot.mode, true);
+    render_diag_register_u8(buf, "STATUS", 0x07, snapshot.status, false);
+    let _ = buf.push_str("},\"decoded\":{},\"measurements\":{");
+    json_field_opt_u16(buf, "vbus_mv", snapshot.vbus_mv, true);
+    json_field_opt_i32(buf, "iout_ma", snapshot.iout_ma, true);
+    json_field_opt_i16(buf, "temp_c_x16", snapshot.temp_c_x16, false);
+    let _ = buf.push_str("},\"runtime\":{}},\"read_errors\":[");
+    let mut first = true;
+    render_diag_read_error(buf, &mut first, "VREF", snapshot.vref.error);
+    render_diag_read_error(buf, &mut first, "IOUT_LIMIT", snapshot.iout_limit.error);
+    render_diag_read_error(buf, &mut first, "VOUT_SR", snapshot.vout_sr.error);
+    render_diag_read_error(buf, &mut first, "VOUT_FS", snapshot.vout_fs.error);
+    render_diag_read_error(buf, &mut first, "CDC", snapshot.cdc.error);
+    render_diag_read_error(buf, &mut first, "MODE", snapshot.mode.error);
+    render_diag_read_error(buf, &mut first, "STATUS", snapshot.status.error);
+    let _ = buf.push_str("]}");
+}
+
+fn render_diag_ina_package<'a, const N: usize>(
+    buf: &mut String<N>,
+    emitted: &mut DiagEmitState<'a>,
+    id: &'a str,
+    snapshot: Ina3221DiagSnapshot,
+) {
+    let ok = !diag_u16_failed(snapshot.config)
+        && !diag_u16_failed(snapshot.manufacturer_id)
+        && !diag_u16_failed(snapshot.die_id)
+        && snapshot.channel_errors.iter().all(Option::is_none);
+    begin_diag_v2_package(
+        buf,
+        emitted,
+        id,
+        ok,
+        snapshot.captured_at_ms,
+        snapshot.duration_ms,
+    );
+    let _ = buf.push_str("{\"device\":{\"address\":64},\"registers\":{");
+    render_diag_register_u16(buf, "CONFIG", 0x00, snapshot.config, true);
+    render_diag_register_u16(buf, "MANUFACTURER_ID", 0xFE, snapshot.manufacturer_id, true);
+    render_diag_register_u16(buf, "DIE_ID", 0xFF, snapshot.die_id, false);
+    let _ = buf.push_str("},\"decoded\":{},\"measurements\":{");
+    for index in 0..3 {
+        let _ = write!(buf, "\"ch{}_bus_mv\":", index + 1);
+        match snapshot.bus_mv[index] {
+            Some(v) => {
+                let _ = write!(buf, "{}", v);
+            }
+            None => {
+                let _ = buf.push_str("null");
+            }
+        }
+        let _ = write!(buf, ",\"ch{}_shunt_uv\":", index + 1);
+        match snapshot.shunt_uv[index] {
+            Some(v) => {
+                let _ = write!(buf, "{}", v);
+            }
+            None => {
+                let _ = buf.push_str("null");
+            }
+        }
+        if index != 2 {
+            let _ = buf.push(',');
+        }
+    }
+    let _ = write!(buf, "}},\"runtime\":{{\"irq_mask_enable_raw\":{},\"irq_latched_bits\":{},\"pv_count\":{},\"warning_count\":{},\"critical_count\":{}}}}},\"read_errors\":[",
+        snapshot.irq_mask_enable_raw.map_or(0, |v| v), snapshot.irq_latched_bits,
+        snapshot.irq_pv_count, snapshot.irq_warning_count, snapshot.irq_critical_count);
+    let mut first = true;
+    render_diag_read_error(buf, &mut first, "CONFIG", snapshot.config.error);
+    render_diag_read_error(
+        buf,
+        &mut first,
+        "MANUFACTURER_ID",
+        snapshot.manufacturer_id.error,
+    );
+    render_diag_read_error(buf, &mut first, "DIE_ID", snapshot.die_id.error);
+    for index in 0..3 {
+        let name = match index {
+            0 => "CH1",
+            1 => "CH2",
+            _ => "CH3",
+        };
+        render_diag_read_error(buf, &mut first, name, snapshot.channel_errors[index]);
+    }
+    let _ = buf.push_str("]}");
+}
+
+fn render_diag_tmp_package<'a, const N: usize>(
+    buf: &mut String<N>,
+    emitted: &mut DiagEmitState<'a>,
+    id: &'a str,
+    snapshot: Tmp112DiagSnapshot,
+) {
+    let ok = !diag_u16_failed(snapshot.temperature)
+        && !diag_u16_failed(snapshot.config)
+        && !diag_u16_failed(snapshot.tlow)
+        && !diag_u16_failed(snapshot.thigh);
+    begin_diag_v2_package(
+        buf,
+        emitted,
+        id,
+        ok,
+        snapshot.captured_at_ms,
+        snapshot.duration_ms,
+    );
+    let _ = write!(
+        buf,
+        "{{\"device\":{{\"address\":{}}},\"registers\":{{",
+        snapshot.address
+    );
+    render_diag_register_u16(buf, "TEMPERATURE", 0x00, snapshot.temperature, true);
+    render_diag_register_u16(buf, "CONFIG", 0x01, snapshot.config, true);
+    render_diag_register_u16(buf, "TLOW", 0x02, snapshot.tlow, true);
+    render_diag_register_u16(buf, "THIGH", 0x03, snapshot.thigh, false);
+    let _ = buf.push_str("},\"decoded\":{},\"measurements\":{},\"runtime\":{}},\"read_errors\":[");
+    let mut first = true;
+    render_diag_read_error(buf, &mut first, "TEMPERATURE", snapshot.temperature.error);
+    render_diag_read_error(buf, &mut first, "CONFIG", snapshot.config.error);
+    render_diag_read_error(buf, &mut first, "TLOW", snapshot.tlow.error);
+    render_diag_read_error(buf, &mut first, "THIGH", snapshot.thigh.error);
+    let _ = buf.push_str("]}");
 }
 
 fn render_diag_fusb_payload<const N: usize>(buf: &mut String<N>, diag: DerivedPowerSnapshot) {

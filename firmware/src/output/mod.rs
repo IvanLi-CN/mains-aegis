@@ -27,7 +27,8 @@ use mains_aegis_firmware::net_types::{
     ChargeControlEvidenceValueSnapshot, ChargeControlLoopOverrideSnapshot,
     ChargeControlReadinessSnapshot, ChargeControlSnapshot, ChargeControlTelemetrySnapshot,
     DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerInputSnapshot,
-    DerivedPowerPolicySnapshot, DerivedPowerSnapshot, RuntimeModePolicySnapshot,
+    DerivedPowerPolicySnapshot, DerivedPowerSnapshot, DiagReadU16, DiagReadU8,
+    RuntimeModePolicySnapshot, Tmp112DiagSnapshot, Tps55288DiagSnapshot,
     CHARGE_CONTROL_EVIDENCE_CAP,
 };
 use mains_aegis_firmware::output_protection;
@@ -2368,6 +2369,58 @@ pub(super) fn ina_error_kind(err: ina3221::Error<esp_hal::i2c::master::Error>) -
         ina3221::Error::OutOfRange => "out_of_range",
         ina3221::Error::InvalidConfig => "invalid_config",
     }
+}
+
+fn diag_tps_u8(result: Result<u8, ::tps55288::Error<esp_hal::i2c::master::Error>>) -> DiagReadU8 {
+    match result {
+        Ok(raw) => DiagReadU8 {
+            raw: Some(raw),
+            error: None,
+        },
+        Err(error) => DiagReadU8 {
+            raw: None,
+            error: Some(tps_error_kind(error)),
+        },
+    }
+}
+
+fn diag_ina_u16(result: Result<u16, ina3221::Error<esp_hal::i2c::master::Error>>) -> DiagReadU16 {
+    match result {
+        Ok(raw) => DiagReadU16 {
+            raw: Some(raw),
+            error: None,
+        },
+        Err(error) => DiagReadU16 {
+            raw: None,
+            error: Some(ina_error_kind(error)),
+        },
+    }
+}
+
+fn diag_i2c_u16(result: Result<u16, esp_hal::i2c::master::Error>) -> DiagReadU16 {
+    match result {
+        Ok(raw) => DiagReadU16 {
+            raw: Some(raw),
+            error: None,
+        },
+        Err(error) => DiagReadU16 {
+            raw: None,
+            error: Some(i2c_error_kind(error)),
+        },
+    }
+}
+
+fn read_i2c_u16_be<I2C>(
+    i2c: &mut I2C,
+    address: u8,
+    register: u8,
+) -> Result<u16, esp_hal::i2c::master::Error>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let mut raw = [0u8; 2];
+    i2c.write_read(address, &[register], &mut raw)?;
+    Ok(u16::from_be_bytes(raw))
 }
 
 #[derive(Clone, Copy)]
@@ -5071,12 +5124,201 @@ where
         &mut self,
         packages: &[heapless::String<N>],
     ) {
+        let hardware_requested = packages.iter().any(|package| {
+            matches!(
+                package.as_str(),
+                "bq40.core"
+                    | "bq40.manufacturing"
+                    | "bq25792.regs"
+                    | "tps55288.out_a"
+                    | "tps55288.out_b"
+                    | "ina3221.regs"
+                    | "tmp112.out_a"
+                    | "tmp112.out_b"
+                    | "fusb302.regs"
+            )
+        });
+        if hardware_requested && !self.begin_diag_hardware_capture() {
+            return;
+        }
+
         if packages
             .iter()
             .any(|package| package.as_str() == "bq40.manufacturing")
         {
             self.refresh_bq40_manufacturing_diag_snapshot();
         }
+        if packages
+            .iter()
+            .any(|package| package.as_str() == "bq40.core")
+        {
+            self.refresh_bq40_core_diag_snapshot();
+        }
+        if packages
+            .iter()
+            .any(|package| package.as_str() == "bq25792.regs")
+        {
+            self.refresh_bq25792_diag_snapshot();
+        }
+        if packages
+            .iter()
+            .any(|package| package.as_str() == "tps55288.out_a")
+        {
+            self.diag_snapshot.hardware.tps_a = self.capture_tps_diag_snapshot(OutputChannel::OutA);
+        }
+        if packages
+            .iter()
+            .any(|package| package.as_str() == "tps55288.out_b")
+        {
+            self.diag_snapshot.hardware.tps_b = self.capture_tps_diag_snapshot(OutputChannel::OutB);
+        }
+        if packages
+            .iter()
+            .any(|package| package.as_str() == "ina3221.regs")
+        {
+            self.refresh_ina_diag_snapshot();
+        }
+        if packages
+            .iter()
+            .any(|package| package.as_str() == "tmp112.out_a")
+        {
+            self.diag_snapshot.hardware.tmp_a = self.capture_tmp_diag_snapshot(0x48);
+        }
+        if packages
+            .iter()
+            .any(|package| package.as_str() == "tmp112.out_b")
+        {
+            self.diag_snapshot.hardware.tmp_b = self.capture_tmp_diag_snapshot(0x49);
+        }
+    }
+
+    fn begin_diag_hardware_capture(&mut self) -> bool {
+        const MIN_INTERVAL_MS: u64 = 1_000;
+        let now_ms = self.fan_now_ms();
+        let hardware = &mut self.diag_snapshot.hardware;
+        hardware.capture_error = None;
+        hardware.retry_after_ms = None;
+        if let Some(last_ms) = hardware.last_fresh_capture_ms {
+            let elapsed = now_ms.saturating_sub(last_ms);
+            if elapsed < MIN_INTERVAL_MS {
+                hardware.capture_error = Some("diag_capture_rate_limited");
+                hardware.retry_after_ms = Some((MIN_INTERVAL_MS - elapsed) as u16);
+                return false;
+            }
+        }
+        hardware.last_fresh_capture_ms = Some(now_ms);
+        true
+    }
+
+    fn capture_tps_diag_snapshot(&mut self, ch: OutputChannel) -> Tps55288DiagSnapshot {
+        use ::tps55288::registers::addr;
+
+        let started = Instant::now();
+        let captured_at_ms = self.fan_now_ms();
+        let mut snapshot = Tps55288DiagSnapshot::empty(ch.addr());
+        snapshot.captured_at_ms = captured_at_ms;
+        let mut tps = ::tps55288::Tps55288::with_address(&mut self.i2c, ch.addr());
+        let mut vref = [0u8; 2];
+        snapshot.vref = match tps.read_regs(addr::REF0, &mut vref) {
+            Ok(()) => DiagReadU16 {
+                raw: Some(u16::from_le_bytes(vref)),
+                error: None,
+            },
+            Err(error) => DiagReadU16 {
+                raw: None,
+                error: Some(tps_error_kind(error)),
+            },
+        };
+        snapshot.iout_limit = diag_tps_u8(tps.read_reg(addr::IOUT_LIMIT));
+        snapshot.vout_sr = diag_tps_u8(tps.read_reg(addr::VOUT_SR));
+        snapshot.vout_fs = diag_tps_u8(tps.read_reg(addr::VOUT_FS));
+        snapshot.cdc = diag_tps_u8(tps.read_reg(addr::CDC));
+        snapshot.mode = diag_tps_u8(tps.read_reg(addr::MODE));
+        snapshot.status = diag_tps_u8(tps.read_reg(addr::STATUS));
+        match ch {
+            OutputChannel::OutA => {
+                snapshot.vbus_mv = self.ui_snapshot.out_a_vbus_mv;
+                snapshot.iout_ma = self.ui_snapshot.tps_a_iout_ma;
+                snapshot.temp_c_x16 = self.ui_snapshot.tmp_a_c;
+            }
+            OutputChannel::OutB => {
+                snapshot.vbus_mv = self.ui_snapshot.out_b_vbus_mv;
+                snapshot.iout_ma = self.ui_snapshot.tps_b_iout_ma;
+                snapshot.temp_c_x16 = self.ui_snapshot.tmp_b_c;
+            }
+        }
+        snapshot.duration_ms = started.elapsed().as_millis().min(u16::MAX as u64) as u16;
+        snapshot
+    }
+
+    fn refresh_ina_diag_snapshot(&mut self) {
+        let started = Instant::now();
+        let mut snapshot = self.diag_snapshot.hardware.ina3221;
+        snapshot.captured_at_ms = self.fan_now_ms();
+        snapshot.config = diag_ina_u16(ina3221::read_config(&mut self.i2c));
+        snapshot.manufacturer_id = diag_ina_u16(ina3221::read_manufacturer_id(&mut self.i2c));
+        snapshot.die_id = diag_ina_u16(ina3221::read_die_id(&mut self.i2c));
+        for (index, channel) in [
+            ina3221::Channel::Ch1,
+            ina3221::Channel::Ch2,
+            ina3221::Channel::Ch3,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let bus = ina3221::read_bus_mv(&mut self.i2c, channel);
+            let shunt = ina3221::read_shunt_uv(&mut self.i2c, channel);
+            snapshot.bus_mv[index] = bus.as_ref().ok().copied();
+            snapshot.shunt_uv[index] = shunt.as_ref().ok().copied();
+            snapshot.channel_errors[index] = bus.err().or_else(|| shunt.err()).map(ina_error_kind);
+        }
+        snapshot.duration_ms = started.elapsed().as_millis().min(u16::MAX as u64) as u16;
+        self.diag_snapshot.hardware.ina3221 = snapshot;
+    }
+
+    fn capture_tmp_diag_snapshot(&mut self, addr: u8) -> Tmp112DiagSnapshot {
+        let started = Instant::now();
+        let mut snapshot = Tmp112DiagSnapshot::empty(addr);
+        snapshot.captured_at_ms = self.fan_now_ms();
+        snapshot.temperature = diag_i2c_u16(read_i2c_u16_be(&mut self.i2c, addr, 0x00));
+        snapshot.config = diag_i2c_u16(read_i2c_u16_be(&mut self.i2c, addr, 0x01));
+        snapshot.tlow = diag_i2c_u16(read_i2c_u16_be(&mut self.i2c, addr, 0x02));
+        snapshot.thigh = diag_i2c_u16(read_i2c_u16_be(&mut self.i2c, addr, 0x03));
+        snapshot.duration_ms = started.elapsed().as_millis().min(u16::MAX as u64) as u16;
+        snapshot
+    }
+
+    fn refresh_bq40_core_diag_snapshot(&mut self) {
+        let Some(addr) = self.bms_addr else { return };
+        self.diag_snapshot.bms.pack_mv =
+            bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::VOLTAGE).ok();
+        self.diag_snapshot.bms.current_ma =
+            bq40z50::read_i16(&mut self.i2c, addr, bq40z50::cmd::CURRENT).ok();
+        self.diag_snapshot.bms.soc_pct =
+            bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE).ok();
+    }
+
+    fn refresh_bq25792_diag_snapshot(&mut self) {
+        let charger = &mut self.diag_snapshot.charger;
+        charger.ctrl0 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0).ok();
+        charger.ctrl2 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_2).ok();
+        charger.ctrl3 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_3).ok();
+        charger.ctrl4 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_4).ok();
+        charger.ctrl5 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_5).ok();
+        charger.st0 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_0).ok();
+        charger.st1 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_1).ok();
+        charger.st2 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_2).ok();
+        charger.st3 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_3).ok();
+        charger.st4 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_4).ok();
+        charger.fault0 = bq25792::read_u8(&mut self.i2c, bq25792::reg::FAULT_STATUS_0).ok();
+        charger.fault1 = bq25792::read_u8(&mut self.i2c, bq25792::reg::FAULT_STATUS_1).ok();
+        charger.ibus_adc_ma = bq25792::read_adc_i16(&mut self.i2c, bq25792::reg::IBUS_ADC).ok();
+        charger.ibat_adc_ma = bq25792::read_adc_i16(&mut self.i2c, bq25792::reg::IBAT_ADC).ok();
+        charger.vbus_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VBUS_ADC).ok();
+        charger.vbat_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok();
+        charger.vsys_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VSYS_ADC).ok();
+        charger.vac1_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VAC1_ADC).ok();
+        charger.vac2_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VAC2_ADC).ok();
     }
 
     fn refresh_bq40_manufacturing_diag_snapshot(&mut self) {

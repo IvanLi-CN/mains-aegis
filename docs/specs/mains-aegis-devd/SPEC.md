@@ -72,7 +72,15 @@
 - `POST /api/v1/settings/advanced-power`: 通过指定 `device_id` 的连接设备整块替换 Advanced Power 高级设置。当前设备侧合同固定为 11 个数字字段，并继续只保存相对偏移量或无量纲值。
 - `POST /api/v1/settings/advanced-power/reset`: 通过指定 `device_id` 的连接设备把 Advanced Power 恢复为设备默认值。
 
-`diag-snapshot` 响应必须保持只读，不触发充电策略、BMS 恢复或输出状态变化。响应顶层固定为 `packages` 与 `errors`；单个 package 失败只写入 `errors`，不得阻断其它 package。首版 package id 为 `mcu.runtime`、`bq40.core`、`bq40.manufacturing`、`bq25792.regs`、`tps55288.out_a`、`tps55288.out_b`、`ina3221.regs`、`tmp112.out_a`、`tmp112.out_b`、`fusb302.regs`、`usbpd.policy`、`front_panel.io`、`derived.power`；跨设备派生值只放入 `derived.*` 或 `usbpd.policy`。
+`diag-snapshot` 使用 schema v2。响应顶层固定为 `schema_version=2`、`packages` 与 `errors`；路径、CLI 命令和 package id 保持稳定。空 package 仍只读取轻量 core，硬件 package 必须显式请求。首版 package id 为 `mcu.runtime`、`bq40.core`、`bq40.manufacturing`、`bq25792.regs`、`tps55288.out_a`、`tps55288.out_b`、`ina3221.regs`、`tmp112.out_a`、`tmp112.out_b`、`fusb302.regs`、`usbpd.policy`、`front_panel.io`、`derived.power`；跨设备派生值只放入 `derived.*` 或 `usbpd.policy`。
+
+每个 package 固定包含 `ok`、`source`、`captured_at_ms`、`age_ms`、`duration_ms`、`payload` 与 `read_errors`。硬件寄存器使用稳定名称及 `{address,raw}` 数值，解码位和物理量分别进入 `decoded` 与 `measurements`。单项读取失败时保留同包成功数据、将 `ok=false` 并写入 `read_errors`；顶层 `errors` 只表示未知包、整包不可用、采集 busy、限频、超时或传输协议失败。
+
+显式请求 `bq40.*`、`bq25792.regs`、`tps55288.*`、`ina3221.regs`、`tmp112.*` 或 `fusb302.regs` 时，固件从硬件 owner 路径执行 fresh capture。`mcu.runtime`、`usbpd.policy`、`front_panel.io` 与 `derived.power` 保持快照，并必须准确标记 cache/latch source。FUSB302 interrupt registers 与 INA3221 Mask/Enable 等 Read/Clear 数据只能由正常业务路径读取并锁存；调试请求不得额外读取或清除它们。
+
+固件不得通过扩大完整 JSON 缓冲承载全量 package。LAN 使用 HTTP chunked transfer 逐包组成一个 JSON；USB CDC 使用同 request id 的 begin/package/error/end 有界帧，devd 校验并聚合后继续向 CLI/API 返回单个 JSON。USB 与 LAN 共用 single-flight capture；冲突返回 `diag_capture_busy`。硬件 fresh capture 最短间隔为 1 秒，过快请求返回 `diag_capture_rate_limited` 与 `retry_after_ms`；总采集超时 10 秒，单包无进展超时 2 秒。
+
+INA3221 GPIO IRQ 由 PowerRuntime 唯一消费。IRQ 后读取一次 Mask/Enable，锁存来源、计数、原始值、即时三通道测量、采集时间与错误。Warning 进入现有 output derating 输入；Critical 进入现有 ActiveProtection 关断且保留人工恢复语义；PV 强制进入现有 input gate，恢复继续服从既有阈值与连续样本要求。初始化必须写入并回读 12V/19V PV 阈值、3250mA output warning、4000mA output critical、7000mA input critical 与 6500mA output-sum critical。
 
 `derived.power` 承载原电源派生诊断 payload，至少包含：
 

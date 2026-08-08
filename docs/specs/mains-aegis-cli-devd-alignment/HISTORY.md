@@ -1,5 +1,10 @@
 # History（mains-aegis-cli-devd-alignment）
 
+## Diagnostic schema v2
+
+- 决定只改变设备传输实现，不增加新的 owner-facing streaming 命令。
+- 决定 legacy payload 明确标记并透传，不执行有损的 v2 归一化。
+
 ## USB CDC compact status JSON
 
 - `status --fresh` 曾因 compact status 的 charger 对象带尾逗号而超时：固件已发送响应，但 devd 按协议拒绝了无效 JSON。

@@ -882,6 +882,7 @@ pub struct DerivedPowerSnapshot {
     pub charger: DerivedPowerChargerSnapshot,
     pub policy: DerivedPowerPolicySnapshot,
     pub bms: DerivedPowerBmsSnapshot,
+    pub hardware: HardwareDiagSnapshot,
 }
 
 impl DerivedPowerSnapshot {
@@ -891,6 +892,167 @@ impl DerivedPowerSnapshot {
             charger: DerivedPowerChargerSnapshot::empty(),
             policy: DerivedPowerPolicySnapshot::empty(),
             bms: DerivedPowerBmsSnapshot::empty(),
+            hardware: HardwareDiagSnapshot::empty(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiagReadU8 {
+    pub raw: Option<u8>,
+    pub error: Option<&'static str>,
+}
+
+impl DiagReadU8 {
+    pub const fn empty() -> Self {
+        Self {
+            raw: None,
+            error: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiagReadU16 {
+    pub raw: Option<u16>,
+    pub error: Option<&'static str>,
+}
+
+impl DiagReadU16 {
+    pub const fn empty() -> Self {
+        Self {
+            raw: None,
+            error: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tps55288DiagSnapshot {
+    pub captured_at_ms: u64,
+    pub duration_ms: u16,
+    pub address: u8,
+    pub vref: DiagReadU16,
+    pub mode: DiagReadU8,
+    pub status: DiagReadU8,
+    pub vout_sr: DiagReadU8,
+    pub vout_fs: DiagReadU8,
+    pub cdc: DiagReadU8,
+    pub iout_limit: DiagReadU8,
+    pub vbus_mv: Option<u16>,
+    pub iout_ma: Option<i32>,
+    pub temp_c_x16: Option<i16>,
+}
+
+impl Tps55288DiagSnapshot {
+    pub const fn empty(address: u8) -> Self {
+        Self {
+            captured_at_ms: 0,
+            duration_ms: 0,
+            address,
+            vref: DiagReadU16::empty(),
+            mode: DiagReadU8::empty(),
+            status: DiagReadU8::empty(),
+            vout_sr: DiagReadU8::empty(),
+            vout_fs: DiagReadU8::empty(),
+            cdc: DiagReadU8::empty(),
+            iout_limit: DiagReadU8::empty(),
+            vbus_mv: None,
+            iout_ma: None,
+            temp_c_x16: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ina3221DiagSnapshot {
+    pub captured_at_ms: u64,
+    pub duration_ms: u16,
+    pub config: DiagReadU16,
+    pub manufacturer_id: DiagReadU16,
+    pub die_id: DiagReadU16,
+    pub bus_mv: [Option<i32>; 3],
+    pub shunt_uv: [Option<i32>; 3],
+    pub channel_errors: [Option<&'static str>; 3],
+    pub irq_mask_enable_raw: Option<u16>,
+    pub irq_latched_bits: u16,
+    pub irq_pv_count: u32,
+    pub irq_warning_count: u32,
+    pub irq_critical_count: u32,
+    pub irq_last_at_ms: Option<u64>,
+    pub irq_read_error: Option<&'static str>,
+}
+
+impl Ina3221DiagSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            captured_at_ms: 0,
+            duration_ms: 0,
+            config: DiagReadU16::empty(),
+            manufacturer_id: DiagReadU16::empty(),
+            die_id: DiagReadU16::empty(),
+            bus_mv: [None; 3],
+            shunt_uv: [None; 3],
+            channel_errors: [None; 3],
+            irq_mask_enable_raw: None,
+            irq_latched_bits: 0,
+            irq_pv_count: 0,
+            irq_warning_count: 0,
+            irq_critical_count: 0,
+            irq_last_at_ms: None,
+            irq_read_error: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tmp112DiagSnapshot {
+    pub captured_at_ms: u64,
+    pub duration_ms: u16,
+    pub address: u8,
+    pub temperature: DiagReadU16,
+    pub config: DiagReadU16,
+    pub tlow: DiagReadU16,
+    pub thigh: DiagReadU16,
+}
+
+impl Tmp112DiagSnapshot {
+    pub const fn empty(address: u8) -> Self {
+        Self {
+            captured_at_ms: 0,
+            duration_ms: 0,
+            address,
+            temperature: DiagReadU16::empty(),
+            config: DiagReadU16::empty(),
+            tlow: DiagReadU16::empty(),
+            thigh: DiagReadU16::empty(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HardwareDiagSnapshot {
+    pub tps_a: Tps55288DiagSnapshot,
+    pub tps_b: Tps55288DiagSnapshot,
+    pub ina3221: Ina3221DiagSnapshot,
+    pub tmp_a: Tmp112DiagSnapshot,
+    pub tmp_b: Tmp112DiagSnapshot,
+    pub last_fresh_capture_ms: Option<u64>,
+    pub capture_error: Option<&'static str>,
+    pub retry_after_ms: Option<u16>,
+}
+
+impl HardwareDiagSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            tps_a: Tps55288DiagSnapshot::empty(0x74),
+            tps_b: Tps55288DiagSnapshot::empty(0x75),
+            ina3221: Ina3221DiagSnapshot::empty(),
+            tmp_a: Tmp112DiagSnapshot::empty(0x48),
+            tmp_b: Tmp112DiagSnapshot::empty(0x49),
+            last_fresh_capture_ms: None,
+            capture_error: None,
+            retry_after_ms: None,
         }
     }
 }

@@ -1410,6 +1410,7 @@ mod tests {
                 emshut_exit_comm: Some(true),
                 emshut_exit_vpack: Some(true),
             },
+            hardware: crate::net_types::HardwareDiagSnapshot::empty(),
         };
 
         let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
@@ -1427,6 +1428,7 @@ mod tests {
             UpsStatusSnapshot::empty(),
             diag,
         );
+        assert!(body.as_str().starts_with("{\"schema_version\":2,"));
         assert!(body.as_str().contains("\"packages\":{"));
         assert!(body.as_str().contains("\"bq40.manufacturing\""));
         assert!(body

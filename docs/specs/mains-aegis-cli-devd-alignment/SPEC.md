@@ -16,6 +16,10 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 
 ### Goals
 
+- `device diag-snapshot` 与 devd HTTP/IPC 保持现有调用面并识别 diagnostic schema v2。USB 固件多帧响应由 devd 按 request id、package 顺序和 end 状态聚合；缺帧、重复帧、乱序与超时必须返回结构化协议错误。
+- 对缺失 `schema_version` 的旧固件 payload 标记 `schema_version=1` 与 `legacy=true` 并保留原值；请求 v2-only hardware package 时明确返回 unsupported，不把 status cache 推测成 fresh v2 数据。
+- hardware package watch/fresh 遵守设备 1 秒采集下限，并透传 `diag_capture_busy`、`diag_capture_rate_limited`、`retry_after_ms` 与部分失败结果。
+
 - 新增 `tools/mains-aegis-host`，统一产出 `mains-aegis` 与 `mains-aegis-devd` 两个二进制。
 - 普通用户通过 `mains-aegis` CLI 使用 devd；业务命令默认自动复用或按需启动 singleton IPC daemon，`mains-aegis-devd` binary 仅作为 packaged sibling/internal daemon 与开发诊断入口。
 - `mains-aegis daemon serve` 是 developer/debug foreground IPC daemon；HTTP/Web 暴露只能通过显式 `mains-aegis daemon http` 开启。
