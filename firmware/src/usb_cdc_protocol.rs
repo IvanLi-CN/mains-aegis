@@ -19,7 +19,7 @@ pub const WEB_SERIAL_RESPONSE_FRAME_CAP: usize = 4608;
 
 pub const WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP: usize = 8192;
 pub const WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP: usize = 8704;
-pub const DIAG_SNAPSHOT_MAX_PACKAGES: usize = 8;
+pub const DIAG_SNAPSHOT_MAX_PACKAGES: usize = 16;
 
 const WIFI_CONFIG_MAGIC: [u8; 4] = *b"MAWF";
 const WIFI_CONFIG_VERSION: u8 = 1;
@@ -1489,6 +1489,8 @@ mod tests {
         assert!(body.as_str().contains("\"derived.power\""));
         assert!(body.as_str().ends_with("}}"));
         assert!(body.len() < WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP);
+        let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+        assert_eq!(parsed["schema_version"], serde_json::json!(2));
 
         let mut frame = String::<WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP>::new();
         render_response_json(&mut frame, "req-diag", body.as_str());
@@ -1498,6 +1500,37 @@ mod tests {
             .as_str()
             .contains("\"pressure_reason\":\"tps_output_current\""));
         assert!(frame.len() < WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP);
+    }
+
+    #[test]
+    fn diag_snapshot_keeps_tps_successes_when_one_register_fails() {
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.hardware.tps_a.captured_at_ms = 42;
+        diag.hardware.tps_a.mode = crate::net_types::DiagReadU8 {
+            raw: Some(0x82),
+            error: None,
+        };
+        diag.hardware.tps_a.status = crate::net_types::DiagReadU8 {
+            raw: None,
+            error: Some("i2c_nack"),
+        };
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("tps55288.out_a").unwrap())
+            .unwrap();
+        let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+        render_diag_snapshot_json(
+            &mut body,
+            packages.as_slice(),
+            UpsStatusSnapshot::empty(),
+            diag,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+        let package = &parsed["packages"]["tps55288.out_a"];
+        assert_eq!(package["ok"], serde_json::json!(false));
+        assert_eq!(package["payload"]["registers"]["MODE"]["raw"], 130);
+        assert_eq!(package["payload"]["decoded"]["oe"], true);
+        assert_eq!(package["read_errors"][0]["code"], "i2c_nack");
     }
 
     #[test]

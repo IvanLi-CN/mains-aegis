@@ -979,6 +979,16 @@ pub fn render_diag_snapshot_json<'a, const N: usize>(
     }
     let _ = buf.push_str("},\"errors\":{");
     let mut first_error = true;
+    if let Some(code) = diag.hardware.capture_error {
+        first_error = false;
+        let _ = buf.push_str("\"capture\":{\"code\":\"");
+        write_json_string_escaped(buf, code);
+        let _ = write!(
+            buf,
+            "\",\"retryable\":true,\"retry_after_ms\":{}}}",
+            diag.hardware.retry_after_ms.unwrap_or(0)
+        );
+    }
     for error in emitted.errors.iter() {
         if !first_error {
             let _ = buf.push(',');
@@ -1017,18 +1027,29 @@ fn render_diag_snapshot_package<'a, const N: usize>(
         }
         "bq40.core" => {
             render_diag_package_header(buf, emitted, id, "power_cache", 0);
+            let _ = write!(
+                buf,
+                "{{\"device\":{{\"address\":{}}},\"registers\":{{}},\"decoded\":",
+                diag.bms.addr.unwrap_or(0)
+            );
             render_diag_bms_payload(buf, diag.bms);
-            let _ = buf.push('}');
+            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[]}");
         }
         "bq40.manufacturing" => {
             render_diag_package_header(buf, emitted, id, "fresh_i2c", 0);
+            let _ = write!(
+                buf,
+                "{{\"device\":{{\"address\":{}}},\"registers\":{{}},\"decoded\":",
+                diag.bms.addr.unwrap_or(0)
+            );
             render_diag_bms_payload(buf, diag.bms);
-            let _ = buf.push('}');
+            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[]}");
         }
         "bq25792.regs" => {
-            render_diag_package_header(buf, emitted, id, "power_cache", 0);
+            render_diag_package_header(buf, emitted, id, "fresh_i2c", 0);
+            let _ = buf.push_str("{\"device\":{\"address\":107},\"registers\":{},\"decoded\":");
             render_diag_charger_payload(buf, diag.charger);
-            let _ = buf.push('}');
+            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[]}");
         }
         "tps55288.out_a" => {
             render_diag_tps_package(buf, emitted, id, diag.hardware.tps_a);
@@ -1046,9 +1067,10 @@ fn render_diag_snapshot_package<'a, const N: usize>(
             render_diag_tmp_package(buf, emitted, id, diag.hardware.tmp_b);
         }
         "fusb302.regs" => {
-            render_diag_package_header(buf, emitted, id, "power_cache", 0);
+            render_diag_package_header(buf, emitted, id, "runtime_latch", 0);
+            let _ = buf.push_str("{\"device\":{\"address\":34},\"registers\":{},\"decoded\":");
             render_diag_fusb_payload(buf, diag);
-            let _ = buf.push('}');
+            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{\"read_clear_owner\":\"usbpd.policy\"}},\"read_errors\":[]}");
         }
         "usbpd.policy" => {
             render_diag_package_header(buf, emitted, id, "power_cache", 0);
@@ -1372,7 +1394,98 @@ fn render_diag_tps_package<'a, const N: usize>(
     render_diag_register_u8(buf, "CDC", 0x05, snapshot.cdc, true);
     render_diag_register_u8(buf, "MODE", 0x06, snapshot.mode, true);
     render_diag_register_u8(buf, "STATUS", 0x07, snapshot.status, false);
-    let _ = buf.push_str("},\"decoded\":{},\"measurements\":{");
+    let _ = buf.push_str("},\"decoded\":{");
+    let vref_code = snapshot.vref.raw.map(|raw| raw & 0x03ff);
+    json_field_opt_u16(buf, "vout_code", vref_code, true);
+    json_field_opt_u16(
+        buf,
+        "vout_setting_mv",
+        vref_code.map(|code| 800u16.saturating_add(code.saturating_mul(20))),
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "iout_limit_enabled",
+        snapshot.iout_limit.raw.map(|raw| raw & 0x80 != 0),
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "iout_limit_ma",
+        snapshot
+            .iout_limit
+            .raw
+            .map(|raw| u16::from(raw & 0x7f) * 50),
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "oe",
+        snapshot.mode.raw.map(|raw| raw & 0x80 != 0),
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "fpwm",
+        snapshot.mode.raw.map(|raw| raw & 0x02 != 0),
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "hiccup",
+        snapshot.mode.raw.map(|raw| raw & 0x20 != 0),
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "scp",
+        snapshot.status.raw.map(|raw| raw & 0x80 != 0),
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "ocp",
+        snapshot.status.raw.map(|raw| raw & 0x40 != 0),
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "ovp",
+        snapshot.status.raw.map(|raw| raw & 0x20 != 0),
+        true,
+    );
+    json_field_opt_u8(
+        buf,
+        "operating_mode",
+        snapshot.status.raw.map(|raw| raw & 0x03),
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "scp_masked",
+        snapshot.cdc.raw.map(|raw| raw & 0x80 != 0),
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "ocp_masked",
+        snapshot.cdc.raw.map(|raw| raw & 0x40 != 0),
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "ovp_masked",
+        snapshot.cdc.raw.map(|raw| raw & 0x20 != 0),
+        true,
+    );
+    json_field_opt_u8(
+        buf,
+        "vout_sr",
+        snapshot.vout_sr.raw.map(|raw| raw & 0x03),
+        true,
+    );
+    json_field_opt_u8(buf, "vout_fs", snapshot.vout_fs.raw, false);
+    let _ = buf.push_str("},\"measurements\":{");
     json_field_opt_u16(buf, "vbus_mv", snapshot.vbus_mv, true);
     json_field_opt_i32(buf, "iout_ma", snapshot.iout_ma, true);
     json_field_opt_i16(buf, "temp_c_x16", snapshot.temp_c_x16, false);

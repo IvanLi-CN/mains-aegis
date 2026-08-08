@@ -1366,8 +1366,8 @@ fn split_request_target(target: &str) -> (&str, Option<&str>) {
     }
 }
 
-fn parse_diag_snapshot_query_packages(query: Option<&str>) -> Vec<String<32>, 8> {
-    let mut packages = Vec::<String<32>, 8>::new();
+fn parse_diag_snapshot_query_packages(query: Option<&str>) -> Vec<String<32>, 16> {
+    let mut packages = Vec::<String<32>, 16>::new();
     let Some(query) = query else {
         return packages;
     };
@@ -1430,12 +1430,6 @@ async fn request_diag_capture(packages: &[String<32>]) -> Result<(), &'static st
     Err("diag_capture_timeout")
 }
 
-fn diag_snapshot_json_complete(body: &str) -> bool {
-    body.starts_with(r#"{"schema_version":2,"packages":{"#)
-        && body.contains(r#","errors":{"#)
-        && body.ends_with("}}")
-}
-
 pub fn set_front_panel_runtime(snapshot: FrontPanelRuntimeSnapshot) {
     critical_section::with(|cs| {
         *FRONT_PANEL_RUNTIME.borrow_ref_mut(cs) = snapshot;
@@ -1453,10 +1447,7 @@ pub(crate) const fn status_push_interval_millis_for_test() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        diag_package_mask, diag_snapshot_json_complete, parse_diag_snapshot_query_packages,
-        split_request_target,
-    };
+    use super::{diag_package_mask, parse_diag_snapshot_query_packages, split_request_target};
 
     #[test]
     fn splits_request_target_query() {
@@ -1478,15 +1469,6 @@ mod tests {
         assert_eq!(packages.len(), 2);
         assert_eq!(packages[0].as_str(), "bq40.manufacturing");
         assert_eq!(packages[1].as_str(), "bq25792.regs");
-    }
-
-    #[test]
-    fn diag_snapshot_json_complete_rejects_truncated_payload() {
-        assert!(diag_snapshot_json_complete(
-            r#"{"schema_version":2,"packages":{},"errors":{}}"#
-        ));
-        assert!(!diag_snapshot_json_complete(r#"{"packages":{},"errors":{"#));
-        assert!(!diag_snapshot_json_complete(r#"{"packages":{}"#));
     }
 
     #[test]

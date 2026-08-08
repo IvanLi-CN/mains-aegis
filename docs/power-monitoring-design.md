@@ -125,15 +125,14 @@ I = VSHUNT / RSHUNT
 
 ### 3.3 触发后的动作（保护 vs 控制）
 
-建议在固件里把动作分层，避免把“保护”做成“闭环抖动”：
+固件当前把动作接入既有保护与输入门控，避免形成独立的告警状态机：
 
-- **硬保护（Critical）**：
-  - 立即：关断/降额 TPS55288（例如拉低 `THERM_KILL_N` 触发“硬停机”（双路同时停机，见 4.3）、或通过 I2C 下调限流/降低目标电压）
-  - 记录：通道号、采样值、时间戳、重复次数
-  - 恢复策略：需要明确是否允许自动重试（次数/间隔），或仅人工/上位机清故障
-- **控制（VIN 欠压，PV）**：
-  - `PV` 下降沿触发：MCU 进入欠压处理流程（按系统策略决定降额/关断/切换供电路径）
-  - `PV` 回升后：按系统策略恢复
+- 初始化写入并回读 PV、CH1/CH2 Warning、CH1/CH2/CH3 Critical、CH1+CH2 summation 与 `Mask/Enable`；任一写入或回读失败时 INA 不进入 ready。
+- `PowerRuntime` 是三个 INA GPIO IRQ 的唯一消费者。任一 IRQ 到达后只读取一次 Read/Clear `Mask/Enable(0x0F)`，同时采集三通道 bus/shunt，累计事件计数、最近时间、原始位与读取错误。
+- `Warning` 使用 `3250mA` 的 CH1/CH2 阈值，把即时样本送入现有 current derating 判定。
+- `Critical` 使用 CH1/CH2 `4000mA`、CH3 `7000mA` 与 CH1+CH2 `6500mA` 阈值，强制现有 `ActiveProtection` 进入 current shutdown；输出门控与人工恢复语义保持不变。
+- `PV` 强制现有 input gate 进入 cutoff；解除后仍必须满足 profile recovery 阈值与连续样本要求，IRQ 不绕过恢复迟滞。
+- `diag-snapshot` 只返回累计锁存的 IRQ 数据；普通 fresh 诊断不会再次读取 `0x0F`。
 
 ---
 

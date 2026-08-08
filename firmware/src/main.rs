@@ -1937,7 +1937,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             net_bridge::publish_status_snapshot(ui_snapshot);
             #[cfg(feature = "net_http")]
             if let Some(request) = mains_aegis_firmware::net::take_diag_capture_request() {
-                let mut packages = heapless::Vec::<heapless::String<32>, 8>::new();
+                let mut packages = heapless::Vec::<heapless::String<32>, 16>::new();
                 for (bit, name) in [
                     (0, "bq40.core"),
                     (1, "bq40.manufacturing"),
