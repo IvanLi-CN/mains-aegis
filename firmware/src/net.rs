@@ -1316,7 +1316,9 @@ async fn write_diag_chunked_response(
             "\"encoding\":{\"code\":\"diag_snapshot_package_too_large\",\"retryable\":true}",
         );
     }
-    write_http_chunk(socket, errors.as_str()).await?;
+    if !errors.is_empty() {
+        write_http_chunk(socket, errors.as_str()).await?;
+    }
     write_http_chunk(socket, "}}").await?;
     socket_write_all(socket, b"0\r\n\r\n").await
 }
