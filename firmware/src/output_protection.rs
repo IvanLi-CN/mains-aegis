@@ -102,6 +102,16 @@ impl ProtectionRuntime {
     }
 }
 
+pub fn force_current_shutdown(mut runtime: ProtectionRuntime) -> ProtectionRuntime {
+    runtime.phase = ProtectionPhase::Shutdown;
+    runtime.status.current_active = true;
+    runtime.shutdown_reason = ProtectionReason::Current;
+    runtime.current_over_since_ms = None;
+    runtime.next_step_due_ms = None;
+    runtime.low_vout_since_ms = None;
+    runtime
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProtectionAction {
     None,
@@ -363,8 +373,8 @@ fn classify_current(
 #[cfg(test)]
 mod tests {
     use super::{
-        step, ProtectionAction, ProtectionConfig, ProtectionInputs, ProtectionPhase,
-        ProtectionReason, ProtectionRuntime,
+        force_current_shutdown, step, ProtectionAction, ProtectionConfig, ProtectionInputs,
+        ProtectionPhase, ProtectionReason, ProtectionRuntime,
     };
 
     const CFG: ProtectionConfig = ProtectionConfig {
@@ -582,5 +592,13 @@ mod tests {
 
         assert_eq!(missing_sample.runtime.phase, ProtectionPhase::Shutdown);
         assert_eq!(missing_sample.action, ProtectionAction::None);
+    }
+
+    #[test]
+    fn critical_alert_forces_existing_current_shutdown_state() {
+        let runtime = force_current_shutdown(ProtectionRuntime::new(3_500));
+        assert_eq!(runtime.phase, ProtectionPhase::Shutdown);
+        assert_eq!(runtime.status.reason(), ProtectionReason::Current);
+        assert_eq!(runtime.shutdown_reason, ProtectionReason::Current);
     }
 }

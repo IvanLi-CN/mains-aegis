@@ -170,6 +170,22 @@ const FAN_RPM_MAX_SAMPLE_WINDOW_MS: u64 = 2_000;
 const FAN_RPM_MIN_SAMPLE_REVS: u32 = 2;
 const VIN_MAINS_PRESENT_THRESHOLD_MV: u16 = 3_000;
 const VIN_MAINS_LATCH_FAILURE_LIMIT: u8 = 2;
+const INA3221_ADDR: u8 = 0x40;
+const INA_REG_CH1_CRITICAL: u8 = 0x07;
+const INA_REG_CH1_WARNING: u8 = 0x08;
+const INA_REG_CH2_CRITICAL: u8 = 0x09;
+const INA_REG_CH2_WARNING: u8 = 0x0A;
+const INA_REG_CH3_CRITICAL: u8 = 0x0B;
+const INA_REG_SHUNT_SUM: u8 = 0x0D;
+const INA_REG_SHUNT_SUM_LIMIT: u8 = 0x0E;
+const INA_REG_MASK_ENABLE: u8 = 0x0F;
+const INA_REG_PV_LOWER: u8 = 0x11;
+const INA_WARNING_3250MA_RAW: u16 = 0x1960;
+const INA_CH12_CRITICAL_4000MA_RAW: u16 = 0x1F40;
+const INA_CH3_CRITICAL_7000MA_RAW: u16 = 0x2648;
+const INA_SUM_CH12_ENABLE_RAW: u16 = 0x6000;
+const INA_SUM_CRITICAL_6500MA_RAW: u16 = 0x0CB2;
+const INA_ALERT_ENABLE_RAW: u16 = 0x6C00;
 const BMS_DIAG_BREADCRUMB_LEN: usize = 8;
 const BMS_DIAG_BREADCRUMB_VERSION: u8 = 1;
 const BMS_SBS_CONFIGURATION_SMB_CELL_TEMP: u8 = 1 << 6;
@@ -2421,6 +2437,55 @@ where
     let mut raw = [0u8; 2];
     i2c.write_read(address, &[register], &mut raw)?;
     Ok(u16::from_be_bytes(raw))
+}
+
+fn write_i2c_u16_be<I2C>(
+    i2c: &mut I2C,
+    address: u8,
+    register: u8,
+    value: u16,
+) -> Result<(), esp_hal::i2c::master::Error>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let raw = value.to_be_bytes();
+    i2c.write(address, &[register, raw[0], raw[1]])
+}
+
+fn configure_ina_alerts<I2C>(i2c: &mut I2C, rated_vout_mv: u16) -> Result<(), &'static str>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let pv_lower_raw = if rated_vout_mv <= 12_000 {
+        11_000
+    } else {
+        18_000
+    };
+    let registers = [
+        (INA_REG_CH1_CRITICAL, INA_CH12_CRITICAL_4000MA_RAW),
+        (INA_REG_CH1_WARNING, INA_WARNING_3250MA_RAW),
+        (INA_REG_CH2_CRITICAL, INA_CH12_CRITICAL_4000MA_RAW),
+        (INA_REG_CH2_WARNING, INA_WARNING_3250MA_RAW),
+        (INA_REG_CH3_CRITICAL, INA_CH3_CRITICAL_7000MA_RAW),
+        (INA_REG_SHUNT_SUM, INA_SUM_CH12_ENABLE_RAW),
+        (INA_REG_SHUNT_SUM_LIMIT, INA_SUM_CRITICAL_6500MA_RAW),
+        (INA_REG_PV_LOWER, pv_lower_raw),
+        (INA_REG_MASK_ENABLE, INA_ALERT_ENABLE_RAW),
+    ];
+    for (register, value) in registers {
+        write_i2c_u16_be(i2c, INA3221_ADDR, register, value).map_err(i2c_error_kind)?;
+    }
+    for (register, expected) in registers {
+        let actual = read_i2c_u16_be(i2c, INA3221_ADDR, register).map_err(i2c_error_kind)?;
+        if register == INA_REG_MASK_ENABLE {
+            if actual & INA_ALERT_ENABLE_RAW != INA_ALERT_ENABLE_RAW {
+                return Err("ina_alert_readback_mismatch");
+            }
+        } else if actual != expected {
+            return Err("ina_alert_readback_mismatch");
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -4907,6 +4972,7 @@ where
     }
 
     pub fn tick(&mut self, irq: &IrqSnapshot) -> bool {
+        self.consume_ina_alert_irq(irq);
         if let Some(until) = self.bms_activation_isolation_until {
             if Instant::now() < until {
                 self.note_skipped_vin_telemetry_if_due(Instant::now());
@@ -5001,6 +5067,58 @@ where
         self.update_fan_state(irq);
         self.refresh_audio_signals();
         telemetry_printed
+    }
+
+    fn consume_ina_alert_irq(&mut self, irq: &IrqSnapshot) {
+        if irq.ina_pv == 0 && irq.ina_warning == 0 && irq.ina_critical == 0 {
+            return;
+        }
+
+        let now_ms = self.fan_now_ms();
+        let ina = &mut self.diag_snapshot.hardware.ina3221;
+        ina.irq_pv_count = ina.irq_pv_count.wrapping_add(irq.ina_pv);
+        ina.irq_warning_count = ina.irq_warning_count.wrapping_add(irq.ina_warning);
+        ina.irq_critical_count = ina.irq_critical_count.wrapping_add(irq.ina_critical);
+        ina.irq_last_at_ms = Some(now_ms);
+        match read_i2c_u16_be(&mut self.i2c, INA3221_ADDR, INA_REG_MASK_ENABLE) {
+            Ok(raw) => {
+                ina.irq_mask_enable_raw = Some(raw);
+                ina.irq_latched_bits |= raw;
+                ina.irq_read_error = None;
+            }
+            Err(error) => {
+                ina.irq_read_error = Some(i2c_error_kind(error));
+            }
+        }
+
+        self.refresh_ina_diag_snapshot();
+        let sample = self.diag_snapshot.hardware.ina3221;
+        self.ui_snapshot.out_b_vbus_mv = sample.bus_mv[0].and_then(|v| u16::try_from(v).ok());
+        self.ui_snapshot.tps_b_iout_ma = sample.shunt_uv[0].map(|uv| uv / 10);
+        self.ui_snapshot.out_a_vbus_mv = sample.bus_mv[1].and_then(|v| u16::try_from(v).ok());
+        self.ui_snapshot.tps_a_iout_ma = sample.shunt_uv[1].map(|uv| uv / 10);
+        if self.cfg.telemetry_include_vin_ch3 {
+            self.ui_snapshot.vin_vbus_mv = sample.bus_mv[2].and_then(|v| u16::try_from(v).ok());
+            self.ui_snapshot.vin_iin_ma = sample.shunt_uv[2].map(|uv| uv / 7);
+        }
+
+        if irq.ina_pv != 0 {
+            if self.input_gate.force_cutoff() == output_state_logic::InputGateAction::Cutoff {
+                self.ups_in_ce.set_high();
+            }
+            self.ui_snapshot.vin_mains_present = Some(false);
+            self.ui_snapshot.dcin_present = Some(false);
+            self.ui_snapshot.dashboard_detail.input_gate_state = Some(self.input_gate.state_slug());
+            self.ui_snapshot.dashboard_detail.input_gate_reason =
+                Some(self.input_gate.reason_slug());
+        }
+        if irq.ina_critical != 0 {
+            self.output_protection =
+                output_protection::force_current_shutdown(self.output_protection);
+            self.apply_output_gate(OutputGateReason::ActiveProtection);
+        } else if irq.ina_warning != 0 {
+            self.update_output_protection();
+        }
     }
 
     pub fn ui_snapshot(&self) -> SelfCheckUiSnapshot {
@@ -11886,7 +12004,10 @@ where
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(2) {}
 
-        match ina3221::init_with_config(&mut self.i2c, cfg) {
+        match ina3221::init_with_config(&mut self.i2c, cfg).and_then(|()| {
+            configure_ina_alerts(&mut self.i2c, self.runtime_mode_policy.rated_vout_mv)
+                .map_err(|_| ina3221::Error::InvalidConfig)
+        }) {
             Ok(()) => {
                 self.ina_ready = true;
                 self.ui_snapshot.ina3221 = SelfCheckCommState::Ok;
