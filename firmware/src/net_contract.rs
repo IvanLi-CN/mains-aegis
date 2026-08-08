@@ -1023,7 +1023,7 @@ fn render_diag_snapshot_package<'a, const N: usize>(
         "mcu.runtime" => {
             render_diag_package_header(buf, emitted, id, "runtime_cache", 0);
             render_diag_mcu_runtime_payload(buf, status);
-            let _ = buf.push('}');
+            let _ = buf.push_str(",\"read_errors\":[]}");
         }
         "bq40.core" => {
             render_diag_package_header(buf, emitted, id, "power_cache", 0);
@@ -1075,19 +1075,19 @@ fn render_diag_snapshot_package<'a, const N: usize>(
         "usbpd.policy" => {
             render_diag_package_header(buf, emitted, id, "power_cache", 0);
             render_diag_usbpd_policy_payload(buf, diag);
-            let _ = buf.push('}');
+            let _ = buf.push_str(",\"read_errors\":[]}");
         }
         "front_panel.io" => {
             render_diag_package_header(buf, emitted, id, "status_cache", 0);
             render_diag_front_panel_payload(buf, status);
-            let _ = buf.push('}');
+            let _ = buf.push_str(",\"read_errors\":[]}");
         }
         "derived.power" => {
             render_diag_package_header(buf, emitted, id, "power_cache", 0);
             let mut nested = String::<DIAG_SNAPSHOT_DERIVED_POWER_BODY_CAP>::new();
             render_derived_power_json(&mut nested, diag);
             let _ = buf.push_str(nested.as_str());
-            let _ = buf.push('}');
+            let _ = buf.push_str(",\"read_errors\":[]}");
         }
         _ => {
             let _ = emitted.errors.push(id);
@@ -1110,7 +1110,11 @@ fn render_diag_package_header<'a, const N: usize>(
     write_json_string_escaped(buf, id);
     let _ = buf.push_str("\":{\"ok\":true,\"source\":\"");
     write_json_string_escaped(buf, source);
-    let _ = write!(buf, "\",\"duration_ms\":{},\"payload\":", duration_ms);
+    let _ = write!(
+        buf,
+        "\",\"captured_at_ms\":0,\"age_ms\":0,\"duration_ms\":{},\"payload\":",
+        duration_ms
+    );
 }
 
 fn render_diag_mcu_runtime_payload<const N: usize>(buf: &mut String<N>, status: UpsStatusSnapshot) {

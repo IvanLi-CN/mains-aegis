@@ -2764,8 +2764,13 @@ async fn lan_http_json(
         )
     })?;
     let mut response = Vec::new();
+    let read_timeout_ms = if path.starts_with("/api/v1/diag-snapshot") {
+        12_000
+    } else {
+        LAN_PROBE_TIMEOUT_MS
+    };
     tokio::time::timeout(
-        Duration::from_millis(LAN_PROBE_TIMEOUT_MS),
+        Duration::from_millis(read_timeout_ms),
         tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut response),
     )
     .await

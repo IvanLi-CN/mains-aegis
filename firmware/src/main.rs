@@ -2492,6 +2492,19 @@ fn handle_web_serial_frame<'d, I2C>(
                 write_web_serial_line(serial, frame.as_str());
             }
             UsbCdcRequest::GetDiagSnapshot(request) => {
+                #[cfg(feature = "net_http")]
+                if !esp_firmware::net::try_begin_usb_diag_capture() {
+                    let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                    render_error_json(
+                        &mut frame,
+                        Some(request_id.as_str()),
+                        "diag_capture_busy",
+                        "another diagnostic capture is already in progress",
+                        true,
+                    );
+                    write_web_serial_line(serial, frame.as_str());
+                    return;
+                }
                 let mut body = heapless::String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
                 let mut frame = heapless::String::<WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP>::new();
                 power.refresh_diag_snapshot_packages(request.packages.as_slice());
@@ -2523,6 +2536,8 @@ fn handle_web_serial_frame<'d, I2C>(
                             true,
                         );
                         write_web_serial_line(serial, frame.as_str());
+                        #[cfg(feature = "net_http")]
+                        esp_firmware::net::finish_usb_diag_capture();
                         return;
                     }
                     render_diag_stream_package_json(
@@ -2532,6 +2547,8 @@ fn handle_web_serial_frame<'d, I2C>(
                         body.as_str(),
                     );
                     write_web_serial_line(serial, frame.as_str());
+                    #[cfg(feature = "net_http")]
+                    esp_firmware::net::finish_usb_diag_capture();
                 }
                 render_diag_stream_end_json(&mut frame, request_id.as_str(), expected_packages);
                 write_web_serial_line(serial, frame.as_str());

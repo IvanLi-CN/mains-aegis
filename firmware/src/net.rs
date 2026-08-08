@@ -168,6 +168,16 @@ pub fn take_diag_capture_request() -> Option<DiagCaptureRequest> {
     })
 }
 
+pub fn try_begin_usb_diag_capture() -> bool {
+    DIAG_CAPTURE_BUSY
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+}
+
+pub fn finish_usb_diag_capture() {
+    DIAG_CAPTURE_BUSY.store(false, Ordering::Release);
+}
+
 pub fn complete_diag_capture(request: DiagCaptureRequest, snapshot: DerivedPowerSnapshot) {
     publish_diag_snapshot(snapshot);
     DIAG_CAPTURE_COMPLETE_GENERATION.store(request.generation, Ordering::Release);
