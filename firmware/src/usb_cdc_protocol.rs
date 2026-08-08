@@ -432,6 +432,52 @@ pub fn render_response_json<const N: usize>(
     let _ = buf.push('}');
 }
 
+pub fn render_diag_stream_begin_json<const N: usize>(
+    buf: &mut String<N>,
+    request_id: &str,
+    expected_packages: usize,
+) {
+    buf.clear();
+    let _ = buf.push_str(r#"{"type":"diag_snapshot","phase":"begin","request_id":""#);
+    write_json_string_escaped(buf, request_id);
+    let _ = write!(
+        buf,
+        r#"","schema_version":2,"expected_packages":{}}}"#,
+        expected_packages
+    );
+}
+
+pub fn render_diag_stream_package_json<const N: usize>(
+    buf: &mut String<N>,
+    request_id: &str,
+    package_id: &str,
+    package_json: &str,
+) {
+    buf.clear();
+    let _ = buf.push_str(r#"{"type":"diag_snapshot","phase":"package","request_id":""#);
+    write_json_string_escaped(buf, request_id);
+    let _ = buf.push_str(r#"","package_id":""#);
+    write_json_string_escaped(buf, package_id);
+    let _ = buf.push_str(r#"","result":"#);
+    let _ = buf.push_str(package_json);
+    let _ = buf.push('}');
+}
+
+pub fn render_diag_stream_end_json<const N: usize>(
+    buf: &mut String<N>,
+    request_id: &str,
+    emitted_packages: usize,
+) {
+    buf.clear();
+    let _ = buf.push_str(r#"{"type":"diag_snapshot","phase":"end","request_id":""#);
+    write_json_string_escaped(buf, request_id);
+    let _ = write!(
+        buf,
+        r#"","emitted_packages":{},"ok":true}}"#,
+        emitted_packages
+    );
+}
+
 pub fn render_wifi_config_ack_json<const N: usize>(
     buf: &mut String<N>,
     request_id: &str,

@@ -62,10 +62,11 @@ use mains_aegis_firmware::{
     },
     net_types::{UpsStatusSnapshot, WifiConnectionState, WifiErrorKind},
     usb_cdc_protocol::{
-        parse_frame, render_error_json, render_error_json_with_details, render_hello_json,
-        render_log_json, render_protocol_error_json, render_response_json,
-        render_status_frame_json, render_wifi_config_ack_json, request_id_hint, LogLevel,
-        UsbCdcFrame, UsbCdcLineBuffer, UsbCdcRequest, WifiConfigCommand,
+        parse_frame, render_diag_stream_begin_json, render_diag_stream_end_json,
+        render_diag_stream_package_json, render_error_json, render_error_json_with_details,
+        render_hello_json, render_log_json, render_protocol_error_json, render_response_json,
+        render_status_frame_json, render_wifi_config_ack_json, request_id_hint, LogLevel, UsbCdcFrame,
+        UsbCdcLineBuffer, UsbCdcRequest, WifiConfigCommand,
         WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP, WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP,
         WEB_SERIAL_RESPONSE_BODY_CAP, WEB_SERIAL_RESPONSE_FRAME_CAP,
     },
@@ -1935,6 +1936,32 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             let ui_snapshot = power.ui_snapshot();
             net_bridge::publish_status_snapshot(ui_snapshot);
             #[cfg(feature = "net_http")]
+            if let Some(request) = mains_aegis_firmware::net::take_diag_capture_request() {
+                let mut packages = heapless::Vec::<heapless::String<32>, 8>::new();
+                for (bit, name) in [
+                    (0, "bq40.core"),
+                    (1, "bq40.manufacturing"),
+                    (2, "bq25792.regs"),
+                    (3, "tps55288.out_a"),
+                    (4, "tps55288.out_b"),
+                    (5, "ina3221.regs"),
+                    (6, "tmp112.out_a"),
+                    (7, "tmp112.out_b"),
+                    (8, "fusb302.regs"),
+                ] {
+                    if request.package_mask & (1 << bit) != 0 {
+                        if let Ok(package) = heapless::String::try_from(name) {
+                            let _ = packages.push(package);
+                        }
+                    }
+                }
+                power.refresh_diag_snapshot_packages(packages.as_slice());
+                mains_aegis_firmware::net::complete_diag_capture(
+                    request,
+                    power.derived_power_snapshot(),
+                );
+            }
+            #[cfg(feature = "net_http")]
             mains_aegis_firmware::net::publish_charge_control_detail(
                 power.current_manual_charge_control_detail_snapshot(),
             );
@@ -2468,24 +2495,45 @@ fn handle_web_serial_frame<'d, I2C>(
                 let mut body = heapless::String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
                 let mut frame = heapless::String::<WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP>::new();
                 power.refresh_diag_snapshot_packages(request.packages.as_slice());
-                render_diag_snapshot_json(
-                    &mut body,
-                    request.packages.as_slice(),
-                    status,
-                    power.derived_power_snapshot(),
-                );
-                if !diag_snapshot_response_complete(body.as_str()) {
-                    render_error_json(
+                let expected_packages = request.packages.len().max(1);
+                render_diag_stream_begin_json(&mut frame, request_id.as_str(), expected_packages);
+                write_web_serial_line(serial, frame.as_str());
+                for index in 0..expected_packages {
+                    let package_id = request
+                        .packages
+                        .get(index)
+                        .map(|package| package.as_str())
+                        .unwrap_or("core");
+                    let mut single = heapless::Vec::<heapless::String<32>, 1>::new();
+                    if let Ok(package) = heapless::String::try_from(package_id) {
+                        let _ = single.push(package);
+                    }
+                    render_diag_snapshot_json(
+                        &mut body,
+                        single.as_slice(),
+                        status,
+                        power.derived_power_snapshot(),
+                    );
+                    if !diag_snapshot_response_complete(body.as_str()) {
+                        render_error_json(
+                            &mut frame,
+                            Some(request_id.as_str()),
+                            "diag_snapshot_package_too_large",
+                            "diagnostic package exceeded USB CDC package capacity",
+                            true,
+                        );
+                        write_web_serial_line(serial, frame.as_str());
+                        return;
+                    }
+                    render_diag_stream_package_json(
                         &mut frame,
-                        Some(request_id.as_str()),
-                        "diag_snapshot_too_large",
-                        "diag-snapshot response exceeded USB CDC response capacity",
-                        true,
+                        request_id.as_str(),
+                        package_id,
+                        body.as_str(),
                     );
                     write_web_serial_line(serial, frame.as_str());
-                    return;
                 }
-                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                render_diag_stream_end_json(&mut frame, request_id.as_str(), expected_packages);
                 write_web_serial_line(serial, frame.as_str());
             }
             UsbCdcRequest::RecoverBmsDischargeAuthorization => {
@@ -2761,7 +2809,7 @@ fn handle_web_serial_frame<'d, I2C>(
 
 #[cfg(feature = "web_serial")]
 fn diag_snapshot_response_complete(body: &str) -> bool {
-    body.starts_with("{\"packages\":{") && body.ends_with("}}")
+    body.starts_with("{\"schema_version\":2,\"packages\":{") && body.ends_with("}}")
 }
 
 #[cfg(feature = "web_serial")]

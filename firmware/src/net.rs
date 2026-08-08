@@ -3,6 +3,7 @@
 use alloc::string::String as AllocString;
 use core::{
     cell::RefCell,
+    fmt::Write as _,
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
@@ -29,12 +30,13 @@ use crate::{
     net_contract::{
         accepts_event_stream, is_api_v1_path, render_charge_control_result_json,
         render_diag_snapshot_json, render_identity_json, render_network_json, render_ping_json,
-        render_settings_json, render_status_json, write_error_body, write_sse_event, BuildInfo,
+        render_settings_json, render_status_json, write_error_body, write_json_string_escaped,
+        write_sse_event, BuildInfo,
     },
     net_logic::{
-        build_http_response_head, build_sse_response_head, lan_advanced_power_apply_timeout_ms,
-        origin_reflection_allowed, resolve_net_env_config, select_active_dns,
-        LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL_MS,
+        build_chunked_json_response_head, build_http_response_head, build_sse_response_head,
+        lan_advanced_power_apply_timeout_ms, origin_reflection_allowed, resolve_net_env_config,
+        select_active_dns, LAN_ADVANCED_POWER_APPLY_POLL_INTERVAL_MS,
     },
     net_types::{
         AdvancedPowerCapabilitiesSnapshot, AdvancedPowerSettingsSnapshot,
@@ -94,6 +96,17 @@ static PENDING_LAN_COMMAND: Mutex<RefCell<Option<LanManagementCommand>>> =
 static LAN_COMMAND_RESULT: Mutex<RefCell<Option<LanCommandResult>>> =
     Mutex::new(RefCell::new(None));
 static WIFI_CONFIG_GENERATION: AtomicU32 = AtomicU32::new(0);
+static DIAG_CAPTURE_BUSY: AtomicBool = AtomicBool::new(false);
+static DIAG_CAPTURE_GENERATION: AtomicU32 = AtomicU32::new(0);
+static DIAG_CAPTURE_REQUEST_MASK: AtomicU32 = AtomicU32::new(0);
+static DIAG_CAPTURE_REQUEST_GENERATION: AtomicU32 = AtomicU32::new(0);
+static DIAG_CAPTURE_COMPLETE_GENERATION: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiagCaptureRequest {
+    pub generation: u32,
+    pub package_mask: u32,
+}
 
 const BUILD_INFO: BuildInfo = BuildInfo {
     package_version: env!("CARGO_PKG_VERSION"),
@@ -145,6 +158,20 @@ pub fn publish_diag_snapshot(snapshot: DerivedPowerSnapshot) {
     critical_section::with(|cs| {
         *DIAG_SNAPSHOT.borrow_ref_mut(cs) = snapshot;
     });
+}
+
+pub fn take_diag_capture_request() -> Option<DiagCaptureRequest> {
+    let generation = DIAG_CAPTURE_REQUEST_GENERATION.swap(0, Ordering::AcqRel);
+    (generation != 0).then(|| DiagCaptureRequest {
+        generation,
+        package_mask: DIAG_CAPTURE_REQUEST_MASK.load(Ordering::Acquire),
+    })
+}
+
+pub fn complete_diag_capture(request: DiagCaptureRequest, snapshot: DerivedPowerSnapshot) {
+    publish_diag_snapshot(snapshot);
+    DIAG_CAPTURE_COMPLETE_GENERATION.store(request.generation, Ordering::Release);
+    DIAG_CAPTURE_BUSY.store(false, Ordering::Release);
 }
 
 pub fn publish_charge_control_detail(snapshot: ChargeControlDetailSnapshot) {
@@ -875,49 +902,41 @@ async fn handle_http_connection(socket: &mut TcpSocket<'_>) -> Result<(), embass
         "/api/v1/diag-snapshot" => {
             let mut diag_body = String::<HTTP_DIAG_SNAPSHOT_BODY_CAP>::new();
             let packages = parse_diag_snapshot_query_packages(query);
-            if diag_snapshot_query_requires_native_refresh(packages.as_slice()) {
+            if let Err(code) = request_diag_capture(packages.as_slice()).await {
                 let mut error_body = String::<HTTP_RESPONSE_BODY_CAP>::new();
                 write_error_body(
                     &mut error_body,
-                    "diag_snapshot_native_package_unavailable",
-                    "requested diag-snapshot package requires the native USB CDC diagnostic path",
+                    code,
+                    if code == "diag_capture_busy" {
+                        "another diagnostic capture is already in progress"
+                    } else {
+                        "diagnostic capture did not complete within 10 seconds"
+                    },
                     true,
                     None,
                 );
                 write_http_response(
                     socket,
-                    "503 Service Unavailable",
+                    if code == "diag_capture_busy" {
+                        "409 Conflict"
+                    } else {
+                        "504 Gateway Timeout"
+                    },
                     error_body.as_str(),
                     origin,
                 )
                 .await?;
                 return Ok(());
             }
-            render_diag_snapshot_json(
-                &mut diag_body,
+            write_diag_chunked_response(
+                socket,
                 packages.as_slice(),
                 current_status_snapshot(),
                 current_diag_snapshot(),
-            );
-            if !diag_snapshot_json_complete(diag_body.as_str()) {
-                let mut error_body = String::<HTTP_RESPONSE_BODY_CAP>::new();
-                write_error_body(
-                    &mut error_body,
-                    "diag_snapshot_too_large",
-                    "diag-snapshot response exceeded firmware HTTP buffer",
-                    true,
-                    None,
-                );
-                write_http_response(
-                    socket,
-                    "500 Internal Server Error",
-                    error_body.as_str(),
-                    origin,
-                )
-                .await?;
-                return Ok(());
-            }
-            write_http_response(socket, "200 OK", diag_body.as_str(), origin).await?;
+                origin,
+                &mut diag_body,
+            )
+            .await?;
         }
         _ => {
             write_error_body(&mut body, "not_found", "not found", false, None);
@@ -1198,6 +1217,120 @@ async fn write_http_response(
     Ok(())
 }
 
+async fn write_http_chunk(
+    socket: &mut TcpSocket<'_>,
+    chunk: &str,
+) -> Result<(), embassy_net::tcp::Error> {
+    let mut header = String::<24>::new();
+    let _ = write!(header, "{:X}\r\n", chunk.len());
+    socket_write_all(socket, header.as_bytes()).await?;
+    socket_write_all(socket, chunk.as_bytes()).await?;
+    socket_write_all(socket, b"\r\n").await
+}
+
+async fn write_diag_chunked_response(
+    socket: &mut TcpSocket<'_>,
+    packages: &[String<32>],
+    status: UpsStatusSnapshot,
+    diag: DerivedPowerSnapshot,
+    origin: Option<&str>,
+    package_body: &mut String<HTTP_DIAG_SNAPSHOT_BODY_CAP>,
+) -> Result<(), embassy_net::tcp::Error> {
+    let Some(head) = build_chunked_json_response_head("200 OK", origin) else {
+        return Err(embassy_net::tcp::Error::ConnectionReset);
+    };
+    socket_write_all(socket, head.as_bytes()).await?;
+    write_http_chunk(socket, "{\"schema_version\":2,\"packages\":{").await?;
+
+    let iterations = packages.len().max(1);
+    let mut emitted = false;
+    let mut package_too_large = false;
+    for index in 0..iterations {
+        let mut single = Vec::<String<32>, 1>::new();
+        if let Some(package) = packages.get(index) {
+            let _ = single.push(package.clone());
+        }
+        render_diag_snapshot_json(package_body, single.as_slice(), status, diag);
+        let prefix = "{\"schema_version\":2,\"packages\":{";
+        let Some(rest) = package_body.as_str().strip_prefix(prefix) else {
+            package_too_large = true;
+            continue;
+        };
+        let Some((package_json, _)) = rest.split_once("},\"errors\":{") else {
+            package_too_large = true;
+            continue;
+        };
+        if package_json.is_empty() {
+            continue;
+        }
+        if emitted {
+            write_http_chunk(socket, ",").await?;
+        }
+        write_http_chunk(socket, package_json).await?;
+        emitted = true;
+    }
+
+    write_http_chunk(socket, "},\"errors\":{").await?;
+    let mut errors = String::<HTTP_RESPONSE_BODY_CAP>::new();
+    let mut first_error = true;
+    for package in packages {
+        if diag_package_supported(package.as_str()) {
+            continue;
+        }
+        if !first_error {
+            let _ = errors.push(',');
+        }
+        first_error = false;
+        let _ = errors.push('"');
+        write_json_string_escaped(&mut errors, package.as_str());
+        let _ = errors.push_str("\":{\"code\":\"unsupported_package\",\"message\":\"diagnostic package is not supported\"}");
+    }
+    if let Some(code) = diag.hardware.capture_error {
+        if !first_error {
+            let _ = errors.push(',');
+        }
+        first_error = false;
+        let _ = errors.push_str("\"capture\":{\"code\":\"");
+        write_json_string_escaped(&mut errors, code);
+        let _ = write!(
+            errors,
+            "\",\"retryable\":true,\"retry_after_ms\":{}}}",
+            diag.hardware.retry_after_ms.unwrap_or(0)
+        );
+    }
+    if package_too_large {
+        if !first_error {
+            let _ = errors.push(',');
+        }
+        let _ = errors.push_str(
+            "\"encoding\":{\"code\":\"diag_snapshot_package_too_large\",\"retryable\":true}",
+        );
+    }
+    write_http_chunk(socket, errors.as_str()).await?;
+    write_http_chunk(socket, "}}").await?;
+    socket_write_all(socket, b"0\r\n\r\n").await
+}
+
+fn diag_package_supported(package: &str) -> bool {
+    matches!(
+        package,
+        "core"
+            | "mcu.runtime"
+            | "bq40.core"
+            | "bq40.manufacturing"
+            | "bq25792.regs"
+            | "tps55288.out_a"
+            | "tps55288.out_b"
+            | "ina3221.regs"
+            | "tmp112.out_a"
+            | "tmp112.out_b"
+            | "fusb302.regs"
+            | "usbpd.policy"
+            | "front_panel.io"
+            | "derived.power"
+    )
+}
+
 async fn write_sse_response_head(
     socket: &mut TcpSocket<'_>,
     origin: Option<&str>,
@@ -1251,14 +1384,56 @@ fn parse_diag_snapshot_query_packages(query: Option<&str>) -> Vec<String<32>, 8>
     packages
 }
 
-fn diag_snapshot_json_complete(body: &str) -> bool {
-    body.starts_with(r#"{"packages":{"#) && body.contains(r#","errors":{"#) && body.ends_with("}}")
+fn diag_package_mask(packages: &[String<32>]) -> u32 {
+    packages.iter().fold(0, |mask, package| {
+        mask | match package.as_str() {
+            "bq40.core" => 1 << 0,
+            "bq40.manufacturing" => 1 << 1,
+            "bq25792.regs" => 1 << 2,
+            "tps55288.out_a" => 1 << 3,
+            "tps55288.out_b" => 1 << 4,
+            "ina3221.regs" => 1 << 5,
+            "tmp112.out_a" => 1 << 6,
+            "tmp112.out_b" => 1 << 7,
+            "fusb302.regs" => 1 << 8,
+            _ => 0,
+        }
+    })
 }
 
-fn diag_snapshot_query_requires_native_refresh(packages: &[String<32>]) -> bool {
-    packages
-        .iter()
-        .any(|package| package.as_str() == "bq40.manufacturing")
+async fn request_diag_capture(packages: &[String<32>]) -> Result<(), &'static str> {
+    let mask = diag_package_mask(packages);
+    if mask == 0 {
+        return Ok(());
+    }
+    if DIAG_CAPTURE_BUSY
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err("diag_capture_busy");
+    }
+    let generation = DIAG_CAPTURE_GENERATION
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1)
+        .max(1);
+    DIAG_CAPTURE_REQUEST_MASK.store(mask, Ordering::Release);
+    DIAG_CAPTURE_REQUEST_GENERATION.store(generation, Ordering::Release);
+    let started = embassy_time::Instant::now();
+    while started.elapsed() < Duration::from_secs(10) {
+        if DIAG_CAPTURE_COMPLETE_GENERATION.load(Ordering::Acquire) == generation {
+            return Ok(());
+        }
+        Timer::after(Duration::from_millis(10)).await;
+    }
+    DIAG_CAPTURE_REQUEST_GENERATION.store(0, Ordering::Release);
+    DIAG_CAPTURE_BUSY.store(false, Ordering::Release);
+    Err("diag_capture_timeout")
+}
+
+fn diag_snapshot_json_complete(body: &str) -> bool {
+    body.starts_with(r#"{"schema_version":2,"packages":{"#)
+        && body.contains(r#","errors":{"#)
+        && body.ends_with("}}")
 }
 
 pub fn set_front_panel_runtime(snapshot: FrontPanelRuntimeSnapshot) {
@@ -1279,8 +1454,8 @@ pub(crate) const fn status_push_interval_millis_for_test() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        diag_snapshot_json_complete, diag_snapshot_query_requires_native_refresh,
-        parse_diag_snapshot_query_packages, split_request_target,
+        diag_package_mask, diag_snapshot_json_complete, parse_diag_snapshot_query_packages,
+        split_request_target,
     };
 
     #[test]
@@ -1308,25 +1483,21 @@ mod tests {
     #[test]
     fn diag_snapshot_json_complete_rejects_truncated_payload() {
         assert!(diag_snapshot_json_complete(
-            r#"{"packages":{},"errors":{}}"#
+            r#"{"schema_version":2,"packages":{},"errors":{}}"#
         ));
         assert!(!diag_snapshot_json_complete(r#"{"packages":{},"errors":{"#));
         assert!(!diag_snapshot_json_complete(r#"{"packages":{}"#));
     }
 
     #[test]
-    fn native_refresh_packages_are_not_served_from_lan_cache() {
+    fn fresh_hardware_packages_map_to_bridge_bits() {
         let packages = parse_diag_snapshot_query_packages(Some(
             "package=bq40.manufacturing&package=derived.power",
         ));
-        assert!(diag_snapshot_query_requires_native_refresh(
-            packages.as_slice()
-        ));
+        assert_eq!(diag_package_mask(packages.as_slice()), 1 << 1);
 
         let packages = parse_diag_snapshot_query_packages(Some("package=derived.power"));
-        assert!(!diag_snapshot_query_requires_native_refresh(
-            packages.as_slice()
-        ));
+        assert_eq!(diag_package_mask(packages.as_slice()), 0);
     }
 }
 
