@@ -85,7 +85,8 @@ jobs:
             --image 0x10000:firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware.bin \
             --out firmware/target/mains-aegis-artifacts \
             --features net_http,web_serial \
-            --profile release
+            --profile release \
+            --output-stem mains-aegis-firmware
 
       - name: Validate committed bundled firmware assets
         if: steps.changes.outputs.firmware == 'true'

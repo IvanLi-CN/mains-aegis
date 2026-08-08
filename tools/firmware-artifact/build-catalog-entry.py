@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -86,10 +87,20 @@ def clean_managed_outputs(out: Path) -> None:
             path.unlink()
 
 
-def require_external_inputs(out: Path, inputs: list[Path]) -> None:
-    for source in inputs:
+def preserve_managed_inputs(
+    out: Path, inputs: list[Path]
+) -> tuple[tempfile.TemporaryDirectory[str], list[Path]]:
+    snapshot = tempfile.TemporaryDirectory(prefix="mains-aegis-artifact-inputs-")
+    snapshot_root = Path(snapshot.name)
+    preserved = []
+    for index, source in enumerate(inputs):
         if source == out or out in source.parents:
-            raise SystemExit(f"artifact input must be outside managed output directory: {source}")
+            staged = snapshot_root / f"input-{index}"
+            shutil.copyfile(source, staged)
+            preserved.append(staged)
+        else:
+            preserved.append(source)
+    return snapshot, preserved
 
 
 def stage_artifact_file(
@@ -132,7 +143,7 @@ def main() -> int:
     parser.add_argument("--elf", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--name", default="mains-aegis")
-    parser.add_argument("--output-stem", default="mains-aegis-firmware")
+    parser.add_argument("--output-stem", default=None)
     parser.add_argument("--version", default=None)
     parser.add_argument("--profile", default="release")
     parser.add_argument("--features", default="net_http,web_serial")
@@ -144,18 +155,27 @@ def main() -> int:
 
     elf = Path(args.elf).resolve()
     out = Path(args.out).resolve()
-    output_stem = validate_output_stem(args.output_stem)
+    output_stem = validate_output_stem(args.output_stem or args.name)
     firmware_dir = Path(args.firmware_dir).resolve()
     image_args = []
     if args.bin:
         image_args.append(args.bin)
     image_args.extend(args.image)
+    parsed_images = [
+        (address, Path(path).resolve())
+        for address, path in map(parse_image_arg, image_args)
+    ]
     input_paths = [elf]
-    input_paths.extend(Path(parse_image_arg(value)[1]).resolve() for value in image_args)
+    input_paths.extend(path for _, path in parsed_images)
     if args.defmt_metadata:
         input_paths.append(Path(args.defmt_metadata).resolve())
     out.mkdir(parents=True, exist_ok=True)
-    require_external_inputs(out, input_paths)
+    input_snapshot, input_paths = preserve_managed_inputs(out, input_paths)
+    elf = input_paths[0]
+    parsed_images = [
+        (address, input_paths[index]) for index, (address, _) in enumerate(parsed_images, start=1)
+    ]
+    defmt_metadata = input_paths[-1] if args.defmt_metadata else None
     clean_managed_outputs(out)
     git_sha = git_value(["rev-parse", "--short", "HEAD"], cwd=firmware_dir)
     dirty = "dirty" if git_value(
@@ -170,12 +190,11 @@ def main() -> int:
 
     files = []
     files.append(stage_artifact_file("elf", str(elf), out, output_stem))
-    for index, image_arg in enumerate(image_args, start=1):
-        flash_address, path = parse_image_arg(image_arg)
+    for index, (flash_address, path) in enumerate(parsed_images, start=1):
         image_name = f"{output_stem}.bin" if index == 1 else f"{output_stem}-{index}.bin"
-        files.append(stage_artifact_file("image", path, out, image_name, flash_address))
-    if args.defmt_metadata:
-        files.append(stage_artifact_file("defmt_metadata", args.defmt_metadata, out, f"{output_stem}.defmt"))
+        files.append(stage_artifact_file("image", str(path), out, image_name, flash_address))
+    if defmt_metadata:
+        files.append(stage_artifact_file("defmt_metadata", str(defmt_metadata), out, f"{output_stem}.defmt"))
 
     elf_hash = next((item["sha256"] for item in files if item["kind"] == "elf"), None)
     metadata_hash = next((item["sha256"] for item in files if item["kind"] == "defmt_metadata"), None)
@@ -211,6 +230,7 @@ def main() -> int:
     catalog_path.write_text(json.dumps({"schema_version": 1, "artifacts": [manifest]}, indent=2, sort_keys=True) + "\n")
     sums_path = out / "SHA256SUMS"
     sums_path.write_text("".join(f"{item['sha256']}  {item['path']}\n" for item in files))
+    input_snapshot.cleanup()
     print(manifest_path)
     return 0
 

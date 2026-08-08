@@ -63,17 +63,23 @@ class ManagedOutputTests(unittest.TestCase):
 
             self.assertEqual([path.name for path in out.iterdir()], ["keep.txt"])
 
-    def test_rejects_inputs_inside_managed_output_directory(self) -> None:
+    def test_preserves_inputs_inside_managed_output_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             out = Path(tmpdir)
             source = out / "mains-aegis-firmware"
+            source.write_bytes(b"firmware-bytes")
 
-            with self.assertRaises(SystemExit):
-                MODULE.require_external_inputs(out, [source])
+            snapshot, preserved = MODULE.preserve_managed_inputs(out, [source])
+            self.addCleanup(snapshot.cleanup)
+
+            self.assertNotEqual(preserved[0], source)
+            self.assertEqual(preserved[0].read_bytes(), b"firmware-bytes")
 
 
 class CatalogGenerationTests(unittest.TestCase):
-    def run_generator(self, output_stem: str) -> tuple[Path, dict[str, object]]:
+    def run_generator(
+        self, output_stem: str | None, name: str = "mains-aegis"
+    ) -> tuple[Path, dict[str, object]]:
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
@@ -87,21 +93,24 @@ class CatalogGenerationTests(unittest.TestCase):
         elf.write_bytes(b"elf")
         image.write_bytes(b"image")
         out = root / "out"
+        command = [
+            "python3",
+            str(SCRIPT_PATH),
+            "--elf",
+            str(elf),
+            "--image",
+            f"0x10000:{image}",
+            "--out",
+            str(out),
+            "--firmware-dir",
+            str(firmware),
+            "--name",
+            name,
+        ]
+        if output_stem:
+            command.extend(["--output-stem", output_stem])
         subprocess.run(
-            [
-                "python3",
-                str(SCRIPT_PATH),
-                "--elf",
-                str(elf),
-                "--image",
-                f"0x10000:{image}",
-                "--out",
-                str(out),
-                "--firmware-dir",
-                str(firmware),
-                "--output-stem",
-                output_stem,
-            ],
+            command,
             check=True,
             capture_output=True,
             text=True,
@@ -131,6 +140,46 @@ class CatalogGenerationTests(unittest.TestCase):
         self.assertTrue((out / "mains-aegis-firmware-19v").is_file())
         self.assertTrue((out / "mains-aegis-firmware-19v.bin").is_file())
         self.assertTrue((out / "mains-aegis-firmware-19v.manifest.json").is_file())
+
+    def test_default_output_stem_follows_artifact_name(self) -> None:
+        out, _ = self.run_generator(None, name="bq40-comm-tool")
+
+        self.assertTrue((out / "bq40-comm-tool").is_file())
+        self.assertTrue((out / "bq40-comm-tool.bin").is_file())
+        self.assertTrue((out / "bq40-comm-tool.manifest.json").is_file())
+
+    def test_full_generator_supports_in_place_regeneration(self) -> None:
+        out, _ = self.run_generator("mains-aegis-firmware")
+        subprocess.run(
+            [
+                "python3",
+                str(SCRIPT_PATH),
+                "--elf",
+                str(out / "mains-aegis-firmware"),
+                "--image",
+                f"0x10000:{out / 'mains-aegis-firmware.bin'}",
+                "--out",
+                str(out),
+                "--firmware-dir",
+                str(out.parent / "firmware"),
+                "--output-stem",
+                "mains-aegis-firmware",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(
+            sorted(path.name for path in out.iterdir()),
+            [
+                "SHA256SUMS",
+                "firmware-catalog.json",
+                "mains-aegis-firmware",
+                "mains-aegis-firmware.bin",
+                "mains-aegis-firmware.manifest.json",
+            ],
+        )
 
 
 if __name__ == "__main__":
