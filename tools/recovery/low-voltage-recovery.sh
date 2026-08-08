@@ -360,7 +360,8 @@ run_step "Generate main firmware catalog manifest" \
   python3 "$REPO_ROOT/tools/firmware-artifact/build-catalog-entry.py" \
   --elf "$main_elf" \
   --out "$main_artifact_dir" \
-  --features net_http,web_serial
+  --features net_http,web_serial \
+  --output-stem mains-aegis-firmware
 
 if [[ "$mode" != "real" ]]; then
   echo "Dry-run completed. Real recovery maintenance would now require an explicit device id and port, start devd, scan that target, flash main firmware, and validate diag-snapshot."

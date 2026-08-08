@@ -665,7 +665,8 @@ python3 tools/firmware-artifact/build-catalog-entry.py \
   --image 0x10000:firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware.bin \
   --out firmware/target/mains-aegis-artifacts \
   --features net_http,web_serial \
-  --profile release
+  --profile release \
+  --output-stem mains-aegis-firmware
 ```
 
 devd API 流程是 `scan -> bind -> connect -> identity -> artifact/select -> monitor/reset/flash`。无硬件环境只使用 mock 设备与 `flash dry_run=true`。
