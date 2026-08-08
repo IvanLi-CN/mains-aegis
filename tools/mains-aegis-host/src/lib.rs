@@ -2764,8 +2764,13 @@ async fn lan_http_json(
         )
     })?;
     let mut response = Vec::new();
+    let read_timeout_ms = if path.starts_with("/api/v1/diag-snapshot") {
+        12_000
+    } else {
+        LAN_PROBE_TIMEOUT_MS
+    };
     tokio::time::timeout(
-        Duration::from_millis(LAN_PROBE_TIMEOUT_MS),
+        Duration::from_millis(read_timeout_ms),
         tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut response),
     )
     .await
@@ -2797,6 +2802,16 @@ fn parse_lan_http_json_response(
             format!("{method} {path} from {address} did not return HTTP headers"),
         )
     })?;
+    let decoded_body;
+    let body = if head
+        .lines()
+        .any(|line| line.eq_ignore_ascii_case("Transfer-Encoding: chunked"))
+    {
+        decoded_body = decode_http_chunked_body(body)?;
+        decoded_body.as_str()
+    } else {
+        body
+    };
     let status = head
         .lines()
         .next()
@@ -2860,6 +2875,34 @@ fn parse_lan_http_json_response(
             format!("{method} {path} from {address} returned invalid JSON: {error}"),
         )
     })
+}
+
+fn decode_http_chunked_body(mut encoded: &str) -> Result<String, HttpError> {
+    let mut decoded = String::new();
+    loop {
+        let (size_line, rest) = encoded.split_once("\r\n").ok_or_else(|| {
+            HttpError::retryable("lan_http_chunked_invalid", "missing chunk size terminator")
+        })?;
+        let size = usize::from_str_radix(size_line.split(';').next().unwrap_or(""), 16)
+            .map_err(|_| HttpError::retryable("lan_http_chunked_invalid", "invalid chunk size"))?;
+        encoded = rest;
+        if size == 0 {
+            return Ok(decoded);
+        }
+        if encoded.len() < size || !encoded.is_char_boundary(size) {
+            return Err(HttpError::retryable(
+                "lan_http_chunked_invalid",
+                "truncated or non-UTF-8-aligned chunk",
+            ));
+        }
+        decoded.push_str(&encoded[..size]);
+        encoded = encoded
+            .get(size..)
+            .and_then(|rest| rest.strip_prefix("\r\n"))
+            .ok_or_else(|| {
+                HttpError::retryable("lan_http_chunked_invalid", "missing chunk terminator")
+            })?;
+    }
 }
 
 fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpError> {
@@ -4458,6 +4501,7 @@ async fn device_diag_snapshot_inner(
             if (cache_is_fresh || allow_stale_cache)
                 && diag_snapshot_value_satisfies_packages(&diag, &packages)
             {
+                let diag = normalize_diag_snapshot_schema(diag, &packages);
                 return Ok(Json(device_read_payload(
                     diag,
                     include_meta,
@@ -4522,6 +4566,7 @@ async fn device_diag_snapshot_inner(
             if allow_stale_cache {
                 if let Some(diag) = cached_diag_snapshot.clone() {
                     if diag_snapshot_value_satisfies_packages(&diag, &packages) {
+                        let diag = normalize_diag_snapshot_schema(diag, &packages);
                         return Ok(Json(device_read_payload(
                             diag,
                             include_meta,
@@ -4626,6 +4671,7 @@ async fn device_diag_snapshot_inner(
             Err(error) => return Err(error),
         }
     };
+    let diag = normalize_diag_snapshot_schema(diag, &packages);
     update_device_diag_snapshot(&state, &id, diag.clone());
     Ok(Json(device_read_payload(
         diag,
@@ -4683,6 +4729,47 @@ fn diag_snapshot_value_satisfies_packages(diag: &Value, packages: &[String]) -> 
             package_map.contains_key(package)
         }
     })
+}
+
+fn normalize_diag_snapshot_schema(mut diag: Value, packages: &[String]) -> Value {
+    let Some(object) = diag.as_object_mut() else {
+        return diag;
+    };
+    if object
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .is_some()
+    {
+        return diag;
+    }
+    object.insert("schema_version".to_string(), json!(1));
+    object.insert("legacy".to_string(), json!(true));
+
+    let available = object
+        .get("packages")
+        .and_then(Value::as_object)
+        .map(|map| map.keys().cloned().collect::<HashSet<_>>())
+        .unwrap_or_default();
+    let errors = object
+        .entry("errors".to_string())
+        .or_insert_with(|| json!({}));
+    let Some(errors) = errors.as_object_mut() else {
+        return diag;
+    };
+    for package in packages {
+        if package == "core" || available.contains(package) {
+            continue;
+        }
+        errors.insert(
+            package.clone(),
+            json!({
+                "code": "unsupported_schema_v1",
+                "message": "requested diagnostic package requires schema v2 firmware",
+                "retryable": false
+            }),
+        );
+    }
+    diag
 }
 
 fn diag_snapshot_lan_path(packages: &[String]) -> String {
@@ -7805,6 +7892,7 @@ fn derive_diag_snapshot_from_status_for_packages(
             })
         });
     json!({
+        "schema_version": 2,
         "packages": {
             "mcu.runtime": {
                 "ok": true,
@@ -8018,6 +8106,7 @@ fn derive_diag_snapshot_from_status(status: &Value, source: &str) -> Value {
         }
     });
     json!({
+        "schema_version": 2,
         "packages": {
             "derived.power": {
                 "ok": true,
@@ -8846,6 +8935,7 @@ where
     let deadline = std::time::Instant::now() + response_timeout;
     let mut cdc_line = Vec::new();
     let mut json_candidate = Vec::new();
+    let mut diag_stream = DiagStreamAggregator::default();
     let mut byte = [0u8; 1];
     while std::time::Instant::now() < deadline {
         match port.read(&mut byte) {
@@ -8853,6 +8943,9 @@ where
             Ok(_) => {
                 match native_monitor_ingest_byte(byte[0], &mut cdc_line, &mut json_candidate) {
                     NativeMonitorInput::CdcLine(line) => {
+                        if let Some(frame) = diag_stream.consume_line(&line, request_id)? {
+                            return Ok(frame);
+                        }
                         if let Some(frame) = parse_matching_cdc_response(&line, request_id)? {
                             return Ok(frame);
                         }
@@ -8877,6 +8970,105 @@ where
         "native_cdc_timeout",
         format!("timed out waiting for CDC response from {port_path}"),
     ))
+}
+
+#[derive(Default)]
+struct DiagStreamAggregator {
+    begun: bool,
+    expected_packages: Option<usize>,
+    package_ids: HashSet<String>,
+    packages: serde_json::Map<String, Value>,
+    errors: serde_json::Map<String, Value>,
+}
+
+impl DiagStreamAggregator {
+    fn consume_line(&mut self, line: &[u8], request_id: &str) -> Result<Option<Value>, HttpError> {
+        for frame in json_frames_from_cdc_line(line) {
+            if frame.get("request_id").and_then(Value::as_str) != Some(request_id)
+                || frame.get("type").and_then(Value::as_str) != Some("diag_snapshot")
+            {
+                continue;
+            }
+            match frame.get("phase").and_then(Value::as_str) {
+                Some("begin") => {
+                    if self.begun {
+                        return Err(diag_stream_protocol_error("duplicate_begin"));
+                    }
+                    self.begun = true;
+                    self.expected_packages = frame
+                        .get("expected_packages")
+                        .and_then(Value::as_u64)
+                        .and_then(|value| usize::try_from(value).ok());
+                }
+                Some("package") => {
+                    if !self.begun {
+                        return Err(diag_stream_protocol_error("package_before_begin"));
+                    }
+                    let package_id = frame
+                        .get("package_id")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| diag_stream_protocol_error("missing_package_id"))?;
+                    if !self.package_ids.insert(package_id.to_string()) {
+                        return Err(diag_stream_protocol_error("duplicate_package"));
+                    }
+                    let result = frame
+                        .get("result")
+                        .and_then(Value::as_object)
+                        .ok_or_else(|| diag_stream_protocol_error("missing_package_result"))?;
+                    if result.get("schema_version").and_then(Value::as_u64) != Some(2) {
+                        return Err(diag_stream_protocol_error("invalid_schema_version"));
+                    }
+                    let result_packages = result
+                        .get("packages")
+                        .and_then(Value::as_object)
+                        .ok_or_else(|| diag_stream_protocol_error("missing_packages"))?;
+                    for (id, package) in result_packages {
+                        if self.packages.insert(id.clone(), package.clone()).is_some() {
+                            return Err(diag_stream_protocol_error("duplicate_package_payload"));
+                        }
+                    }
+                    if let Some(result_errors) = result.get("errors").and_then(Value::as_object) {
+                        self.errors.extend(result_errors.clone());
+                    }
+                }
+                Some("end") => {
+                    if !self.begun {
+                        return Err(diag_stream_protocol_error("end_before_begin"));
+                    }
+                    let emitted = frame
+                        .get("emitted_packages")
+                        .and_then(Value::as_u64)
+                        .and_then(|value| usize::try_from(value).ok())
+                        .ok_or_else(|| diag_stream_protocol_error("missing_emitted_packages"))?;
+                    if self.expected_packages != Some(emitted)
+                        || self.package_ids.len() != emitted
+                        || !frame.get("ok").and_then(Value::as_bool).unwrap_or(false)
+                    {
+                        return Err(diag_stream_protocol_error("incomplete_stream"));
+                    }
+                    return Ok(Some(json!({
+                        "type": "response",
+                        "request_id": request_id,
+                        "ok": true,
+                        "result": {
+                            "schema_version": 2,
+                            "packages": core::mem::take(&mut self.packages),
+                            "errors": core::mem::take(&mut self.errors)
+                        }
+                    })));
+                }
+                _ => return Err(diag_stream_protocol_error("invalid_phase")),
+            }
+        }
+        Ok(None)
+    }
+}
+
+fn diag_stream_protocol_error(reason: &str) -> HttpError {
+    HttpError::retryable(
+        "diag_stream_protocol_error",
+        format!("invalid diagnostic stream: {reason}"),
+    )
 }
 
 fn parse_matching_cdc_response(line: &[u8], request_id: &str) -> Result<Option<Value>, HttpError> {
@@ -9622,6 +9814,7 @@ fn mock_identity(id: &str) -> Value {
 
 fn mock_diag_snapshot() -> Value {
     json!({
+        "schema_version": 2,
         "packages": {
             "derived.power": {
                 "ok": true,
@@ -12602,6 +12795,22 @@ mod tests {
     }
 
     #[test]
+    fn legacy_diag_snapshot_is_marked_without_fabricating_v2_packages() {
+        let legacy = json!({
+            "packages": {"mcu.runtime": {"ok": true, "payload": {"mode": "standby"}}},
+            "errors": {}
+        });
+        let normalized = normalize_diag_snapshot_schema(legacy, &["tps55288.out_a".to_string()]);
+        assert_eq!(normalized["schema_version"], json!(1));
+        assert_eq!(normalized["legacy"], json!(true));
+        assert!(normalized["packages"].get("tps55288.out_a").is_none());
+        assert_eq!(
+            normalized["errors"]["tps55288.out_a"]["code"],
+            json!("unsupported_schema_v1")
+        );
+    }
+
+    #[test]
     fn diag_snapshot_query_parses_repeated_package_keys() {
         assert_eq!(
             diag_snapshot_packages_from_raw_query(Some(
@@ -13548,6 +13757,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_chunked_lan_diag_snapshot_response() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n18\r\n{\"schema_version\":2,\"pac\r\n16\r\nkages\":{},\"errors\":{}}\r\n0\r\n\r\n";
+        let parsed =
+            parse_lan_http_json_response(response, "GET", "/api/v1/diag-snapshot", "192.168.4.25")
+                .unwrap();
+        assert_eq!(parsed["schema_version"], json!(2));
+    }
+
+    #[test]
     fn rejects_lan_http_non_success_status() {
         let response = b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n\r\n{\"error\":{\"code\":\"not_found\"}}";
 
@@ -14017,6 +14235,42 @@ mod tests {
         assert!(parse_matching_cdc_response(line, "devd-identity")
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    fn diagnostic_stream_aggregates_and_rejects_duplicate_packages() {
+        let mut stream = DiagStreamAggregator::default();
+        assert!(stream
+            .consume_line(
+                br#"{"type":"diag_snapshot","phase":"begin","request_id":"req","schema_version":2,"expected_packages":1}"#,
+                "req",
+            )
+            .unwrap()
+            .is_none());
+        let package = br#"{"type":"diag_snapshot","phase":"package","request_id":"req","package_id":"tps55288.out_a","result":{"schema_version":2,"packages":{"tps55288.out_a":{"ok":false,"payload":{},"read_errors":[{"code":"i2c_nack"}]}},"errors":{}}}"#;
+        assert!(stream.consume_line(package, "req").unwrap().is_none());
+        assert_eq!(
+            stream.consume_line(package, "req").unwrap_err().0.code,
+            "diag_stream_protocol_error"
+        );
+
+        let mut stream = DiagStreamAggregator::default();
+        stream
+            .consume_line(br#"{"type":"diag_snapshot","phase":"begin","request_id":"req","schema_version":2,"expected_packages":1}"#, "req")
+            .unwrap();
+        stream.consume_line(package, "req").unwrap();
+        let result = stream
+            .consume_line(
+                br#"{"type":"diag_snapshot","phase":"end","request_id":"req","emitted_packages":1,"ok":true}"#,
+                "req",
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["result"]["schema_version"], json!(2));
+        assert_eq!(
+            result["result"]["packages"]["tps55288.out_a"]["read_errors"][0]["code"],
+            json!("i2c_nack")
+        );
     }
 
     #[test]

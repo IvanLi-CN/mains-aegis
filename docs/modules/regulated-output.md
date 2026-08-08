@@ -287,6 +287,10 @@ TPS 输出准入仍未成立，系统必须保持 owner-facing `mode=blocked`，
 
 以下诊断属于固件基线能力，不是临时 bring-up 脚本：
 
+- `diag-snapshot` schema v2 可按需读取 `tps55288.out_a/out_b`、`ina3221.regs` 与 `tmp112.out_a/out_b`。TPS 包提供稳定寄存器地址/raw、VOUT/限流/OE/FPWM/SCP/OCP/OVP 解码，并关联对应 INA/TMP 测量；单个寄存器 NACK 时保留同包其余成功数据并写入 `read_errors`。
+- OUT-A 固定报告设备地址 `116 (0x74)`；即使 TPS 访问失败，单独请求 INA/TMP/runtime package 仍可保留 CH2、TMP112-A 与运行时锁存证据。
+- INA Read/Clear `Mask/Enable(0x0F)` 仅由 IRQ 业务路径读取；FUSB302 Read/Clear interrupt registers 同样只由 PD 轮询 owner 读取。诊断包只呈现业务锁存，不主动清除告警。
+
 - 自检期若 `BQ40Z50` 普通通信正常、但 `primary_reason` 落在 `xdsg_blocked` / `xchg_blocked`，固件会追加一条 `bms_diag_block: ... stage=self_test_blocked`
 - 运行期若放电路径再次进入 `xdsg_blocked` / `xchg_blocked`，固件会以节流方式持续输出 `bms_diag_block: ... stage=runtime_blocked`
 - 启动期若已经批准“放电授权恢复尝试”，但恢复链路最终没有把 `discharge_ready` 拉回 `true`，固件会输出 `bms_diag_block: ... stage=activation_finish_blocked`

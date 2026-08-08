@@ -95,6 +95,7 @@ Dry-run responses include `backend`, `action`, target profile or delay, `force`,
 - Protocol name: `mains-aegis.cdc.v1`.
 - Every Web write command carries `request_id`.
 - Firmware returns `response` or `error` with the same `request_id`.
+- `get_diag_snapshot` 使用同一 `request_id` 的 `diag_snapshot` `begin/package/end` 帧；采集或编码失败使用现有 `error` 帧。devd 聚合后仍向 CLI/API 返回单个 schema v2 JSON。
 - During bring-up, legacy `defmt` or plain serial bytes may still appear on the same CDC stream. Browser clients ignore non-JSONL and malformed non-protocol lines; protocol responses must still be valid JSONL frames.
 
 ## Frame Types
@@ -123,6 +124,7 @@ Supported `op` values:
 - `get_status`
 - `get_settings`
 - `get_charge_control`
+- `get_diag_snapshot`
 - `preview_charge_control`
 - `control_manual_charge`
 - `set_log_level`
@@ -136,6 +138,7 @@ Examples:
 {"type":"request","request_id":"web-2","op":"get_status"}
 {"type":"request","request_id":"web-2b","op":"get_settings"}
 {"type":"request","request_id":"web-2c","op":"get_charge_control"}
+{"type":"request","request_id":"web-diag","op":"get_diag_snapshot","packages":["tps55288.out_a","ina3221.regs","tmp112.out_a","mcu.runtime"]}
 {"type":"request","request_id":"web-3","op":"set_log_level","level":"debug"}
 {"type":"request","request_id":"web-4","op":"set_manual_charge_prefs","target":"rsoc_80","speed":"ma_500","timer_h":2}
 {"type":"request","request_id":"web-4a","op":"preview_charge_control","target":"full_100","current_ma":500,"timer_minutes":120,"power_path":"auto"}
@@ -144,6 +147,16 @@ Examples:
 {"type":"request","request_id":"web-4b","op":"set_advanced_power","standby_drop_mv":1200,"assist_low_drop_mv":600,"assist_enter_delta_ma":0,"assist_exit_delta_ma":0,"assist_required_samples":2,"assist_ramp_step_mv":100,"assist_ramp_interval_ms":200,"rated_enter_delta_ma":0,"rated_exit_delta_ma":0,"vin_drop_threshold_pct":4,"required_samples":2}
 {"type":"request","request_id":"web-4c","op":"reset_advanced_power"}
 ```
+
+`get_diag_snapshot` 的成功序列如下；`expected_packages` 与 `emitted_packages` 按传输 package 帧计数，`core` 可在一个 package 帧中展开 `mcu.runtime + derived.power`：
+
+```json
+{"type":"diag_snapshot","phase":"begin","request_id":"web-diag","schema_version":2,"expected_packages":1}
+{"type":"diag_snapshot","phase":"package","request_id":"web-diag","package_id":"tps55288.out_a","result":{"schema_version":2,"packages":{},"errors":{}}}
+{"type":"diag_snapshot","phase":"end","request_id":"web-diag","emitted_packages":1,"ok":true}
+```
+
+接收端必须拒绝 package-before-begin、重复 package、数量不符、缺失 end 与 schema 不匹配。设备 LAN `/api/v1/diag-snapshot` 使用等价 package 集合，通过 HTTP/1.1 chunked transfer 逐包组成一个合法 JSON。
 
 ### `wifi_config`
 

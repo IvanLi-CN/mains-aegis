@@ -129,6 +129,29 @@ pub fn build_sse_response_head(origin: Option<&str>) -> Option<String<RESPONSE_H
     Some(head)
 }
 
+pub fn build_chunked_json_response_head(
+    status: &str,
+    origin: Option<&str>,
+) -> Option<String<RESPONSE_HEAD_CAP>> {
+    let allow_origin = origin.unwrap_or("*");
+    let vary = if origin.is_some() {
+        "Vary: Origin\r\n"
+    } else {
+        ""
+    };
+    let mut head = String::<RESPONSE_HEAD_CAP>::new();
+    write!(
+        head,
+        "HTTP/1.1 {}\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: {}\r\n{}Access-Control-Allow-Methods: {}\r\nAccess-Control-Allow-Headers: Accept, Content-Type\r\nAccess-Control-Allow-Private-Network: true\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n",
+        status,
+        allow_origin,
+        vary,
+        HTTP_ALLOW_METHODS,
+    )
+    .ok()?;
+    Some(head)
+}
+
 pub fn parse_ipv4(input: &str) -> Option<[u8; 4]> {
     let mut octets = [0u8; 4];
     let mut idx = 0usize;

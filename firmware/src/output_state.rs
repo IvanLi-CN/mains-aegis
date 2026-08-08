@@ -88,6 +88,17 @@ impl InputGateTracker {
         self.recover_streak = 0;
     }
 
+    pub fn force_cutoff(&mut self) -> InputGateAction {
+        self.low_streak = 0;
+        self.recover_streak = 0;
+        if self.cutoff {
+            InputGateAction::None
+        } else {
+            self.cutoff = true;
+            InputGateAction::Cutoff
+        }
+    }
+
     pub fn step(&mut self, fresh_pre_tps_vin_mv: Option<u16>) -> InputGateAction {
         let Some(vin_mv) = fresh_pre_tps_vin_mv else {
             self.low_streak = 0;
@@ -388,6 +399,20 @@ mod tests {
         assert!(tracker.cutoff);
         assert_eq!(tracker.step(Some(11_050)), InputGateAction::None);
         assert_eq!(tracker.step(Some(11_100)), InputGateAction::Enable);
+    }
+
+    #[test]
+    fn input_gate_forced_cutoff_uses_existing_recovery_samples() {
+        let mut gate = InputGateTracker::new(InputGateThresholds {
+            cutoff_mv: 11_300,
+            recover_mv: 11_500,
+            required_samples: 3,
+        });
+        assert_eq!(gate.force_cutoff(), InputGateAction::Cutoff);
+        assert_eq!(gate.force_cutoff(), InputGateAction::None);
+        assert_eq!(gate.step(Some(11_600)), InputGateAction::None);
+        assert_eq!(gate.step(Some(11_600)), InputGateAction::None);
+        assert_eq!(gate.step(Some(11_600)), InputGateAction::Enable);
     }
 
     fn low_battery_release_input() -> LowBatteryOutputHoldReleaseInput {

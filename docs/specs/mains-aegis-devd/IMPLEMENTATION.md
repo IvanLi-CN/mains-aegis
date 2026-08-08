@@ -7,6 +7,13 @@
 - Lifecycle: archived
 - Implementation: 见下方迁移状态与覆盖记录。
 
+## Diagnostic schema v2
+
+- `diag-snapshot` 的硬件 package 从摘要缓存升级为按需 fresh capture，并保留逐项读取错误。
+- USB CDC 使用 begin/package/error/end 分块，LAN 使用 chunked HTTP；host/devd 对外仍返回单个 JSON。
+- INA3221 IRQ 事件由 PowerRuntime 消费并锁存，告警来源进入既有 input gate 与 active protection。
+- 旧固件响应由 host/devd 标记为 schema v1 legacy，不伪造 v2 数据。
+
 ## Migrated Implementation Record
 
 - Status: 已完成（v1 devd foundation）
