@@ -4458,6 +4458,7 @@ async fn device_diag_snapshot_inner(
             if (cache_is_fresh || allow_stale_cache)
                 && diag_snapshot_value_satisfies_packages(&diag, &packages)
             {
+                let diag = normalize_diag_snapshot_schema(diag, &packages);
                 return Ok(Json(device_read_payload(
                     diag,
                     include_meta,
@@ -4522,6 +4523,7 @@ async fn device_diag_snapshot_inner(
             if allow_stale_cache {
                 if let Some(diag) = cached_diag_snapshot.clone() {
                     if diag_snapshot_value_satisfies_packages(&diag, &packages) {
+                        let diag = normalize_diag_snapshot_schema(diag, &packages);
                         return Ok(Json(device_read_payload(
                             diag,
                             include_meta,
@@ -4626,6 +4628,7 @@ async fn device_diag_snapshot_inner(
             Err(error) => return Err(error),
         }
     };
+    let diag = normalize_diag_snapshot_schema(diag, &packages);
     update_device_diag_snapshot(&state, &id, diag.clone());
     Ok(Json(device_read_payload(
         diag,
@@ -4683,6 +4686,47 @@ fn diag_snapshot_value_satisfies_packages(diag: &Value, packages: &[String]) -> 
             package_map.contains_key(package)
         }
     })
+}
+
+fn normalize_diag_snapshot_schema(mut diag: Value, packages: &[String]) -> Value {
+    let Some(object) = diag.as_object_mut() else {
+        return diag;
+    };
+    if object
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .is_some()
+    {
+        return diag;
+    }
+    object.insert("schema_version".to_string(), json!(1));
+    object.insert("legacy".to_string(), json!(true));
+
+    let available = object
+        .get("packages")
+        .and_then(Value::as_object)
+        .map(|map| map.keys().cloned().collect::<HashSet<_>>())
+        .unwrap_or_default();
+    let errors = object
+        .entry("errors".to_string())
+        .or_insert_with(|| json!({}));
+    let Some(errors) = errors.as_object_mut() else {
+        return diag;
+    };
+    for package in packages {
+        if package == "core" || available.contains(package) {
+            continue;
+        }
+        errors.insert(
+            package.clone(),
+            json!({
+                "code": "unsupported_schema_v1",
+                "message": "requested diagnostic package requires schema v2 firmware",
+                "retryable": false
+            }),
+        );
+    }
+    diag
 }
 
 fn diag_snapshot_lan_path(packages: &[String]) -> String {
@@ -7805,6 +7849,7 @@ fn derive_diag_snapshot_from_status_for_packages(
             })
         });
     json!({
+        "schema_version": 2,
         "packages": {
             "mcu.runtime": {
                 "ok": true,
@@ -8018,6 +8063,7 @@ fn derive_diag_snapshot_from_status(status: &Value, source: &str) -> Value {
         }
     });
     json!({
+        "schema_version": 2,
         "packages": {
             "derived.power": {
                 "ok": true,
@@ -9622,6 +9668,7 @@ fn mock_identity(id: &str) -> Value {
 
 fn mock_diag_snapshot() -> Value {
     json!({
+        "schema_version": 2,
         "packages": {
             "derived.power": {
                 "ok": true,
@@ -12599,6 +12646,22 @@ mod tests {
             &core,
             &["core".to_string()]
         ));
+    }
+
+    #[test]
+    fn legacy_diag_snapshot_is_marked_without_fabricating_v2_packages() {
+        let legacy = json!({
+            "packages": {"mcu.runtime": {"ok": true, "payload": {"mode": "standby"}}},
+            "errors": {}
+        });
+        let normalized = normalize_diag_snapshot_schema(legacy, &["tps55288.out_a".to_string()]);
+        assert_eq!(normalized["schema_version"], json!(1));
+        assert_eq!(normalized["legacy"], json!(true));
+        assert!(normalized["packages"].get("tps55288.out_a").is_none());
+        assert_eq!(
+            normalized["errors"]["tps55288.out_a"]["code"],
+            json!("unsupported_schema_v1")
+        );
     }
 
     #[test]
