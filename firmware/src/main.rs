@@ -65,8 +65,8 @@ use mains_aegis_firmware::{
         parse_frame, render_diag_stream_begin_json, render_diag_stream_end_json,
         render_diag_stream_package_json, render_error_json, render_error_json_with_details,
         render_hello_json, render_log_json, render_protocol_error_json, render_response_json,
-        render_status_frame_json, render_wifi_config_ack_json, request_id_hint, LogLevel, UsbCdcFrame,
-        UsbCdcLineBuffer, UsbCdcRequest, WifiConfigCommand,
+        render_status_frame_json, render_wifi_config_ack_json, request_id_hint, LogLevel,
+        UsbCdcFrame, UsbCdcLineBuffer, UsbCdcRequest, WifiConfigCommand,
         WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP, WEB_SERIAL_DIAG_SNAPSHOT_FRAME_CAP,
         WEB_SERIAL_RESPONSE_BODY_CAP, WEB_SERIAL_RESPONSE_FRAME_CAP,
     },
@@ -2493,7 +2493,7 @@ fn handle_web_serial_frame<'d, I2C>(
             }
             UsbCdcRequest::GetDiagSnapshot(request) => {
                 #[cfg(feature = "net_http")]
-                if !esp_firmware::net::try_begin_usb_diag_capture() {
+                if !mains_aegis_firmware::net::try_begin_usb_diag_capture() {
                     let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
                     render_error_json(
                         &mut frame,
@@ -2537,7 +2537,7 @@ fn handle_web_serial_frame<'d, I2C>(
                         );
                         write_web_serial_line(serial, frame.as_str());
                         #[cfg(feature = "net_http")]
-                        esp_firmware::net::finish_usb_diag_capture();
+                        mains_aegis_firmware::net::finish_usb_diag_capture();
                         return;
                     }
                     render_diag_stream_package_json(
@@ -2548,7 +2548,7 @@ fn handle_web_serial_frame<'d, I2C>(
                     );
                     write_web_serial_line(serial, frame.as_str());
                     #[cfg(feature = "net_http")]
-                    esp_firmware::net::finish_usb_diag_capture();
+                    mains_aegis_firmware::net::finish_usb_diag_capture();
                 }
                 render_diag_stream_end_json(&mut frame, request_id.as_str(), expected_packages);
                 write_web_serial_line(serial, frame.as_str());
