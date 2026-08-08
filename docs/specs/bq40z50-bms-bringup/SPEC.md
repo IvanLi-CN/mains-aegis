@@ -39,7 +39,7 @@ References:
 - Firmware configures:
   - `GPIO21` as input for `BMS_BTP_INT_H` (active-high on alert).
 
-- Firmware polls BQ40Z50 over `I2C1`/SMBus at `400kHz`:
+- Firmware polls BQ40Z50 over shared `I2C1`/SMBus at the current firmware bus rate (`25kHz`):
   - prefer `addr=0x0B` (per project I2C map); fallback `addr=0x16` (TI TRM default) if `0x0B`
     NACKs.
   - reads:

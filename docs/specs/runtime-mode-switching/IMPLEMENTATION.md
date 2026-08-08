@@ -20,6 +20,13 @@
   - 且 `requested_outputs` 中存在未进入 `active_outputs` 的通道
   - 则 API / diag 发布 `mode=blocked`
   - front-panel 保持或退回自检/阻断界面，不渲染 Dashboard
+- 正常主固件启动自检始终保留配置请求 `both`；输出健康与可恢复集合只写入
+  `active_outputs / recoverable_outputs`，不再反向缩窄 `requested_outputs`。
+- `output::pure::boot_output_contract` 是启动结果与 owner-facing mode 的单一派生入口；标准
+  `just firmware-host-test` 会覆盖完整 host suite，前面板预览 crate 通过自身 build script
+  生成同源 profile 后可直接复现单路失败阻断场景。
+- 手动 output bypass 恢复时还原 bypass 前的完整请求，并清空 active/recoverable 子集，使
+  admission retry 按原契约重新准入所有要求通道。
 - staged assist 已经落地：
   - `standby` 使用低于额定输出的热备目标
   - `assist_low` 通过运行时双判据进入，并按 `assist_ramp_step_mv / assist_ramp_interval_ms` 限速爬升

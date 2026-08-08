@@ -3152,6 +3152,59 @@ pub enum EnabledOutputs {
     Both,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BootOutputContract {
+    pub requested_outputs: EnabledOutputs,
+    pub active_outputs: EnabledOutputs,
+    pub owner_mode: UpsMode,
+}
+
+pub(super) fn requested_outputs_active(
+    requested_outputs: EnabledOutputs,
+    active_outputs: EnabledOutputs,
+) -> bool {
+    match requested_outputs {
+        EnabledOutputs::None => true,
+        EnabledOutputs::Only(ch) => active_outputs.is_enabled(ch),
+        EnabledOutputs::Both => active_outputs == EnabledOutputs::Both,
+    }
+}
+
+pub fn boot_output_contract(
+    desired_outputs: EnabledOutputs,
+    active_outputs: EnabledOutputs,
+    candidate_mode: UpsMode,
+) -> BootOutputContract {
+    let requested_outputs = desired_outputs;
+    let all_requested_active = requested_outputs_active(requested_outputs, active_outputs);
+    let mode_requires_outputs = requested_outputs != EnabledOutputs::None
+        && matches!(
+            candidate_mode,
+            UpsMode::Standby | UpsMode::Supplement | UpsMode::Backup
+        );
+
+    BootOutputContract {
+        requested_outputs,
+        active_outputs,
+        owner_mode: if mode_requires_outputs && !all_requested_active {
+            UpsMode::Blocked
+        } else {
+            candidate_mode
+        },
+    }
+}
+
+pub const fn bypass_restore_output_state(
+    requested_before_bypass: EnabledOutputs,
+) -> OutputRuntimeState {
+    OutputRuntimeState::new(
+        requested_before_bypass,
+        EnabledOutputs::None,
+        EnabledOutputs::None,
+        OutputGateReason::None,
+    )
+}
+
 impl EnabledOutputs {
     pub fn is_enabled(self, ch: OutputChannel) -> bool {
         match self {

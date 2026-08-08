@@ -14742,6 +14742,32 @@ mod tests {
     }
 
     #[test]
+    fn self_check_blocks_dashboard_when_either_required_output_is_inactive() {
+        let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Blocked);
+        snapshot.gc9307 = SelfCheckCommState::Ok;
+        snapshot.tca6408a = SelfCheckCommState::Ok;
+        snapshot.fusb302 = SelfCheckCommState::Ok;
+        snapshot.ina3221 = SelfCheckCommState::Ok;
+        snapshot.bq25792 = SelfCheckCommState::Ok;
+        snapshot.bq40z50 = SelfCheckCommState::Ok;
+        snapshot.bq40z50_discharge_ready = Some(true);
+        snapshot.requested_outputs = EnabledOutputs::Both;
+        snapshot.tps_a = SelfCheckCommState::Ok;
+        snapshot.tps_b = SelfCheckCommState::Ok;
+        snapshot.tmp_a = SelfCheckCommState::Ok;
+        snapshot.tmp_b = SelfCheckCommState::Ok;
+
+        snapshot.active_outputs = EnabledOutputs::Only(OutputSelector::OutA);
+        assert_eq!(self_check_dashboard_block_reason(&snapshot), Some("out_b"));
+
+        snapshot.active_outputs = EnabledOutputs::Only(OutputSelector::OutB);
+        assert_eq!(self_check_dashboard_block_reason(&snapshot), Some("out_a"));
+
+        snapshot.active_outputs = EnabledOutputs::Both;
+        assert!(self_check_can_enter_dashboard(&snapshot));
+    }
+
+    #[test]
     fn self_check_can_enter_dashboard_when_only_bms_charge_path_is_blocked() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         snapshot.gc9307 = SelfCheckCommState::Ok;

@@ -701,6 +701,62 @@ pub mod output {
     }
 
     #[test]
+    fn normal_boot_preserves_required_outputs_independently_of_healthy_subset() {
+        use channel::OutputChannel::{OutA, OutB};
+
+        let cases = [
+            (
+                pure::EnabledOutputs::Both,
+                pure::EnabledOutputs::Only(OutB),
+                UpsMode::Blocked,
+            ),
+            (
+                pure::EnabledOutputs::Both,
+                pure::EnabledOutputs::Only(OutA),
+                UpsMode::Blocked,
+            ),
+            (
+                pure::EnabledOutputs::Both,
+                pure::EnabledOutputs::Both,
+                UpsMode::Standby,
+            ),
+        ];
+
+        for (desired, active, expected_mode) in cases {
+            let contract = pure::boot_output_contract(desired, active, UpsMode::Standby);
+            assert_eq!(contract.requested_outputs, pure::EnabledOutputs::Both);
+            assert_eq!(contract.active_outputs, active);
+            assert_eq!(contract.owner_mode, expected_mode);
+        }
+    }
+
+    #[test]
+    fn explicit_diagnostic_single_channel_request_remains_single_channel() {
+        let desired = pure::EnabledOutputs::Only(channel::OutputChannel::OutB);
+        let contract = pure::boot_output_contract(desired, desired, UpsMode::Standby);
+
+        assert_eq!(contract.requested_outputs, desired);
+        assert_eq!(contract.active_outputs, desired);
+        assert_eq!(contract.owner_mode, UpsMode::Standby);
+    }
+
+    #[test]
+    fn output_bypass_restore_preserves_contract_and_restarts_admission() {
+        let state = pure::bypass_restore_output_state(pure::EnabledOutputs::Both);
+
+        assert_eq!(state.requested_outputs, pure::EnabledOutputs::Both);
+        assert_eq!(state.active_outputs, pure::EnabledOutputs::None);
+        assert_eq!(state.recoverable_outputs, pure::EnabledOutputs::None);
+        assert_eq!(state.gate_reason, OutputGateReason::None);
+        assert!(pure::output_admission_retry_needed(
+            state.requested_outputs,
+            state.active_outputs,
+            state.recoverable_outputs,
+            state.gate_reason,
+        ));
+    }
+
+    #[test]
     fn runtime_charge_override_blocks_charging_in_output_and_blocked_modes() {
         assert_eq!(
             runtime_charge_override(UpsMode::Supplement),

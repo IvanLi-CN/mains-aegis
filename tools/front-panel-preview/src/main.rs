@@ -962,6 +962,29 @@ fn bq40_snapshot_for_scenario(
     let mut snapshot = base_bq40_snapshot(mode);
     let overlay = match scenario {
         ScenarioArg::FirmwareSafeMode => SelfCheckOverlay::None,
+        ScenarioArg::SelfCheckOutAFailed => {
+            snapshot.mode = UpsMode::Blocked;
+            snapshot.bq40z50 = SelfCheckCommState::Ok;
+            snapshot.bq40z50_discharge_ready = Some(true);
+            snapshot.bq40z50_no_battery = Some(false);
+            snapshot.bq25792_vbat_present = Some(true);
+            snapshot.requested_outputs = esp_firmware::output_state::EnabledOutputs::Both;
+            snapshot.active_outputs = esp_firmware::output_state::EnabledOutputs::Only(
+                esp_firmware::output_state::OutputSelector::OutB,
+            );
+            snapshot.recoverable_outputs = esp_firmware::output_state::EnabledOutputs::Only(
+                esp_firmware::output_state::OutputSelector::OutB,
+            );
+            snapshot.tps_a = SelfCheckCommState::Err;
+            snapshot.tps_a_enabled = Some(false);
+            snapshot.out_a_vbus_mv = None;
+            snapshot.tps_a_iout_ma = None;
+            snapshot.tps_b = SelfCheckCommState::Ok;
+            snapshot.tps_b_enabled = Some(true);
+            snapshot.out_b_vbus_mv = Some(11_376);
+            snapshot.tps_b_iout_ma = Some(420);
+            SelfCheckOverlay::None
+        }
         ScenarioArg::SelfCheckBmsMissingTpsWarn => {
             snapshot.bq25792 = SelfCheckCommState::Ok;
             snapshot.bq25792_allow_charge = Some(false);
@@ -1871,6 +1894,7 @@ fn run() -> Result<(), String> {
             .map_err(|_| "render failed unexpectedly".to_string())?;
         }
         ScenarioArg::Bq40Offline
+        | ScenarioArg::SelfCheckOutAFailed
         | ScenarioArg::SelfCheckBmsMissingTpsWarn
         | ScenarioArg::Bq40OfflineDialog
         | ScenarioArg::Bq40DischargeBlocked
@@ -2162,6 +2186,7 @@ enum ScenarioArg {
     DashboardManualChargeStopHold,
     DashboardManualChargeResetAuto,
     DashboardManualChargeBlocked,
+    SelfCheckOutAFailed,
     SelfCheckBmsMissingTpsWarn,
     Bq40Offline,
     Bq40OfflineDialog,
@@ -2286,6 +2311,7 @@ impl ScenarioArg {
             "dashboard-manual-charge-stop-hold" => Ok(Self::DashboardManualChargeStopHold),
             "dashboard-manual-charge-reset-auto" => Ok(Self::DashboardManualChargeResetAuto),
             "dashboard-manual-charge-blocked" => Ok(Self::DashboardManualChargeBlocked),
+            "self-check-out-a-failed" => Ok(Self::SelfCheckOutAFailed),
             "self-check-bms-missing-tps-warn" => Ok(Self::SelfCheckBmsMissingTpsWarn),
             "bq40-offline" => Ok(Self::Bq40Offline),
             "bq40-offline-dialog" => Ok(Self::Bq40OfflineDialog),
@@ -2419,6 +2445,7 @@ impl ScenarioArg {
             ScenarioArg::DashboardManualChargeStopHold => "dashboard-manual-charge-stop-hold",
             ScenarioArg::DashboardManualChargeResetAuto => "dashboard-manual-charge-reset-auto",
             ScenarioArg::DashboardManualChargeBlocked => "dashboard-manual-charge-blocked",
+            ScenarioArg::SelfCheckOutAFailed => "self-check-out-a-failed",
             ScenarioArg::SelfCheckBmsMissingTpsWarn => "self-check-bms-missing-tps-warn",
             ScenarioArg::Bq40Offline => "bq40-offline",
             ScenarioArg::Bq40OfflineDialog => "bq40-offline-dialog",

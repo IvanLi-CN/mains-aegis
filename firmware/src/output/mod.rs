@@ -2514,34 +2514,12 @@ fn stable_mains_present(
     stable_mains_state(vin_mains_present, vin_vbus_mv, charger_present).present
 }
 
-fn requested_outputs_active(requested: EnabledOutputs, active: EnabledOutputs) -> bool {
-    match requested {
-        EnabledOutputs::None => true,
-        EnabledOutputs::Only(ch) => active.is_enabled(ch),
-        EnabledOutputs::Both => active == EnabledOutputs::Both,
-    }
-}
-
-fn mode_requires_active_tps_outputs(mode: UpsMode, requested: EnabledOutputs) -> bool {
-    requested != EnabledOutputs::None
-        && matches!(
-            mode,
-            UpsMode::Standby | UpsMode::Supplement | UpsMode::Backup
-        )
-}
-
 fn gate_owner_mode_on_active_outputs(
     mode: UpsMode,
     requested: EnabledOutputs,
     active: EnabledOutputs,
 ) -> UpsMode {
-    if mode_requires_active_tps_outputs(mode, requested)
-        && !requested_outputs_active(requested, active)
-    {
-        UpsMode::Blocked
-    } else {
-        mode
-    }
+    boot_output_contract(requested, active, mode).owner_mode
 }
 
 fn discharge_authorization_input_ready(
@@ -3610,7 +3588,8 @@ where
         Some(false) => UpsMode::Backup,
         _ => UpsMode::Standby,
     };
-    ui.mode = gate_owner_mode_on_active_outputs(candidate_mode, desired_outputs, enabled_outputs);
+    let boot_outputs = boot_output_contract(desired_outputs, enabled_outputs, candidate_mode);
+    ui.mode = boot_outputs.owner_mode;
 
     defmt::info!(
         "self_test: done requested_outputs={} active_outputs={} recoverable_outputs={} gate_reason={} charger_enabled={=bool} bms_present={=bool}",
@@ -3628,13 +3607,8 @@ where
         ina_detected: ina_ready,
         detected_tmp_outputs,
         detected_tps_outputs,
-        requested_outputs: enabled_outputs_from_flags(
-            enabled_outputs.is_enabled(OutputChannel::OutA)
-                || recoverable_outputs.is_enabled(OutputChannel::OutA),
-            enabled_outputs.is_enabled(OutputChannel::OutB)
-                || recoverable_outputs.is_enabled(OutputChannel::OutB),
-        ),
-        active_outputs: enabled_outputs,
+        requested_outputs: boot_outputs.requested_outputs,
+        active_outputs: boot_outputs.active_outputs,
         recoverable_outputs,
         output_gate_reason,
         charger_probe_ok,
@@ -3768,6 +3742,7 @@ pub struct PowerManager<'d, I2C> {
     output_state: OutputRuntimeState,
     recoverable_output_source: OutputGateReason,
     output_bypass_active: bool,
+    bypass_requested_outputs: EnabledOutputs,
     output_restore_after_bms_recovery: bool,
     output_protection: output_protection::ProtectionRuntime,
     fan: fan::Controller,
@@ -4588,6 +4563,7 @@ where
             output_state,
             recoverable_output_source,
             output_bypass_active: false,
+            bypass_requested_outputs: EnabledOutputs::None,
             output_restore_after_bms_recovery: false,
             output_protection: output_protection::ProtectionRuntime::new(cfg.ilimit_ma),
             fan: fan::Controller::new(cfg.fan_config),
@@ -4775,6 +4751,7 @@ where
             self.output_state.requested_outputs
         };
         self.output_state.recoverable_outputs = recoverable;
+        self.bypass_requested_outputs = self.output_state.requested_outputs;
         self.output_state.requested_outputs = EnabledOutputs::None;
         self.output_state.gate_reason = OutputGateReason::ManualBypass;
         self.recoverable_output_source = OutputGateReason::ManualBypass;
@@ -4791,15 +4768,14 @@ where
         if !self.output_bypass_active {
             return;
         }
-        let restore = self.output_state.recoverable_outputs;
+        let requested = self.bypass_requested_outputs;
         self.output_bypass_active = false;
-        self.output_state.requested_outputs = restore;
-        self.output_state.active_outputs = EnabledOutputs::None;
-        self.output_state.gate_reason = OutputGateReason::None;
+        self.bypass_requested_outputs = EnabledOutputs::None;
+        self.output_state = bypass_restore_output_state(requested);
         self.recoverable_output_source = OutputGateReason::None;
         defmt::info!(
             "power: output bypass restored requested_outputs={}",
-            restore.describe()
+            requested.describe()
         );
         self.reconcile_output_state();
     }

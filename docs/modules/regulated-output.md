@@ -19,13 +19,13 @@
 当前 SoT 以主固件 Cargo feature 为准：未显式选择时回落到 `12V`，启用 `main-vout-19v` 时切到 `19V`。
 
 - `I2C1`: `GPIO48=SDA`、`GPIO47=SCL`、`25kHz`
-- 默认请求输出集合：`out_a`
+- 正常主固件默认请求输出集合：`both`
 - 默认目标输出：`12V`
 - 默认目标限流：`3.5A`
 - `TPS55288` light-load：`PFM`
 - 非活动通道不主动稳压；是否处于寄存器 `OE=0` 由运行态状态机决定
 
-历史文档中曾出现 `100kHz`、`400kHz`、`out_a+out_b` 等口径，它们仅代表旧 bring-up 阶段，不再视为当前实现真相。
+历史文档中曾出现 `100kHz`、`400kHz`、单路默认输出等口径，它们仅代表旧 bring-up 阶段，不再视为当前实现真相。
 
 ## 开发约束
 
@@ -77,10 +77,15 @@
 
 模块内部固定维护四类状态：
 
-- `requested_outputs`：当前模块希望提供的输出集合
+- `requested_outputs`：当前固件配置要求提供的输出集合；正常主固件固定为 `both`
 - `active_outputs`：当前允许真正重试配置/使能的输出集合
 - `recoverable_outputs`：被门控前最后一个可恢复集合
 - `gate_reason`：当前门控原因
+
+正常主固件不得用 `active_outputs` 或 `recoverable_outputs` 的健康子集重建或缩窄
+`requested_outputs`。若 OUT-A 或 OUT-B 任一路未通过存在性、状态、温度/配置前置条件或输出
+准入，`requested_outputs` 仍保持 `both`。只有显式选择的诊断/测试固件 profile 才可以把请求
+配置为单通道。
 
 对外运行模式必须以后两类输出状态为准。若 `requested_outputs != none`，但本轮请求的任一路
 TPS 输出没有进入 `active_outputs`，固件不得把 owner-facing `mode` 发布为

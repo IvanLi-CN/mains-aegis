@@ -36,3 +36,8 @@ Always restore the output before returning the hardware to normal UPS use.
 
 This is a diagnostic/bench control, not a production UPS mode and not a
 replacement for source-limited backup takeover.
+
+Normal main firmware otherwise preserves its configured `both` request even
+when only one channel is healthy. A single-channel or `none` request is valid
+only through an explicit diagnostic/test profile or control such as this one;
+the boot self-check must never infer that downgrade from the healthy subset.

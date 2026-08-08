@@ -68,6 +68,8 @@
   - 输出电压：`5V / 12V / 15V / 19V`
   - 每路限流：`1.5A / 3.5A`
   - charger：`off / min / 1A`
+- 单通道 profile 是显式诊断/测试构建能力，不得被正常主固件用作自动降级依据；正常主固件仍
+  要求 OUT-A 与 OUT-B 同时满足输出契约。
 - `tps-test-charge-min` 必须使用 `BQ25792` 合法最小档位：`ICHG=50mA`、`IINDPM=100mA`
 - 测试固件必须在 `BMS/BQ40` 缺失时仍能独立运行。
 - 屏幕必须稳定点亮，并持续刷新 charger / OUT-A / OUT-B 三块 live status。

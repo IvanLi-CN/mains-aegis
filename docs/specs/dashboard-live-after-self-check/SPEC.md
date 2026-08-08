@@ -14,6 +14,8 @@
 
 - 开机阶段继续显示 `Variant C` 自检页，并按既有阶段回调逐步更新状态。
 - 自检完成且运行态首份快照准备好后，自动切换到 `Variant B` Dashboard。
+- 正常主固件只有在 `requested_outputs=both` 中两路都进入 `active_outputs` 后才算自检完成；
+  缺任一路时保持或退回自检/阻断页并发布 `mode=blocked`。
 - Dashboard 所有指标改为真实数据源：
   - `PIN W`：`VIN / INA3221 CH3`
   - `POUT / VOUT / IOUT / TPS OUT`：`INA3221 + TPS55288`
@@ -62,11 +64,13 @@
 ## 验收标准（Acceptance Criteria）
 
 - Given 屏幕链路可用，When 开机进入主固件，Then 首屏仍为 `SELF CHECK`。
-- Given 自检结束且 `PowerManager` 已产出运行态快照，When UI 进入 steady state，Then 自动切换到 `UPS DASHBOARD`，且运行中不再回切自检页。
+- Given 自检结束且 `PowerManager` 已产出运行态快照，When UI 进入 steady state 且输出契约完整，Then 自动切换到 `UPS DASHBOARD`；若契约随后失效则回到自检/阻断页。
 - Given Dashboard 某个真实字段缺失，When 渲染对应区域，Then 显示 `N/A`，meter 归零，且不显示任何演示波动数值。
 - Given 运行态 `VIN` 遥测存在，When Dashboard 显示 `PIN W`，Then 读数来自 `INA3221 CH3` 的 `vin_vbus_mv * vin_iin_ma`。
 - Given `vin_iin_ma<=0` 但 `VIN` 仍在线，When Dashboard 计算 `PIN W`，Then 显示 `0.0W`，不再把逆流/空载样本转成正功率。
 - Given `VIN` 遥测缺失，When Dashboard 渲染 `PIN W`，Then 显示 `N/A`。
+- Given 正常主固件请求 `both` 且仅一路输出 active，When 前面板评估 Dashboard eligibility，Then
+  结果为不可进入，并在自检页标出缺失通道。
 - Given charger `input_present` 不在线但 `VIN>=3V`，When Dashboard 进入 live 渲染，Then `PIN W` 区块仍显示，且 live Dashboard 仍按“有市电”分支渲染。
 - Given `tools/front-panel-preview` 运行真实 Dashboard 场景，When 导出 PNG，Then `preview.png` 分辨率为 `320x172`。
 
