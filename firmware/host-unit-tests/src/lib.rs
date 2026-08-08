@@ -14,7 +14,7 @@ compile_error!(
     "PPS requires at least one enabled fixed PDO; clear at least one no-pd-sink-* feature"
 );
 
-extern crate self as esp_firmware;
+extern crate self as mains_aegis_firmware;
 
 #[no_mangle]
 pub extern "Rust" fn _defmt_acquire() {}

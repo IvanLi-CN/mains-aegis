@@ -80,7 +80,7 @@
 ## 验收标准（Acceptance Criteria）
 
 - 构建通过：
-  - `cargo build --release --bin esp-firmware`
+  - `cargo build --release --bin mains-aegis-firmware`
   - `cargo build --release --bin test-fw --features test-fw-audio-playback`
 - 主固件上电后只请求一次 `boot_startup`，允许在自检期间开始播放且不阻塞自检，不再出现 6 段 demo playlist 的阻塞播放与对应日志序列。
 - 主循环期间 power/front-panel tick 节奏保持可用，音频服务每轮并入调度而不独占流程。
@@ -120,14 +120,14 @@
 - 已通过：
   - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml audio`
   - `cargo build --manifest-path tools/front-panel-preview/Cargo.toml`
-  - `cd firmware && cargo +esp build --release --bin esp-firmware`
+  - `cd firmware && cargo +esp build --release --bin mains-aegis-firmware`
   - `cd firmware && cargo +esp build --release --bin test-fw --no-default-features --features test-fw-audio-playback`
 - 本轮交互操作音接入需通过：
   - `python3 tools/audio/gen_interaction_feedback_previews.py`
   - `python3 -m py_compile tools/audio/gen_interaction_feedback_previews.py`
   - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml audio`
   - `cargo test --manifest-path firmware/host-unit-tests/Cargo.toml front_panel`
-  - `cd firmware && cargo +esp build --release --bin esp-firmware`
+  - `cd firmware && cargo +esp build --release --bin mains-aegis-firmware`
   - devd-backed flash 到 `/dev/cu.usbmodem212201` 并 monitor 至少 120 秒
 
 ## 风险 / 假设

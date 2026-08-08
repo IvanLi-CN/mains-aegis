@@ -72,17 +72,17 @@ jobs:
         if: steps.changes.outputs.firmware == 'true'
         run: |
           cd firmware
-          cargo build --release --bin esp-firmware --features net_http,web_serial
+          cargo build --release --bin mains-aegis-firmware --features net_http,web_serial
           cd ..
           python3 -m esptool --chip esp32s3 elf2image \
             --flash-mode dio \
             --flash-freq 80m \
             --flash-size 4MB \
-            --output firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware.bin \
-            firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware
+            --output firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware.bin \
+            firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware
           python3 tools/firmware-artifact/build-catalog-entry.py \
-            --elf firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware \
-            --image 0x10000:firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware.bin \
+            --elf firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware \
+            --image 0x10000:firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware.bin \
             --out firmware/target/mains-aegis-artifacts \
             --features net_http,web_serial \
             --profile release

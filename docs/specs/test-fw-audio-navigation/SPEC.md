@@ -21,7 +21,7 @@
 
 ### Non-goals
 
-- 不修改主业务固件 (`esp-firmware`) 的电源管理、自检与运行语义。
+- 不修改主业务固件 (`mains-aegis-firmware`) 的电源管理、自检与运行语义。
 - 不引入完整音效资源管理平台（在线音源、混音器、配置持久化）。
 - 不改硬件引脚和板级电路设计。
 
@@ -85,7 +85,7 @@
   - 多功能有默认：上电进入默认测试页；返回后进入导航页。
   - 音频优先级满足抢占规则与同级 FIFO 顺序。
 - 回归保护：
-  - `cargo build --release --bin esp-firmware` 通过。
+  - `cargo build --release --bin mains-aegis-firmware` 通过。
 
 
 ## 验证记录
@@ -96,7 +96,7 @@
   - `cargo build --release --bin test-fw --features "test-fw-screen-static test-fw-audio-playback"`
   - `cargo build --release --bin test-fw --features "test-fw-screen-static test-fw-audio-playback test-fw-default-screen-static"`
   - `cargo build --release --bin test-fw --features "test-fw-screen-static test-fw-audio-playback test-fw-default-audio-playback"`
-  - `cargo build --release --bin esp-firmware`
+  - `cargo build --release --bin mains-aegis-firmware`
 - 负例构建按预期失败：
   - `cargo build --release --bin test-fw`
   - `cargo build --release --bin test-fw --features "test-fw-screen-static test-fw-audio-playback test-fw-default-screen-static test-fw-default-audio-playback"`

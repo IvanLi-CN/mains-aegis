@@ -100,7 +100,7 @@
 | 接口（Name） | 类型（Kind） | 范围（Scope） | 变更（Change） | 契约文档（Contract Doc） | 负责人（Owner） | 使用方（Consumers） | 备注（Notes） |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `no-pd-sink-*` / `no-pps` Cargo features | build config | internal | New | None | firmware | firmware build matrix | 默认全开、按 blacklist 裁剪 capability |
-| `esp_firmware::usb_pd` | Rust module | internal | New | None | firmware | main firmware | sink policy + FUSB302 driver |
+| `mains_aegis_firmware::usb_pd` | Rust module | internal | New | None | firmware | main firmware | sink policy + FUSB302 driver |
 | `PowerManager::usb_pd_demand/update_usb_pd_state` | Rust API | internal | New | None | firmware | main loop | PD 与 charger runtime 桥接 |
 | `FrontPanel<I2C>` | Rust type | internal | Modify | None | firmware | main/test-fw/tps-test-fw | I2C2 共享总线 |
 

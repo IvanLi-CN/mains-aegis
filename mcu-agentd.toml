@@ -9,7 +9,7 @@ id = "esp"
 [mcu.esp]
 backend = "espflash"
 chip = "esp32s3"
-artifact_elf = "firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware"
+artifact_elf = "firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware"
 selector_cache_file = "firmware/.esp32-port"
 
 [mcu.esp.espflash]

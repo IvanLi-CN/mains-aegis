@@ -1,7 +1,7 @@
-use esp_firmware::net_types::{
+use mains_aegis_firmware::net_types::{
     ChargeControlSnapshot, NetworkUiSummary, UpsStatusSnapshot, WifiSnapshot,
 };
-use esp_firmware::output_state::{EnabledOutputs, OutputSelector};
+use mains_aegis_firmware::output_state::{EnabledOutputs, OutputSelector};
 
 use crate::front_panel_scene::SelfCheckUiSnapshot;
 use crate::front_panel_scene::{BmsResultKind, DashboardInputSource, SelfCheckCommState, UpsMode};
@@ -9,7 +9,7 @@ use crate::front_panel_scene::{BmsResultKind, DashboardInputSource, SelfCheckCom
 pub fn current_network_summary() -> NetworkUiSummary {
     #[cfg(feature = "net_http")]
     {
-        return esp_firmware::net::current_network_ui_summary();
+        return mains_aegis_firmware::net::current_network_ui_summary();
     }
 
     #[cfg(not(feature = "net_http"))]
@@ -18,22 +18,23 @@ pub fn current_network_summary() -> NetworkUiSummary {
     }
 }
 
-fn current_front_panel_runtime_summary() -> esp_firmware::net_types::FrontPanelRuntimeSnapshot {
+fn current_front_panel_runtime_summary(
+) -> mains_aegis_firmware::net_types::FrontPanelRuntimeSnapshot {
     #[cfg(feature = "net_http")]
     {
-        return esp_firmware::net::current_front_panel_runtime();
+        return mains_aegis_firmware::net::current_front_panel_runtime();
     }
 
     #[cfg(not(feature = "net_http"))]
     {
-        esp_firmware::net_types::FrontPanelRuntimeSnapshot::unavailable()
+        mains_aegis_firmware::net_types::FrontPanelRuntimeSnapshot::unavailable()
     }
 }
 
 pub fn current_wifi_snapshot() -> WifiSnapshot {
     #[cfg(feature = "net_http")]
     {
-        return esp_firmware::net::current_wifi_snapshot();
+        return mains_aegis_firmware::net::current_wifi_snapshot();
     }
 
     #[cfg(not(feature = "net_http"))]
@@ -45,7 +46,7 @@ pub fn current_wifi_snapshot() -> WifiSnapshot {
 pub fn publish_status_snapshot(snapshot: SelfCheckUiSnapshot) {
     #[cfg(feature = "net_http")]
     {
-        esp_firmware::net::publish_ups_status(build_status_snapshot(snapshot));
+        mains_aegis_firmware::net::publish_ups_status(build_status_snapshot(snapshot));
     }
 
     #[cfg(not(feature = "net_http"))]
@@ -298,7 +299,7 @@ mod tests {
     use crate::front_panel_scene::{
         DashboardDetailSnapshot, SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
     };
-    use esp_firmware::output_state::{EnabledOutputs, OutputSelector};
+    use mains_aegis_firmware::output_state::{EnabledOutputs, OutputSelector};
 
     #[test]
     fn outputs_slug_uses_frozen_dual_output_contract_value() {

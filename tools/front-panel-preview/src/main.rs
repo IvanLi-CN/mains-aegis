@@ -8,7 +8,7 @@ use std::{
 
 use image::{Rgb, RgbImage};
 
-extern crate self as esp_firmware;
+extern crate self as mains_aegis_firmware;
 
 #[path = "../../../firmware/src/output_state.rs"]
 pub mod output_state;
@@ -968,12 +968,12 @@ fn bq40_snapshot_for_scenario(
             snapshot.bq40z50_discharge_ready = Some(true);
             snapshot.bq40z50_no_battery = Some(false);
             snapshot.bq25792_vbat_present = Some(true);
-            snapshot.requested_outputs = esp_firmware::output_state::EnabledOutputs::Both;
-            snapshot.active_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutB,
+            snapshot.requested_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Both;
+            snapshot.active_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutB,
             );
-            snapshot.recoverable_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutB,
+            snapshot.recoverable_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutB,
             );
             snapshot.tps_a = SelfCheckCommState::Err;
             snapshot.tps_a_enabled = Some(false);
@@ -1003,14 +1003,15 @@ fn bq40_snapshot_for_scenario(
             snapshot.tps_b_enabled = Some(false);
             snapshot.out_b_vbus_mv = None;
             snapshot.tps_b_iout_ma = None;
-            snapshot.requested_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutA,
+            snapshot.requested_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutA,
             );
-            snapshot.active_outputs = esp_firmware::output_state::EnabledOutputs::None;
-            snapshot.recoverable_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutA,
+            snapshot.active_outputs = mains_aegis_firmware::output_state::EnabledOutputs::None;
+            snapshot.recoverable_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutA,
             );
-            snapshot.output_gate_reason = esp_firmware::output_state::OutputGateReason::BmsNotReady;
+            snapshot.output_gate_reason =
+                mains_aegis_firmware::output_state::OutputGateReason::BmsNotReady;
             SelfCheckOverlay::None
         }
         ScenarioArg::Bq40Offline => SelfCheckOverlay::None,
@@ -1026,14 +1027,15 @@ fn bq40_snapshot_for_scenario(
             snapshot.bq40z50_discharge_ready = Some(false);
             snapshot.bq40z50_issue_detail = Some("xdsg_blocked");
             snapshot.bq40z50_recovery_action = Some(BmsRecoveryUiAction::DischargeAuthorization);
-            snapshot.requested_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutA,
+            snapshot.requested_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutA,
             );
-            snapshot.active_outputs = esp_firmware::output_state::EnabledOutputs::None;
-            snapshot.recoverable_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutA,
+            snapshot.active_outputs = mains_aegis_firmware::output_state::EnabledOutputs::None;
+            snapshot.recoverable_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutA,
             );
-            snapshot.output_gate_reason = esp_firmware::output_state::OutputGateReason::BmsNotReady;
+            snapshot.output_gate_reason =
+                mains_aegis_firmware::output_state::OutputGateReason::BmsNotReady;
             snapshot.bq25792_allow_charge = Some(true);
             snapshot.bq25792_vbat_present = Some(true);
             snapshot.tps_a = SelfCheckCommState::Warn;
@@ -1053,10 +1055,11 @@ fn bq40_snapshot_for_scenario(
             snapshot.bq40z50_discharge_ready = Some(false);
             snapshot.bq40z50_issue_detail = Some("emshut_active");
             snapshot.bq40z50_recovery_action = Some(BmsRecoveryUiAction::DischargeAuthorization);
-            snapshot.requested_outputs = esp_firmware::output_state::EnabledOutputs::Both;
-            snapshot.active_outputs = esp_firmware::output_state::EnabledOutputs::None;
-            snapshot.recoverable_outputs = esp_firmware::output_state::EnabledOutputs::Both;
-            snapshot.output_gate_reason = esp_firmware::output_state::OutputGateReason::BmsNotReady;
+            snapshot.requested_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Both;
+            snapshot.active_outputs = mains_aegis_firmware::output_state::EnabledOutputs::None;
+            snapshot.recoverable_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Both;
+            snapshot.output_gate_reason =
+                mains_aegis_firmware::output_state::OutputGateReason::BmsNotReady;
             snapshot.bq25792_allow_charge = Some(true);
             snapshot.bq25792_vbat_present = Some(false);
             snapshot.tps_a = SelfCheckCommState::Warn;
@@ -1087,14 +1090,15 @@ fn bq40_snapshot_for_scenario(
             blocked.bq40z50_discharge_ready = Some(false);
             blocked.bq40z50_issue_detail = Some("xdsg_blocked");
             blocked.bq40z50_recovery_action = Some(BmsRecoveryUiAction::DischargeAuthorization);
-            blocked.requested_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutA,
+            blocked.requested_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutA,
             );
-            blocked.active_outputs = esp_firmware::output_state::EnabledOutputs::None;
-            blocked.recoverable_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutA,
+            blocked.active_outputs = mains_aegis_firmware::output_state::EnabledOutputs::None;
+            blocked.recoverable_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutA,
             );
-            blocked.output_gate_reason = esp_firmware::output_state::OutputGateReason::BmsNotReady;
+            blocked.output_gate_reason =
+                mains_aegis_firmware::output_state::OutputGateReason::BmsNotReady;
             blocked.bq25792_allow_charge = Some(true);
             blocked.bq25792_vbat_present = Some(true);
             blocked.tps_a = SelfCheckCommState::Warn;
@@ -1117,14 +1121,15 @@ fn bq40_snapshot_for_scenario(
             snapshot.bq40z50_issue_detail = Some("xdsg_blocked");
             snapshot.bq40z50_recovery_action = Some(BmsRecoveryUiAction::DischargeAuthorization);
             snapshot.bq40z50_recovery_pending = true;
-            snapshot.requested_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutA,
+            snapshot.requested_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutA,
             );
-            snapshot.active_outputs = esp_firmware::output_state::EnabledOutputs::None;
-            snapshot.recoverable_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutA,
+            snapshot.active_outputs = mains_aegis_firmware::output_state::EnabledOutputs::None;
+            snapshot.recoverable_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutA,
             );
-            snapshot.output_gate_reason = esp_firmware::output_state::OutputGateReason::BmsNotReady;
+            snapshot.output_gate_reason =
+                mains_aegis_firmware::output_state::OutputGateReason::BmsNotReady;
             snapshot.tps_a = SelfCheckCommState::Warn;
             snapshot.tps_a_enabled = Some(false);
             snapshot.out_a_vbus_mv = None;
@@ -1140,14 +1145,15 @@ fn bq40_snapshot_for_scenario(
             snapshot.bq40z50_issue_detail = None;
             snapshot.bq40z50_recovery_action = None;
             snapshot.bq25792_vbat_present = Some(true);
-            snapshot.requested_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutA,
+            snapshot.requested_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutA,
             );
-            snapshot.active_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutA,
+            snapshot.active_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutA,
             );
             snapshot.recoverable_outputs = snapshot.active_outputs;
-            snapshot.output_gate_reason = esp_firmware::output_state::OutputGateReason::None;
+            snapshot.output_gate_reason =
+                mains_aegis_firmware::output_state::OutputGateReason::None;
             snapshot.bq40z50_last_result = Some(BmsResultKind::Success);
             SelfCheckOverlay::None
         }
@@ -1201,14 +1207,15 @@ fn bq40_snapshot_for_scenario(
             snapshot.bq40z50_discharge_ready = Some(false);
             snapshot.bq40z50_issue_detail = Some("xdsg_blocked");
             snapshot.bq40z50_recovery_action = None;
-            snapshot.requested_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutA,
+            snapshot.requested_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutA,
             );
-            snapshot.active_outputs = esp_firmware::output_state::EnabledOutputs::None;
-            snapshot.recoverable_outputs = esp_firmware::output_state::EnabledOutputs::Only(
-                esp_firmware::output_state::OutputSelector::OutA,
+            snapshot.active_outputs = mains_aegis_firmware::output_state::EnabledOutputs::None;
+            snapshot.recoverable_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Only(
+                mains_aegis_firmware::output_state::OutputSelector::OutA,
             );
-            snapshot.output_gate_reason = esp_firmware::output_state::OutputGateReason::BmsNotReady;
+            snapshot.output_gate_reason =
+                mains_aegis_firmware::output_state::OutputGateReason::BmsNotReady;
             snapshot.tps_a = SelfCheckCommState::Warn;
             snapshot.tps_a_enabled = Some(false);
             snapshot.out_a_vbus_mv = None;

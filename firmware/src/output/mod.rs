@@ -13,11 +13,15 @@ use crate::front_panel_scene::{
 };
 use crate::irq::IrqSnapshot;
 use crate::net_bridge;
-use esp_firmware::bq25792;
-use esp_firmware::bq40z50;
-use esp_firmware::fan;
-use esp_firmware::ina3221;
-use esp_firmware::net_types::{
+use esp_hal::gpio::{Flex, Input};
+use esp_hal::ram;
+use esp_hal::time::{Duration, Instant};
+use heapless::String;
+use mains_aegis_firmware::bq25792;
+use mains_aegis_firmware::bq40z50;
+use mains_aegis_firmware::fan;
+use mains_aegis_firmware::ina3221;
+use mains_aegis_firmware::net_types::{
     validate_advanced_power_settings, AdvancedPowerSettingsSnapshot, AdvancedPowerValidationError,
     ChargeControlBlockSnapshot, ChargeControlDetailSnapshot, ChargeControlEvidenceEntrySnapshot,
     ChargeControlEvidenceValueSnapshot, ChargeControlLoopOverrideSnapshot,
@@ -26,19 +30,15 @@ use esp_firmware::net_types::{
     DerivedPowerPolicySnapshot, DerivedPowerSnapshot, RuntimeModePolicySnapshot,
     CHARGE_CONTROL_EVIDENCE_CAP,
 };
-use esp_firmware::output_protection;
-use esp_firmware::output_retry::{self, TpsConfigRetryDecision};
-use esp_firmware::output_state as output_state_logic;
-use esp_firmware::tmp112;
-use esp_firmware::usb_pd;
-use esp_hal::gpio::{Flex, Input};
-use esp_hal::ram;
-use esp_hal::time::{Duration, Instant};
-use heapless::String;
+use mains_aegis_firmware::output_protection;
+use mains_aegis_firmware::output_retry::{self, TpsConfigRetryDecision};
+use mains_aegis_firmware::output_state as output_state_logic;
+use mains_aegis_firmware::tmp112;
+use mains_aegis_firmware::usb_pd;
 
 pub use self::channel::OutputChannel;
 pub use self::pure::{AppliedFanState, EnabledOutputs};
-pub use esp_firmware::output_state::OutputGateReason;
+pub use mains_aegis_firmware::output_state::OutputGateReason;
 
 use self::pure::*;
 
@@ -883,42 +883,66 @@ const fn beeper_target_decode(raw: u8) -> Option<BeeperSettingTarget> {
 }
 
 const fn web_serial_manual_charge_target(
-    target: esp_firmware::usb_cdc_protocol::ManualChargeTarget,
+    target: mains_aegis_firmware::usb_cdc_protocol::ManualChargeTarget,
 ) -> ManualChargeTarget {
     match target {
-        esp_firmware::usb_cdc_protocol::ManualChargeTarget::Pack3V7 => ManualChargeTarget::Pack3V7,
-        esp_firmware::usb_cdc_protocol::ManualChargeTarget::Rsoc80 => ManualChargeTarget::Rsoc80,
-        esp_firmware::usb_cdc_protocol::ManualChargeTarget::Full100 => ManualChargeTarget::Full100,
+        mains_aegis_firmware::usb_cdc_protocol::ManualChargeTarget::Pack3V7 => {
+            ManualChargeTarget::Pack3V7
+        }
+        mains_aegis_firmware::usb_cdc_protocol::ManualChargeTarget::Rsoc80 => {
+            ManualChargeTarget::Rsoc80
+        }
+        mains_aegis_firmware::usb_cdc_protocol::ManualChargeTarget::Full100 => {
+            ManualChargeTarget::Full100
+        }
     }
 }
 
 const fn web_serial_manual_charge_speed(
-    speed: esp_firmware::usb_cdc_protocol::ManualChargeSpeed,
+    speed: mains_aegis_firmware::usb_cdc_protocol::ManualChargeSpeed,
 ) -> ManualChargeSpeed {
     match speed {
-        esp_firmware::usb_cdc_protocol::ManualChargeSpeed::Ma100 => ManualChargeSpeed::Ma100,
-        esp_firmware::usb_cdc_protocol::ManualChargeSpeed::Ma500 => ManualChargeSpeed::Ma500,
-        esp_firmware::usb_cdc_protocol::ManualChargeSpeed::Ma1000 => ManualChargeSpeed::Ma1000,
+        mains_aegis_firmware::usb_cdc_protocol::ManualChargeSpeed::Ma100 => {
+            ManualChargeSpeed::Ma100
+        }
+        mains_aegis_firmware::usb_cdc_protocol::ManualChargeSpeed::Ma500 => {
+            ManualChargeSpeed::Ma500
+        }
+        mains_aegis_firmware::usb_cdc_protocol::ManualChargeSpeed::Ma1000 => {
+            ManualChargeSpeed::Ma1000
+        }
     }
 }
 
 const fn web_serial_manual_charge_timer(
-    timer: esp_firmware::usb_cdc_protocol::ManualChargeTimerLimit,
+    timer: mains_aegis_firmware::usb_cdc_protocol::ManualChargeTimerLimit,
 ) -> ManualChargeTimerLimit {
     match timer {
-        esp_firmware::usb_cdc_protocol::ManualChargeTimerLimit::H1 => ManualChargeTimerLimit::H1,
-        esp_firmware::usb_cdc_protocol::ManualChargeTimerLimit::H2 => ManualChargeTimerLimit::H2,
-        esp_firmware::usb_cdc_protocol::ManualChargeTimerLimit::H6 => ManualChargeTimerLimit::H6,
+        mains_aegis_firmware::usb_cdc_protocol::ManualChargeTimerLimit::H1 => {
+            ManualChargeTimerLimit::H1
+        }
+        mains_aegis_firmware::usb_cdc_protocol::ManualChargeTimerLimit::H2 => {
+            ManualChargeTimerLimit::H2
+        }
+        mains_aegis_firmware::usb_cdc_protocol::ManualChargeTimerLimit::H6 => {
+            ManualChargeTimerLimit::H6
+        }
     }
 }
 
 const fn web_serial_manual_charge_power_path(
-    power_path: esp_firmware::usb_cdc_protocol::ManualChargePowerPath,
+    power_path: mains_aegis_firmware::usb_cdc_protocol::ManualChargePowerPath,
 ) -> ManualChargePowerPath {
     match power_path {
-        esp_firmware::usb_cdc_protocol::ManualChargePowerPath::Auto => ManualChargePowerPath::Auto,
-        esp_firmware::usb_cdc_protocol::ManualChargePowerPath::DcIn => ManualChargePowerPath::DcIn,
-        esp_firmware::usb_cdc_protocol::ManualChargePowerPath::UsbC => ManualChargePowerPath::UsbC,
+        mains_aegis_firmware::usb_cdc_protocol::ManualChargePowerPath::Auto => {
+            ManualChargePowerPath::Auto
+        }
+        mains_aegis_firmware::usb_cdc_protocol::ManualChargePowerPath::DcIn => {
+            ManualChargePowerPath::DcIn
+        }
+        mains_aegis_firmware::usb_cdc_protocol::ManualChargePowerPath::UsbC => {
+            ManualChargePowerPath::UsbC
+        }
     }
 }
 
@@ -1094,7 +1118,7 @@ where
 
 fn write_wifi_config_record<I2C>(
     i2c: &mut I2C,
-    record: [u8; esp_firmware::usb_cdc_protocol::WIFI_CONFIG_RECORD_LEN],
+    record: [u8; mains_aegis_firmware::usb_cdc_protocol::WIFI_CONFIG_RECORD_LEN],
 ) -> Result<(), esp_hal::i2c::master::Error>
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
@@ -1115,23 +1139,27 @@ where
 fn read_wifi_config_record<I2C>(
     i2c: &mut I2C,
 ) -> Result<
-    Option<esp_firmware::usb_cdc_protocol::WifiConfigSecret>,
-    esp_firmware::usb_cdc_protocol::WifiConfigStorageError,
+    Option<mains_aegis_firmware::usb_cdc_protocol::WifiConfigSecret>,
+    mains_aegis_firmware::usb_cdc_protocol::WifiConfigStorageError,
 >
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let mut record = [0u8; esp_firmware::usb_cdc_protocol::WIFI_CONFIG_RECORD_LEN];
-    for idx in 0..(esp_firmware::usb_cdc_protocol::WIFI_CONFIG_RECORD_LEN / EEPROM_BLOCK_LEN) {
+    let mut record = [0u8; mains_aegis_firmware::usb_cdc_protocol::WIFI_CONFIG_RECORD_LEN];
+    for idx in
+        0..(mains_aegis_firmware::usb_cdc_protocol::WIFI_CONFIG_RECORD_LEN / EEPROM_BLOCK_LEN)
+    {
         let block = read_eeprom_block(
             i2c,
             EEPROM_WIFI_CONFIG_OFFSET + (idx as u16 * EEPROM_BLOCK_LEN as u16),
         )
-        .map_err(|_| esp_firmware::usb_cdc_protocol::WifiConfigStorageError::InvalidSecret)?;
+        .map_err(|_| {
+            mains_aegis_firmware::usb_cdc_protocol::WifiConfigStorageError::InvalidSecret
+        })?;
         let start = idx * EEPROM_BLOCK_LEN;
         record[start..start + EEPROM_BLOCK_LEN].copy_from_slice(&block);
     }
-    esp_firmware::usb_cdc_protocol::decode_wifi_config_record(&record)
+    mains_aegis_firmware::usb_cdc_protocol::decode_wifi_config_record(&record)
 }
 
 fn load_manual_charge_prefs_from_eeprom<I2C>(
@@ -6746,7 +6774,7 @@ where
 
     pub fn advanced_power_capabilities_snapshot(
         &self,
-    ) -> esp_firmware::net_types::AdvancedPowerCapabilitiesSnapshot {
+    ) -> mains_aegis_firmware::net_types::AdvancedPowerCapabilitiesSnapshot {
         AdvancedPowerSettingsSnapshot::capabilities_for_rated_vout(self.cfg.vout_mv)
     }
 
@@ -7346,7 +7374,7 @@ where
                 } else {
                     "none"
                 },
-                planned_path: esp_firmware::net_types::ChargeControlPlannedPathSnapshot {
+                planned_path: mains_aegis_firmware::net_types::ChargeControlPlannedPathSnapshot {
                     requested: manual_charge_power_path_name(evaluation.requested_power_path),
                     bound: manual_charge_bound_path_name(evaluation.bound_power_path),
                     binding_reason: evaluation
@@ -7406,7 +7434,7 @@ where
 
     pub fn preview_manual_charge_control_detail_snapshot(
         &self,
-        prefs: esp_firmware::usb_cdc_protocol::ManualChargePrefsCommand,
+        prefs: mains_aegis_firmware::usb_cdc_protocol::ManualChargePrefsCommand,
     ) -> ChargeControlDetailSnapshot {
         if self.manual_charge_runtime.active {
             return self.current_manual_charge_control_detail_snapshot();
@@ -7431,13 +7459,13 @@ where
 
     pub fn control_manual_charge(
         &mut self,
-        command: esp_firmware::usb_cdc_protocol::ManualChargeControlCommand,
+        command: mains_aegis_firmware::usb_cdc_protocol::ManualChargeControlCommand,
     ) -> Result<ChargeControlSnapshot, ManualChargeControlError> {
         match command.action {
-            esp_firmware::usb_cdc_protocol::ManualChargeControlAction::Start => {
+            mains_aegis_firmware::usb_cdc_protocol::ManualChargeControlAction::Start => {
                 self.start_manual_charge_session(command.confirm_loop)
             }
-            esp_firmware::usb_cdc_protocol::ManualChargeControlAction::Stop => {
+            mains_aegis_firmware::usb_cdc_protocol::ManualChargeControlAction::Stop => {
                 let now = Instant::now();
                 self.bms_activation_force_charge_requested = false;
                 self.bms_activation_auto_force_charge_until = None;
@@ -7582,7 +7610,7 @@ where
 
     pub fn set_web_serial_manual_charge_prefs(
         &mut self,
-        prefs: esp_firmware::usb_cdc_protocol::ManualChargePrefsCommand,
+        prefs: mains_aegis_firmware::usb_cdc_protocol::ManualChargePrefsCommand,
     ) {
         self.request_manual_charge_action(ManualChargeUiAction::SetTarget(
             web_serial_manual_charge_target(prefs.target),
@@ -7616,9 +7644,9 @@ where
 
     pub fn write_web_serial_wifi_config(
         &mut self,
-        config: Option<&esp_firmware::usb_cdc_protocol::WifiConfigSecret>,
+        config: Option<&mains_aegis_firmware::usb_cdc_protocol::WifiConfigSecret>,
     ) -> Result<(), esp_hal::i2c::master::Error> {
-        let record = esp_firmware::usb_cdc_protocol::encode_wifi_config_record(config);
+        let record = mains_aegis_firmware::usb_cdc_protocol::encode_wifi_config_record(config);
         write_wifi_config_record(&mut self.i2c, record)
     }
 
@@ -7626,8 +7654,8 @@ where
     pub fn read_web_serial_wifi_config(
         &mut self,
     ) -> Result<
-        Option<esp_firmware::usb_cdc_protocol::WifiConfigSecret>,
-        esp_firmware::usb_cdc_protocol::WifiConfigStorageError,
+        Option<mains_aegis_firmware::usb_cdc_protocol::WifiConfigSecret>,
+        mains_aegis_firmware::usb_cdc_protocol::WifiConfigStorageError,
     > {
         read_wifi_config_record(&mut self.i2c)
     }

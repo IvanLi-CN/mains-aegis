@@ -29,6 +29,7 @@
 - `tools/mains-aegis-host`: native serial monitor 自动在 UPS BACKUP 进入/退出边沿触发 host profile 切换，并通过 USB CDC `set_host_power_profile` 同步当前 host profile 给固件 runtime overlay；LAN/mock transport 不参与该自动策略。
 - `schemas/firmware-catalog.schema.json`: v1 catalog schema。
 - `tools/firmware-artifact/build-catalog-entry.py`: local manifest/catalog generator。
+- 固件 catalog 生成器对外固定输出 `mains-aegis-firmware`、`mains-aegis-firmware.bin` 与 `mains-aegis-firmware.manifest.json`；19V 等显式变体使用语义后缀，详细构建身份继续保存在 manifest 中。
 - `web/src/api/*`: devd mode client contracts。
 - `firmware/src/net_contract.rs`: firmware identity/status/power diagnostic JSON contract。
 - `firmware/src/net_contract.rs`、`firmware/src/usb_cdc_protocol.rs` 与 `firmware/src/output/mod.rs`: status JSON 新增 `host.power_profile`，USB CDC 新增 `set_host_power_profile`，前面板 BACKUP status 页把 fresh profile 显示为 `SAVER/BAL/PERF`，否则显示 `POL --`。

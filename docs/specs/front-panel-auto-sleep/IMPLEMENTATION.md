@@ -11,9 +11,9 @@
 ## 验证
 
 - 已通过：`bash firmware/scripts/run-host-unit-tests.sh`
-- 已通过：`cargo +esp check --release --manifest-path Cargo.toml --bin esp-firmware`（在 `firmware/` 目录运行）
-- 已通过：`cargo +esp check --release --manifest-path firmware/Cargo.toml --bin esp-firmware --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
-- 已通过：`cargo +esp build --manifest-path firmware/Cargo.toml --bin esp-firmware --release --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc --features net_http,web_serial`
+- 已通过：`cargo +esp check --release --manifest-path Cargo.toml --bin mains-aegis-firmware`（在 `firmware/` 目录运行）
+- 已通过：`cargo +esp check --release --manifest-path firmware/Cargo.toml --bin mains-aegis-firmware --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
+- 已通过：`cargo +esp build --manifest-path firmware/Cargo.toml --bin mains-aegis-firmware --release --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc --features net_http,web_serial`
 - 已通过：`cargo test --manifest-path tools/mains-aegis-host/Cargo.toml --lib`
 - 已通过：烧录到 `/tmp/fixture-ups-usb-port` 后，硬件自检后的屏幕显示由主人确认恢复正常。
 

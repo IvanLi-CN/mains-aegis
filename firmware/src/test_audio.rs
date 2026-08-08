@@ -1,1 +1,1 @@
-pub use esp_firmware::audio::*;
+pub use mains_aegis_firmware::audio::*;

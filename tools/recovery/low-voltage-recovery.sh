@@ -301,7 +301,7 @@ poll_diag_snapshot() {
   validate_diag_snapshot "$diag_json" "$result_out"
 }
 
-main_elf="$REPO_ROOT/firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware"
+main_elf="$REPO_ROOT/firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware"
 main_artifact_dir="$report_root/main-artifact"
 
 if [[ "$mode" == "real" ]]; then

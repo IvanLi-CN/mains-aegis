@@ -58,7 +58,7 @@
 
 ## 接口变更（Interfaces）
 
-- `esp_firmware::fan`：风扇纯逻辑模块及构建期 PPR 解析。
+- `mains_aegis_firmware::fan`：风扇纯逻辑模块及构建期 PPR 解析。
 - `output::Config`：新增风扇策略配置。
 - `PowerManager::fan_command()`：新增只读接口，返回当前风扇输出命令。
 

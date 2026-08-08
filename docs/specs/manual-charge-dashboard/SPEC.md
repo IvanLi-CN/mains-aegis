@@ -233,8 +233,8 @@
 - `cargo fmt --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/tools/front-panel-preview/Cargo.toml --all`
 - `cargo test --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/firmware/host-unit-tests/Cargo.toml`
 - `cargo build --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/tools/front-panel-preview/Cargo.toml`
-- `cargo +esp check --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/firmware/Cargo.toml --bin esp-firmware --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
-- `cargo +esp build --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/firmware/Cargo.toml --bin esp-firmware --release --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
+- `cargo +esp check --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/firmware/Cargo.toml --bin mains-aegis-firmware --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
+- `cargo +esp build --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/firmware/Cargo.toml --bin mains-aegis-firmware --release --target xtensa-esp32s3-none-elf -Zbuild-std=core,alloc`
 - `tools/front-panel-preview/target/debug/front-panel-preview --variant B --focus idle --mode standby --scenario dashboard-manual-charge-default --out-dir /tmp/mains-aegis-manual-charge-final`
 - `tools/front-panel-preview/target/debug/front-panel-preview --variant B --focus idle --mode standby --scenario dashboard-manual-charge-active --out-dir /tmp/mains-aegis-manual-charge-final`
 - `cargo run --manifest-path /Users/ivan/Projects/Ivan/mains-aegis/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --mode standby --scenario dashboard-manual-charge-auto-charging --out-dir /tmp/mains-aegis-manual-charge-takeover-preview`

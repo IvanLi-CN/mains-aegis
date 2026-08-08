@@ -81,8 +81,8 @@ cd firmware
 cargo build
 cargo build --release
 # Main firmware voltage defaults to 12V; enable 19V explicitly when needed.
-cargo build --release --bin esp-firmware
-cargo build --release --bin esp-firmware --features main-vout-19v
+cargo build --release --bin mains-aegis-firmware
+cargo build --release --bin mains-aegis-firmware --features main-vout-19v
 # 开发阶段需要“最小电流强制充电唤醒”时，显式打开该特性
 cargo build --release --features force-min-charge
 # 仅在诊断阶段需要双地址探测时，显式打开该特性（默认只访问 0x0B）
@@ -92,7 +92,7 @@ cargo +esp check
 # 如需验证无网络最小构建，显式关闭默认特性
 cargo +esp check --no-default-features
 # TMP 硬件保护测试模式：关闭 MCU 主动散热与软件热降额/热关断，但保留 TMP/THERM_KILL_N 观测
-cargo build --release --bin esp-firmware --features tmp-hw-protect-test
+cargo build --release --bin mains-aegis-firmware --features tmp-hw-protect-test
 ```
 
 > 注意：本工程将 target / toolchain 配置隔离在 `firmware/` 内，不要求仓库根目录存在 Rust workspace。
@@ -188,7 +188,7 @@ bash scripts/run-host-unit-tests.sh
 
 ```bash
 cd firmware
-cargo build --release --bin esp-firmware
+cargo build --release --bin mains-aegis-firmware
 cd ..
 
 # (Human-only) Ensure the selected port is correct
@@ -661,8 +661,8 @@ just devd-http
 
 ```bash
 python3 tools/firmware-artifact/build-catalog-entry.py \
-  --elf firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware \
-  --image 0x10000:firmware/target/xtensa-esp32s3-none-elf/release/esp-firmware.bin \
+  --elf firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware \
+  --image 0x10000:firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware.bin \
   --out firmware/target/mains-aegis-artifacts \
   --features net_http,web_serial \
   --profile release
@@ -703,10 +703,10 @@ devd API 流程是 `scan -> bind -> connect -> identity -> artifact/select -> mo
 
 ```bash
 # 1 pulse per revolution
-cargo build --release --bin esp-firmware --features fan-tach-1-ppr
+cargo build --release --bin mains-aegis-firmware --features fan-tach-1-ppr
 
 # 2 pulses per revolution（与未指定 feature 的默认构建等价）
-cargo build --release --bin esp-firmware --features fan-tach-2-ppr
+cargo build --release --bin mains-aegis-firmware --features fan-tach-2-ppr
 ```
 
 ### 主动热保护（正常构建）
@@ -766,7 +766,7 @@ cargo build --release --bin esp-firmware --features fan-tach-2-ppr
    - 在运行态命令下应看到 `fan: tach_timeout ...`，并保持 `high`
    - 恢复 tach 脉冲后应看到 `fan: tach_recovered ...`
 4. TMP 硬件保护测试路径：
-   - 使用 `cargo build --release --bin esp-firmware --features tmp-hw-protect-test`
+   - 使用 `cargo build --release --bin mains-aegis-firmware --features tmp-hw-protect-test`
    - 烧录后确认风扇始终由 MCU 保持关闭
    - 让 TMP 硬件保护触发，确认日志出现 `power: therm_kill_n asserted ...`，遥测中出现 `therm_kill_n=0`，UI/音频同步出现对应告警
 

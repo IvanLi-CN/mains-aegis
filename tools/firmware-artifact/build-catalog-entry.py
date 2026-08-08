@@ -68,9 +68,39 @@ def firmware_source_hash(firmware_dir: Path) -> str:
     return f"{value:016x}"
 
 
-def stage_artifact_file(kind: str, value: str, out: Path, flash_address: int | None = None) -> dict[str, object]:
+def validate_output_stem(value: str) -> str:
+    if not value or value in {".", ".."} or Path(value).name != value:
+        raise SystemExit("--output-stem must be a non-empty file name stem")
+    return value
+
+
+def clean_managed_outputs(out: Path) -> None:
+    for path in out.iterdir():
+        if not path.is_file():
+            continue
+        if (
+            path.name in {"firmware-catalog.json", "SHA256SUMS", "esp-firmware", "esp-firmware.bin"}
+            or path.name.endswith(".manifest.json")
+            or path.name.startswith("mains-aegis-firmware")
+        ):
+            path.unlink()
+
+
+def require_external_inputs(out: Path, inputs: list[Path]) -> None:
+    for source in inputs:
+        if source == out or out in source.parents:
+            raise SystemExit(f"artifact input must be outside managed output directory: {source}")
+
+
+def stage_artifact_file(
+    kind: str,
+    value: str,
+    out: Path,
+    output_name: str | None = None,
+    flash_address: int | None = None,
+) -> dict[str, object]:
     source = Path(value).resolve()
-    dest = out / source.name
+    dest = out / (output_name or source.name)
     source_hash = sha256(source)
     if source != dest.resolve():
         shutil.copyfile(source, dest)
@@ -102,6 +132,7 @@ def main() -> int:
     parser.add_argument("--elf", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--name", default="mains-aegis")
+    parser.add_argument("--output-stem", default="mains-aegis-firmware")
     parser.add_argument("--version", default=None)
     parser.add_argument("--profile", default="release")
     parser.add_argument("--features", default="net_http,web_serial")
@@ -113,8 +144,19 @@ def main() -> int:
 
     elf = Path(args.elf).resolve()
     out = Path(args.out).resolve()
+    output_stem = validate_output_stem(args.output_stem)
     firmware_dir = Path(args.firmware_dir).resolve()
+    image_args = []
+    if args.bin:
+        image_args.append(args.bin)
+    image_args.extend(args.image)
+    input_paths = [elf]
+    input_paths.extend(Path(parse_image_arg(value)[1]).resolve() for value in image_args)
+    if args.defmt_metadata:
+        input_paths.append(Path(args.defmt_metadata).resolve())
     out.mkdir(parents=True, exist_ok=True)
+    require_external_inputs(out, input_paths)
+    clean_managed_outputs(out)
     git_sha = git_value(["rev-parse", "--short", "HEAD"], cwd=firmware_dir)
     dirty = "dirty" if git_value(
         ["status", "--porcelain", "--untracked-files=no", "--", "src", "Cargo.toml", "build.rs"],
@@ -127,16 +169,13 @@ def main() -> int:
     artifact_id = f"{args.name}-esp32s3-{args.profile}-{'-'.join(features) or 'default'}-{build_id}"
 
     files = []
-    files.append(stage_artifact_file("elf", str(elf), out))
-    image_args = []
-    if args.bin:
-        image_args.append(args.bin)
-    image_args.extend(args.image)
-    for image_arg in image_args:
+    files.append(stage_artifact_file("elf", str(elf), out, output_stem))
+    for index, image_arg in enumerate(image_args, start=1):
         flash_address, path = parse_image_arg(image_arg)
-        files.append(stage_artifact_file("image", path, out, flash_address))
+        image_name = f"{output_stem}.bin" if index == 1 else f"{output_stem}-{index}.bin"
+        files.append(stage_artifact_file("image", path, out, image_name, flash_address))
     if args.defmt_metadata:
-        files.append(stage_artifact_file("defmt_metadata", args.defmt_metadata, out))
+        files.append(stage_artifact_file("defmt_metadata", args.defmt_metadata, out, f"{output_stem}.defmt"))
 
     elf_hash = next((item["sha256"] for item in files if item["kind"] == "elf"), None)
     metadata_hash = next((item["sha256"] for item in files if item["kind"] == "defmt_metadata"), None)
@@ -166,7 +205,7 @@ def main() -> int:
         },
         "files": files,
     }
-    manifest_path = out / f"{artifact_id}.manifest.json"
+    manifest_path = out / f"{output_stem}.manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     catalog_path = out / "firmware-catalog.json"
     catalog_path.write_text(json.dumps({"schema_version": 1, "artifacts": [manifest]}, indent=2, sort_keys=True) + "\n")

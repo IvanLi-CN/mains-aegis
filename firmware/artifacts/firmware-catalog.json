@@ -1,13 +1,20 @@
 {
   "artifacts": [
     {
-      "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-ea9c41d7-dirty-bee758c94ea10ce9",
-      "build_id": "ea9c41d7-dirty-bee758c94ea10ce9",
+      "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-e2c699b9-dirty-1ed3abff3c3d78fc",
+      "build_id": "e2c699b9-dirty-1ed3abff3c3d78fc",
       "defmt": {
-        "elf_sha256": "a6c466c00eb165c0462d1f99b8cf9f4b857921f657663972baab90b2b024fc4d",
+        "elf_sha256": "17e05e8231026a64be59459e799dd9fa769e4370ee9b3f0659bb786036e9b358",
         "enabled": true,
         "encoding": "defmt-espflash",
         "metadata_sha256": null
+      },
+      "fault_recovery": {
+        "boot_health": true,
+        "layout": "single_image_0x10000",
+        "mcu_watchdog": true,
+        "rollback_blocker": "missing_rollback_bootloader_otadata_ota_slots",
+        "rollback_capable": false
       },
       "features": [
         "net_http",
@@ -16,20 +23,20 @@
       "files": [
         {
           "kind": "elf",
-          "path": "esp-firmware",
-          "sha256": "a6c466c00eb165c0462d1f99b8cf9f4b857921f657663972baab90b2b024fc4d",
-          "size": 4828988
+          "path": "mains-aegis-firmware",
+          "sha256": "17e05e8231026a64be59459e799dd9fa769e4370ee9b3f0659bb786036e9b358",
+          "size": 5200232
         },
         {
           "flash_address": 65536,
           "kind": "image",
-          "path": "esp-firmware.bin",
-          "sha256": "e30866fb0dddd1b06506988c2281b861fff99ffd52337bd9cc6d0b185414ff5d",
-          "size": 2812608
+          "path": "mains-aegis-firmware.bin",
+          "sha256": "6a94fbd6770447c6f83464aab957220ffca34e46590bd7233f5c4c54d1aa1b15",
+          "size": 3016192
         }
       ],
       "git_dirty": "dirty",
-      "git_sha": "ea9c41d7",
+      "git_sha": "e2c699b9",
       "name": "mains-aegis",
       "profile": "release",
       "protocol": "mains-aegis.cdc.v1",
