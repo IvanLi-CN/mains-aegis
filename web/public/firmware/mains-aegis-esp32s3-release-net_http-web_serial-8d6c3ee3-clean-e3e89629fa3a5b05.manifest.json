@@ -1,0 +1,43 @@
+{
+  "artifact_id": "mains-aegis-esp32s3-release-net_http-web_serial-8d6c3ee3-clean-e3e89629fa3a5b05",
+  "build_id": "8d6c3ee3-clean-e3e89629fa3a5b05",
+  "defmt": {
+    "elf_sha256": "7f5e32a42c17f99d7c28fff6e297c16666f9dc4dbd039bca0b60af822023b2de",
+    "enabled": true,
+    "encoding": "defmt-espflash",
+    "metadata_sha256": null
+  },
+  "fault_recovery": {
+    "boot_health": true,
+    "layout": "single_image_0x10000",
+    "mcu_watchdog": true,
+    "rollback_blocker": "missing_rollback_bootloader_otadata_ota_slots",
+    "rollback_capable": false
+  },
+  "features": [
+    "net_http",
+    "web_serial"
+  ],
+  "files": [
+    {
+      "kind": "elf",
+      "path": "mains-aegis-esp32s3-release-net_http-web_serial-8d6c3ee3-clean-e3e89629fa3a5b05/mains-aegis-firmware-12v",
+      "sha256": "7f5e32a42c17f99d7c28fff6e297c16666f9dc4dbd039bca0b60af822023b2de",
+      "size": 5242636
+    },
+    {
+      "flash_address": 65536,
+      "kind": "image",
+      "path": "mains-aegis-esp32s3-release-net_http-web_serial-8d6c3ee3-clean-e3e89629fa3a5b05/mains-aegis-firmware-12v.bin",
+      "sha256": "32513c6db831956ebb4fe2e29008701ff39ccea973ef62c6affb47663ae88376",
+      "size": 3056240
+    }
+  ],
+  "git_dirty": "clean",
+  "git_sha": "8d6c3ee3",
+  "name": "mains-aegis",
+  "profile": "release",
+  "protocol": "mains-aegis.cdc.v1",
+  "target_chip": "esp32s3",
+  "version": "0.1.0"
+}
