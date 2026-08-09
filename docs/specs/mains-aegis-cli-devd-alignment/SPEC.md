@@ -16,7 +16,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 
 ### Goals
 
-- `device diag-snapshot` 与 devd HTTP/IPC 保持现有调用面并识别 diagnostic schema v2。USB 固件多帧响应由 devd 按 request id、package 顺序和 end 状态聚合；缺帧、重复帧、乱序与超时必须返回结构化协议错误。fresh I2C package 的 `i2c_nack_address`、`i2c_nack_data` 与 `i2c_nack_unknown` 必须原样透传，不得归并为通用 `i2c_nack`。
+- `device diag-snapshot` 与 devd HTTP/IPC 保持现有调用面并识别 diagnostic schema v2。USB 固件多帧响应由 devd 按 request id、package 顺序和 end 状态聚合；缺帧、重复帧、乱序与超时必须返回结构化协议错误。fresh I2C package 的 `i2c_nack_address`、`i2c_nack_data` 与 `i2c_nack_unknown` 必须原样透传，不得归并为通用 `i2c_nack`；TPS55288 `VREF` 的数据阶段失败与同包后续寄存器的地址阶段失败必须同时保留。
 - 对缺失 `schema_version` 的旧固件 payload 标记 `schema_version=1` 与 `legacy=true` 并保留原值；请求 v2-only hardware package 时明确返回 unsupported，不把 status cache 推测成 fresh v2 数据。
 - hardware package watch/fresh 遵守设备 1 秒采集下限，并透传 `diag_capture_busy`、`diag_capture_rate_limited`、`retry_after_ms` 与部分失败结果。
 
