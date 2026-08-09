@@ -9,7 +9,7 @@
 
 ## Diagnostic schema v2
 
-- `diag-snapshot` 的硬件 package 从摘要缓存升级为按需 fresh capture，并保留逐项读取错误。
+- `diag-snapshot` 的硬件 package 从摘要缓存升级为按需 fresh capture，并保留逐项读取错误；ESP HAL 的 Address/Data/Unknown ACK 失败映射为 `i2c_nack_address`、`i2c_nack_data`、`i2c_nack_unknown`，不改变运行时保护使用的通用 I2C 错误分类。
 - USB CDC 使用 begin/package/error/end 分块，LAN 使用 chunked HTTP；host/devd 对外仍返回单个 JSON。
 - INA3221 IRQ 事件由 PowerRuntime 消费并锁存，告警来源进入既有 input gate 与 active protection。
 - 旧固件响应由 host/devd 标记为 schema v1 legacy，不伪造 v2 数据。

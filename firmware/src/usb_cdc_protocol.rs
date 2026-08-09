@@ -1512,7 +1512,7 @@ mod tests {
         };
         diag.hardware.tps_a.status = crate::net_types::DiagReadU8 {
             raw: None,
-            error: Some("i2c_nack"),
+            error: Some("i2c_nack_address"),
         };
         let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
         packages
@@ -1530,7 +1530,8 @@ mod tests {
         assert_eq!(package["ok"], serde_json::json!(false));
         assert_eq!(package["payload"]["registers"]["MODE"]["raw"], 130);
         assert_eq!(package["payload"]["decoded"]["oe"], true);
-        assert_eq!(package["read_errors"][0]["code"], "i2c_nack");
+        assert_eq!(package["read_errors"][0]["code"], "i2c_nack_address");
+        assert_eq!(package["read_errors"][0]["retryable"], true);
     }
 
     #[test]

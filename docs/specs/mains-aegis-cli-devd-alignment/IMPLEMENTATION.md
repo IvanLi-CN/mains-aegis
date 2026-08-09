@@ -2,7 +2,7 @@
 
 ## 当前实现
 
-- CLI、IPC 与 HTTP 继续返回一个 diagnostic JSON；USB 传输层 begin/package/error/end 分块由 devd 聚合。
+- CLI、IPC 与 HTTP 继续返回一个 diagnostic JSON；USB 传输层 begin/package/error/end 分块由 devd 聚合，并原样保留 fresh I2C 的地址、数据与未知 NACK 错误码。
 - host/devd 区分 schema v2 与 legacy v1，并保持 v2 package/error、busy 与限频语义。
 
 - compact status renderer 在 charger 对象末字段后直接闭合对象，并由 host-side JSON parser 回归测试验证完整 payload，保证 `status --fresh` 可被 devd 匹配。

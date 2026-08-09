@@ -4,6 +4,7 @@
 
 - 决定只改变设备传输实现，不增加新的 owner-facing streaming 命令。
 - 决定 legacy payload 明确标记并透传，不执行有损的 v2 归一化。
+- 决定 host/devd 不归并 fresh I2C 的 ACK 阶段，地址、数据与未知 NACK 错误码均原样返回给调用方。
 
 ## USB CDC compact status JSON
 

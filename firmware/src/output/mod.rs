@@ -22,13 +22,13 @@ use mains_aegis_firmware::bq40z50;
 use mains_aegis_firmware::fan;
 use mains_aegis_firmware::ina3221;
 use mains_aegis_firmware::net_types::{
-    validate_advanced_power_settings, AdvancedPowerSettingsSnapshot, AdvancedPowerValidationError,
-    ChargeControlBlockSnapshot, ChargeControlDetailSnapshot, ChargeControlEvidenceEntrySnapshot,
-    ChargeControlEvidenceValueSnapshot, ChargeControlLoopOverrideSnapshot,
-    ChargeControlReadinessSnapshot, ChargeControlSnapshot, ChargeControlTelemetrySnapshot,
-    DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerInputSnapshot,
-    DerivedPowerPolicySnapshot, DerivedPowerSnapshot, DiagReadU16, DiagReadU8,
-    RuntimeModePolicySnapshot, Tmp112DiagSnapshot, Tps55288DiagSnapshot,
+    diag_i2c_nack_code, validate_advanced_power_settings, AdvancedPowerSettingsSnapshot,
+    AdvancedPowerValidationError, ChargeControlBlockSnapshot, ChargeControlDetailSnapshot,
+    ChargeControlEvidenceEntrySnapshot, ChargeControlEvidenceValueSnapshot,
+    ChargeControlLoopOverrideSnapshot, ChargeControlReadinessSnapshot, ChargeControlSnapshot,
+    ChargeControlTelemetrySnapshot, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot,
+    DerivedPowerInputSnapshot, DerivedPowerPolicySnapshot, DerivedPowerSnapshot, DiagI2cNackReason,
+    DiagReadU16, DiagReadU8, RuntimeModePolicySnapshot, Tmp112DiagSnapshot, Tps55288DiagSnapshot,
     CHARGE_CONTROL_EVIDENCE_CAP,
 };
 use mains_aegis_firmware::output_protection;
@@ -2350,6 +2350,22 @@ pub(super) fn i2c_error_kind(err: esp_hal::i2c::master::Error) -> &'static str {
     }
 }
 
+fn diag_i2c_error_kind(err: esp_hal::i2c::master::Error) -> &'static str {
+    use esp_hal::i2c::master::{AcknowledgeCheckFailedReason, Error};
+
+    match err {
+        Error::AcknowledgeCheckFailed(reason) => {
+            let reason = match reason {
+                AcknowledgeCheckFailedReason::Address => DiagI2cNackReason::Address,
+                AcknowledgeCheckFailedReason::Data => DiagI2cNackReason::Data,
+                _ => DiagI2cNackReason::Unknown,
+            };
+            diag_i2c_nack_code(reason)
+        }
+        other => i2c_error_kind(other),
+    }
+}
+
 fn spin_delay(wait: Duration) {
     let start = Instant::now();
     while start.elapsed() < wait {}
@@ -2371,6 +2387,20 @@ pub(super) fn ina_error_kind(err: ina3221::Error<esp_hal::i2c::master::Error>) -
     }
 }
 
+fn diag_tps_error_kind(err: ::tps55288::Error<esp_hal::i2c::master::Error>) -> &'static str {
+    match err {
+        ::tps55288::Error::I2c(error) => diag_i2c_error_kind(error),
+        other => tps_error_kind(other),
+    }
+}
+
+fn diag_ina_error_kind(err: ina3221::Error<esp_hal::i2c::master::Error>) -> &'static str {
+    match err {
+        ina3221::Error::I2c(error) => diag_i2c_error_kind(error),
+        other => ina_error_kind(other),
+    }
+}
+
 fn diag_tps_u8(result: Result<u8, ::tps55288::Error<esp_hal::i2c::master::Error>>) -> DiagReadU8 {
     match result {
         Ok(raw) => DiagReadU8 {
@@ -2379,7 +2409,7 @@ fn diag_tps_u8(result: Result<u8, ::tps55288::Error<esp_hal::i2c::master::Error>
         },
         Err(error) => DiagReadU8 {
             raw: None,
-            error: Some(tps_error_kind(error)),
+            error: Some(diag_tps_error_kind(error)),
         },
     }
 }
@@ -2392,7 +2422,7 @@ fn diag_ina_u16(result: Result<u16, ina3221::Error<esp_hal::i2c::master::Error>>
         },
         Err(error) => DiagReadU16 {
             raw: None,
-            error: Some(ina_error_kind(error)),
+            error: Some(diag_ina_error_kind(error)),
         },
     }
 }
@@ -2405,7 +2435,7 @@ fn diag_i2c_u16(result: Result<u16, esp_hal::i2c::master::Error>) -> DiagReadU16
         },
         Err(error) => DiagReadU16 {
             raw: None,
-            error: Some(i2c_error_kind(error)),
+            error: Some(diag_i2c_error_kind(error)),
         },
     }
 }

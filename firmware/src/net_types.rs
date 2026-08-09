@@ -927,6 +927,25 @@ impl DiagReadU16 {
     }
 }
 
+/// The precise phase reported by ESP HAL when an I2C acknowledge check fails.
+///
+/// Diagnostic captures preserve this distinction without changing the broader
+/// runtime error taxonomy used by the protection and retry paths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiagI2cNackReason {
+    Address,
+    Data,
+    Unknown,
+}
+
+pub const fn diag_i2c_nack_code(reason: DiagI2cNackReason) -> &'static str {
+    match reason {
+        DiagI2cNackReason::Address => "i2c_nack_address",
+        DiagI2cNackReason::Data => "i2c_nack_data",
+        DiagI2cNackReason::Unknown => "i2c_nack_unknown",
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tps55288DiagSnapshot {
     pub captured_at_ms: u64,
@@ -1544,10 +1563,23 @@ pub fn format_ipv4(buf: &mut String<16>, ipv4: [u8; 4]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_advanced_power_settings, AdvancedPowerSettingsSnapshot,
-        AdvancedPowerValidationError, DeviceSettingsSnapshot, NetworkUiSummary,
+        diag_i2c_nack_code, validate_advanced_power_settings, AdvancedPowerSettingsSnapshot,
+        AdvancedPowerValidationError, DeviceSettingsSnapshot, DiagI2cNackReason, NetworkUiSummary,
         RuntimeModePolicySnapshot, WifiConnectionState, WifiErrorKind, WifiSnapshot,
     };
+
+    #[test]
+    fn diagnostic_nack_codes_preserve_acknowledgement_phase() {
+        assert_eq!(
+            diag_i2c_nack_code(DiagI2cNackReason::Address),
+            "i2c_nack_address"
+        );
+        assert_eq!(diag_i2c_nack_code(DiagI2cNackReason::Data), "i2c_nack_data");
+        assert_eq!(
+            diag_i2c_nack_code(DiagI2cNackReason::Unknown),
+            "i2c_nack_unknown"
+        );
+    }
 
     #[test]
     fn connected_ui_summary_prefers_ip_text() {

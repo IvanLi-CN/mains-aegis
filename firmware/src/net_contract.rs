@@ -1360,7 +1360,13 @@ fn render_diag_read_error<const N: usize>(
     write_json_string_escaped(buf, error);
     let retryable = matches!(
         error,
-        "i2c_timeout" | "i2c_nack" | "i2c_arbitration" | "i2c"
+        "i2c_timeout"
+            | "i2c_nack"
+            | "i2c_nack_address"
+            | "i2c_nack_data"
+            | "i2c_nack_unknown"
+            | "i2c_arbitration"
+            | "i2c"
     );
     let _ = write!(buf, "\",\"retryable\":{}}}", retryable);
 }
