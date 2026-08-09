@@ -23,14 +23,14 @@ use mains_aegis_firmware::fan;
 use mains_aegis_firmware::ina3221;
 use mains_aegis_firmware::net_types::{
     diag_i2c_nack_code, validate_advanced_power_settings, AdvancedPowerSettingsSnapshot,
-    AdvancedPowerValidationError, ChargeControlBlockSnapshot, ChargeControlDetailSnapshot,
-    ChargeControlEvidenceEntrySnapshot, ChargeControlEvidenceValueSnapshot,
-    ChargeControlLoopOverrideSnapshot, ChargeControlReadinessSnapshot, ChargeControlSnapshot,
-    ChargeControlTelemetrySnapshot, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot,
-    DerivedPowerInputSnapshot, DerivedPowerPolicySnapshot, DerivedPowerSnapshot, DiagI2cNackReason,
-    DiagReadError, DiagReadU16, DiagReadU8, RuntimeModePolicySnapshot, Tmp112DiagSnapshot,
-    Tps55288DiagSnapshot, TpsEnableInterlockSnapshot, CHARGE_CONTROL_EVIDENCE_CAP,
-    DIAG_READ_ERROR_CAP,
+    AdvancedPowerValidationError, Bq40CoreDiagSnapshot, ChargeControlBlockSnapshot,
+    ChargeControlDetailSnapshot, ChargeControlEvidenceEntrySnapshot,
+    ChargeControlEvidenceValueSnapshot, ChargeControlLoopOverrideSnapshot,
+    ChargeControlReadinessSnapshot, ChargeControlSnapshot, ChargeControlTelemetrySnapshot,
+    DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerInputSnapshot,
+    DerivedPowerPolicySnapshot, DerivedPowerSnapshot, DiagI2cNackReason, DiagReadError,
+    DiagReadU16, DiagReadU8, RuntimeModePolicySnapshot, Tmp112DiagSnapshot, Tps55288DiagSnapshot,
+    TpsEnableInterlockSnapshot, CHARGE_CONTROL_EVIDENCE_CAP, DIAG_READ_ERROR_CAP,
 };
 use mains_aegis_firmware::output_protection;
 use mains_aegis_firmware::output_retry::{self, TpsConfigRetryDecision};
@@ -5787,13 +5787,50 @@ where
     }
 
     fn refresh_bq40_core_diag_snapshot(&mut self) {
-        let Some(addr) = self.bms_addr else { return };
-        self.diag_snapshot.bms.pack_mv =
-            bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::VOLTAGE).ok();
-        self.diag_snapshot.bms.current_ma =
-            bq40z50::read_i16(&mut self.i2c, addr, bq40z50::cmd::CURRENT).ok();
-        self.diag_snapshot.bms.soc_pct =
-            bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE).ok();
+        let captured_at_ms = self.fan_now_ms();
+        let started = Instant::now();
+        let mut snapshot = Bq40CoreDiagSnapshot::empty();
+        snapshot.captured_at_ms = captured_at_ms;
+        let Some(addr) = self.bms_addr else {
+            snapshot.state = "err";
+            push_diag_read_error(&mut snapshot.errors, "DEVICE", "bms_unavailable");
+            snapshot.duration_ms = started.elapsed().as_millis().min(u16::MAX as u64) as u16;
+            self.diag_snapshot.hardware.bq40_core = snapshot;
+            return;
+        };
+
+        snapshot.address = Some(addr);
+        snapshot.voltage = diag_i2c_u16(bq40z50::read_u16(
+            &mut self.i2c,
+            addr,
+            bq40z50::cmd::VOLTAGE,
+        ));
+        if let Some(error) = snapshot.voltage.error {
+            push_diag_read_error(&mut snapshot.errors, "VOLTAGE", error);
+        }
+        snapshot.current = diag_i2c_u16(bq40z50::read_u16(
+            &mut self.i2c,
+            addr,
+            bq40z50::cmd::CURRENT,
+        ));
+        if let Some(error) = snapshot.current.error {
+            push_diag_read_error(&mut snapshot.errors, "CURRENT", error);
+        }
+        snapshot.relative_state_of_charge = diag_i2c_u16(bq40z50::read_u16(
+            &mut self.i2c,
+            addr,
+            bq40z50::cmd::RELATIVE_STATE_OF_CHARGE,
+        ));
+        if let Some(error) = snapshot.relative_state_of_charge.error {
+            push_diag_read_error(&mut snapshot.errors, "RELATIVE_STATE_OF_CHARGE", error);
+        }
+        snapshot.state = if snapshot.errors.iter().all(Option::is_none) {
+            "ok"
+        } else {
+            "err"
+        };
+        snapshot.duration_ms = started.elapsed().as_millis().min(u16::MAX as u64) as u16;
+        self.diag_snapshot.hardware.bq40_core = snapshot;
     }
 
     fn refresh_bq25792_diag_snapshot(&mut self) {

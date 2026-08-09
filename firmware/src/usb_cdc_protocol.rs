@@ -1698,6 +1698,99 @@ mod tests {
     }
 
     #[test]
+    fn diag_snapshot_marks_bq_core_unavailable_without_reusing_bms_cache() {
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.bms.addr = Some(0x0b);
+        diag.bms.pack_mv = Some(15_200);
+        diag.bms.current_ma = Some(-820);
+        diag.bms.soc_pct = Some(61);
+        diag.hardware.bq40_core.captured_at_ms = 790;
+        diag.hardware.bq40_core.state = "err";
+        diag.hardware.bq40_core.errors[0] = Some(crate::net_types::DiagReadError {
+            register: "DEVICE",
+            code: "bms_unavailable",
+        });
+
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("bq40.core").unwrap())
+            .unwrap();
+        let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+        render_diag_snapshot_json(
+            &mut body,
+            packages.as_slice(),
+            UpsStatusSnapshot::empty(),
+            diag,
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+        let bq40 = &parsed["packages"]["bq40.core"];
+        assert_eq!(bq40["ok"], serde_json::json!(false));
+        assert_eq!(bq40["source"], "fresh_i2c");
+        assert_eq!(bq40["captured_at_ms"], serde_json::json!(790));
+        assert_eq!(bq40["payload"]["device"]["address"], 0);
+        assert_eq!(bq40["payload"]["decoded"]["state"], "err");
+        assert_eq!(
+            bq40["payload"]["measurements"]["pack_mv"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            bq40["payload"]["measurements"]["current_ma"],
+            serde_json::Value::Null
+        );
+        assert_eq!(bq40["read_errors"][0]["register"], "DEVICE");
+        assert_eq!(bq40["read_errors"][0]["code"], "bms_unavailable");
+        assert_eq!(bq40["read_errors"][0]["retryable"], false);
+    }
+
+    #[test]
+    fn diag_snapshot_renders_bq_core_as_fresh_register_capture() {
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.hardware.bq40_core.captured_at_ms = 791;
+        diag.hardware.bq40_core.duration_ms = 4;
+        diag.hardware.bq40_core.address = Some(0x0b);
+        diag.hardware.bq40_core.state = "ok";
+        diag.hardware.bq40_core.voltage = crate::net_types::DiagReadU16 {
+            raw: Some(15_200),
+            error: None,
+        };
+        diag.hardware.bq40_core.current = crate::net_types::DiagReadU16 {
+            raw: Some((-820i16) as u16),
+            error: None,
+        };
+        diag.hardware.bq40_core.relative_state_of_charge = crate::net_types::DiagReadU16 {
+            raw: Some(61),
+            error: None,
+        };
+
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("bq40.core").unwrap())
+            .unwrap();
+        let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+        render_diag_snapshot_json(
+            &mut body,
+            packages.as_slice(),
+            UpsStatusSnapshot::empty(),
+            diag,
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+        let bq40 = &parsed["packages"]["bq40.core"];
+        assert_eq!(bq40["ok"], serde_json::json!(true));
+        assert_eq!(bq40["source"], "fresh_i2c");
+        assert_eq!(bq40["captured_at_ms"], serde_json::json!(791));
+        assert_eq!(bq40["duration_ms"], serde_json::json!(4));
+        assert_eq!(bq40["payload"]["device"]["address"], 11);
+        assert_eq!(bq40["payload"]["registers"]["VOLTAGE"]["address"], 9);
+        assert_eq!(bq40["payload"]["registers"]["VOLTAGE"]["raw"], 15_200);
+        assert_eq!(bq40["payload"]["registers"]["CURRENT"]["address"], 10);
+        assert_eq!(bq40["payload"]["measurements"]["current_ma"], -820);
+        assert_eq!(bq40["payload"]["measurements"]["soc_pct"], 61);
+        assert_eq!(bq40["read_errors"], serde_json::json!([]));
+    }
+
+    #[test]
     fn keeps_request_id_available_after_validation_errors() {
         let line = r#"{"type":"request","request_id":"req-err","op":"output_enable"}"#;
         assert_eq!(

@@ -1058,12 +1058,40 @@ impl Tmp112DiagSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bq40CoreDiagSnapshot {
+    pub captured_at_ms: u64,
+    pub duration_ms: u16,
+    pub address: Option<u8>,
+    pub state: &'static str,
+    pub voltage: DiagReadU16,
+    pub current: DiagReadU16,
+    pub relative_state_of_charge: DiagReadU16,
+    pub errors: [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+}
+
+impl Bq40CoreDiagSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            captured_at_ms: 0,
+            duration_ms: 0,
+            address: None,
+            state: "pending",
+            voltage: DiagReadU16::empty(),
+            current: DiagReadU16::empty(),
+            relative_state_of_charge: DiagReadU16::empty(),
+            errors: [None; DIAG_READ_ERROR_CAP],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HardwareDiagSnapshot {
     pub tps_a: Tps55288DiagSnapshot,
     pub tps_b: Tps55288DiagSnapshot,
     pub ina3221: Ina3221DiagSnapshot,
     pub tmp_a: Tmp112DiagSnapshot,
     pub tmp_b: Tmp112DiagSnapshot,
+    pub bq40_core: Bq40CoreDiagSnapshot,
     pub bq40_captured_at_ms: u64,
     pub bq40_duration_ms: u16,
     pub bq40_errors: [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
@@ -1084,6 +1112,7 @@ impl HardwareDiagSnapshot {
             ina3221: Ina3221DiagSnapshot::empty(),
             tmp_a: Tmp112DiagSnapshot::empty(0x48),
             tmp_b: Tmp112DiagSnapshot::empty(0x49),
+            bq40_core: Bq40CoreDiagSnapshot::empty(),
             bq40_captured_at_ms: 0,
             bq40_duration_ms: 0,
             bq40_errors: [None; DIAG_READ_ERROR_CAP],

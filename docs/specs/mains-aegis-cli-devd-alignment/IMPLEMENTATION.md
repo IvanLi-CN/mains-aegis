@@ -2,7 +2,7 @@
 
 ## 当前实现
 
-- CLI、IPC 与 HTTP 继续返回一个 diagnostic JSON；USB 传输层 begin/package/error/end 分块由 devd 聚合，并原样保留 fresh I2C 的地址、数据与未知 NACK 错误码。BQ40 manufacturing 和 BQ25792 register 的部分失败保留 `ok=false`、采集时序和稳定寄存器错误；BQ40 无效 block response 或地址不可用时返回不可重试的结构化读取错误和当前采集时间，不复用陈旧数据；TPS55288 `VREF` 的数据阶段 NACK 与同包后续寄存器的地址阶段 NACK 也均按寄存器原样返回。
+- CLI、IPC 与 HTTP 继续返回一个 diagnostic JSON；USB 传输层 begin/package/error/end 分块由 devd 聚合，并原样保留 fresh I2C 的地址、数据与未知 NACK 错误码。BQ40 core 的 `VOLTAGE`、`CURRENT`、`RELATIVE_STATE_OF_CHARGE` 与 manufacturing、BQ25792 register 的部分失败保留 `ok=false`、采集时序和稳定寄存器错误；BQ40 无效 block response 或地址不可用时返回不可重试的结构化读取错误和当前采集时间，不复用陈旧数据；TPS55288 `VREF` 的数据阶段 NACK 与同包后续寄存器的地址阶段 NACK 也均按寄存器原样返回。
 - host/devd 区分 schema v2 与 legacy v1，并保持 v2 package/error、busy 与限频语义。
 - `mcu.runtime` 诊断透传 `tps_enable_interlock`，用于区分 MCU 因 TPS retryable I2C 耗尽而持有的 `THERM_KILL_N` 与 release 后仍低的外部或未知来源；`TPS_EN` 状态只作线路推导。
 

@@ -5,10 +5,10 @@ use heapless::String;
 use crate::{
     mdns_wire::DeviceIdentity,
     net_types::{
-        format_ipv4, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerSnapshot,
-        DeviceSettingsSnapshot, DiagReadError, DiagReadU16, DiagReadU8, Ina3221DiagSnapshot,
-        Tmp112DiagSnapshot, Tps55288DiagSnapshot, UpsStatusSnapshot, WifiSnapshot, API_VERSION,
-        DIAG_READ_ERROR_CAP,
+        format_ipv4, Bq40CoreDiagSnapshot, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot,
+        DerivedPowerSnapshot, DeviceSettingsSnapshot, DiagReadError, DiagReadU16, DiagReadU8,
+        Ina3221DiagSnapshot, Tmp112DiagSnapshot, Tps55288DiagSnapshot, UpsStatusSnapshot,
+        WifiSnapshot, API_VERSION, DIAG_READ_ERROR_CAP,
     },
 };
 
@@ -1027,14 +1027,7 @@ fn render_diag_snapshot_package<'a, const N: usize>(
             let _ = buf.push_str(",\"read_errors\":[]}");
         }
         "bq40.core" => {
-            render_diag_package_header(buf, emitted, id, "power_cache", 0);
-            let _ = write!(
-                buf,
-                "{{\"device\":{{\"address\":{}}},\"registers\":{{}},\"decoded\":",
-                diag.bms.addr.unwrap_or(0)
-            );
-            render_diag_bms_payload(buf, diag.bms);
-            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[]}");
+            render_diag_bq40_core_package(buf, emitted, id, diag.hardware.bq40_core);
         }
         "bq40.manufacturing" => {
             begin_diag_v2_package_with_source(
@@ -1271,6 +1264,51 @@ fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowe
     json_field_opt_bool(buf, "emshut_exit_comm", bms.emshut_exit_comm, true);
     json_field_opt_bool(buf, "emshut_exit_vpack", bms.emshut_exit_vpack, false);
     let _ = buf.push('}');
+}
+
+fn render_diag_bq40_core_package<'a, const N: usize>(
+    buf: &mut String<N>,
+    emitted: &mut DiagEmitState<'a>,
+    id: &'a str,
+    snapshot: Bq40CoreDiagSnapshot,
+) {
+    begin_diag_v2_package_with_source(
+        buf,
+        emitted,
+        id,
+        snapshot.errors.iter().all(Option::is_none),
+        "fresh_i2c",
+        snapshot.captured_at_ms,
+        snapshot.duration_ms,
+    );
+    let _ = write!(
+        buf,
+        "{{\"device\":{{\"address\":{}}},\"registers\":{{",
+        snapshot.address.unwrap_or(0)
+    );
+    render_diag_register_u16(buf, "VOLTAGE", 0x09, snapshot.voltage, true);
+    render_diag_register_u16(buf, "CURRENT", 0x0a, snapshot.current, true);
+    render_diag_register_u16(
+        buf,
+        "RELATIVE_STATE_OF_CHARGE",
+        0x0d,
+        snapshot.relative_state_of_charge,
+        false,
+    );
+    let _ = buf.push_str("},\"decoded\":{\"state\":\"");
+    write_json_string_escaped(buf, snapshot.state);
+    let _ = buf.push_str("\"},\"measurements\":{");
+    json_field_opt_u16(buf, "pack_mv", snapshot.voltage.raw, true);
+    json_field_opt_i16(
+        buf,
+        "current_ma",
+        snapshot.current.raw.map(|raw| raw as i16),
+        true,
+    );
+    json_field_opt_u16(buf, "soc_pct", snapshot.relative_state_of_charge.raw, false);
+    let _ = buf.push_str("},\"runtime\":{}},\"read_errors\":[");
+    render_diag_error_list(buf, &snapshot.errors);
+    let _ = buf.push_str("]}");
 }
 
 fn render_diag_charger_payload<const N: usize>(
