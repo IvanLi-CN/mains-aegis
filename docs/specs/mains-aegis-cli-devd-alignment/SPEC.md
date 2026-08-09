@@ -126,8 +126,6 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 
 ## Visual Evidence
 
-PR: none
-
 视觉证据由 Vite 纯前端 mock UI 生成，使用正式路由和 mock fixtures，不连接真实 UPS 设备。
 
 - source_type: mock_ui
