@@ -508,6 +508,40 @@ export type DevdWebLease = {
   device: DevdDevice;
 };
 
+export type TpsEnableInterlock = {
+  therm_kill_n_low: boolean;
+  mcu_drive_low: boolean;
+  tps_en_effective_inhibit: boolean;
+  source: "mcu_i2c_retry_exhausted" | "external_or_unknown" | "released" | string;
+  asserted_at_ms: number | null;
+  last_release_at_ms: number | null;
+  failure_channel: string | null;
+  failure_stage: string | null;
+  failure_code: string | null;
+};
+
+export type DevdDiagSnapshot = {
+  schema_version: number;
+  packages: {
+    "mcu.runtime"?: {
+      payload?: {
+        tps_enable_interlock?: TpsEnableInterlock;
+      };
+    };
+  };
+  errors?: Record<string, unknown>;
+};
+
+export type TpsEnableReleaseResponse = {
+  ok: true;
+  accepted: true;
+  result: "released" | "already_released" | string;
+  mcu_drive_low: false;
+  therm_kill_n_low: boolean;
+  warning: "therm_kill_n_still_low" | null;
+  output_gate_reason: string;
+};
+
 export type AppRuntimeMode =
   | "hosted"
   | "http_service_api_only"

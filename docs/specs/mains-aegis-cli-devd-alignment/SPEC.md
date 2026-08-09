@@ -79,6 +79,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - `mains-aegis device <id> status` 与 `mains-aegis device <id> diag-snapshot` 是 UPS 只读观测的正式 CLI 面，必须通过 IPC 调用 devd，不得要求操作者直接拼 JSON-RPC 或依赖 HTTP service。
 - 两个只读命令都支持 `--fresh`、`--cache-only`、`--include-meta`、`--watch`、`--interval-ms` 与 `--samples`。`--fresh` 与 `--cache-only` 互斥；单次读取默认允许 devd 按自身策略使用 fresh 或 cache。`--watch` 的默认语义固定为 monitor-cache telemetry stream：优先按节拍返回 monitor cache，并通过 `meta.cache_fresh/sample_fresh` 标示新鲜度；若 monitor cache 尚不可用，则返回带 `miss=true` 的 JSONL miss 行，而不是隐式退回 direct CDC 读。需要逐样本强制 CDC fresh 读时，操作者必须显式传入 `--fresh`。
 - `mains-aegis device <id> recovery bms-discharge-authorization` 通过 IPC `device.recovery.bms_discharge_authorization` 调用 devd，不直接打开串口、不直接 force TPS 输出。CLI 必须原样输出固件裁决 JSON，包含 `ok`、`accepted`、`result`、`reason`、`status_before` 与 `status_after` 等恢复诊断字段；native serial 与 LAN 设备的 owner-facing 结果应一致。native serial 的恢复写路径只能使用绑定 USB CDC 或显式绑定 companion LAN，不得把缓存的 `identity/status.network.ipv4` 当作设备授权目标。
+- `mains-aegis device <id> tps-en release --confirm release-tps-en` 通过 IPC `device.tps_en.release` 调用 devd。它只能使用已绑定 USB CDC，且只请求固件释放 MCU 的 `THERM_KILL_N` 开漏；不得发送 LAN 写入、不得清 TPS 故障锁存、不得自动读取或恢复 TPS 输出。错误确认令牌必须被拒绝。
 
 ### Release and install
 
@@ -117,6 +118,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - `mains-aegis device <id> bind` 创建的绑定在 devd 重启后仍可由 `devices list` 看到；`connect` 和 Web lease 不跨重启恢复。
 - `mains-aegis device <id> flash` 和 `mains-aegis host power ...` 默认 dry-run，真实动作必须显式 `--real`。
 - `mains-aegis device <id> recovery bms-discharge-authorization` 返回固件终态裁决 JSON；当固件报告 `pending` 时，devd 负责轮询至终态或 timeout，CLI 不得把命令已发送当作恢复成功。
+- `mains-aegis device <id> tps-en release --confirm release-tps-en` 映射到 `device.tps_en.release`；错误确认、无 Web USB lease 的 HTTP 请求和 LAN target 都被拒绝，release 返回后 TPS 锁存和输出停止状态仍保持。
 - `bun run --cwd web check` 通过。
 - CI 与 host-power VM workflow 使用 `tools/mains-aegis-host`。
 - Host-tools release workflow 覆盖 Linux x86_64、macOS arm64、Windows x86_64。

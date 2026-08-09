@@ -2749,6 +2749,31 @@ fn handle_web_serial_frame<'d, I2C>(
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
             }
+            UsbCdcRequest::ReleaseTpsEn => {
+                let result = power.release_tps_enable_interlock();
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                let result_name = if result.already_released {
+                    "already_released"
+                } else {
+                    "released"
+                };
+                let warning = if result.therm_kill_n_low {
+                    "\"therm_kill_n_still_low\""
+                } else {
+                    "null"
+                };
+                let _ = write!(
+                    body,
+                    r#"{{"ok":true,"accepted":true,"result":"{}","mcu_drive_low":false,"therm_kill_n_low":{},"warning":{},"output_gate_reason":"{}"}}"#,
+                    result_name,
+                    result.therm_kill_n_low,
+                    warning,
+                    result.output_gate_reason.as_str(),
+                );
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
+            }
         },
         Ok(UsbCdcFrame::WifiConfig {
             request_id,

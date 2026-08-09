@@ -48,7 +48,8 @@
 - 固件不得依赖上电默认值来满足上述语义（必须显式配置两颗器件）。
 - 必须冻结两颗器件的阈值（`T(HIGH)` / `T(LOW)`）与去抖参数，并保证两颗器件配置一致或明确差异（见 `./contracts/config.md`）。
 - 对 `TMP112A` 配置写入失败（I2C NACK/timeout 等）时，固件必须按冻结的失败策略处置（fail-safe vs degrade；见 `./contracts/config.md`）。
-- `THERM_KILL_N` 语义必须与硬件设计一致：开漏线与、低有效；并在固件侧保持“默认不主动拉低”（除非明确开启强制关断模式）。
+- `THERM_KILL_N` 语义必须与硬件设计一致：开漏线与、低有效；固件启动时必须释放 GPIO40。运行中仅允许两类 MCU 主动拉低：已冻结的强制关断模式，或已请求 TPS 的可重试 I2C 失败耗尽预算后的硬抑制；后者必须先完成既有双路软件保护停机。
+- MCU 释放自身开漏后若线路仍低，必须保留外部热保护语义，不得把它重写为 MCU 原因或自动恢复输出。
 - 当 `THERM_KILL_N=0` 时，固件必须在日志中给出“可能来源”的提示（`out_a/out_b/both/unknown`），提示算法以读取两颗 `TMP112A` 当前温度并与 `T(LOW)/T(HIGH)` 比较为准（不新增硬件信号；详见 `./contracts/config.md`）。
 
 ## 接口契约（Interfaces & Contracts）

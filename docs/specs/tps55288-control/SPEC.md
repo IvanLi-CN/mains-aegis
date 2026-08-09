@@ -54,6 +54,9 @@
 - 任一 `TPS55288` I2C 通信失败（NACK/timeout/CRC 等）时，固件不得 panic；必须输出可定位日志（包含：地址、步骤、错误类别），并进入“保守策略”（不得继续对该器件反复写寄存器刷屏；允许周期性重试但需限频）。
 - 启动自检只有一路 TPS 无通信错误且未报告 `SCP/OCP/OVP` 时，固件必须保留双路 `requested_outputs` 合同，并将缺失通道纳入有限退避重试。
 - 任一路要求 TPS 的通信/配置重试耗尽后，固件必须锁存 `tps_config_failed`，停止双路输出，保留失败通道错误与 `mode=blocked`，并等待显式 restore。
+- 当且仅当 `i2c_nack`、`i2c_timeout`、`i2c_arbitration` 或通用 `i2c` 错误耗尽该重试预算时，固件必须先完成双路软件停机和尽力 `disable_output()`，再由 GPIO40 以开漏方式拉低 `THERM_KILL_N`，通过板级链路抑制共享 `TPS_EN`。`invalid_config`、读回异常和 `SCP/OCP/OVP` 继续使用既有软件保护停机，不得触发这一 MCU 硬抑制。
+- MCU 对 `THERM_KILL_N` 的拉低只在当前运行期保持。受限 release 仅释放 MCU 自己的开漏拉低，不清除 `tps_config_failed`、不探测 TPS、也不恢复输出；后续仍须先诊断并走既有显式 restore。
+- `mcu.runtime` 诊断必须提供 `tps_enable_interlock`：物理 `THERM_KILL_N` 电平、MCU 驱动意图、推导的 `TPS_EN` 抑制状态、来源、触发/最近释放时间和最近 I2C 失败通道/阶段/错误。`TPS_EN` 没有独立可读 GPIO，禁止把推导状态表述为直接引脚读数。
 - 固件侧 `TPS55288` 驱动必须明确使用 `tps55288` 这个 crate（crates.io，`0.2.0`）。
 - 固件必须初始化 `INA3221 (0x40)`，并按 `./contracts/config.md` 的映射仅启用 OUT-A/OUT-B 的采样通道（CH2/CH1）。
 - 固件必须每 `500ms` 打印一次遥测（telemetry）日志，且每次打印必须包含 OUT-A 与 OUT-B 两路：
@@ -85,6 +88,14 @@
 - Given 两颗 `TPS55288` 仅有一颗可响应（另一颗缺件/焊接异常/总线故障），
   When 固件启动并尝试配置两颗器件，
   Then 固件不 panic；日志中能明确指出失败器件地址与错误类型；缺失通道只在有限退避重试预算内重试，耗尽后锁存 `tps_config_failed` 并停止双路输出；双路请求合同与 `mode=blocked` 保持不变。
+
+- Given 任一已请求 TPS 的可重试 I2C 错误耗尽预算，
+  When 固件进入保护停机，
+  Then 两路软件输出先停止并尽力发送两路 disable，再由 MCU 拉低 `THERM_KILL_N` 抑制 `TPS_EN`；非重试配置错误和 TPS `SCP/OCP/OVP` 不得拉低 GPIO40。
+
+- Given MCU 已因 TPS I2C 耗尽持有 `THERM_KILL_N` 低电平，
+  When 操作者发出已确认的 release，
+  Then 仅 MCU 开漏被释放，故障锁存和双路停止状态保持；若线路仍为低，诊断必须报告 `external_or_unknown`，且输出继续受保护。
 
 - Given `INA3221` 可响应，
   When 固件按固定配置初始化并读取 OUT-A/OUT-B 两路电压/电流，

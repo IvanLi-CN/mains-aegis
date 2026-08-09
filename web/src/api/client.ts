@@ -23,6 +23,8 @@ import type {
   SerialLogEntry,
   SerialTraceEntry,
   DevdWebLease,
+  DevdDiagSnapshot,
+  TpsEnableReleaseResponse,
   UpsStatus,
   WifiApplyNetwork,
 } from "./types";
@@ -1299,6 +1301,24 @@ export const getDevdDeviceChargeControl = (
   requestJson<ChargeControlDetail>(
     baseUrl,
     `/api/v1/devices/${encodeURIComponent(deviceId)}/charge-control`,
+    { bridgeAuth: true },
+  );
+export const getDevdDeviceDiagSnapshot = (baseUrl: string, deviceId: string) =>
+  requestJson<DevdDiagSnapshot>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/diag-snapshot?package=mcu.runtime&cache_only=true`,
+    { bridgeAuth: true },
+  );
+export const releaseDevdTpsEnableInterlock = (
+  baseUrl: string,
+  deviceId: string,
+  leaseId: string,
+) =>
+  requestWithBody<TpsEnableReleaseResponse>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/tps-en/release`,
+    "POST",
+    { confirm: "release-tps-en", lease_id: leaseId },
     { bridgeAuth: true },
   );
 export const previewDevdDeviceChargeControl = (

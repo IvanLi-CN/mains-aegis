@@ -1023,7 +1023,7 @@ fn render_diag_snapshot_package<'a, const N: usize>(
     match id {
         "mcu.runtime" => {
             render_diag_package_header(buf, emitted, id, "runtime_cache", 0);
-            render_diag_mcu_runtime_payload(buf, status);
+            render_diag_mcu_runtime_payload(buf, status, diag);
             let _ = buf.push_str(",\"read_errors\":[]}");
         }
         "bq40.core" => {
@@ -1138,7 +1138,11 @@ fn render_diag_package_header<'a, const N: usize>(
     );
 }
 
-fn render_diag_mcu_runtime_payload<const N: usize>(buf: &mut String<N>, status: UpsStatusSnapshot) {
+fn render_diag_mcu_runtime_payload<const N: usize>(
+    buf: &mut String<N>,
+    status: UpsStatusSnapshot,
+    diag: DerivedPowerSnapshot,
+) {
     let boot = crate::boot_recovery::diagnostics();
     let _ = buf.push('{');
     json_field_str(buf, "mode", status.mode, true);
@@ -1162,8 +1166,30 @@ fn render_diag_mcu_runtime_payload<const N: usize>(buf: &mut String<N>, status: 
         buf,
         "rollback_blocker",
         "missing_rollback_bootloader_otadata_ota_slots",
-        false,
+        true,
     );
+    let interlock = diag.hardware.tps_enable_interlock;
+    let _ = buf.push_str("\"tps_enable_interlock\":{");
+    json_field_bool(buf, "therm_kill_n_low", interlock.therm_kill_n_low, true);
+    json_field_bool(buf, "mcu_drive_low", interlock.mcu_drive_low, true);
+    json_field_bool(
+        buf,
+        "tps_en_effective_inhibit",
+        interlock.tps_en_effective_inhibit,
+        true,
+    );
+    json_field_str(buf, "source", interlock.source, true);
+    json_field_opt_u64(buf, "asserted_at_ms", interlock.asserted_at_ms, true);
+    json_field_opt_u64(
+        buf,
+        "last_release_at_ms",
+        interlock.last_release_at_ms,
+        true,
+    );
+    json_field_opt_str(buf, "failure_channel", interlock.failure_channel, true);
+    json_field_opt_str(buf, "failure_stage", interlock.failure_stage, true);
+    json_field_opt_str(buf, "failure_code", interlock.failure_code, false);
+    let _ = buf.push_str("}");
     let _ = buf.push('}');
 }
 
@@ -2126,6 +2152,25 @@ fn json_field_u32<const N: usize>(
     json_field_opt_num(buf, key, Some(value as i64), trailing_comma);
 }
 
+fn json_field_opt_u64<const N: usize>(
+    buf: &mut String<N>,
+    key: &str,
+    value: Option<u64>,
+    trailing_comma: bool,
+) {
+    let _ = buf.push('"');
+    let _ = buf.push_str(key);
+    let _ = buf.push_str("\":");
+    if let Some(value) = value {
+        let _ = write!(buf, "{}", value);
+    } else {
+        let _ = buf.push_str("null");
+    }
+    if trailing_comma {
+        let _ = buf.push(',');
+    }
+}
+
 fn json_field_u32_opt<const N: usize>(
     buf: &mut String<N>,
     key: &str,
@@ -2272,14 +2317,16 @@ fn json_field_opt_ipv4<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        accepts_event_stream, render_compact_status_json, render_identity_json,
-        render_settings_json, render_status_json, write_error_body, write_sse_event, BuildInfo,
+        accepts_event_stream, render_compact_status_json, render_diag_snapshot_json,
+        render_identity_json, render_settings_json, render_status_json, write_error_body,
+        write_sse_event, BuildInfo,
     };
     use crate::{
         mdns_wire::derive_device_identity,
         net_types::{
-            DeviceSettingsSnapshot, ManualChargeSettingsSnapshot, NetworkUiSummary,
-            UpsStatusSnapshot, WifiConnectionState, WifiSettingsSnapshot, WifiSnapshot,
+            DerivedPowerSnapshot, DeviceSettingsSnapshot, ManualChargeSettingsSnapshot,
+            NetworkUiSummary, TpsEnableInterlockSnapshot, UpsStatusSnapshot, WifiConnectionState,
+            WifiSettingsSnapshot, WifiSnapshot,
         },
     };
     use heapless::String;
@@ -2484,6 +2531,41 @@ mod tests {
         assert!(body
             .as_str()
             .contains("\"rollback_blocker\":\"missing_rollback_bootloader_otadata_ota_slots\""));
+    }
+
+    #[test]
+    fn diag_runtime_exposes_tps_enable_interlock_without_claiming_a_tps_en_pin_read() {
+        let mut body = String::<8192>::new();
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.hardware.tps_enable_interlock = TpsEnableInterlockSnapshot {
+            therm_kill_n_low: true,
+            mcu_drive_low: true,
+            tps_en_effective_inhibit: true,
+            source: "mcu_i2c_retry_exhausted",
+            asserted_at_ms: Some(123),
+            last_release_at_ms: None,
+            failure_channel: Some("out_a"),
+            failure_stage: Some("status"),
+            failure_code: Some("i2c_nack"),
+        };
+
+        render_diag_snapshot_json(&mut body, &[], UpsStatusSnapshot::empty(), diag);
+
+        let value: Value = serde_json::from_str(body.as_str()).expect("valid diagnostic JSON");
+        let interlock = &value["packages"]["mcu.runtime"]["payload"]["tps_enable_interlock"];
+        assert_eq!(interlock["therm_kill_n_low"], true);
+        assert_eq!(interlock["mcu_drive_low"], true);
+        assert_eq!(interlock["tps_en_effective_inhibit"], true);
+        assert_eq!(interlock["source"], "mcu_i2c_retry_exhausted");
+        assert_eq!(interlock["asserted_at_ms"], 123);
+        assert_eq!(interlock["failure_channel"], "out_a");
+        assert!(
+            !interlock
+                .as_object()
+                .expect("interlock object")
+                .contains_key("tps_en_level"),
+            "TPS_EN is inferred from THERM_KILL_N, not read from a nonexistent GPIO"
+        );
     }
 
     #[test]

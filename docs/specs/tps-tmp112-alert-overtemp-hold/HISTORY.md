@@ -5,6 +5,7 @@
 ## Decision Trace
 
 - 固件已实现两颗 TMP112A 的 comparator 配置、阈值写入与回读，并在启动路径保留 fail-safe 与 `THERM_KILL_N` 诊断；该主题因此按完成态归档。
+- `THERM_KILL_N` 同时承载 TMP112 外部硬停机与 MCU TPS I2C 失联硬抑制；两者共享电平保护效果，但 runtime 记录 MCU 持有状态，release 后仍低时明确为外部或未知来源。
 
 ## Decision Trace
 

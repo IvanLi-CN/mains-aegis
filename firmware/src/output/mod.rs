@@ -29,7 +29,8 @@ use mains_aegis_firmware::net_types::{
     ChargeControlTelemetrySnapshot, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot,
     DerivedPowerInputSnapshot, DerivedPowerPolicySnapshot, DerivedPowerSnapshot, DiagI2cNackReason,
     DiagReadError, DiagReadU16, DiagReadU8, RuntimeModePolicySnapshot, Tmp112DiagSnapshot,
-    Tps55288DiagSnapshot, CHARGE_CONTROL_EVIDENCE_CAP, DIAG_READ_ERROR_CAP,
+    Tps55288DiagSnapshot, TpsEnableInterlockSnapshot, CHARGE_CONTROL_EVIDENCE_CAP,
+    DIAG_READ_ERROR_CAP,
 };
 use mains_aegis_firmware::output_protection;
 use mains_aegis_firmware::output_retry::{self, TpsConfigRetryDecision};
@@ -2780,6 +2781,9 @@ struct TpsFaultLatch {
     ovp_latched: bool,
     config_failure_latched: bool,
     config_retry_failures: u8,
+    last_config_failure_stage: Option<&'static str>,
+    last_config_failure_kind: Option<&'static str>,
+    retry_exhausted_i2c: bool,
 }
 
 impl TpsFaultLatch {
@@ -2803,27 +2807,102 @@ impl TpsFaultLatch {
         self.ovp_latched
     }
 
-    fn record_config_failure(&mut self, _stage: &'static str, _kind: &'static str) -> u8 {
+    fn record_config_failure(&mut self, stage: &'static str, kind: &'static str) -> u8 {
+        self.last_config_failure_stage = Some(stage);
+        self.last_config_failure_kind = Some(kind);
         self.config_retry_failures = self.config_retry_failures.saturating_add(1);
         self.config_retry_failures
     }
 
-    fn latch_config_failure(&mut self) {
+    fn latch_config_failure(&mut self, retry_exhausted_i2c: bool) {
         self.config_failure_latched = true;
+        self.retry_exhausted_i2c |= retry_exhausted_i2c;
     }
 
     const fn config_failure_active(self) -> bool {
         self.config_failure_latched
     }
 
+    const fn retry_exhausted_i2c(self) -> bool {
+        self.retry_exhausted_i2c
+    }
+
     fn clear_config_failure(&mut self) {
         self.config_failure_latched = false;
         self.config_retry_failures = 0;
+        self.last_config_failure_stage = None;
+        self.last_config_failure_kind = None;
+        self.retry_exhausted_i2c = false;
     }
 
     fn clear(&mut self) {
         *self = Self::default();
     }
+}
+
+#[derive(Clone, Copy, Default)]
+struct TpsEnableInterlock {
+    state: output_retry::TpsEnableInhibitState,
+    asserted_at_ms: Option<u64>,
+    last_release_at_ms: Option<u64>,
+    failure_channel: Option<OutputChannel>,
+    failure_stage: Option<&'static str>,
+    failure_code: Option<&'static str>,
+}
+
+impl TpsEnableInterlock {
+    fn record_assertion(
+        &mut self,
+        now_ms: u64,
+        channel: OutputChannel,
+        stage: &'static str,
+        code: &'static str,
+    ) {
+        let asserted = self.state.assert_low();
+        debug_assert!(asserted);
+        self.asserted_at_ms = Some(now_ms);
+        self.failure_channel = Some(channel);
+        self.failure_stage = Some(stage);
+        self.failure_code = Some(code);
+    }
+
+    fn record_release(&mut self, now_ms: u64) {
+        let already_released = self.state.release();
+        debug_assert!(!already_released);
+        self.last_release_at_ms = Some(now_ms);
+    }
+
+    const fn can_assert(self) -> bool {
+        self.state.can_assert()
+    }
+
+    const fn mcu_drive_low(self) -> bool {
+        self.state.mcu_drive_low()
+    }
+
+    fn snapshot(self, therm_kill_n_low: bool) -> TpsEnableInterlockSnapshot {
+        TpsEnableInterlockSnapshot {
+            therm_kill_n_low,
+            mcu_drive_low: self.mcu_drive_low(),
+            tps_en_effective_inhibit: therm_kill_n_low,
+            source: output_retry::tps_enable_interlock_source(
+                self.mcu_drive_low(),
+                therm_kill_n_low,
+            ),
+            asserted_at_ms: self.asserted_at_ms,
+            last_release_at_ms: self.last_release_at_ms,
+            failure_channel: self.failure_channel.map(OutputChannel::name),
+            failure_stage: self.failure_stage,
+            failure_code: self.failure_code,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TpsEnableReleaseResult {
+    pub already_released: bool,
+    pub therm_kill_n_low: bool,
+    pub output_gate_reason: OutputGateReason,
 }
 
 fn output_state_gate_transition(
@@ -4007,6 +4086,7 @@ pub struct PowerManager<'d, I2C> {
     ups_in_ce: Flex<'d>,
     ups_in_pg: Input<'d>,
     therm_kill: Flex<'d>,
+    tps_enable_interlock: TpsEnableInterlock,
     chg_ce: Flex<'d>,
     chg_ilim_hiz_brk: Flex<'d>,
 
@@ -4802,6 +4882,7 @@ where
             ups_in_ce,
             ups_in_pg,
             therm_kill,
+            tps_enable_interlock: TpsEnableInterlock::default(),
             chg_ce,
             chg_ilim_hiz_brk,
             cfg,
@@ -5106,6 +5187,37 @@ where
         self.recompute_ui_mode();
     }
 
+    fn maybe_assert_tps_enable_interlock(
+        &mut self,
+        failed_ch: OutputChannel,
+        stage: &'static str,
+        kind: &'static str,
+        decision: TpsConfigRetryDecision,
+    ) {
+        if !matches!(
+            output_retry::tps_failure_protection(kind, decision),
+            output_retry::TpsFailureProtection::SoftwareStopThenHardInhibit
+        ) || !self.tps_fault_latch(failed_ch).retry_exhausted_i2c()
+            || !self.tps_enable_interlock.can_assert()
+        {
+            return;
+        }
+
+        // The protective state transition performs the dual TPS software stop
+        // before this MCU-owned hardware inhibit is asserted.
+        self.apply_output_gate(OutputGateReason::TpsConfigFailed);
+        self.therm_kill.set_low();
+        self.tps_enable_interlock
+            .record_assertion(self.fan_now_ms(), failed_ch, stage, kind);
+        defmt::error!(
+            "power: tps_en_hard_inhibit asserted ch={} stage={} err={} therm_kill_n_low={=bool}",
+            failed_ch.name(),
+            stage,
+            kind,
+            self.therm_kill.is_low()
+        );
+    }
+
     pub fn enter_firmware_safe_mode(&mut self) {
         self.charger_allowed = false;
         self.force_disable_outputs();
@@ -5154,6 +5266,26 @@ where
             requested.describe()
         );
         self.reconcile_output_state();
+    }
+
+    pub fn release_tps_enable_interlock(&mut self) -> TpsEnableReleaseResult {
+        let already_released = !self.tps_enable_interlock.mcu_drive_low();
+        if !already_released {
+            self.therm_kill.set_high();
+            self.tps_enable_interlock.record_release(self.fan_now_ms());
+        }
+        let therm_kill_n_low = self.therm_kill.is_low();
+        defmt::warn!(
+            "power: tps_en_hard_inhibit release already_released={=bool} therm_kill_n_low={=bool} gate_reason={}",
+            already_released,
+            therm_kill_n_low,
+            self.output_state.gate_reason.as_str(),
+        );
+        TpsEnableReleaseResult {
+            already_released,
+            therm_kill_n_low,
+            output_gate_reason: self.output_state.gate_reason,
+        }
     }
 
     fn maybe_log_charger_input_power_anomaly(
@@ -5465,7 +5597,10 @@ where
     }
 
     pub fn derived_power_snapshot(&self) -> DerivedPowerSnapshot {
-        self.diag_snapshot
+        let mut snapshot = self.diag_snapshot;
+        snapshot.hardware.tps_enable_interlock =
+            self.tps_enable_interlock.snapshot(self.therm_kill.is_low());
+        snapshot
     }
 
     pub fn refresh_diag_snapshot_packages<const N: usize>(
@@ -11748,7 +11883,10 @@ where
         if self.output_bypass_active {
             return OutputGateReason::ManualBypass;
         }
-        if self.therm_kill.is_low() {
+        // The MCU-owned pull-down is the secondary action for a TPS I2C
+        // exhaustion. Preserve that failure as the gate reason; a low line
+        // after release is an external or unknown thermal hold.
+        if self.therm_kill.is_low() && !self.tps_enable_interlock.mcu_drive_low() {
             return OutputGateReason::ThermKill;
         }
 
@@ -12485,7 +12623,8 @@ where
                     TPS_CONFIG_MAX_RETRY_ATTEMPTS,
                 );
                 if matches!(decision, TpsConfigRetryDecision::Latch) {
-                    self.tps_fault_latch_mut(ch).latch_config_failure();
+                    self.tps_fault_latch_mut(ch)
+                        .latch_config_failure(output_retry::is_tps_config_error_retryable(kind));
                 }
                 let next_retry = matches!(decision, TpsConfigRetryDecision::Retry)
                     .then_some(Instant::now() + self.cfg.retry_backoff);
@@ -12522,6 +12661,7 @@ where
                         "power: tps addr=0x75 nack_hint=maybe_address_changed; power-cycle TPS rails to restore preset address"
                     );
                 }
+                self.maybe_assert_tps_enable_interlock(ch, stage.as_str(), kind, decision);
             }
         }
     }
@@ -12597,7 +12737,8 @@ where
                     TPS_CONFIG_MAX_RETRY_ATTEMPTS,
                 );
                 if matches!(decision, TpsConfigRetryDecision::Latch) {
-                    self.tps_fault_latch_mut(ch).latch_config_failure();
+                    self.tps_fault_latch_mut(ch)
+                        .latch_config_failure(output_retry::is_tps_config_error_retryable(kind));
                 }
                 let next_retry = matches!(decision, TpsConfigRetryDecision::Retry)
                     .then_some(Instant::now() + self.cfg.retry_backoff);
@@ -12626,6 +12767,7 @@ where
                         "power: tps addr=0x75 nack_hint=maybe_address_changed; power-cycle TPS rails to restore preset address"
                     );
                 }
+                self.maybe_assert_tps_enable_interlock(ch, stage.as_str(), kind, decision);
             }
         }
         self.recompute_ui_mode();
@@ -12700,13 +12842,19 @@ where
             TPS_CONFIG_MAX_RETRY_ATTEMPTS,
         );
         if matches!(decision, TpsConfigRetryDecision::Latch) {
-            self.tps_fault_latch_mut(failed_ch).latch_config_failure();
+            self.tps_fault_latch_mut(failed_ch)
+                .latch_config_failure(output_retry::is_tps_config_error_retryable(kind));
         }
         let next_retry = matches!(decision, TpsConfigRetryDecision::Retry)
             .then_some(Instant::now() + self.cfg.retry_backoff);
 
-        let _ = tps55288::disable_output_only(&mut self.i2c, OutputChannel::OutA);
-        let _ = tps55288::disable_output_only(&mut self.i2c, OutputChannel::OutB);
+        if matches!(
+            output_retry::tps_failure_protection(kind, decision),
+            output_retry::TpsFailureProtection::SoftwareStop
+        ) {
+            let _ = tps55288::disable_output_only(&mut self.i2c, OutputChannel::OutA);
+            let _ = tps55288::disable_output_only(&mut self.i2c, OutputChannel::OutB);
+        }
 
         self.mark_tps_failed(OutputChannel::OutA, next_retry);
         self.mark_tps_failed(OutputChannel::OutB, next_retry);
@@ -12730,6 +12878,7 @@ where
                 "power: tps addr=0x75 nack_hint=maybe_address_changed; power-cycle TPS rails to restore preset address"
             );
         }
+        self.maybe_assert_tps_enable_interlock(failed_ch, stage.as_str(), kind, decision);
     }
 
     fn mark_tps_ok(&mut self, ch: OutputChannel) {

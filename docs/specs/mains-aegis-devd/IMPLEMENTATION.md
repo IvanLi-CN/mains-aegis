@@ -13,6 +13,7 @@
 - USB CDC 使用 begin/package/error/end 分块，LAN 使用 chunked HTTP；host/devd 对外仍返回单个 JSON。LAN 的有界 request target 可容纳全部稳定硬件 package 的重复 `package=` 查询，并由回归测试覆盖，避免在 JSON 分块前把合法全包请求拒绝为 `invalid_request`。
 - INA3221 IRQ 事件由 PowerRuntime 消费并锁存，告警来源进入既有 input gate 与 active protection。
 - 旧固件响应由 host/devd 标记为 schema v1 legacy，不伪造 v2 数据。
+- `mcu.runtime` 已包含 `tps_enable_interlock`，公开 GPIO40 线路读数、MCU 持有意图、推导的 `TPS_EN` 抑制、来源、时间与最近 I2C 失败。固件只在 retryable TPS I2C 耗尽后，于双路软件停机后拉低 GPIO40；release 不清锁存或恢复输出。
 
 ## Migrated Implementation Record
 
@@ -44,6 +45,7 @@
 - `firmware/src/net_contract.rs`: `diag-snapshot.bms` 已暴露 BQ40 AFE FET status/control/latch、logical `op_*` FET flags、SafetyAlert 派生位、discharge path contradiction 字段；`diag-snapshot.charger` 已暴露 BQ25792 `ctrl2`、`ctrl5`、`sfet_present` 与 `sdrv_ctrl`。
 - `firmware/src/output/mod.rs`、`firmware/src/net.rs` 与 `firmware/src/usb_cdc_protocol.rs`: 提供受限 BMS 放电授权恢复链路，覆盖 USB CDC `recover_bms_discharge_authorization` 与设备本体 LAN HTTP `POST /api/v1/recovery/bms-discharge-authorization`，并让前面板自检恢复操作复用同一个固件恢复事务。
 - `tools/mains-aegis-host`: 提供 devd HTTP `POST /api/v1/devices/{id}/recovery/bms-discharge-authorization`，native serial / LAN transport 返回固件原始裁决结果并刷新 status/diag cache。
+- `tools/mains-aegis-host`: 提供 IPC `device.tps_en.release` 和 devd HTTP `POST /api/v1/devices/{id}/tps-en/release`。HTTP 只能由有效 USB Web lease 调用，CLI/IPC 也只选择已绑定 USB CDC；任意 LAN 写路径被拒绝。Web Device Info 显示互锁事实并只提供带确认弹窗的 MCU release 动作。
 
 
 ## References

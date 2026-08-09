@@ -1073,6 +1073,7 @@ pub struct HardwareDiagSnapshot {
     pub last_fresh_capture_ms: Option<u64>,
     pub capture_error: Option<&'static str>,
     pub retry_after_ms: Option<u16>,
+    pub tps_enable_interlock: TpsEnableInterlockSnapshot,
 }
 
 impl HardwareDiagSnapshot {
@@ -1092,6 +1093,39 @@ impl HardwareDiagSnapshot {
             last_fresh_capture_ms: None,
             capture_error: None,
             retry_after_ms: None,
+            tps_enable_interlock: TpsEnableInterlockSnapshot::empty(),
+        }
+    }
+}
+
+/// Runtime state for the board-level `THERM_KILL_N -> TPS_EN` interlock.
+/// `tps_en_effective_inhibit` is inferred from the shared kill line; TPS_EN
+/// itself has no independent MCU-readable pin on this board.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TpsEnableInterlockSnapshot {
+    pub therm_kill_n_low: bool,
+    pub mcu_drive_low: bool,
+    pub tps_en_effective_inhibit: bool,
+    pub source: &'static str,
+    pub asserted_at_ms: Option<u64>,
+    pub last_release_at_ms: Option<u64>,
+    pub failure_channel: Option<&'static str>,
+    pub failure_stage: Option<&'static str>,
+    pub failure_code: Option<&'static str>,
+}
+
+impl TpsEnableInterlockSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            therm_kill_n_low: false,
+            mcu_drive_low: false,
+            tps_en_effective_inhibit: false,
+            source: "released",
+            asserted_at_ms: None,
+            last_release_at_ms: None,
+            failure_channel: None,
+            failure_stage: None,
+            failure_code: None,
         }
     }
 }

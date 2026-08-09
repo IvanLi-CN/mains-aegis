@@ -18,6 +18,7 @@
 - [x] M3: 落地 fault/告警的最小观测与日志口径（`I2C1_INT(GPIO33)` + 状态读取/解析）
 - [x] M4: 固化上板验证步骤与测量口径到 `firmware/README.md`
 - [x] M5: 单路启动通信失败保留双路请求合同，按通道有限重试；重试耗尽后锁存并停止双路输出
+- [x] M6: 可重试 TPS I2C 错误耗尽时在双路软件停机后由 GPIO40 开漏抑制 `THERM_KILL_N -> TPS_EN`；受限 release 只解除 MCU 持有，不清除锁存或恢复输出
 
 ## References
 

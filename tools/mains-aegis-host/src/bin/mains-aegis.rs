@@ -151,6 +151,10 @@ enum DeviceCommand {
         #[arg(long, conflicts_with = "enable")]
         restore: bool,
     },
+    TpsEn {
+        #[command(subcommand)]
+        command: TpsEnCommand,
+    },
     Trace(TraceArgs),
     Artifact {
         #[command(subcommand)]
@@ -174,6 +178,14 @@ enum DeviceCommand {
 #[derive(Debug, Subcommand)]
 enum RecoveryCommand {
     BmsDischargeAuthorization,
+}
+
+#[derive(Debug, Subcommand)]
+enum TpsEnCommand {
+    Release {
+        #[arg(long)]
+        confirm: String,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -832,6 +844,12 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
             "device.output_bypass",
             json!({ "device_id": device_id, "enable": enable, "restore": restore }),
         ),
+        DeviceCommand::TpsEn { command } => match command {
+            TpsEnCommand::Release { confirm } => (
+                "device.tps_en.release",
+                json!({ "device_id": device_id, "confirm": confirm }),
+            ),
+        },
         DeviceCommand::Trace(args) => (
             "device.trace",
             json!({
@@ -953,7 +971,7 @@ mod tests {
     use super::{
         collect_new_matching_entries, device_read_ipc_params, device_to_ipc,
         looks_like_ipc_connect_error, seed_seen_ids, trace_entry_matches_kind, Cli, Command,
-        DaemonCommand, DeviceCommand, DeviceReadArgs, RecoveryCommand,
+        DaemonCommand, DeviceCommand, DeviceReadArgs, RecoveryCommand, TpsEnCommand,
     };
     use clap::Parser as _;
     use serde_json::json;
@@ -1023,6 +1041,37 @@ mod tests {
         let (method, params) = device_to_ipc(device_id, command);
         assert_eq!(method, "device.recovery.bms_discharge_authorization");
         assert_eq!(params, json!({"device_id": "serial-04f3bb3f5367"}));
+    }
+
+    #[test]
+    fn cli_maps_confirmed_tps_enable_release_to_ipc() {
+        let cli = Cli::try_parse_from([
+            "mains-aegis",
+            "device",
+            "serial-04f3bb3f5367",
+            "tps-en",
+            "release",
+            "--confirm",
+            "release-tps-en",
+        ])
+        .unwrap();
+
+        let Command::Device { device_id, command } = cli.command else {
+            panic!("expected device command");
+        };
+        assert!(matches!(
+            command,
+            DeviceCommand::TpsEn {
+                command: TpsEnCommand::Release { .. }
+            }
+        ));
+
+        let (method, params) = device_to_ipc(device_id, command);
+        assert_eq!(method, "device.tps_en.release");
+        assert_eq!(
+            params,
+            json!({"device_id": "serial-04f3bb3f5367", "confirm": "release-tps-en"})
+        );
     }
 
     #[test]

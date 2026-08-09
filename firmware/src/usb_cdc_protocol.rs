@@ -59,6 +59,7 @@ pub enum UsbCdcRequest {
     ResetAdvancedPower,
     EnableOutputBypass,
     RestoreOutput,
+    ReleaseTpsEn,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,6 +197,7 @@ pub enum UsbCdcProtocolError {
     UnsupportedType,
     UnsupportedOperation,
     UnsafeOperation,
+    InvalidConfirmation,
     InvalidLogLevel,
     InvalidManualChargePrefs,
     InvalidManualChargeControl,
@@ -214,6 +216,7 @@ impl UsbCdcProtocolError {
             Self::UnsupportedType => "unsupported_type",
             Self::UnsupportedOperation => "unsupported_operation",
             Self::UnsafeOperation => "unsafe_operation",
+            Self::InvalidConfirmation => "invalid_confirmation",
             Self::InvalidLogLevel => "invalid_log_level",
             Self::InvalidManualChargePrefs => "invalid_manual_charge_prefs",
             Self::InvalidManualChargeControl => "invalid_manual_charge_control",
@@ -232,6 +235,7 @@ impl UsbCdcProtocolError {
             Self::UnsupportedType => "frame type is not supported by this endpoint",
             Self::UnsupportedOperation => "request operation is not supported",
             Self::UnsafeOperation => "requested operation is outside the safe USB control surface",
+            Self::InvalidConfirmation => "confirmation token does not authorize this operation",
             Self::InvalidLogLevel => "log level must be error, warn, info, debug, or trace",
             Self::InvalidManualChargePrefs => "manual charge prefs are outside the safe set",
             Self::InvalidManualChargeControl => {
@@ -662,6 +666,15 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
         "reset_advanced_power" => Ok(UsbCdcRequest::ResetAdvancedPower),
         "enable_output_bypass" => Ok(UsbCdcRequest::EnableOutputBypass),
         "restore_output" => Ok(UsbCdcRequest::RestoreOutput),
+        "release_tps_en" => {
+            let confirm = json_string_field::<32>(line, "confirm")?
+                .ok_or(UsbCdcProtocolError::MissingField)?;
+            if confirm.as_str() == "release-tps-en" {
+                Ok(UsbCdcRequest::ReleaseTpsEn)
+            } else {
+                Err(UsbCdcProtocolError::InvalidConfirmation)
+            }
+        }
         "output_enable" | "output_disable" | "clear_fault" | "start_charge" | "stop_charge" => {
             Err(UsbCdcProtocolError::UnsafeOperation)
         }
@@ -1225,6 +1238,30 @@ mod tests {
                 op: UsbCdcRequest::RecoverBmsDischargeAuthorization,
             }
         );
+    }
+
+    #[test]
+    fn parses_confirmed_tps_enable_release_request() {
+        let frame = parse_frame(
+            r#"{"type":"request","request_id":"req-tps-release","op":"release_tps_en","confirm":"release-tps-en"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            frame,
+            UsbCdcFrame::Request {
+                request_id: String::try_from("req-tps-release").unwrap(),
+                op: UsbCdcRequest::ReleaseTpsEn,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_tps_enable_release_without_exact_confirmation() {
+        let err = parse_frame(
+            r#"{"type":"request","request_id":"req-tps-release","op":"release_tps_en","confirm":"release"}"#,
+        )
+        .unwrap_err();
+        assert_eq!(err, UsbCdcProtocolError::InvalidConfirmation);
     }
 
     #[test]

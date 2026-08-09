@@ -858,6 +858,12 @@ struct OutputBypassRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct TpsEnableReleaseRequest {
+    confirm: String,
+    lease_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct AdvancedPowerRequest {
     standby_drop_mv: u16,
     input_uvlo_cutoff_mv: u16,
@@ -1019,6 +1025,10 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
         .route(
             "/api/v1/devices/{id}/output-bypass",
             post(device_output_bypass),
+        )
+        .route(
+            "/api/v1/devices/{id}/tps-en/release",
+            post(device_tps_en_release),
         )
         .route("/api/v1/devices/{id}/connection", get(device_connection))
         .route(
@@ -1892,6 +1902,15 @@ async fn dispatch_ipc_request(
                     Json(OutputBypassRequest { enable, restore }),
                 )
                 .await,
+            )
+        }
+        "device.tps_en.release" => {
+            let id = require_param(&params, "device_id")?;
+            let confirm = require_param(&params, "confirm")?;
+            json_result(
+                device_tps_en_release_inner(state.clone(), id, confirm, None)
+                    .await
+                    .map(Json),
             )
         }
         "device.trace" => {
@@ -4339,6 +4358,56 @@ async fn device_output_bypass(
     )
     .await?;
     Ok(Json(result))
+}
+
+async fn device_tps_en_release(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<TpsEnableReleaseRequest>,
+) -> Result<Json<Value>, HttpError> {
+    let lease_id = input.lease_id.as_deref().ok_or_else(|| {
+        HttpError::non_retryable(
+            "web_session_required",
+            "TPS_EN release from the Web API requires an active USB lease",
+        )
+    })?;
+    Ok(Json(
+        device_tps_en_release_inner(state, id, input.confirm, Some(lease_id)).await?,
+    ))
+}
+
+async fn device_tps_en_release_inner(
+    state: AppState,
+    id: String,
+    confirm: String,
+    lease_id: Option<&str>,
+) -> Result<Value, HttpError> {
+    if confirm != "release-tps-en" {
+        return Err(HttpError::non_retryable(
+            "invalid_confirmation",
+            "TPS_EN release requires confirm=release-tps-en",
+        ));
+    }
+    let target = resolve_settings_control_target(&state, Some(&id), lease_id)?;
+    if !matches!(target, SettingsControlTarget::Usb { .. }) {
+        return Err(HttpError::non_retryable(
+            "devd_usb_session_required",
+            "TPS_EN release is available only through the bound USB CDC device",
+        ));
+    }
+    send_settings_frame(
+        &state,
+        &target,
+        json!({
+            "type": "request",
+            "op": "release_tps_en",
+            "confirm": "release-tps-en",
+        }),
+        |_| {},
+        "tps_enable_interlock",
+        "MCU TPS_EN hard inhibit released through USB CDC",
+    )
+    .await
 }
 
 fn recovery_lan_address_for_state_changing_write(
@@ -11870,6 +11939,63 @@ mod tests {
             &uri,
             &headers
         ));
+    }
+
+    #[tokio::test]
+    async fn tps_enable_release_requires_web_usb_lease() {
+        let error = device_tps_en_release(
+            State(create_app_state(false)),
+            Path("fixture-ups-device".to_string()),
+            Json(TpsEnableReleaseRequest {
+                confirm: "release-tps-en".to_string(),
+                lease_id: None,
+            }),
+        )
+        .await
+        .expect_err("Web release without a lease must be rejected");
+
+        assert_eq!(error.0.code, "web_session_required");
+    }
+
+    #[tokio::test]
+    async fn tps_enable_release_rejects_lan_write_path() {
+        let state = create_app_state(false);
+        let device_id = "fixture-lan-device".to_string();
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.devices.insert(
+                device_id.clone(),
+                DeviceRecord {
+                    id: device_id.clone(),
+                    display_name: "LAN device".to_string(),
+                    port_path: None,
+                    lan_address: Some("192.168.4.25:80".to_string()),
+                    lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
+                    transport: DeviceTransport::Lan,
+                    binding: None,
+                    connection: ConnectionState::Connected,
+                    identity: Some(json!({"device_id": "fixture-lan-device"})),
+                    status: None,
+                    status_updated_at: None,
+                    diag_snapshot: None,
+                    diag_snapshot_updated_at: None,
+                    selected_artifact_id: None,
+                    log_decode: LogDecodeState::default(),
+                    settings: default_settings(),
+                    logs: VecDeque::new(),
+                    trace: VecDeque::new(),
+                    last_power_event_signature: None,
+                },
+            );
+        }
+
+        let error =
+            device_tps_en_release_inner(state, device_id, "release-tps-en".to_string(), None)
+                .await
+                .expect_err("TPS_EN release must not be sent over LAN");
+
+        assert_eq!(error.0.code, "devd_usb_session_required");
     }
 
     #[test]

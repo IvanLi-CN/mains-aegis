@@ -5,6 +5,7 @@ import {
   getStatus,
   getSettings,
   previewDeviceChargeControl,
+  releaseDevdTpsEnableInterlock,
   resetDeviceAdvancedPower,
   setDeviceManualChargeControl,
   setDeviceManualChargePrefs,
@@ -333,6 +334,45 @@ describe("mock advanced power reset", () => {
         },
       },
     });
+  });
+});
+
+describe("TPS enable interlock release", () => {
+  test("uses the USB lease and exact confirmation token", async () => {
+    let requestUrl = "";
+    let requestInit: RequestInit | undefined;
+
+    const result = await withFetchMock(
+      async (input, init) => {
+        requestUrl = String(input);
+        requestInit = init;
+        return jsonResponse({
+          ok: true,
+          accepted: true,
+          result: "released",
+          mcu_drive_low: false,
+          therm_kill_n_low: false,
+          warning: null,
+          output_gate_reason: "tps_config_failed",
+        });
+      },
+      async () =>
+        releaseDevdTpsEnableInterlock(
+          "http://127.0.0.1:30080",
+          "mains-aegis-198840",
+          "usb-lease-1",
+        ),
+    );
+
+    expect(requestUrl).toBe(
+      "http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/tps-en/release",
+    );
+    expect(requestInit?.method).toBe("POST");
+    expect(JSON.parse(String(requestInit?.body))).toEqual({
+      confirm: "release-tps-en",
+      lease_id: "usb-lease-1",
+    });
+    expect(result.result).toBe("released");
   });
 });
 
