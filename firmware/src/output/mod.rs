@@ -5343,7 +5343,7 @@ where
             },
             Err(error) => DiagReadU16 {
                 raw: None,
-                error: Some(tps_error_kind(error)),
+                error: Some(diag_tps_error_kind(error)),
             },
         };
         snapshot.iout_limit = diag_tps_u8(tps.read_reg(addr::IOUT_LIMIT));

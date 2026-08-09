@@ -1506,6 +1506,10 @@ mod tests {
     fn diag_snapshot_keeps_tps_successes_when_one_register_fails() {
         let mut diag = DerivedPowerSnapshot::empty();
         diag.hardware.tps_a.captured_at_ms = 42;
+        diag.hardware.tps_a.vref = crate::net_types::DiagReadU16 {
+            raw: None,
+            error: Some("i2c_nack_address"),
+        };
         diag.hardware.tps_a.mode = crate::net_types::DiagReadU8 {
             raw: Some(0x82),
             error: None,
@@ -1528,9 +1532,15 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
         let package = &parsed["packages"]["tps55288.out_a"];
         assert_eq!(package["ok"], serde_json::json!(false));
+        assert_eq!(
+            package["payload"]["registers"]["VREF"]["raw"],
+            serde_json::json!(null)
+        );
         assert_eq!(package["payload"]["registers"]["MODE"]["raw"], 130);
         assert_eq!(package["payload"]["decoded"]["oe"], true);
         assert_eq!(package["read_errors"][0]["code"], "i2c_nack_address");
+        assert_eq!(package["read_errors"][0]["register"], "VREF");
+        assert_eq!(package["read_errors"][1]["code"], "i2c_nack_address");
         assert_eq!(package["read_errors"][0]["retryable"], true);
     }
 
