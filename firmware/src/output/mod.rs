@@ -3760,9 +3760,9 @@ where
         && !tps_b_fault
         && tmp_b_present
         && tmp_out_b_ok;
-    let mut recoverable_outputs = enabled_outputs_from_flags(out_a_allowed, out_b_allowed);
-    let mut output_gate_reason = OutputGateReason::None;
-    let bms_block_recoverable_outputs = enabled_outputs_from_flags(
+    // A communication failure without an asserted TPS fault is eligible for
+    // bounded runtime recovery. It must not discard a healthy peer.
+    let mut recoverable_outputs = enabled_outputs_from_flags(
         desired_outputs.is_enabled(OutputChannel::OutA)
             && sync_ok
             && ina_ready
@@ -3776,6 +3776,8 @@ where
             && tmp_b_present
             && tmp_out_b_ok,
     );
+    let mut output_gate_reason = OutputGateReason::None;
+    let bms_block_recoverable_outputs = recoverable_outputs;
 
     if desired_outputs.is_enabled(OutputChannel::OutA) && !out_a_allowed {
         defmt::warn!(
@@ -11781,7 +11783,9 @@ where
                 continue;
             }
             let latch = self.tps_fault_latch(ch);
-            if latch.config_failure_active() {
+            if latch.config_failure_active()
+                && tps_config_failure_blocks_active_outputs(self.output_state.active_outputs, ch)
+            {
                 return OutputGateReason::TpsConfigFailed;
             }
             if latch.fault_active() {
@@ -11857,21 +11861,41 @@ where
             && self.ui_snapshot.tmp_a != SelfCheckCommState::Err
             && self.ui_snapshot.tmp_b != SelfCheckCommState::Err
         {
-            let restore = self.output_state.requested_outputs;
             let now = Instant::now();
-            self.output_state.active_outputs = restore;
-            self.output_state.recoverable_outputs = restore;
-            self.recoverable_output_source = OutputGateReason::None;
-            if restore.is_enabled(OutputChannel::OutA) {
+            let mut scheduled_a = false;
+            let mut scheduled_b = false;
+            if missing_tps_recovery_should_schedule(
+                self.output_state.requested_outputs,
+                self.output_state.active_outputs,
+                self.output_state.recoverable_outputs,
+                self.tps_fault_latch(OutputChannel::OutA)
+                    .config_failure_active(),
+                self.tps_a_next_retry_at.is_some(),
+                OutputChannel::OutA,
+            ) {
                 self.mark_tps_failed(OutputChannel::OutA, Some(now));
+                scheduled_a = true;
             }
-            if restore.is_enabled(OutputChannel::OutB) {
+            if missing_tps_recovery_should_schedule(
+                self.output_state.requested_outputs,
+                self.output_state.active_outputs,
+                self.output_state.recoverable_outputs,
+                self.tps_fault_latch(OutputChannel::OutB)
+                    .config_failure_active(),
+                self.tps_b_next_retry_at.is_some(),
+                OutputChannel::OutB,
+            ) {
                 self.mark_tps_failed(OutputChannel::OutB, Some(now));
+                scheduled_b = true;
             }
-            defmt::info!(
-                "power: output admission retry requested_outputs={}",
-                restore.describe()
-            );
+            if scheduled_a || scheduled_b {
+                defmt::info!(
+                    "power: output admission retry missing_a={=bool} missing_b={=bool} active_outputs={}",
+                    scheduled_a,
+                    scheduled_b,
+                    self.output_state.active_outputs.describe()
+                );
+            }
         }
     }
 
@@ -12336,10 +12360,14 @@ where
         }
 
         if !self.tps_a_ready
-            && self
+            && (self
                 .output_state
                 .active_outputs
                 .is_enabled(OutputChannel::OutA)
+                || self
+                    .output_state
+                    .recoverable_outputs
+                    .is_enabled(OutputChannel::OutA))
             && self.tps_a_next_retry_at.is_some_and(|t| now >= t)
         {
             self.tps_a_next_retry_at = None;
@@ -12347,10 +12375,14 @@ where
         }
 
         if !self.tps_b_ready
-            && self
+            && (self
                 .output_state
                 .active_outputs
                 .is_enabled(OutputChannel::OutB)
+                || self
+                    .output_state
+                    .recoverable_outputs
+                    .is_enabled(OutputChannel::OutB))
             && self.tps_b_next_retry_at.is_some_and(|t| now >= t)
         {
             self.tps_b_next_retry_at = None;
@@ -12491,7 +12523,10 @@ where
     }
 
     fn try_configure_tps(&mut self, ch: OutputChannel) {
-        let enabled = self.output_state.active_outputs.is_enabled(ch);
+        let enabled = self.output_state.active_outputs.is_enabled(ch)
+            || (self.output_state.requested_outputs.is_enabled(ch)
+                && self.output_state.recoverable_outputs.is_enabled(ch)
+                && self.output_state.gate_reason == OutputGateReason::None);
         let addr = ch.addr();
         let ilimit_ma = self.current_output_ilimit_ma();
         let target_vout_mv = self.active_output_target_vout_mv();
@@ -12500,6 +12535,36 @@ where
             Ok(()) => {
                 if enabled {
                     self.clear_tps_fault_latch(ch);
+                    self.output_state.active_outputs = enabled_outputs_from_flags(
+                        self.output_state
+                            .active_outputs
+                            .is_enabled(OutputChannel::OutA)
+                            || ch == OutputChannel::OutA,
+                        self.output_state
+                            .active_outputs
+                            .is_enabled(OutputChannel::OutB)
+                            || ch == OutputChannel::OutB,
+                    );
+                    self.output_state.recoverable_outputs = enabled_outputs_from_flags(
+                        self.output_state
+                            .recoverable_outputs
+                            .is_enabled(OutputChannel::OutA)
+                            || ch == OutputChannel::OutA,
+                        self.output_state
+                            .recoverable_outputs
+                            .is_enabled(OutputChannel::OutB)
+                            || ch == OutputChannel::OutB,
+                    );
+                    self.cfg.detected_tps_outputs = enabled_outputs_from_flags(
+                        self.cfg
+                            .detected_tps_outputs
+                            .is_enabled(OutputChannel::OutA)
+                            || ch == OutputChannel::OutA,
+                        self.cfg
+                            .detected_tps_outputs
+                            .is_enabled(OutputChannel::OutB)
+                            || ch == OutputChannel::OutB,
+                    );
                 }
                 tps55288::log_configured(&mut self.i2c, ch, enabled, enabled);
                 self.mark_tps_ok(ch);

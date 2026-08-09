@@ -78,8 +78,8 @@
 模块内部固定维护四类状态：
 
 - `requested_outputs`：当前固件配置要求提供的输出集合；正常主固件固定为 `both`
-- `active_outputs`：当前允许真正重试配置/使能的输出集合
-- `recoverable_outputs`：被门控前最后一个可恢复集合
+- `active_outputs`：当前已配置并允许真正使能的输出集合
+- `recoverable_outputs`：满足安全前置条件、可进入有限重试的输出集合；包含被门控前的活动通道，以及启动只读探测暂时失败但未报告 TPS fault 的请求通道
 - `gate_reason`：当前门控原因
 
 正常主固件不得用 `active_outputs` 或 `recoverable_outputs` 的健康子集重建或缩窄
@@ -99,7 +99,7 @@ TPS 输出没有进入 `active_outputs`，固件不得把 owner-facing `mode` �
 - `bms_not_ready`：`BQ40Z50` 缺失，或放电路径未就绪
 - `therm_kill`：`THERM_KILL_N` 被拉低
 - `tps_fault`：任一路 `TPS55288 STATUS` 命中 `SCP/OCP/OVP`
-- `tps_config_failed`：任一路 `TPS55288` 运行期配置失败在有限重试后被锁存
+- `tps_config_failed`：活动 `TPS55288` 通道的运行期配置失败在有限重试后被锁存
 - `active_protection`：软保护链路已执行主动停机，等待条件恢复后进入显式恢复
 
 `tps_fault` 的判定不是靠周期轮询 `STATUS`。运行态基线是：
@@ -114,6 +114,8 @@ TPS 输出没有进入 `active_outputs`，固件不得把 owner-facing `mode` �
 - `i2c_nack / i2c_timeout / i2c_arbitration / i2c` 这类瞬态总线错误，最多只给有限次退避重试
 - `invalid_config / out_of_range` 这类非瞬态错误，不进入延迟重试，直接锁存
 - 一旦锁存为 `tps_config_failed`，该路停止周期性整套 `disable -> init -> enable` 重配，等待显式 restore
+- 启动探测只缺失一路且没有 `SCP/OCP/OVP` 时，运行期只重试该缺失通道；成功后才把该通道加入 `active_outputs`
+- 缺失通道的重试耗尽只保留该通道错误，不会门控仍在 `active_outputs` 的健康同伴；`requested_outputs` 仍保持双路合同，owner-facing 模式继续为 `blocked`
 
 ### TPS55288 输出准入矩阵
 
@@ -124,7 +126,7 @@ TPS 输出没有进入 `active_outputs`，固件不得把 owner-facing `mode` �
 | 1 | `none` | * | * | * | * | * | * | * | * | * | 保持原样 | 保持输出关闭；不进入 `TPS55288` enable |
 | 2 | 非 `none` | `0` | * | * | * | * | * | * | * | * | 禁止输出 | force disable；`gate_reason=therm_kill` |
 | 3 | 非 `none` | `1` | 有 | * | * | * | * | * | * | * | 禁止输出 | force disable；`gate_reason=tps_fault`；不自动恢复 |
-| 4 | 非 `none` | `1` | 无 | 耗尽 | * | * | * | * | * | * | 禁止输出 | force disable；`gate_reason=tps_config_failed`；不自动恢复 |
+| 4 | 非 `none` | `1` | 无 | 活动通道耗尽 | * | * | * | * | * | * | 禁止输出 | force disable；`gate_reason=tps_config_failed`；不自动恢复 |
 | 5 | 非 `none` | `1` | 无 | 未耗尽 | shutdown | * | * | * | * | * | 禁止输出 | force disable；`gate_reason=active_protection`；不自动恢复 |
 | 6 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 缺失 | * | * | * | * | 禁止输出 / BMS hold | force disable；`gate_reason=bms_not_ready`；保存可恢复通道 |
 | 7 | 非 `none` | `1` | 无 | 未耗尽 | 非 shutdown | 不安全 | * | * | * | * | 禁止输出 / BMS hold | force disable；`gate_reason=bms_not_ready`；保存可恢复通道 |
@@ -176,7 +178,8 @@ TPS 输出没有进入 `active_outputs`，固件不得把 owner-facing `mode` �
 
 1. 启动阶段按 boot self-test 结果生成初始状态：
    - 可直接运行的通道进入 `active_outputs`
-   - 因 `BMS` 门控而暂不允许启动的通道进入 `recoverable_outputs`
+   - 因 `BMS` 门控，或无 TPS fault 的单通道通信失败而暂不允许启动的通道进入 `recoverable_outputs`
+   - 单通道通信失败时保留健康同伴；运行期按退避只重新配置缺失通道，不把它与健康同伴绑成一次成对重配
    - 若模式请求输出且 `BMS` 在线但放电路径未就绪，固件会先记录一条显式的 `discharge_authorization decision=eligible/...` 日志，再决定是否发起恢复尝试
 2. 运行态只要命中任一门控源：
    - 保存当前 `active_outputs` 到 `recoverable_outputs`
@@ -248,7 +251,7 @@ TPS 输出准入仍未成立，系统必须保持 owner-facing `mode=blocked`，
 - `BQ40Z50` 缺失或 `discharge_ready != true`
 - `THERM_KILL_N == 0`
 - 任一路 `TPS55288 STATUS` 命中 `SCP/OCP/OVP`
-- 任一路 `TPS55288` 运行期配置重试耗尽
+- 活动 `TPS55288` 通道的运行期配置重试耗尽
 - 主动保护链路进入 shutdown
 - `BQ40Z50` 原生保护或放电路径状态导致的 `discharge_ready=false`，包括低电、`RCA`、`CUV/CUVC`、`no_battery` 等
 
