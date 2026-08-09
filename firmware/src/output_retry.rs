@@ -85,6 +85,16 @@ pub fn tps_failure_protection(
     }
 }
 
+/// A repeated retry exhaustion can occur after the logical output gate was
+/// already latched, even though a preceding pair-enable operation briefly
+/// enabled one TPS. The idempotent gate transition then skips its normal stop,
+/// so the caller must issue the best-effort dual software stop directly.
+pub const fn tps_hard_inhibit_requires_direct_software_stop(
+    gate_transition_changes_state: bool,
+) -> bool {
+    !gate_transition_changes_state
+}
+
 pub const fn tps_enable_interlock_source(
     mcu_drive_low: bool,
     therm_kill_n_low: bool,
@@ -102,9 +112,9 @@ pub const fn tps_enable_interlock_source(
 mod tests {
     use super::{
         is_tps_config_error_retryable, tps_config_retry_decision, tps_enable_interlock_source,
-        tps_failure_protection, tps_i2c_retry_exhaustion_should_hard_inhibit,
-        TpsConfigRetryDecision, TpsEnableInhibitState, TpsFailureProtection,
-        DEFAULT_TPS_CONFIG_MAX_RETRY_ATTEMPTS,
+        tps_failure_protection, tps_hard_inhibit_requires_direct_software_stop,
+        tps_i2c_retry_exhaustion_should_hard_inhibit, TpsConfigRetryDecision,
+        TpsEnableInhibitState, TpsFailureProtection, DEFAULT_TPS_CONFIG_MAX_RETRY_ATTEMPTS,
     };
 
     #[test]
@@ -166,6 +176,12 @@ mod tests {
             tps_failure_protection("scp", TpsConfigRetryDecision::Latch),
             TpsFailureProtection::SoftwareStop,
         );
+    }
+
+    #[test]
+    fn already_latched_gate_reissues_software_stop_before_hard_inhibit() {
+        assert!(tps_hard_inhibit_requires_direct_software_stop(false));
+        assert!(!tps_hard_inhibit_requires_direct_software_stop(true));
     }
 
     #[test]

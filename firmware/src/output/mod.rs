@@ -5203,9 +5203,20 @@ where
             return;
         }
 
-        // The protective state transition performs the dual TPS software stop
-        // before this MCU-owned hardware inhibit is asserted.
-        self.apply_output_gate(OutputGateReason::TpsConfigFailed);
+        // The transition normally performs the dual TPS software stop. A
+        // repeated exhaustion can reach this point after that gate is already
+        // latched, while an earlier pair-enable attempt briefly re-enabled a
+        // TPS. In that case force the best-effort dual stop again before the
+        // MCU-owned hardware inhibit.
+        let next_state =
+            output_state_gate_transition(self.output_state, OutputGateReason::TpsConfigFailed);
+        if output_retry::tps_hard_inhibit_requires_direct_software_stop(
+            next_state != self.output_state,
+        ) {
+            self.force_disable_outputs();
+        } else {
+            self.apply_output_gate(OutputGateReason::TpsConfigFailed);
+        }
         self.therm_kill.set_low();
         self.tps_enable_interlock
             .record_assertion(self.fan_now_ms(), failed_ch, stage, kind);
