@@ -6,6 +6,11 @@
 
 - 2026-08-08: 新固件发布资产采用带显式电压后缀的稳定短文件名，芯片、profile、features、Git SHA 与源码摘要继续由 manifest 的 `artifact_id` / `build_id` 承载；catalog 仍按 `files[].path` 解析，因此历史长文件名资产无需重发或别名副本。
 - 2026-08-08: `diag-snapshot` 升级为 schema v2，保留 endpoint/package id，采用逐包 fresh capture、部分失败与流式传输；Read/Clear 数据只由业务 owner 锁存，并补齐 INA3221 IRQ 到现有保护链路。
+- 2026-08-09: fresh I2C diagnostics 保留 ESP HAL 的 ACK 失败阶段，区分地址、数据与未知 NACK；该信息只扩展 `read_errors.code`，不改变既有保护与重试路径的通用错误分类。
+- 2026-08-09: TPS55288 的 `VREF` 读取纳入同一阶段映射，保证数据阶段 NACK 不再以通用错误呈现；同包其余寄存器继续逐项保留自己的错误阶段。
+- 2026-08-09: BQ40 manufacturing 与 BQ25792 register fresh capture 开始保留底层读取错误、采集时间和耗时，避免用空字段把不完整采集误报为成功；BQ40 block 无效与 BMS 地址不可用同样作为当前请求的结构化失败，不复用旧 payload 或时间。
+- 2026-08-09: 设备 LAN HTTP 的有界 request target 提升到可承载全部稳定硬件 package 的重复查询；全包诊断仍按逐包 chunked JSON 输出，不因合法 query 长度在解析阶段返回 `invalid_request`。
+- 2026-08-09: TPS retryable I2C 错误耗尽采用双阶段保护：先停止双路软件输出，再由 GPIO40 开漏拉低 `THERM_KILL_N -> TPS_EN`。`mcu.runtime` 公开互锁事实；受限 USB CDC/CLI/HTTP release 只解除 MCU 持有，LAN 写路径被明确拒绝。
 
 - 2026-06-14: `power event`、`status` 与 `diag-snapshot` 统一补充 `tps_total_iout_ma` / `tps_limit_threshold_ma`，用于解释 `pressure_tps_output_current`；DC IN profile 的 `iindpm_ma` 基线更新为 `1000mA`。
 - 2026-06-04: `diag-snapshot` 增加 `charger.vbat_lowv_pct_x10`、`charger.iprechg_ma`、`policy.recovery_stage`、`bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg`，支持确认 `REG08=71.4%/120mA` 与 BQ40 `2550mV + CUV_RECOV_CHG=0` baseline。

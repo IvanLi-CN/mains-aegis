@@ -3274,13 +3274,40 @@ pub(super) const fn enabled_outputs_from_flags(out_a: bool, out_b: bool) -> Enab
 pub(super) fn output_admission_retry_needed(
     requested: EnabledOutputs,
     active: EnabledOutputs,
-    recoverable: EnabledOutputs,
+    _recoverable: EnabledOutputs,
     gate_reason: OutputGateReason,
 ) -> bool {
     requested != EnabledOutputs::None
-        && active == EnabledOutputs::None
-        && recoverable == EnabledOutputs::None
+        && requested != active
         && gate_reason == OutputGateReason::None
+}
+
+pub(super) fn missing_tps_recovery_should_schedule(
+    requested: EnabledOutputs,
+    active: EnabledOutputs,
+    recoverable: EnabledOutputs,
+    failed_latched: bool,
+    retry_scheduled: bool,
+    channel: OutputChannel,
+) -> bool {
+    requested.is_enabled(channel)
+        && !active.is_enabled(channel)
+        && recoverable.is_enabled(channel)
+        && !failed_latched
+        && !retry_scheduled
+}
+
+pub(super) fn tps_retry_should_enable_output(
+    requested: EnabledOutputs,
+    active: EnabledOutputs,
+    recoverable: EnabledOutputs,
+    gate_reason: OutputGateReason,
+    channel: OutputChannel,
+) -> bool {
+    active.is_enabled(channel)
+        || (requested.is_enabled(channel)
+            && recoverable.is_enabled(channel)
+            && gate_reason == OutputGateReason::None)
 }
 
 pub(super) fn confirmed_active_outputs_from_tps_readback(
@@ -7508,6 +7535,66 @@ mod tests {
             EnabledOutputs::None,
             EnabledOutputs::Both,
             OutputGateReason::BmsNotReady,
+        ));
+    }
+
+    #[test]
+    fn output_admission_retry_recovers_a_missing_peer_without_dropping_the_active_one() {
+        assert!(output_admission_retry_needed(
+            EnabledOutputs::Both,
+            EnabledOutputs::Only(OutputChannel::OutB),
+            EnabledOutputs::Only(OutputChannel::OutB),
+            OutputGateReason::None,
+        ));
+    }
+
+    #[test]
+    fn missing_tps_recovery_observes_backoff_and_latch() {
+        let requested = EnabledOutputs::Both;
+        let active = EnabledOutputs::Only(OutputChannel::OutB);
+        let recoverable = EnabledOutputs::Both;
+
+        assert!(missing_tps_recovery_should_schedule(
+            requested,
+            active,
+            recoverable,
+            false,
+            false,
+            OutputChannel::OutA,
+        ));
+        assert!(!missing_tps_recovery_should_schedule(
+            requested,
+            active,
+            recoverable,
+            false,
+            true,
+            OutputChannel::OutA,
+        ));
+        assert!(!missing_tps_recovery_should_schedule(
+            requested,
+            active,
+            recoverable,
+            true,
+            false,
+            OutputChannel::OutA,
+        ));
+    }
+
+    #[test]
+    fn missing_tps_retry_enables_the_recovered_peer() {
+        assert!(tps_retry_should_enable_output(
+            EnabledOutputs::Both,
+            EnabledOutputs::Only(OutputChannel::OutB),
+            EnabledOutputs::Both,
+            OutputGateReason::None,
+            OutputChannel::OutA,
+        ));
+        assert!(!tps_retry_should_enable_output(
+            EnabledOutputs::Both,
+            EnabledOutputs::Only(OutputChannel::OutB),
+            EnabledOutputs::Both,
+            OutputGateReason::BmsNotReady,
+            OutputChannel::OutA,
         ));
     }
 

@@ -59,6 +59,7 @@ pub enum UsbCdcRequest {
     ResetAdvancedPower,
     EnableOutputBypass,
     RestoreOutput,
+    ReleaseTpsEn,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,6 +197,7 @@ pub enum UsbCdcProtocolError {
     UnsupportedType,
     UnsupportedOperation,
     UnsafeOperation,
+    InvalidConfirmation,
     InvalidLogLevel,
     InvalidManualChargePrefs,
     InvalidManualChargeControl,
@@ -214,6 +216,7 @@ impl UsbCdcProtocolError {
             Self::UnsupportedType => "unsupported_type",
             Self::UnsupportedOperation => "unsupported_operation",
             Self::UnsafeOperation => "unsafe_operation",
+            Self::InvalidConfirmation => "invalid_confirmation",
             Self::InvalidLogLevel => "invalid_log_level",
             Self::InvalidManualChargePrefs => "invalid_manual_charge_prefs",
             Self::InvalidManualChargeControl => "invalid_manual_charge_control",
@@ -232,6 +235,7 @@ impl UsbCdcProtocolError {
             Self::UnsupportedType => "frame type is not supported by this endpoint",
             Self::UnsupportedOperation => "request operation is not supported",
             Self::UnsafeOperation => "requested operation is outside the safe USB control surface",
+            Self::InvalidConfirmation => "confirmation token does not authorize this operation",
             Self::InvalidLogLevel => "log level must be error, warn, info, debug, or trace",
             Self::InvalidManualChargePrefs => "manual charge prefs are outside the safe set",
             Self::InvalidManualChargeControl => {
@@ -662,6 +666,15 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
         "reset_advanced_power" => Ok(UsbCdcRequest::ResetAdvancedPower),
         "enable_output_bypass" => Ok(UsbCdcRequest::EnableOutputBypass),
         "restore_output" => Ok(UsbCdcRequest::RestoreOutput),
+        "release_tps_en" => {
+            let confirm = json_string_field::<32>(line, "confirm")?
+                .ok_or(UsbCdcProtocolError::MissingField)?;
+            if confirm.as_str() == "release-tps-en" {
+                Ok(UsbCdcRequest::ReleaseTpsEn)
+            } else {
+                Err(UsbCdcProtocolError::InvalidConfirmation)
+            }
+        }
         "output_enable" | "output_disable" | "clear_fault" | "start_charge" | "stop_charge" => {
             Err(UsbCdcProtocolError::UnsafeOperation)
         }
@@ -1228,6 +1241,30 @@ mod tests {
     }
 
     #[test]
+    fn parses_confirmed_tps_enable_release_request() {
+        let frame = parse_frame(
+            r#"{"type":"request","request_id":"req-tps-release","op":"release_tps_en","confirm":"release-tps-en"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            frame,
+            UsbCdcFrame::Request {
+                request_id: String::try_from("req-tps-release").unwrap(),
+                op: UsbCdcRequest::ReleaseTpsEn,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_tps_enable_release_without_exact_confirmation() {
+        let err = parse_frame(
+            r#"{"type":"request","request_id":"req-tps-release","op":"release_tps_en","confirm":"release"}"#,
+        )
+        .unwrap_err();
+        assert_eq!(err, UsbCdcProtocolError::InvalidConfirmation);
+    }
+
+    #[test]
     fn rejects_malformed_advanced_power_numbers_with_trailing_fraction() {
         let err = parse_http_advanced_power_request(
             r#"{"standby_drop_mv":1200,"input_uvlo_cutoff_mv":11300,"input_uvlo_recover_mv":11500,"input_uvlo_required_samples":3.9,"source_limited_enter_delta_ma":1900}"#,
@@ -1506,13 +1543,17 @@ mod tests {
     fn diag_snapshot_keeps_tps_successes_when_one_register_fails() {
         let mut diag = DerivedPowerSnapshot::empty();
         diag.hardware.tps_a.captured_at_ms = 42;
+        diag.hardware.tps_a.vref = crate::net_types::DiagReadU16 {
+            raw: None,
+            error: Some("i2c_nack_address"),
+        };
         diag.hardware.tps_a.mode = crate::net_types::DiagReadU8 {
             raw: Some(0x82),
             error: None,
         };
         diag.hardware.tps_a.status = crate::net_types::DiagReadU8 {
             raw: None,
-            error: Some("i2c_nack"),
+            error: Some("i2c_nack_address"),
         };
         let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
         packages
@@ -1528,9 +1569,225 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
         let package = &parsed["packages"]["tps55288.out_a"];
         assert_eq!(package["ok"], serde_json::json!(false));
+        assert_eq!(
+            package["payload"]["registers"]["VREF"]["raw"],
+            serde_json::json!(null)
+        );
         assert_eq!(package["payload"]["registers"]["MODE"]["raw"], 130);
         assert_eq!(package["payload"]["decoded"]["oe"], true);
-        assert_eq!(package["read_errors"][0]["code"], "i2c_nack");
+        assert_eq!(package["read_errors"][0]["code"], "i2c_nack_address");
+        assert_eq!(package["read_errors"][0]["register"], "VREF");
+        assert_eq!(package["read_errors"][1]["code"], "i2c_nack_address");
+        assert_eq!(package["read_errors"][0]["retryable"], true);
+    }
+
+    #[test]
+    fn diag_snapshot_orders_tps_errors_by_capture_sequence() {
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.hardware.tps_a.mode = crate::net_types::DiagReadU8 {
+            raw: None,
+            error: Some("i2c_nack_data"),
+        };
+        diag.hardware.tps_a.vref = crate::net_types::DiagReadU16 {
+            raw: None,
+            error: Some("i2c_nack_address"),
+        };
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("tps55288.out_a").unwrap())
+            .unwrap();
+        let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+        render_diag_snapshot_json(
+            &mut body,
+            packages.as_slice(),
+            UpsStatusSnapshot::empty(),
+            diag,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+        let errors = &parsed["packages"]["tps55288.out_a"]["read_errors"];
+        assert_eq!(errors[0]["register"], "MODE");
+        assert_eq!(errors[0]["code"], "i2c_nack_data");
+        assert_eq!(errors[1]["register"], "VREF");
+    }
+
+    #[test]
+    fn diag_snapshot_marks_bq_fresh_read_failures() {
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.hardware.bq25792_captured_at_ms = 123;
+        diag.hardware.bq25792_duration_ms = 7;
+        diag.hardware.bq25792_errors[0] = Some(crate::net_types::DiagReadError {
+            register: "STATUS0",
+            code: "i2c_nack_address",
+        });
+        diag.hardware.bq40_captured_at_ms = 456;
+        diag.hardware.bq40_duration_ms = 9;
+        diag.hardware.bq40_errors[0] = Some(crate::net_types::DiagReadError {
+            register: "SAFETY_STATUS",
+            code: "i2c_nack_data",
+        });
+        diag.hardware.bq40_errors[1] = Some(crate::net_types::DiagReadError {
+            register: "CHARGING_STATUS",
+            code: "invalid_response",
+        });
+
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("bq25792.regs").unwrap())
+            .unwrap();
+        packages
+            .push(String::try_from("bq40.manufacturing").unwrap())
+            .unwrap();
+        let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+        render_diag_snapshot_json(
+            &mut body,
+            packages.as_slice(),
+            UpsStatusSnapshot::empty(),
+            diag,
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+        let package = &parsed["packages"]["bq25792.regs"];
+        assert_eq!(package["ok"], serde_json::json!(false));
+        assert_eq!(package["captured_at_ms"], serde_json::json!(123));
+        assert_eq!(package["duration_ms"], serde_json::json!(7));
+        assert_eq!(package["read_errors"][0]["register"], "STATUS0");
+        assert_eq!(package["read_errors"][0]["code"], "i2c_nack_address");
+        assert_eq!(package["read_errors"][0]["retryable"], true);
+
+        let bq40 = &parsed["packages"]["bq40.manufacturing"];
+        assert_eq!(bq40["ok"], serde_json::json!(false));
+        assert_eq!(bq40["captured_at_ms"], serde_json::json!(456));
+        assert_eq!(bq40["duration_ms"], serde_json::json!(9));
+        assert_eq!(bq40["read_errors"][0]["register"], "SAFETY_STATUS");
+        assert_eq!(bq40["read_errors"][0]["code"], "i2c_nack_data");
+        assert_eq!(bq40["read_errors"][1]["register"], "CHARGING_STATUS");
+        assert_eq!(bq40["read_errors"][1]["code"], "invalid_response");
+        assert_eq!(bq40["read_errors"][1]["retryable"], false);
+    }
+
+    #[test]
+    fn diag_snapshot_marks_bq_unavailable_capture_as_current_failure() {
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.hardware.bq40_captured_at_ms = 789;
+        diag.hardware.bq40_errors[0] = Some(crate::net_types::DiagReadError {
+            register: "DEVICE",
+            code: "bms_unavailable",
+        });
+
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("bq40.manufacturing").unwrap())
+            .unwrap();
+        let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+        render_diag_snapshot_json(
+            &mut body,
+            packages.as_slice(),
+            UpsStatusSnapshot::empty(),
+            diag,
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+        let bq40 = &parsed["packages"]["bq40.manufacturing"];
+        assert_eq!(bq40["ok"], serde_json::json!(false));
+        assert_eq!(bq40["captured_at_ms"], serde_json::json!(789));
+        assert_eq!(bq40["duration_ms"], serde_json::json!(0));
+        assert_eq!(bq40["payload"]["device"]["address"], 0);
+        assert_eq!(bq40["read_errors"][0]["register"], "DEVICE");
+        assert_eq!(bq40["read_errors"][0]["code"], "bms_unavailable");
+        assert_eq!(bq40["read_errors"][0]["retryable"], false);
+    }
+
+    #[test]
+    fn diag_snapshot_marks_bq_core_unavailable_without_reusing_bms_cache() {
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.bms.addr = Some(0x0b);
+        diag.bms.pack_mv = Some(15_200);
+        diag.bms.current_ma = Some(-820);
+        diag.bms.soc_pct = Some(61);
+        diag.hardware.bq40_core.captured_at_ms = 790;
+        diag.hardware.bq40_core.state = "err";
+        diag.hardware.bq40_core.errors[0] = Some(crate::net_types::DiagReadError {
+            register: "DEVICE",
+            code: "bms_unavailable",
+        });
+
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("bq40.core").unwrap())
+            .unwrap();
+        let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+        render_diag_snapshot_json(
+            &mut body,
+            packages.as_slice(),
+            UpsStatusSnapshot::empty(),
+            diag,
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+        let bq40 = &parsed["packages"]["bq40.core"];
+        assert_eq!(bq40["ok"], serde_json::json!(false));
+        assert_eq!(bq40["source"], "fresh_i2c");
+        assert_eq!(bq40["captured_at_ms"], serde_json::json!(790));
+        assert_eq!(bq40["payload"]["device"]["address"], 0);
+        assert_eq!(bq40["payload"]["decoded"]["state"], "err");
+        assert_eq!(
+            bq40["payload"]["measurements"]["pack_mv"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            bq40["payload"]["measurements"]["current_ma"],
+            serde_json::Value::Null
+        );
+        assert_eq!(bq40["read_errors"][0]["register"], "DEVICE");
+        assert_eq!(bq40["read_errors"][0]["code"], "bms_unavailable");
+        assert_eq!(bq40["read_errors"][0]["retryable"], false);
+    }
+
+    #[test]
+    fn diag_snapshot_renders_bq_core_as_fresh_register_capture() {
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.hardware.bq40_core.captured_at_ms = 791;
+        diag.hardware.bq40_core.duration_ms = 4;
+        diag.hardware.bq40_core.address = Some(0x0b);
+        diag.hardware.bq40_core.state = "ok";
+        diag.hardware.bq40_core.voltage = crate::net_types::DiagReadU16 {
+            raw: Some(15_200),
+            error: None,
+        };
+        diag.hardware.bq40_core.current = crate::net_types::DiagReadU16 {
+            raw: Some((-820i16) as u16),
+            error: None,
+        };
+        diag.hardware.bq40_core.relative_state_of_charge = crate::net_types::DiagReadU16 {
+            raw: Some(61),
+            error: None,
+        };
+
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("bq40.core").unwrap())
+            .unwrap();
+        let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+        render_diag_snapshot_json(
+            &mut body,
+            packages.as_slice(),
+            UpsStatusSnapshot::empty(),
+            diag,
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+        let bq40 = &parsed["packages"]["bq40.core"];
+        assert_eq!(bq40["ok"], serde_json::json!(true));
+        assert_eq!(bq40["source"], "fresh_i2c");
+        assert_eq!(bq40["captured_at_ms"], serde_json::json!(791));
+        assert_eq!(bq40["duration_ms"], serde_json::json!(4));
+        assert_eq!(bq40["payload"]["device"]["address"], 11);
+        assert_eq!(bq40["payload"]["registers"]["VOLTAGE"]["address"], 9);
+        assert_eq!(bq40["payload"]["registers"]["VOLTAGE"]["raw"], 15_200);
+        assert_eq!(bq40["payload"]["registers"]["CURRENT"]["address"], 10);
+        assert_eq!(bq40["payload"]["measurements"]["current_ma"], -820);
+        assert_eq!(bq40["payload"]["measurements"]["soc_pct"], 61);
+        assert_eq!(bq40["read_errors"], serde_json::json!([]));
     }
 
     #[test]

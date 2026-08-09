@@ -23,6 +23,8 @@ import type {
   SerialLogEntry,
   SerialTraceEntry,
   DevdWebLease,
+  DevdDiagSnapshot,
+  TpsEnableReleaseResponse,
   UpsStatus,
   WifiApplyNetwork,
 } from "./types";
@@ -522,6 +524,34 @@ function requestMockDevd<T>(
   }
   if (path.match(/^\/api\/v1\/devices\/[^/]+\/settings$/)) {
     return Promise.resolve(mockSettingsForBaseUrl(baseUrl) as T);
+  }
+  if (path.match(/^\/api\/v1\/devices\/[^/]+\/diag-snapshot(?:\?.*)?$/)) {
+    return Promise.resolve({
+      schema_version: 2,
+      packages: {
+        "mcu.runtime": {
+          ok: true,
+          source: "runtime_latch",
+          captured_at_ms: 0,
+          age_ms: 0,
+          duration_ms: 0,
+          payload: {
+            tps_enable_interlock: {
+              therm_kill_n_low: false,
+              mcu_drive_low: false,
+              tps_en_effective_inhibit: false,
+              source: "released",
+              asserted_at_ms: null,
+              last_release_at_ms: null,
+              failure_channel: null,
+              failure_stage: null,
+              failure_code: null,
+            },
+          },
+        },
+      },
+      errors: {},
+    } as T);
   }
   if (path === "/api/v1/serial/session") {
     return Promise.resolve({
@@ -1299,6 +1329,24 @@ export const getDevdDeviceChargeControl = (
   requestJson<ChargeControlDetail>(
     baseUrl,
     `/api/v1/devices/${encodeURIComponent(deviceId)}/charge-control`,
+    { bridgeAuth: true },
+  );
+export const getDevdDeviceDiagSnapshot = (baseUrl: string, deviceId: string) =>
+  requestJson<DevdDiagSnapshot>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/diag-snapshot?package=mcu.runtime`,
+    { bridgeAuth: true },
+  );
+export const releaseDevdTpsEnableInterlock = (
+  baseUrl: string,
+  deviceId: string,
+  leaseId: string,
+) =>
+  requestWithBody<TpsEnableReleaseResponse>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/tps-en/release`,
+    "POST",
+    { confirm: "release-tps-en", lease_id: leaseId },
     { bridgeAuth: true },
   );
 export const previewDevdDeviceChargeControl = (

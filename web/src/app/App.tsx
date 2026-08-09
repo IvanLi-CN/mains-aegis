@@ -53,11 +53,13 @@ import type { LucideIcon } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   bindDevdDevice,
+  getDevdDeviceDiagSnapshot,
   getIdentity,
   isHostedHttpServiceApp,
   isPublicStaticApp,
   listDevdDevices,
   normalizeBaseUrl,
+  releaseDevdTpsEnableInterlock,
   subscribeDevdDeviceEvents,
   toErrorEnvelope,
 } from "../api/client";
@@ -71,6 +73,7 @@ import type {
   LanCompanionCandidate,
   SerialLogEntry,
   SerialTraceEntry,
+  TpsEnableInterlock,
   UpsStatus,
 } from "../api/types";
 import {
@@ -4869,9 +4872,231 @@ function DeviceInfoPage({ record }: { record: DeviceRecord }) {
             value={hardwareCapabilitySourceLabel(hardwareCapability.source)}
           />
         </InfoPanel>
+        <TpsEnableInterlockPanel record={record} />
       </div>
     </section>
   );
+}
+
+function TpsEnableInterlockPanel({ record }: { record: DeviceRecord }) {
+  const target = useMemo(
+    () => devdTpsEnableTarget(record),
+    [
+      record.serial?.baseUrl,
+      record.serial?.leaseId,
+      record.serial?.source,
+      record.target.baseUrl,
+      record.target.deviceId,
+      record.target.mock,
+      record.target.rememberedChannels?.devd?.baseUrl,
+      record.target.rememberedChannels?.devd?.devdDeviceId,
+      record.target.transport,
+    ],
+  );
+  const [interlock, setInterlock] = useState<TpsEnableInterlock | null>(null);
+  const [feedback, setFeedback] = useState<UiFeedback | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const targetKey = target
+    ? `${target.baseUrl}\u0000${target.deviceId}\u0000${target.leaseId ?? ""}`
+    : null;
+  const currentTargetKey = useRef(targetKey);
+  currentTargetKey.current = targetKey;
+
+  const refresh = useCallback(async (isActive: () => boolean = () => true) => {
+    const refreshTarget = target;
+    const refreshTargetKey = targetKey;
+    const isCurrent = () =>
+      isActive() && currentTargetKey.current === refreshTargetKey;
+    if (!refreshTarget || record.target.mock) {
+      if (isCurrent()) {
+        setInterlock(null);
+        setFeedback(null);
+      }
+      return;
+    }
+    try {
+      const snapshot = await getDevdDeviceDiagSnapshot(
+        refreshTarget.baseUrl,
+        refreshTarget.deviceId,
+      );
+      if (!isCurrent()) return;
+      const next = snapshot.packages["mcu.runtime"]?.payload
+        ?.tps_enable_interlock;
+      if (next) {
+        setInterlock(next);
+        setFeedback(null);
+      } else {
+        setInterlock(null);
+        setFeedback({
+          tone: "error",
+          message: "TPS enable interlock diagnostics are unavailable on this firmware.",
+        });
+      }
+    } catch (error) {
+      if (!isCurrent()) return;
+      setInterlock(null);
+      setFeedback(errorFeedback(toErrorEnvelope(error)));
+    }
+  }, [record.target.mock, target, targetKey]);
+
+  useEffect(() => {
+    let active = true;
+    setInterlock(null);
+    setFeedback(null);
+    setDialogOpen(false);
+    setBusy(false);
+    void refresh(() => active);
+    return () => {
+      active = false;
+    };
+  }, [refresh]);
+
+  async function release() {
+    const releaseTarget = target;
+    const releaseTargetKey = targetKey;
+    if (!releaseTarget?.leaseId) return;
+    setBusy(true);
+    try {
+      const result = await releaseDevdTpsEnableInterlock(
+        releaseTarget.baseUrl,
+        releaseTarget.deviceId,
+        releaseTarget.leaseId,
+      );
+      if (currentTargetKey.current !== releaseTargetKey) return;
+      setFeedback(
+        result.warning
+          ? {
+              tone: "error",
+              message:
+                "MCU release completed, but THERM_KILL_N remains low from an external or unknown source.",
+            }
+          : successFeedback(
+              result.result === "already_released"
+                ? "TPS_EN was already released by the MCU"
+                : "MCU TPS_EN hard inhibit released",
+            ),
+      );
+      setDialogOpen(false);
+      await refresh();
+    } catch (error) {
+      if (currentTargetKey.current !== releaseTargetKey) return;
+      setFeedback(errorFeedback(toErrorEnvelope(error)));
+    } finally {
+      if (currentTargetKey.current === releaseTargetKey) setBusy(false);
+    }
+  }
+
+  const leaseReady = Boolean(target?.leaseId);
+  const source = interlock?.source ?? "unavailable";
+  return (
+    <InfoPanel title="TPS enable interlock" icon={AlertTriangle}>
+      <MetricLine
+        label="THERM_KILL_N"
+        value={interlock ? (interlock.therm_kill_n_low ? "low" : "high") : "--"}
+      />
+      <MetricLine
+        label="MCU drive"
+        value={interlock ? (interlock.mcu_drive_low ? "low" : "released") : "--"}
+      />
+      <MetricLine
+        label="TPS_EN inhibit"
+        value={
+          interlock
+            ? interlock.tps_en_effective_inhibit
+              ? "active"
+              : "released"
+            : "--"
+        }
+      />
+      <MetricLine label="Source" value={source} />
+      <MetricLine
+        label="Asserted uptime"
+        value={interlock?.asserted_at_ms === null || interlock?.asserted_at_ms === undefined ? "--" : `${interlock.asserted_at_ms} ms`}
+      />
+      <MetricLine
+        label="Last release uptime"
+        value={interlock?.last_release_at_ms === null || interlock?.last_release_at_ms === undefined ? "--" : `${interlock.last_release_at_ms} ms`}
+      />
+      {interlock?.failure_channel ? (
+        <MetricLine
+          label="Last TPS failure"
+          value={`${interlock.failure_channel} ${interlock.failure_stage ?? "--"} ${interlock.failure_code ?? "--"}`}
+        />
+      ) : null}
+      <div className="tps-enable-interlock-actions">
+        <button
+          className="secondary-button danger-action tps-enable-interlock-release"
+          type="button"
+          disabled={!leaseReady || busy || !interlock?.mcu_drive_low}
+          onClick={() => setDialogOpen(true)}
+        >
+          <ButtonLabel
+            icon={RefreshCw}
+            busy={false}
+            busyText="Releasing"
+            text="Release MCU TPS_EN"
+          />
+        </button>
+        {!leaseReady ? <p className="field-help">An active USB lease is required.</p> : null}
+      </div>
+      {feedback ? <FeedbackMessage feedback={feedback} /> : null}
+      <Dialog.Root open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="pwa-update-dialog-overlay" />
+          <Dialog.Content className="pwa-update-dialog">
+            <Dialog.Title className="pwa-update-dialog-title">
+              Release MCU TPS_EN inhibit
+            </Dialog.Title>
+            <Dialog.Description className="pwa-update-dialog-description">
+              This only releases the MCU open-drain hold. It does not clear the TPS fault latch or restore output.
+            </Dialog.Description>
+            <div className="dialog-actions">
+              <Dialog.Close asChild>
+                <button className="secondary-button" type="button" disabled={busy}>
+                  Cancel
+                </button>
+              </Dialog.Close>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={busy}
+                onClick={() => void release()}
+              >
+                <ButtonLabel
+                  icon={RefreshCw}
+                  busy={busy}
+                  busyText="Releasing"
+                  text="Release TPS_EN"
+                />
+              </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </InfoPanel>
+  );
+}
+
+function devdTpsEnableTarget(record: DeviceRecord): {
+  baseUrl: string;
+  deviceId: string;
+  leaseId: string | null;
+} | null {
+  const baseUrl =
+    record.serial?.source === "devd"
+      ? (record.serial.baseUrl ?? record.target.baseUrl)
+      : record.target.transport === "devd"
+        ? record.target.baseUrl
+        : record.target.rememberedChannels?.devd?.baseUrl;
+  if (baseUrl === undefined) return null;
+  return {
+    baseUrl,
+    deviceId:
+      record.target.rememberedChannels?.devd?.devdDeviceId ?? record.target.deviceId,
+    leaseId:
+      record.serial?.source === "devd" ? (record.serial.leaseId ?? null) : null,
+  };
 }
 
 function SettingsPage({ record }: { record: DeviceRecord }) {

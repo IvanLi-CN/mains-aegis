@@ -2,8 +2,9 @@
 
 ## 当前实现
 
-- CLI、IPC 与 HTTP 继续返回一个 diagnostic JSON；USB 传输层 begin/package/error/end 分块由 devd 聚合。
+- CLI、IPC 与 HTTP 继续返回一个 diagnostic JSON；USB 传输层 begin/package/error/end 分块由 devd 聚合，并原样保留 fresh I2C 的地址、数据与未知 NACK 错误码。BQ40 core 的 `VOLTAGE`、`CURRENT`、`RELATIVE_STATE_OF_CHARGE` 与 manufacturing、BQ25792 register 的部分失败保留 `ok=false`、采集时序和稳定寄存器错误；BQ40 无效 block response 或地址不可用时返回不可重试的结构化读取错误和当前采集时间，不复用陈旧数据；TPS55288 `VREF` 的数据阶段 NACK 与同包后续寄存器的地址阶段 NACK 也均按寄存器原样返回。
 - host/devd 区分 schema v2 与 legacy v1，并保持 v2 package/error、busy 与限频语义。
+- `mcu.runtime` 诊断透传 `tps_enable_interlock`，用于区分 MCU 因 TPS retryable I2C 耗尽而持有的 `THERM_KILL_N` 与 release 后仍低的外部或未知来源；`TPS_EN` 状态只作线路推导。
 
 - compact status renderer 在 charger 对象末字段后直接闭合对象，并由 host-side JSON parser 回归测试验证完整 payload，保证 `status --fresh` 可被 devd 匹配。
 - `tools/mains-aegis-host` 统一产出 `mains-aegis` CLI 与 `mains-aegis-devd` daemon。
@@ -19,6 +20,7 @@
 - Connect discovery 的 owner-facing 动作语义与 devd 持久绑定保持一致：新发现 USB 候选先执行 `Bind USB`，新发现 LAN 候选执行 `Add WiFi`；只有浏览器内已存在的设备记录才显示 `Open` 与 transport 切换动作。
 - host-tools 新增 `/api/v1/devices/{id}/companion-lan` 与对应 IPC/CLI `device <id> companion-lan bind|clear`，把“自动发现”和“持久绑定”分成两步；devd 持久保存 mDNS + 最近成功 `IP:Port`，但默认仍保持 USB-first owner 语义。
 - host-tools 新增 devd HTTP `POST /api/v1/devices/{id}/recovery/bms-discharge-authorization`、IPC `device.recovery.bms_discharge_authorization` 与 CLI `device <id> recovery bms-discharge-authorization`。native serial 设备只有显式绑定 companion LAN 时才优先尝试设备 LAN HTTP，失败后回退 USB CDC；无 companion LAN 时只走绑定 USB CDC，不把缓存的 `identity/status.network.ipv4` 当作恢复写目标；LAN 设备直接走设备本体 HTTP；mock 设备返回结构化 rejected。devd 会等待固件非 `pending` 终态并刷新 status/diag cache。
+- host-tools 新增 USB-only `device.tps_en.release` IPC、`POST /api/v1/devices/{id}/tps-en/release` 与 `mains-aegis device <id> tps-en release --confirm release-tps-en`。HTTP 要求有效 Web USB lease；错误确认和 LAN target 均被拒绝。Web Device Info 只显示互锁诊断并提供一个确认后的 MCU release 动作。
 - Repo skill routing defaults Codex work inside this repository to `$mains-aegis-devd-flow` for development, validation, diagnostics, field investigation, and hardware read/session-read checks. `$mains-aegis-user-operations` remains the explicit end-user/released host-tools route.
 
 ## 验证

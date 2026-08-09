@@ -5,7 +5,7 @@
 ## Current Status
 
 - Lifecycle: archived
-- Implementation: complete；固件已写入并回读两颗 TMP112A 的 comparator、阈值与去抖配置，并保留 `THERM_KILL_N` 可观测性。
+- Implementation: complete；固件已写入并回读两颗 TMP112A 的 comparator、阈值与去抖配置，并保留 `THERM_KILL_N` 可观测性。GPIO40 仍在启动时释放；运行时 TPS retryable I2C 耗尽可作为独立于 TMP112 的 MCU 开漏停机源，诊断会与外部低电平区分。
 
 ## Migrated Implementation Record
 

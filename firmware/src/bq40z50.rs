@@ -1076,11 +1076,15 @@ mod tests {
 
         let mut i2c = ScriptedI2c::new([Step::Write(addr, vec![cmd]), Step::Read(addr, frame)]);
 
-        let raw = read_block_raw(&mut i2c, addr, cmd).unwrap().unwrap();
+        let trace = read_block_raw_trace(&mut i2c, addr, cmd).unwrap();
+        let raw = trace.raw.unwrap();
 
         assert_eq!(raw.declared_len, 4);
         assert_eq!(raw.payload_len, 4);
         assert_eq!(&raw.payload[..4], &payload);
+        assert_eq!(trace.selected_source, Some(BlockReadSource::Pec));
+        assert_eq!(trace.pec.status, BlockReadProbeStatus::Ok);
+        assert_eq!(trace.plain.status, BlockReadProbeStatus::NotAttempted);
     }
 
     #[test]
@@ -1104,11 +1108,15 @@ mod tests {
             Step::Read(addr, plain_frame),
         ]);
 
-        let raw = read_block_raw(&mut i2c, addr, cmd).unwrap().unwrap();
+        let trace = read_block_raw_trace(&mut i2c, addr, cmd).unwrap();
+        let raw = trace.raw.unwrap();
 
         assert_eq!(raw.declared_len, 4);
         assert_eq!(raw.payload_len, 4);
         assert_eq!(&raw.payload[..4], &payload);
+        assert_eq!(trace.selected_source, Some(BlockReadSource::Plain));
+        assert_eq!(trace.pec.status, BlockReadProbeStatus::PecMismatch);
+        assert_eq!(trace.plain.status, BlockReadProbeStatus::Ok);
     }
 
     #[test]

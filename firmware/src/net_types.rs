@@ -927,6 +927,33 @@ impl DiagReadU16 {
     }
 }
 
+/// The precise phase reported by ESP HAL when an I2C acknowledge check fails.
+///
+/// Diagnostic captures preserve this distinction without changing the broader
+/// runtime error taxonomy used by the protection and retry paths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiagI2cNackReason {
+    Address,
+    Data,
+    Unknown,
+}
+
+pub const fn diag_i2c_nack_code(reason: DiagI2cNackReason) -> &'static str {
+    match reason {
+        DiagI2cNackReason::Address => "i2c_nack_address",
+        DiagI2cNackReason::Data => "i2c_nack_data",
+        DiagI2cNackReason::Unknown => "i2c_nack_unknown",
+    }
+}
+
+pub const DIAG_READ_ERROR_CAP: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiagReadError {
+    pub register: &'static str,
+    pub code: &'static str,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tps55288DiagSnapshot {
     pub captured_at_ms: u64,
@@ -1031,15 +1058,50 @@ impl Tmp112DiagSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bq40CoreDiagSnapshot {
+    pub captured_at_ms: u64,
+    pub duration_ms: u16,
+    pub address: Option<u8>,
+    pub state: &'static str,
+    pub voltage: DiagReadU16,
+    pub current: DiagReadU16,
+    pub relative_state_of_charge: DiagReadU16,
+    pub errors: [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+}
+
+impl Bq40CoreDiagSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            captured_at_ms: 0,
+            duration_ms: 0,
+            address: None,
+            state: "pending",
+            voltage: DiagReadU16::empty(),
+            current: DiagReadU16::empty(),
+            relative_state_of_charge: DiagReadU16::empty(),
+            errors: [None; DIAG_READ_ERROR_CAP],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HardwareDiagSnapshot {
     pub tps_a: Tps55288DiagSnapshot,
     pub tps_b: Tps55288DiagSnapshot,
     pub ina3221: Ina3221DiagSnapshot,
     pub tmp_a: Tmp112DiagSnapshot,
     pub tmp_b: Tmp112DiagSnapshot,
+    pub bq40_core: Bq40CoreDiagSnapshot,
+    pub bq40_captured_at_ms: u64,
+    pub bq40_duration_ms: u16,
+    pub bq40_errors: [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+    pub bq25792_captured_at_ms: u64,
+    pub bq25792_duration_ms: u16,
+    pub bq25792_errors: [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
     pub last_fresh_capture_ms: Option<u64>,
     pub capture_error: Option<&'static str>,
     pub retry_after_ms: Option<u16>,
+    pub tps_enable_interlock: TpsEnableInterlockSnapshot,
 }
 
 impl HardwareDiagSnapshot {
@@ -1050,9 +1112,49 @@ impl HardwareDiagSnapshot {
             ina3221: Ina3221DiagSnapshot::empty(),
             tmp_a: Tmp112DiagSnapshot::empty(0x48),
             tmp_b: Tmp112DiagSnapshot::empty(0x49),
+            bq40_core: Bq40CoreDiagSnapshot::empty(),
+            bq40_captured_at_ms: 0,
+            bq40_duration_ms: 0,
+            bq40_errors: [None; DIAG_READ_ERROR_CAP],
+            bq25792_captured_at_ms: 0,
+            bq25792_duration_ms: 0,
+            bq25792_errors: [None; DIAG_READ_ERROR_CAP],
             last_fresh_capture_ms: None,
             capture_error: None,
             retry_after_ms: None,
+            tps_enable_interlock: TpsEnableInterlockSnapshot::empty(),
+        }
+    }
+}
+
+/// Runtime state for the board-level `THERM_KILL_N -> TPS_EN` interlock.
+/// `tps_en_effective_inhibit` is inferred from the shared kill line; TPS_EN
+/// itself has no independent MCU-readable pin on this board.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TpsEnableInterlockSnapshot {
+    pub therm_kill_n_low: bool,
+    pub mcu_drive_low: bool,
+    pub tps_en_effective_inhibit: bool,
+    pub source: &'static str,
+    pub asserted_at_ms: Option<u64>,
+    pub last_release_at_ms: Option<u64>,
+    pub failure_channel: Option<&'static str>,
+    pub failure_stage: Option<&'static str>,
+    pub failure_code: Option<&'static str>,
+}
+
+impl TpsEnableInterlockSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            therm_kill_n_low: false,
+            mcu_drive_low: false,
+            tps_en_effective_inhibit: false,
+            source: "released",
+            asserted_at_ms: None,
+            last_release_at_ms: None,
+            failure_channel: None,
+            failure_stage: None,
+            failure_code: None,
         }
     }
 }
@@ -1544,10 +1646,23 @@ pub fn format_ipv4(buf: &mut String<16>, ipv4: [u8; 4]) {
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_advanced_power_settings, AdvancedPowerSettingsSnapshot,
-        AdvancedPowerValidationError, DeviceSettingsSnapshot, NetworkUiSummary,
+        diag_i2c_nack_code, validate_advanced_power_settings, AdvancedPowerSettingsSnapshot,
+        AdvancedPowerValidationError, DeviceSettingsSnapshot, DiagI2cNackReason, NetworkUiSummary,
         RuntimeModePolicySnapshot, WifiConnectionState, WifiErrorKind, WifiSnapshot,
     };
+
+    #[test]
+    fn diagnostic_nack_codes_preserve_acknowledgement_phase() {
+        assert_eq!(
+            diag_i2c_nack_code(DiagI2cNackReason::Address),
+            "i2c_nack_address"
+        );
+        assert_eq!(diag_i2c_nack_code(DiagI2cNackReason::Data), "i2c_nack_data");
+        assert_eq!(
+            diag_i2c_nack_code(DiagI2cNackReason::Unknown),
+            "i2c_nack_unknown"
+        );
+    }
 
     #[test]
     fn connected_ui_summary_prefers_ip_text() {

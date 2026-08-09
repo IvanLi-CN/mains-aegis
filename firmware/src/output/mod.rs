@@ -22,14 +22,15 @@ use mains_aegis_firmware::bq40z50;
 use mains_aegis_firmware::fan;
 use mains_aegis_firmware::ina3221;
 use mains_aegis_firmware::net_types::{
-    validate_advanced_power_settings, AdvancedPowerSettingsSnapshot, AdvancedPowerValidationError,
-    ChargeControlBlockSnapshot, ChargeControlDetailSnapshot, ChargeControlEvidenceEntrySnapshot,
+    diag_i2c_nack_code, validate_advanced_power_settings, AdvancedPowerSettingsSnapshot,
+    AdvancedPowerValidationError, Bq40CoreDiagSnapshot, ChargeControlBlockSnapshot,
+    ChargeControlDetailSnapshot, ChargeControlEvidenceEntrySnapshot,
     ChargeControlEvidenceValueSnapshot, ChargeControlLoopOverrideSnapshot,
     ChargeControlReadinessSnapshot, ChargeControlSnapshot, ChargeControlTelemetrySnapshot,
     DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerInputSnapshot,
-    DerivedPowerPolicySnapshot, DerivedPowerSnapshot, DiagReadU16, DiagReadU8,
-    RuntimeModePolicySnapshot, Tmp112DiagSnapshot, Tps55288DiagSnapshot,
-    CHARGE_CONTROL_EVIDENCE_CAP,
+    DerivedPowerPolicySnapshot, DerivedPowerSnapshot, DiagI2cNackReason, DiagReadError,
+    DiagReadU16, DiagReadU8, RuntimeModePolicySnapshot, Tmp112DiagSnapshot, Tps55288DiagSnapshot,
+    TpsEnableInterlockSnapshot, CHARGE_CONTROL_EVIDENCE_CAP, DIAG_READ_ERROR_CAP,
 };
 use mains_aegis_firmware::output_protection;
 use mains_aegis_firmware::output_retry::{self, TpsConfigRetryDecision};
@@ -2098,6 +2099,164 @@ where
     }
 }
 
+fn diag_bq40_optional<T>(
+    result: Result<Option<T>, esp_hal::i2c::master::Error>,
+    register: &'static str,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> Option<T> {
+    match result {
+        Ok(Some(value)) => Some(value),
+        Ok(None) => {
+            push_diag_read_error(errors, register, "invalid_response");
+            None
+        }
+        Err(error) => {
+            push_diag_read_error(errors, register, diag_i2c_error_kind(error));
+            None
+        }
+    }
+}
+
+fn diag_bq40_trace(
+    result: Result<bq40z50::ChargingStatusTrace, esp_hal::i2c::master::Error>,
+    register: &'static str,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> Option<bq40z50::ChargingStatusTrace> {
+    match result {
+        Ok(value) if value.value.is_some() => Some(value),
+        Ok(_) => {
+            push_diag_read_error(errors, register, "invalid_response");
+            None
+        }
+        Err(error) => {
+            push_diag_read_error(errors, register, diag_i2c_error_kind(error));
+            None
+        }
+    }
+}
+
+fn read_bq40_op_status_with_raw_trace_diag<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> (Option<u32>, Option<u8>, Option<[u8; 4]>)
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let trace = match bq40z50::read_block_raw_trace(i2c, addr, bq40z50::cmd::OPERATION_STATUS) {
+        Ok(trace) => trace,
+        Err(error) => {
+            push_diag_read_error(errors, "OPERATION_STATUS", diag_i2c_error_kind(error));
+            return (None, None, None);
+        }
+    };
+    let Some(raw) = trace.raw else {
+        push_diag_read_error(errors, "OPERATION_STATUS", "invalid_response");
+        return (None, None, None);
+    };
+    let mut bytes = [0u8; 4];
+    let copy_len = core::cmp::min(raw.payload_len as usize, bytes.len());
+    bytes[..copy_len].copy_from_slice(&raw.payload[..copy_len]);
+    let op_status = (raw.payload_len >= 4).then(|| u32::from_le_bytes(bytes));
+    if op_status.is_none() {
+        push_diag_read_error(errors, "OPERATION_STATUS", "invalid_response");
+    }
+    (op_status, Some(raw.payload_len), Some(bytes))
+}
+
+fn read_bq40_lock_diag_snapshot_diag<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> Bq40LockDiagSnapshot
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    Bq40LockDiagSnapshot {
+        charging: diag_bq40_trace(
+            bq40z50::read_charging_status_trace(i2c, addr),
+            "CHARGING_STATUS",
+            errors,
+        ),
+        safety_alert: diag_bq40_optional(
+            bq40z50::read_safety_alert(i2c, addr),
+            "SAFETY_ALERT",
+            errors,
+        ),
+        safety_status: diag_bq40_optional(
+            bq40z50::read_safety_status(i2c, addr),
+            "SAFETY_STATUS",
+            errors,
+        ),
+        pf_status: diag_bq40_optional(bq40z50::read_pf_status(i2c, addr), "PF_STATUS", errors),
+        manufacturing_status: diag_bq40_optional(
+            bq40z50::read_manufacturing_status(i2c, addr),
+            "MANUFACTURING_STATUS",
+            errors,
+        ),
+        gauging_status: diag_bq40_optional(
+            bq40z50::read_gauging_status(i2c, addr),
+            "GAUGING_STATUS",
+            errors,
+        ),
+        op_status: diag_bq40_optional(
+            bq40z50::read_operation_status(i2c, addr),
+            "OPERATION_STATUS",
+            errors,
+        ),
+        update_status: diag_bq40_optional(
+            bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::UPDATE_STATUS),
+            "UPDATE_STATUS",
+            errors,
+        ),
+        current_at_eoc_ma: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::CURRENT_AT_EOC),
+            "CURRENT_AT_EOC",
+            errors,
+        ),
+        no_valid_charge_term: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::NO_VALID_CHARGE_TERM),
+            "NO_VALID_CHARGE_TERM",
+            errors,
+        ),
+        last_valid_charge_term: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::LAST_VALID_CHARGE_TERM),
+            "LAST_VALID_CHARGE_TERM",
+            errors,
+        ),
+        no_of_qmax_updates: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::NO_OF_QMAX_UPDATES),
+            "NO_OF_QMAX_UPDATES",
+            errors,
+        ),
+        no_of_ra_updates: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::NO_OF_RA_UPDATES),
+            "NO_OF_RA_UPDATES",
+            errors,
+        ),
+        cuv_recovery_mv: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::CUV_RECOVERY),
+            "CUV_RECOVERY",
+            errors,
+        ),
+        protection_configuration: diag_bq40_optional(
+            bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::PROTECTION_CONFIGURATION),
+            "PROTECTION_CONFIGURATION",
+            errors,
+        ),
+        da_configuration: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::DA_CONFIGURATION),
+            "DA_CONFIGURATION",
+            errors,
+        ),
+        power_config: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::POWER_CONFIG),
+            "POWER_CONFIG",
+            errors,
+        ),
+    }
+}
+
 fn log_bq40_lock_diag_snapshot(addr: u8, stage: &'static str, diag: &Bq40LockDiagSnapshot) {
     log_bq40_charging_status_trace(addr, stage, diag.charging.as_ref());
     defmt::info!(
@@ -2350,6 +2509,22 @@ pub(super) fn i2c_error_kind(err: esp_hal::i2c::master::Error) -> &'static str {
     }
 }
 
+fn diag_i2c_error_kind(err: esp_hal::i2c::master::Error) -> &'static str {
+    use esp_hal::i2c::master::{AcknowledgeCheckFailedReason, Error};
+
+    match err {
+        Error::AcknowledgeCheckFailed(reason) => {
+            let reason = match reason {
+                AcknowledgeCheckFailedReason::Address => DiagI2cNackReason::Address,
+                AcknowledgeCheckFailedReason::Data => DiagI2cNackReason::Data,
+                _ => DiagI2cNackReason::Unknown,
+            };
+            diag_i2c_nack_code(reason)
+        }
+        other => i2c_error_kind(other),
+    }
+}
+
 fn spin_delay(wait: Duration) {
     let start = Instant::now();
     while start.elapsed() < wait {}
@@ -2371,6 +2546,91 @@ pub(super) fn ina_error_kind(err: ina3221::Error<esp_hal::i2c::master::Error>) -
     }
 }
 
+fn diag_tps_error_kind(err: ::tps55288::Error<esp_hal::i2c::master::Error>) -> &'static str {
+    match err {
+        ::tps55288::Error::I2c(error) => diag_i2c_error_kind(error),
+        other => tps_error_kind(other),
+    }
+}
+
+fn diag_ina_error_kind(err: ina3221::Error<esp_hal::i2c::master::Error>) -> &'static str {
+    match err {
+        ina3221::Error::I2c(error) => diag_i2c_error_kind(error),
+        other => ina_error_kind(other),
+    }
+}
+
+fn push_diag_read_error(
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+    register: &'static str,
+    code: &'static str,
+) {
+    if errors
+        .iter()
+        .flatten()
+        .any(|error| error.register == register)
+    {
+        return;
+    }
+    if let Some(slot) = errors.iter_mut().find(|slot| slot.is_none()) {
+        *slot = Some(DiagReadError { register, code });
+    }
+}
+
+fn diag_bq25792_u8<I2C>(
+    i2c: &mut I2C,
+    register: u8,
+    name: &'static str,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> Option<u8>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    match bq25792::read_u8(i2c, register) {
+        Ok(raw) => Some(raw),
+        Err(error) => {
+            push_diag_read_error(errors, name, diag_i2c_error_kind(error));
+            None
+        }
+    }
+}
+
+fn diag_bq25792_adc_i16<I2C>(
+    i2c: &mut I2C,
+    register: u8,
+    name: &'static str,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> Option<i16>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    match bq25792::read_adc_i16(i2c, register) {
+        Ok(raw) => Some(raw),
+        Err(error) => {
+            push_diag_read_error(errors, name, diag_i2c_error_kind(error));
+            None
+        }
+    }
+}
+
+fn diag_bq25792_adc_u16<I2C>(
+    i2c: &mut I2C,
+    register: u8,
+    name: &'static str,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> Option<u16>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    match bq25792::read_adc_u16(i2c, register) {
+        Ok(raw) => Some(raw),
+        Err(error) => {
+            push_diag_read_error(errors, name, diag_i2c_error_kind(error));
+            None
+        }
+    }
+}
+
 fn diag_tps_u8(result: Result<u8, ::tps55288::Error<esp_hal::i2c::master::Error>>) -> DiagReadU8 {
     match result {
         Ok(raw) => DiagReadU8 {
@@ -2379,7 +2639,7 @@ fn diag_tps_u8(result: Result<u8, ::tps55288::Error<esp_hal::i2c::master::Error>
         },
         Err(error) => DiagReadU8 {
             raw: None,
-            error: Some(tps_error_kind(error)),
+            error: Some(diag_tps_error_kind(error)),
         },
     }
 }
@@ -2392,7 +2652,7 @@ fn diag_ina_u16(result: Result<u16, ina3221::Error<esp_hal::i2c::master::Error>>
         },
         Err(error) => DiagReadU16 {
             raw: None,
-            error: Some(ina_error_kind(error)),
+            error: Some(diag_ina_error_kind(error)),
         },
     }
 }
@@ -2405,7 +2665,7 @@ fn diag_i2c_u16(result: Result<u16, esp_hal::i2c::master::Error>) -> DiagReadU16
         },
         Err(error) => DiagReadU16 {
             raw: None,
-            error: Some(i2c_error_kind(error)),
+            error: Some(diag_i2c_error_kind(error)),
         },
     }
 }
@@ -2521,6 +2781,9 @@ struct TpsFaultLatch {
     ovp_latched: bool,
     config_failure_latched: bool,
     config_retry_failures: u8,
+    last_config_failure_stage: Option<&'static str>,
+    last_config_failure_kind: Option<&'static str>,
+    retry_exhausted_i2c: bool,
 }
 
 impl TpsFaultLatch {
@@ -2544,27 +2807,102 @@ impl TpsFaultLatch {
         self.ovp_latched
     }
 
-    fn record_config_failure(&mut self, _stage: &'static str, _kind: &'static str) -> u8 {
+    fn record_config_failure(&mut self, stage: &'static str, kind: &'static str) -> u8 {
+        self.last_config_failure_stage = Some(stage);
+        self.last_config_failure_kind = Some(kind);
         self.config_retry_failures = self.config_retry_failures.saturating_add(1);
         self.config_retry_failures
     }
 
-    fn latch_config_failure(&mut self) {
+    fn latch_config_failure(&mut self, retry_exhausted_i2c: bool) {
         self.config_failure_latched = true;
+        self.retry_exhausted_i2c |= retry_exhausted_i2c;
     }
 
     const fn config_failure_active(self) -> bool {
         self.config_failure_latched
     }
 
+    const fn retry_exhausted_i2c(self) -> bool {
+        self.retry_exhausted_i2c
+    }
+
     fn clear_config_failure(&mut self) {
         self.config_failure_latched = false;
         self.config_retry_failures = 0;
+        self.last_config_failure_stage = None;
+        self.last_config_failure_kind = None;
+        self.retry_exhausted_i2c = false;
     }
 
     fn clear(&mut self) {
         *self = Self::default();
     }
+}
+
+#[derive(Clone, Copy, Default)]
+struct TpsEnableInterlock {
+    state: output_retry::TpsEnableInhibitState,
+    asserted_at_ms: Option<u64>,
+    last_release_at_ms: Option<u64>,
+    failure_channel: Option<OutputChannel>,
+    failure_stage: Option<&'static str>,
+    failure_code: Option<&'static str>,
+}
+
+impl TpsEnableInterlock {
+    fn record_assertion(
+        &mut self,
+        now_ms: u64,
+        channel: OutputChannel,
+        stage: &'static str,
+        code: &'static str,
+    ) {
+        let asserted = self.state.assert_low();
+        debug_assert!(asserted);
+        self.asserted_at_ms = Some(now_ms);
+        self.failure_channel = Some(channel);
+        self.failure_stage = Some(stage);
+        self.failure_code = Some(code);
+    }
+
+    fn record_release(&mut self, now_ms: u64) {
+        let already_released = self.state.release();
+        debug_assert!(!already_released);
+        self.last_release_at_ms = Some(now_ms);
+    }
+
+    const fn can_assert(self) -> bool {
+        self.state.can_assert()
+    }
+
+    const fn mcu_drive_low(self) -> bool {
+        self.state.mcu_drive_low()
+    }
+
+    fn snapshot(self, therm_kill_n_low: bool) -> TpsEnableInterlockSnapshot {
+        TpsEnableInterlockSnapshot {
+            therm_kill_n_low,
+            mcu_drive_low: self.mcu_drive_low(),
+            tps_en_effective_inhibit: therm_kill_n_low,
+            source: output_retry::tps_enable_interlock_source(
+                self.mcu_drive_low(),
+                therm_kill_n_low,
+            ),
+            asserted_at_ms: self.asserted_at_ms,
+            last_release_at_ms: self.last_release_at_ms,
+            failure_channel: self.failure_channel.map(OutputChannel::name),
+            failure_stage: self.failure_stage,
+            failure_code: self.failure_code,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TpsEnableReleaseResult {
+    pub already_released: bool,
+    pub therm_kill_n_low: bool,
+    pub output_gate_reason: OutputGateReason,
 }
 
 fn output_state_gate_transition(
@@ -3501,9 +3839,9 @@ where
         && !tps_b_fault
         && tmp_b_present
         && tmp_out_b_ok;
-    let mut recoverable_outputs = enabled_outputs_from_flags(out_a_allowed, out_b_allowed);
-    let mut output_gate_reason = OutputGateReason::None;
-    let bms_block_recoverable_outputs = enabled_outputs_from_flags(
+    // A communication failure without an asserted TPS fault is eligible for
+    // bounded runtime recovery. It must not discard a healthy peer.
+    let mut recoverable_outputs = enabled_outputs_from_flags(
         desired_outputs.is_enabled(OutputChannel::OutA)
             && sync_ok
             && ina_ready
@@ -3517,6 +3855,8 @@ where
             && tmp_b_present
             && tmp_out_b_ok,
     );
+    let mut output_gate_reason = OutputGateReason::None;
+    let bms_block_recoverable_outputs = recoverable_outputs;
 
     if desired_outputs.is_enabled(OutputChannel::OutA) && !out_a_allowed {
         defmt::warn!(
@@ -3746,6 +4086,7 @@ pub struct PowerManager<'d, I2C> {
     ups_in_ce: Flex<'d>,
     ups_in_pg: Input<'d>,
     therm_kill: Flex<'d>,
+    tps_enable_interlock: TpsEnableInterlock,
     chg_ce: Flex<'d>,
     chg_ilim_hiz_brk: Flex<'d>,
 
@@ -4541,6 +4882,7 @@ where
             ups_in_ce,
             ups_in_pg,
             therm_kill,
+            tps_enable_interlock: TpsEnableInterlock::default(),
             chg_ce,
             chg_ilim_hiz_brk,
             cfg,
@@ -4845,6 +5187,48 @@ where
         self.recompute_ui_mode();
     }
 
+    fn maybe_assert_tps_enable_interlock(
+        &mut self,
+        failed_ch: OutputChannel,
+        stage: &'static str,
+        kind: &'static str,
+        decision: TpsConfigRetryDecision,
+    ) {
+        if !matches!(
+            output_retry::tps_failure_protection(kind, decision),
+            output_retry::TpsFailureProtection::SoftwareStopThenHardInhibit
+        ) || !self.tps_fault_latch(failed_ch).retry_exhausted_i2c()
+            || !self.tps_enable_interlock.can_assert()
+        {
+            return;
+        }
+
+        // The transition normally performs the dual TPS software stop. A
+        // repeated exhaustion can reach this point after that gate is already
+        // latched, while an earlier pair-enable attempt briefly re-enabled a
+        // TPS. In that case force the best-effort dual stop again before the
+        // MCU-owned hardware inhibit.
+        let next_state =
+            output_state_gate_transition(self.output_state, OutputGateReason::TpsConfigFailed);
+        if output_retry::tps_hard_inhibit_requires_direct_software_stop(
+            next_state != self.output_state,
+        ) {
+            self.force_disable_outputs();
+        } else {
+            self.apply_output_gate(OutputGateReason::TpsConfigFailed);
+        }
+        self.therm_kill.set_low();
+        self.tps_enable_interlock
+            .record_assertion(self.fan_now_ms(), failed_ch, stage, kind);
+        defmt::error!(
+            "power: tps_en_hard_inhibit asserted ch={} stage={} err={} therm_kill_n_low={=bool}",
+            failed_ch.name(),
+            stage,
+            kind,
+            self.therm_kill.is_low()
+        );
+    }
+
     pub fn enter_firmware_safe_mode(&mut self) {
         self.charger_allowed = false;
         self.force_disable_outputs();
@@ -4893,6 +5277,26 @@ where
             requested.describe()
         );
         self.reconcile_output_state();
+    }
+
+    pub fn release_tps_enable_interlock(&mut self) -> TpsEnableReleaseResult {
+        let already_released = !self.tps_enable_interlock.mcu_drive_low();
+        if !already_released {
+            self.therm_kill.set_high();
+            self.tps_enable_interlock.record_release(self.fan_now_ms());
+        }
+        let therm_kill_n_low = self.therm_kill.is_low();
+        defmt::warn!(
+            "power: tps_en_hard_inhibit release already_released={=bool} therm_kill_n_low={=bool} gate_reason={}",
+            already_released,
+            therm_kill_n_low,
+            self.output_state.gate_reason.as_str(),
+        );
+        TpsEnableReleaseResult {
+            already_released,
+            therm_kill_n_low,
+            output_gate_reason: self.output_state.gate_reason,
+        }
     }
 
     fn maybe_log_charger_input_power_anomaly(
@@ -5204,7 +5608,10 @@ where
     }
 
     pub fn derived_power_snapshot(&self) -> DerivedPowerSnapshot {
-        self.diag_snapshot
+        let mut snapshot = self.diag_snapshot;
+        snapshot.hardware.tps_enable_interlock =
+            self.tps_enable_interlock.snapshot(self.therm_kill.is_low());
+        snapshot
     }
 
     pub fn refresh_diag_snapshot_packages<const N: usize>(
@@ -5305,6 +5712,10 @@ where
         let mut snapshot = Tps55288DiagSnapshot::empty(ch.addr());
         snapshot.captured_at_ms = captured_at_ms;
         let mut tps = ::tps55288::Tps55288::with_address(&mut self.i2c, ch.addr());
+        // Read the configuration register first. This makes the first NACK in a
+        // fresh capture distinguish a dead/unpowered device from a VREF access
+        // problem without writing any TPS state.
+        snapshot.mode = diag_tps_u8(tps.read_reg(addr::MODE));
         let mut vref = [0u8; 2];
         snapshot.vref = match tps.read_regs(addr::REF0, &mut vref) {
             Ok(()) => DiagReadU16 {
@@ -5313,14 +5724,13 @@ where
             },
             Err(error) => DiagReadU16 {
                 raw: None,
-                error: Some(tps_error_kind(error)),
+                error: Some(diag_tps_error_kind(error)),
             },
         };
         snapshot.iout_limit = diag_tps_u8(tps.read_reg(addr::IOUT_LIMIT));
         snapshot.vout_sr = diag_tps_u8(tps.read_reg(addr::VOUT_SR));
         snapshot.vout_fs = diag_tps_u8(tps.read_reg(addr::VOUT_FS));
         snapshot.cdc = diag_tps_u8(tps.read_reg(addr::CDC));
-        snapshot.mode = diag_tps_u8(tps.read_reg(addr::MODE));
         snapshot.status = diag_tps_u8(tps.read_reg(addr::STATUS));
         match ch {
             OutputChannel::OutA => {
@@ -5357,7 +5767,8 @@ where
             let shunt = ina3221::read_shunt_uv(&mut self.i2c, channel);
             snapshot.bus_mv[index] = bus.as_ref().ok().copied();
             snapshot.shunt_uv[index] = shunt.as_ref().ok().copied();
-            snapshot.channel_errors[index] = bus.err().or_else(|| shunt.err()).map(ina_error_kind);
+            snapshot.channel_errors[index] =
+                bus.err().or_else(|| shunt.err()).map(diag_ina_error_kind);
         }
         snapshot.duration_ms = started.elapsed().as_millis().min(u16::MAX as u64) as u16;
         self.diag_snapshot.hardware.ina3221 = snapshot;
@@ -5376,50 +5787,224 @@ where
     }
 
     fn refresh_bq40_core_diag_snapshot(&mut self) {
-        let Some(addr) = self.bms_addr else { return };
-        self.diag_snapshot.bms.pack_mv =
-            bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::VOLTAGE).ok();
-        self.diag_snapshot.bms.current_ma =
-            bq40z50::read_i16(&mut self.i2c, addr, bq40z50::cmd::CURRENT).ok();
-        self.diag_snapshot.bms.soc_pct =
-            bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::RELATIVE_STATE_OF_CHARGE).ok();
+        let captured_at_ms = self.fan_now_ms();
+        let started = Instant::now();
+        let mut snapshot = Bq40CoreDiagSnapshot::empty();
+        snapshot.captured_at_ms = captured_at_ms;
+        let Some(addr) = self.bms_addr else {
+            snapshot.state = "err";
+            push_diag_read_error(&mut snapshot.errors, "DEVICE", "bms_unavailable");
+            snapshot.duration_ms = started.elapsed().as_millis().min(u16::MAX as u64) as u16;
+            self.diag_snapshot.hardware.bq40_core = snapshot;
+            return;
+        };
+
+        snapshot.address = Some(addr);
+        snapshot.voltage = diag_i2c_u16(bq40z50::read_u16(
+            &mut self.i2c,
+            addr,
+            bq40z50::cmd::VOLTAGE,
+        ));
+        if let Some(error) = snapshot.voltage.error {
+            push_diag_read_error(&mut snapshot.errors, "VOLTAGE", error);
+        }
+        snapshot.current = diag_i2c_u16(bq40z50::read_u16(
+            &mut self.i2c,
+            addr,
+            bq40z50::cmd::CURRENT,
+        ));
+        if let Some(error) = snapshot.current.error {
+            push_diag_read_error(&mut snapshot.errors, "CURRENT", error);
+        }
+        snapshot.relative_state_of_charge = diag_i2c_u16(bq40z50::read_u16(
+            &mut self.i2c,
+            addr,
+            bq40z50::cmd::RELATIVE_STATE_OF_CHARGE,
+        ));
+        if let Some(error) = snapshot.relative_state_of_charge.error {
+            push_diag_read_error(&mut snapshot.errors, "RELATIVE_STATE_OF_CHARGE", error);
+        }
+        snapshot.state = if snapshot.errors.iter().all(Option::is_none) {
+            "ok"
+        } else {
+            "err"
+        };
+        snapshot.duration_ms = started.elapsed().as_millis().min(u16::MAX as u64) as u16;
+        self.diag_snapshot.hardware.bq40_core = snapshot;
     }
 
     fn refresh_bq25792_diag_snapshot(&mut self) {
+        let captured_at_ms = self.fan_now_ms();
+        let started = Instant::now();
+        let mut errors = [None; DIAG_READ_ERROR_CAP];
+        let ctrl0 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_CONTROL_0,
+            "CTRL0",
+            &mut errors,
+        );
+        let ctrl2 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_CONTROL_2,
+            "CTRL2",
+            &mut errors,
+        );
+        let ctrl3 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_CONTROL_3,
+            "CTRL3",
+            &mut errors,
+        );
+        let ctrl4 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_CONTROL_4,
+            "CTRL4",
+            &mut errors,
+        );
+        let ctrl5 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_CONTROL_5,
+            "CTRL5",
+            &mut errors,
+        );
+        let st0 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_STATUS_0,
+            "STATUS0",
+            &mut errors,
+        );
+        let st1 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_STATUS_1,
+            "STATUS1",
+            &mut errors,
+        );
+        let st2 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_STATUS_2,
+            "STATUS2",
+            &mut errors,
+        );
+        let st3 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_STATUS_3,
+            "STATUS3",
+            &mut errors,
+        );
+        let st4 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_STATUS_4,
+            "STATUS4",
+            &mut errors,
+        );
+        let fault0 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::FAULT_STATUS_0,
+            "FAULT0",
+            &mut errors,
+        );
+        let fault1 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::FAULT_STATUS_1,
+            "FAULT1",
+            &mut errors,
+        );
+        let ibus_adc_ma = diag_bq25792_adc_i16(
+            &mut self.i2c,
+            bq25792::reg::IBUS_ADC,
+            "IBUS_ADC",
+            &mut errors,
+        );
+        let ibat_adc_ma = diag_bq25792_adc_i16(
+            &mut self.i2c,
+            bq25792::reg::IBAT_ADC,
+            "IBAT_ADC",
+            &mut errors,
+        );
+        let vbus_adc_mv = diag_bq25792_adc_u16(
+            &mut self.i2c,
+            bq25792::reg::VBUS_ADC,
+            "VBUS_ADC",
+            &mut errors,
+        );
+        let vbat_adc_mv = diag_bq25792_adc_u16(
+            &mut self.i2c,
+            bq25792::reg::VBAT_ADC,
+            "VBAT_ADC",
+            &mut errors,
+        );
+        let vsys_adc_mv = diag_bq25792_adc_u16(
+            &mut self.i2c,
+            bq25792::reg::VSYS_ADC,
+            "VSYS_ADC",
+            &mut errors,
+        );
+        let vac1_adc_mv = diag_bq25792_adc_u16(
+            &mut self.i2c,
+            bq25792::reg::VAC1_ADC,
+            "VAC1_ADC",
+            &mut errors,
+        );
+        let vac2_adc_mv = diag_bq25792_adc_u16(
+            &mut self.i2c,
+            bq25792::reg::VAC2_ADC,
+            "VAC2_ADC",
+            &mut errors,
+        );
         let charger = &mut self.diag_snapshot.charger;
-        charger.ctrl0 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0).ok();
-        charger.ctrl2 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_2).ok();
-        charger.ctrl3 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_3).ok();
-        charger.ctrl4 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_4).ok();
-        charger.ctrl5 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_5).ok();
-        charger.st0 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_0).ok();
-        charger.st1 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_1).ok();
-        charger.st2 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_2).ok();
-        charger.st3 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_3).ok();
-        charger.st4 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_4).ok();
-        charger.fault0 = bq25792::read_u8(&mut self.i2c, bq25792::reg::FAULT_STATUS_0).ok();
-        charger.fault1 = bq25792::read_u8(&mut self.i2c, bq25792::reg::FAULT_STATUS_1).ok();
-        charger.ibus_adc_ma = bq25792::read_adc_i16(&mut self.i2c, bq25792::reg::IBUS_ADC).ok();
-        charger.ibat_adc_ma = bq25792::read_adc_i16(&mut self.i2c, bq25792::reg::IBAT_ADC).ok();
-        charger.vbus_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VBUS_ADC).ok();
-        charger.vbat_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok();
-        charger.vsys_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VSYS_ADC).ok();
-        charger.vac1_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VAC1_ADC).ok();
-        charger.vac2_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VAC2_ADC).ok();
+        charger.ctrl0 = ctrl0;
+        charger.ctrl2 = ctrl2;
+        charger.ctrl3 = ctrl3;
+        charger.ctrl4 = ctrl4;
+        charger.ctrl5 = ctrl5;
+        charger.st0 = st0;
+        charger.st1 = st1;
+        charger.st2 = st2;
+        charger.st3 = st3;
+        charger.st4 = st4;
+        charger.fault0 = fault0;
+        charger.fault1 = fault1;
+        charger.ibus_adc_ma = ibus_adc_ma;
+        charger.ibat_adc_ma = ibat_adc_ma;
+        charger.vbus_adc_mv = vbus_adc_mv;
+        charger.vbat_adc_mv = vbat_adc_mv;
+        charger.vsys_adc_mv = vsys_adc_mv;
+        charger.vac1_adc_mv = vac1_adc_mv;
+        charger.vac2_adc_mv = vac2_adc_mv;
+        self.diag_snapshot.hardware.bq25792_captured_at_ms = captured_at_ms;
+        self.diag_snapshot.hardware.bq25792_duration_ms =
+            started.elapsed().as_millis().min(u16::MAX as u64) as u16;
+        self.diag_snapshot.hardware.bq25792_errors = errors;
     }
 
     fn refresh_bq40_manufacturing_diag_snapshot(&mut self) {
+        let captured_at_ms = self.fan_now_ms();
+        let started = Instant::now();
+        self.diag_snapshot.hardware.bq40_errors = [None; DIAG_READ_ERROR_CAP];
         let Some(addr) = self.bms_addr else {
+            self.diag_snapshot.bms = DerivedPowerBmsSnapshot::empty();
+            self.diag_snapshot.bms.state = self_check_comm_state_name(self.ui_snapshot.bq40z50);
+            self.diag_snapshot.hardware.bq40_captured_at_ms = captured_at_ms;
+            self.diag_snapshot.hardware.bq40_duration_ms =
+                started.elapsed().as_millis().min(u16::MAX as u64) as u16;
+            push_diag_read_error(
+                &mut self.diag_snapshot.hardware.bq40_errors,
+                "DEVICE",
+                "bms_unavailable",
+            );
             return;
         };
-        let lock_diag = read_bq40_lock_diag_snapshot(&mut self.i2c, addr);
+        let mut errors = [None; DIAG_READ_ERROR_CAP];
+        let lock_diag = read_bq40_lock_diag_snapshot_diag(&mut self.i2c, addr, &mut errors);
         let (op_status, op_status_raw_len, op_status_raw_bytes) =
-            read_bq40_op_status_with_raw_trace(&mut self.i2c, addr);
+            read_bq40_op_status_with_raw_trace_diag(&mut self.i2c, addr, &mut errors);
         let op_status = op_status.or(lock_diag.op_status);
         let charging_status = lock_diag.charging.and_then(|charging| charging.value);
-        let afe_register = bq40z50::read_afe_register(&mut self.i2c, addr)
-            .ok()
-            .flatten();
+        let afe_register = diag_bq40_optional(
+            bq40z50::read_afe_register(&mut self.i2c, addr),
+            "AFE_REGISTER",
+            &mut errors,
+        );
 
         self.diag_snapshot.bms.addr = Some(addr);
         self.diag_snapshot.bms.state = self_check_comm_state_name(self.ui_snapshot.bq40z50);
@@ -5524,6 +6109,10 @@ where
             lock_diag.power_config,
             bq40z50::power_config::EMSHUT_EXIT_VPACK,
         );
+        self.diag_snapshot.hardware.bq40_captured_at_ms = captured_at_ms;
+        self.diag_snapshot.hardware.bq40_duration_ms =
+            started.elapsed().as_millis().min(u16::MAX as u64) as u16;
+        self.diag_snapshot.hardware.bq40_errors = errors;
     }
 
     fn refresh_derived_power_input_snapshot(&mut self) {
@@ -11342,7 +11931,10 @@ where
         if self.output_bypass_active {
             return OutputGateReason::ManualBypass;
         }
-        if self.therm_kill.is_low() {
+        // The MCU-owned pull-down is the secondary action for a TPS I2C
+        // exhaustion. Preserve that failure as the gate reason; a low line
+        // after release is an external or unknown thermal hold.
+        if self.therm_kill.is_low() && !self.tps_enable_interlock.mcu_drive_low() {
             return OutputGateReason::ThermKill;
         }
 
@@ -11380,6 +11972,9 @@ where
                 continue;
             }
             let latch = self.tps_fault_latch(ch);
+            // A latched configuration failure means the requested TPS has
+            // stopped responding after bounded recovery. Treat it as a
+            // system-wide protective stop, even when its peer remains active.
             if latch.config_failure_active() {
                 return OutputGateReason::TpsConfigFailed;
             }
@@ -11456,21 +12051,41 @@ where
             && self.ui_snapshot.tmp_a != SelfCheckCommState::Err
             && self.ui_snapshot.tmp_b != SelfCheckCommState::Err
         {
-            let restore = self.output_state.requested_outputs;
             let now = Instant::now();
-            self.output_state.active_outputs = restore;
-            self.output_state.recoverable_outputs = restore;
-            self.recoverable_output_source = OutputGateReason::None;
-            if restore.is_enabled(OutputChannel::OutA) {
+            let mut scheduled_a = false;
+            let mut scheduled_b = false;
+            if missing_tps_recovery_should_schedule(
+                self.output_state.requested_outputs,
+                self.output_state.active_outputs,
+                self.output_state.recoverable_outputs,
+                self.tps_fault_latch(OutputChannel::OutA)
+                    .config_failure_active(),
+                self.tps_a_next_retry_at.is_some(),
+                OutputChannel::OutA,
+            ) {
                 self.mark_tps_failed(OutputChannel::OutA, Some(now));
+                scheduled_a = true;
             }
-            if restore.is_enabled(OutputChannel::OutB) {
+            if missing_tps_recovery_should_schedule(
+                self.output_state.requested_outputs,
+                self.output_state.active_outputs,
+                self.output_state.recoverable_outputs,
+                self.tps_fault_latch(OutputChannel::OutB)
+                    .config_failure_active(),
+                self.tps_b_next_retry_at.is_some(),
+                OutputChannel::OutB,
+            ) {
                 self.mark_tps_failed(OutputChannel::OutB, Some(now));
+                scheduled_b = true;
             }
-            defmt::info!(
-                "power: output admission retry requested_outputs={}",
-                restore.describe()
-            );
+            if scheduled_a || scheduled_b {
+                defmt::info!(
+                    "power: output admission retry missing_a={=bool} missing_b={=bool} active_outputs={}",
+                    scheduled_a,
+                    scheduled_b,
+                    self.output_state.active_outputs.describe()
+                );
+            }
         }
     }
 
@@ -11935,10 +12550,14 @@ where
         }
 
         if !self.tps_a_ready
-            && self
+            && (self
                 .output_state
                 .active_outputs
                 .is_enabled(OutputChannel::OutA)
+                || self
+                    .output_state
+                    .recoverable_outputs
+                    .is_enabled(OutputChannel::OutA))
             && self.tps_a_next_retry_at.is_some_and(|t| now >= t)
         {
             self.tps_a_next_retry_at = None;
@@ -11946,10 +12565,14 @@ where
         }
 
         if !self.tps_b_ready
-            && self
+            && (self
                 .output_state
                 .active_outputs
                 .is_enabled(OutputChannel::OutB)
+                || self
+                    .output_state
+                    .recoverable_outputs
+                    .is_enabled(OutputChannel::OutB))
             && self.tps_b_next_retry_at.is_some_and(|t| now >= t)
         {
             self.tps_b_next_retry_at = None;
@@ -12048,7 +12671,8 @@ where
                     TPS_CONFIG_MAX_RETRY_ATTEMPTS,
                 );
                 if matches!(decision, TpsConfigRetryDecision::Latch) {
-                    self.tps_fault_latch_mut(ch).latch_config_failure();
+                    self.tps_fault_latch_mut(ch)
+                        .latch_config_failure(output_retry::is_tps_config_error_retryable(kind));
                 }
                 let next_retry = matches!(decision, TpsConfigRetryDecision::Retry)
                     .then_some(Instant::now() + self.cfg.retry_backoff);
@@ -12085,12 +12709,19 @@ where
                         "power: tps addr=0x75 nack_hint=maybe_address_changed; power-cycle TPS rails to restore preset address"
                     );
                 }
+                self.maybe_assert_tps_enable_interlock(ch, stage.as_str(), kind, decision);
             }
         }
     }
 
     fn try_configure_tps(&mut self, ch: OutputChannel) {
-        let enabled = self.output_state.active_outputs.is_enabled(ch);
+        let enabled = tps_retry_should_enable_output(
+            self.output_state.requested_outputs,
+            self.output_state.active_outputs,
+            self.output_state.recoverable_outputs,
+            self.output_state.gate_reason,
+            ch,
+        );
         let addr = ch.addr();
         let ilimit_ma = self.current_output_ilimit_ma();
         let target_vout_mv = self.active_output_target_vout_mv();
@@ -12099,6 +12730,36 @@ where
             Ok(()) => {
                 if enabled {
                     self.clear_tps_fault_latch(ch);
+                    self.output_state.active_outputs = enabled_outputs_from_flags(
+                        self.output_state
+                            .active_outputs
+                            .is_enabled(OutputChannel::OutA)
+                            || ch == OutputChannel::OutA,
+                        self.output_state
+                            .active_outputs
+                            .is_enabled(OutputChannel::OutB)
+                            || ch == OutputChannel::OutB,
+                    );
+                    self.output_state.recoverable_outputs = enabled_outputs_from_flags(
+                        self.output_state
+                            .recoverable_outputs
+                            .is_enabled(OutputChannel::OutA)
+                            || ch == OutputChannel::OutA,
+                        self.output_state
+                            .recoverable_outputs
+                            .is_enabled(OutputChannel::OutB)
+                            || ch == OutputChannel::OutB,
+                    );
+                    self.cfg.detected_tps_outputs = enabled_outputs_from_flags(
+                        self.cfg
+                            .detected_tps_outputs
+                            .is_enabled(OutputChannel::OutA)
+                            || ch == OutputChannel::OutA,
+                        self.cfg
+                            .detected_tps_outputs
+                            .is_enabled(OutputChannel::OutB)
+                            || ch == OutputChannel::OutB,
+                    );
                 }
                 tps55288::log_configured(&mut self.i2c, ch, enabled, enabled);
                 self.mark_tps_ok(ch);
@@ -12124,7 +12785,8 @@ where
                     TPS_CONFIG_MAX_RETRY_ATTEMPTS,
                 );
                 if matches!(decision, TpsConfigRetryDecision::Latch) {
-                    self.tps_fault_latch_mut(ch).latch_config_failure();
+                    self.tps_fault_latch_mut(ch)
+                        .latch_config_failure(output_retry::is_tps_config_error_retryable(kind));
                 }
                 let next_retry = matches!(decision, TpsConfigRetryDecision::Retry)
                     .then_some(Instant::now() + self.cfg.retry_backoff);
@@ -12153,6 +12815,7 @@ where
                         "power: tps addr=0x75 nack_hint=maybe_address_changed; power-cycle TPS rails to restore preset address"
                     );
                 }
+                self.maybe_assert_tps_enable_interlock(ch, stage.as_str(), kind, decision);
             }
         }
         self.recompute_ui_mode();
@@ -12227,13 +12890,19 @@ where
             TPS_CONFIG_MAX_RETRY_ATTEMPTS,
         );
         if matches!(decision, TpsConfigRetryDecision::Latch) {
-            self.tps_fault_latch_mut(failed_ch).latch_config_failure();
+            self.tps_fault_latch_mut(failed_ch)
+                .latch_config_failure(output_retry::is_tps_config_error_retryable(kind));
         }
         let next_retry = matches!(decision, TpsConfigRetryDecision::Retry)
             .then_some(Instant::now() + self.cfg.retry_backoff);
 
-        let _ = tps55288::disable_output_only(&mut self.i2c, OutputChannel::OutA);
-        let _ = tps55288::disable_output_only(&mut self.i2c, OutputChannel::OutB);
+        if matches!(
+            output_retry::tps_failure_protection(kind, decision),
+            output_retry::TpsFailureProtection::SoftwareStop
+        ) {
+            let _ = tps55288::disable_output_only(&mut self.i2c, OutputChannel::OutA);
+            let _ = tps55288::disable_output_only(&mut self.i2c, OutputChannel::OutB);
+        }
 
         self.mark_tps_failed(OutputChannel::OutA, next_retry);
         self.mark_tps_failed(OutputChannel::OutB, next_retry);
@@ -12257,6 +12926,7 @@ where
                 "power: tps addr=0x75 nack_hint=maybe_address_changed; power-cycle TPS rails to restore preset address"
             );
         }
+        self.maybe_assert_tps_enable_interlock(failed_ch, stage.as_str(), kind, decision);
     }
 
     fn mark_tps_ok(&mut self, ch: OutputChannel) {

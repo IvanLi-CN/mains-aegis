@@ -5,9 +5,10 @@ use heapless::String;
 use crate::{
     mdns_wire::DeviceIdentity,
     net_types::{
-        format_ipv4, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerSnapshot,
-        DeviceSettingsSnapshot, DiagReadU16, DiagReadU8, Ina3221DiagSnapshot, Tmp112DiagSnapshot,
-        Tps55288DiagSnapshot, UpsStatusSnapshot, WifiSnapshot, API_VERSION,
+        format_ipv4, Bq40CoreDiagSnapshot, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot,
+        DerivedPowerSnapshot, DeviceSettingsSnapshot, DiagReadError, DiagReadU16, DiagReadU8,
+        Ina3221DiagSnapshot, Tmp112DiagSnapshot, Tps55288DiagSnapshot, UpsStatusSnapshot,
+        WifiSnapshot, API_VERSION, DIAG_READ_ERROR_CAP,
     },
 };
 
@@ -1022,34 +1023,47 @@ fn render_diag_snapshot_package<'a, const N: usize>(
     match id {
         "mcu.runtime" => {
             render_diag_package_header(buf, emitted, id, "runtime_cache", 0);
-            render_diag_mcu_runtime_payload(buf, status);
+            render_diag_mcu_runtime_payload(buf, status, diag);
             let _ = buf.push_str(",\"read_errors\":[]}");
         }
         "bq40.core" => {
-            render_diag_package_header(buf, emitted, id, "power_cache", 0);
-            let _ = write!(
-                buf,
-                "{{\"device\":{{\"address\":{}}},\"registers\":{{}},\"decoded\":",
-                diag.bms.addr.unwrap_or(0)
-            );
-            render_diag_bms_payload(buf, diag.bms);
-            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[]}");
+            render_diag_bq40_core_package(buf, emitted, id, diag.hardware.bq40_core);
         }
         "bq40.manufacturing" => {
-            render_diag_package_header(buf, emitted, id, "fresh_i2c", 0);
+            begin_diag_v2_package_with_source(
+                buf,
+                emitted,
+                id,
+                diag.hardware.bq40_errors.iter().all(Option::is_none),
+                "fresh_i2c",
+                diag.hardware.bq40_captured_at_ms,
+                diag.hardware.bq40_duration_ms,
+            );
             let _ = write!(
                 buf,
                 "{{\"device\":{{\"address\":{}}},\"registers\":{{}},\"decoded\":",
                 diag.bms.addr.unwrap_or(0)
             );
             render_diag_bms_payload(buf, diag.bms);
-            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[]}");
+            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[");
+            render_diag_error_list(buf, &diag.hardware.bq40_errors);
+            let _ = buf.push_str("]}");
         }
         "bq25792.regs" => {
-            render_diag_package_header(buf, emitted, id, "fresh_i2c", 0);
+            begin_diag_v2_package_with_source(
+                buf,
+                emitted,
+                id,
+                diag.hardware.bq25792_errors.iter().all(Option::is_none),
+                "fresh_i2c",
+                diag.hardware.bq25792_captured_at_ms,
+                diag.hardware.bq25792_duration_ms,
+            );
             let _ = buf.push_str("{\"device\":{\"address\":107},\"registers\":{},\"decoded\":");
             render_diag_charger_payload(buf, diag.charger);
-            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[]}");
+            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[");
+            render_diag_error_list(buf, &diag.hardware.bq25792_errors);
+            let _ = buf.push_str("]}");
         }
         "tps55288.out_a" => {
             render_diag_tps_package(buf, emitted, id, diag.hardware.tps_a);
@@ -1117,7 +1131,11 @@ fn render_diag_package_header<'a, const N: usize>(
     );
 }
 
-fn render_diag_mcu_runtime_payload<const N: usize>(buf: &mut String<N>, status: UpsStatusSnapshot) {
+fn render_diag_mcu_runtime_payload<const N: usize>(
+    buf: &mut String<N>,
+    status: UpsStatusSnapshot,
+    diag: DerivedPowerSnapshot,
+) {
     let boot = crate::boot_recovery::diagnostics();
     let _ = buf.push('{');
     json_field_str(buf, "mode", status.mode, true);
@@ -1141,8 +1159,30 @@ fn render_diag_mcu_runtime_payload<const N: usize>(buf: &mut String<N>, status: 
         buf,
         "rollback_blocker",
         "missing_rollback_bootloader_otadata_ota_slots",
-        false,
+        true,
     );
+    let interlock = diag.hardware.tps_enable_interlock;
+    let _ = buf.push_str("\"tps_enable_interlock\":{");
+    json_field_bool(buf, "therm_kill_n_low", interlock.therm_kill_n_low, true);
+    json_field_bool(buf, "mcu_drive_low", interlock.mcu_drive_low, true);
+    json_field_bool(
+        buf,
+        "tps_en_effective_inhibit",
+        interlock.tps_en_effective_inhibit,
+        true,
+    );
+    json_field_str(buf, "source", interlock.source, true);
+    json_field_opt_u64(buf, "asserted_at_ms", interlock.asserted_at_ms, true);
+    json_field_opt_u64(
+        buf,
+        "last_release_at_ms",
+        interlock.last_release_at_ms,
+        true,
+    );
+    json_field_opt_str(buf, "failure_channel", interlock.failure_channel, true);
+    json_field_opt_str(buf, "failure_stage", interlock.failure_stage, true);
+    json_field_opt_str(buf, "failure_code", interlock.failure_code, false);
+    let _ = buf.push_str("}");
     let _ = buf.push('}');
 }
 
@@ -1226,6 +1266,51 @@ fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowe
     let _ = buf.push('}');
 }
 
+fn render_diag_bq40_core_package<'a, const N: usize>(
+    buf: &mut String<N>,
+    emitted: &mut DiagEmitState<'a>,
+    id: &'a str,
+    snapshot: Bq40CoreDiagSnapshot,
+) {
+    begin_diag_v2_package_with_source(
+        buf,
+        emitted,
+        id,
+        snapshot.errors.iter().all(Option::is_none),
+        "fresh_i2c",
+        snapshot.captured_at_ms,
+        snapshot.duration_ms,
+    );
+    let _ = write!(
+        buf,
+        "{{\"device\":{{\"address\":{}}},\"registers\":{{",
+        snapshot.address.unwrap_or(0)
+    );
+    render_diag_register_u16(buf, "VOLTAGE", 0x09, snapshot.voltage, true);
+    render_diag_register_u16(buf, "CURRENT", 0x0a, snapshot.current, true);
+    render_diag_register_u16(
+        buf,
+        "RELATIVE_STATE_OF_CHARGE",
+        0x0d,
+        snapshot.relative_state_of_charge,
+        false,
+    );
+    let _ = buf.push_str("},\"decoded\":{\"state\":\"");
+    write_json_string_escaped(buf, snapshot.state);
+    let _ = buf.push_str("\"},\"measurements\":{");
+    json_field_opt_u16(buf, "pack_mv", snapshot.voltage.raw, true);
+    json_field_opt_i16(
+        buf,
+        "current_ma",
+        snapshot.current.raw.map(|raw| raw as i16),
+        true,
+    );
+    json_field_opt_u16(buf, "soc_pct", snapshot.relative_state_of_charge.raw, false);
+    let _ = buf.push_str("},\"runtime\":{}},\"read_errors\":[");
+    render_diag_error_list(buf, &snapshot.errors);
+    let _ = buf.push_str("]}");
+}
+
 fn render_diag_charger_payload<const N: usize>(
     buf: &mut String<N>,
     charger: DerivedPowerChargerSnapshot,
@@ -1274,16 +1359,38 @@ fn begin_diag_v2_package<'a, const N: usize>(
     captured_at_ms: u64,
     duration_ms: u16,
 ) {
+    begin_diag_v2_package_with_source(
+        buf,
+        emitted,
+        id,
+        ok,
+        "fresh_i2c",
+        captured_at_ms,
+        duration_ms,
+    );
+}
+
+fn begin_diag_v2_package_with_source<'a, const N: usize>(
+    buf: &mut String<N>,
+    emitted: &mut DiagEmitState<'a>,
+    id: &'a str,
+    ok: bool,
+    source: &str,
+    captured_at_ms: u64,
+    duration_ms: u16,
+) {
     if !emitted.packages.is_empty() {
         let _ = buf.push(',');
     }
     let _ = emitted.packages.push(id);
     let _ = buf.push('"');
     write_json_string_escaped(buf, id);
+    let _ = write!(buf, "\":{{\"ok\":{},\"source\":\"", ok);
+    write_json_string_escaped(buf, source);
     let _ = write!(
         buf,
-        "\":{{\"ok\":{},\"source\":\"fresh_i2c\",\"captured_at_ms\":{},\"age_ms\":0,\"duration_ms\":{},\"payload\":",
-        ok, captured_at_ms, duration_ms
+        "\",\"captured_at_ms\":{},\"age_ms\":0,\"duration_ms\":{},\"payload\":",
+        captured_at_ms, duration_ms
     );
 }
 
@@ -1360,9 +1467,25 @@ fn render_diag_read_error<const N: usize>(
     write_json_string_escaped(buf, error);
     let retryable = matches!(
         error,
-        "i2c_timeout" | "i2c_nack" | "i2c_arbitration" | "i2c"
+        "i2c_timeout"
+            | "i2c_nack"
+            | "i2c_nack_address"
+            | "i2c_nack_data"
+            | "i2c_nack_unknown"
+            | "i2c_arbitration"
+            | "i2c"
     );
     let _ = write!(buf, "\",\"retryable\":{}}}", retryable);
+}
+
+fn render_diag_error_list<const N: usize>(
+    buf: &mut String<N>,
+    errors: &[Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) {
+    let mut first = true;
+    for error in errors.iter().flatten() {
+        render_diag_read_error(buf, &mut first, error.register, Some(error.code));
+    }
 }
 
 fn render_diag_tps_package<'a, const N: usize>(
@@ -1495,12 +1618,14 @@ fn render_diag_tps_package<'a, const N: usize>(
     json_field_opt_i16(buf, "temp_c_x16", snapshot.temp_c_x16, false);
     let _ = buf.push_str("},\"runtime\":{}},\"read_errors\":[");
     let mut first = true;
+    // Keep read errors in wire-transaction order. MODE is deliberately probed
+    // before the register dump so the first NACK remains observable to hosts.
+    render_diag_read_error(buf, &mut first, "MODE", snapshot.mode.error);
     render_diag_read_error(buf, &mut first, "VREF", snapshot.vref.error);
     render_diag_read_error(buf, &mut first, "IOUT_LIMIT", snapshot.iout_limit.error);
     render_diag_read_error(buf, &mut first, "VOUT_SR", snapshot.vout_sr.error);
     render_diag_read_error(buf, &mut first, "VOUT_FS", snapshot.vout_fs.error);
     render_diag_read_error(buf, &mut first, "CDC", snapshot.cdc.error);
-    render_diag_read_error(buf, &mut first, "MODE", snapshot.mode.error);
     render_diag_read_error(buf, &mut first, "STATUS", snapshot.status.error);
     let _ = buf.push_str("]}");
 }
@@ -2065,6 +2190,25 @@ fn json_field_u32<const N: usize>(
     json_field_opt_num(buf, key, Some(value as i64), trailing_comma);
 }
 
+fn json_field_opt_u64<const N: usize>(
+    buf: &mut String<N>,
+    key: &str,
+    value: Option<u64>,
+    trailing_comma: bool,
+) {
+    let _ = buf.push('"');
+    let _ = buf.push_str(key);
+    let _ = buf.push_str("\":");
+    if let Some(value) = value {
+        let _ = write!(buf, "{}", value);
+    } else {
+        let _ = buf.push_str("null");
+    }
+    if trailing_comma {
+        let _ = buf.push(',');
+    }
+}
+
 fn json_field_u32_opt<const N: usize>(
     buf: &mut String<N>,
     key: &str,
@@ -2211,14 +2355,16 @@ fn json_field_opt_ipv4<const N: usize>(
 #[cfg(test)]
 mod tests {
     use super::{
-        accepts_event_stream, render_compact_status_json, render_identity_json,
-        render_settings_json, render_status_json, write_error_body, write_sse_event, BuildInfo,
+        accepts_event_stream, render_compact_status_json, render_diag_snapshot_json,
+        render_identity_json, render_settings_json, render_status_json, write_error_body,
+        write_sse_event, BuildInfo,
     };
     use crate::{
         mdns_wire::derive_device_identity,
         net_types::{
-            DeviceSettingsSnapshot, ManualChargeSettingsSnapshot, NetworkUiSummary,
-            UpsStatusSnapshot, WifiConnectionState, WifiSettingsSnapshot, WifiSnapshot,
+            DerivedPowerSnapshot, DeviceSettingsSnapshot, ManualChargeSettingsSnapshot,
+            NetworkUiSummary, TpsEnableInterlockSnapshot, UpsStatusSnapshot, WifiConnectionState,
+            WifiSettingsSnapshot, WifiSnapshot,
         },
     };
     use heapless::String;
@@ -2423,6 +2569,41 @@ mod tests {
         assert!(body
             .as_str()
             .contains("\"rollback_blocker\":\"missing_rollback_bootloader_otadata_ota_slots\""));
+    }
+
+    #[test]
+    fn diag_runtime_exposes_tps_enable_interlock_without_claiming_a_tps_en_pin_read() {
+        let mut body = String::<8192>::new();
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.hardware.tps_enable_interlock = TpsEnableInterlockSnapshot {
+            therm_kill_n_low: true,
+            mcu_drive_low: true,
+            tps_en_effective_inhibit: true,
+            source: "mcu_i2c_retry_exhausted",
+            asserted_at_ms: Some(123),
+            last_release_at_ms: None,
+            failure_channel: Some("out_a"),
+            failure_stage: Some("status"),
+            failure_code: Some("i2c_nack"),
+        };
+
+        render_diag_snapshot_json(&mut body, &[], UpsStatusSnapshot::empty(), diag);
+
+        let value: Value = serde_json::from_str(body.as_str()).expect("valid diagnostic JSON");
+        let interlock = &value["packages"]["mcu.runtime"]["payload"]["tps_enable_interlock"];
+        assert_eq!(interlock["therm_kill_n_low"], true);
+        assert_eq!(interlock["mcu_drive_low"], true);
+        assert_eq!(interlock["tps_en_effective_inhibit"], true);
+        assert_eq!(interlock["source"], "mcu_i2c_retry_exhausted");
+        assert_eq!(interlock["asserted_at_ms"], 123);
+        assert_eq!(interlock["failure_channel"], "out_a");
+        assert!(
+            !interlock
+                .as_object()
+                .expect("interlock object")
+                .contains_key("tps_en_level"),
+            "TPS_EN is inferred from THERM_KILL_N, not read from a nonexistent GPIO"
+        );
     }
 
     #[test]

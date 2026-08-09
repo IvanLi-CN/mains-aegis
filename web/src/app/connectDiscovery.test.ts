@@ -252,12 +252,16 @@ describe("buildFleetEntries", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.record.connectionState).toBe("online");
-    expect(entries[0]?.record.target.transport).toBe("http");
-    expect(entries[0]?.record.target.baseUrl).toBe("http://192.168.31.42");
+    expect(entries[0]?.record.target.transport).toBe("devd");
+    expect(entries[0]?.record.target.baseUrl).toBe("");
     expect(entries[0]?.record.target.rememberedChannels?.http?.baseUrl).toBe(
       "http://192.168.31.42",
     );
-    expect(entries[0]?.record.target.rememberedChannels?.devd).toBeUndefined();
+    expect(entries[0]?.record.target.rememberedChannels?.devd).toMatchObject({
+      baseUrl: "",
+      devdDeviceId: "mains-aegis-a1b2c3",
+      transport: "lan",
+    });
   });
 
   test("refreshes confirmed companion fallback IP from current LAN discovery", () => {

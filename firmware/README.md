@@ -217,7 +217,7 @@ mcu-agentd monitor esp --reset
 - 正常主固件默认启用：`out_a+out_b`
 - 目标输出：默认 `12V`；启用 `main-vout-19v` 时切到 `19V`
 - 目标限流：`3.5A`
-- 任一要求输出路未通过自检时，保留 `requested_outputs=out_a+out_b` 并发布 `mode=blocked`
+- 任一要求输出路未通过自检时，保留 `requested_outputs=out_a+out_b` 并发布 `mode=blocked`；单路通信失败只在重试预算内单独限频重试，耗尽后停止双路输出
 - 运行态软保护：温度/电流超阈值时会逐步下调 `IOUT_LIMIT`，若降额期间 `VOUT < 14V` 持续则进入 `active_protection` 关断
 
 > 以上默认 profile 由主固件 Cargo feature 决定：未显式选择时回落到 `12V`，启用 `main-vout-19v` 时切到 `19V`。`main-vout-12v` 与 `main-vout-19v` 不允许同时启用（不要在上电状态下频繁刷写造成误判）。
@@ -243,7 +243,8 @@ mcu-agentd monitor esp --reset
 - 固件不会 panic
 - 日志包含 `addr` + `stage` + `err=<i2c_nack|i2c_timeout|i2c_...>`
 - `i2c_nack / i2c_timeout / i2c_arbitration / i2c` 这类瞬态错误只给有限次退避重试（默认 `5s` 一次）
-- 超出预算后会锁存为运行期 `tps_config_failed`，停止无限整套重配，等待显式 restore
+- 任一路要求通道超出预算后会锁存为运行期 `tps_config_failed`，停止双路输出并停止无限整套重配，等待显式 restore
+- 启动探测仅缺失一路时，固件只重试该路；重试耗尽会保留该路 `ERR` 与双路请求合同，并关闭已工作的另一通道
 - `invalid_config / out_of_range` 这类非瞬态错误不进入延迟重试，直接锁存
 
 ## INA3221 遥测（Spec tps55288-control）

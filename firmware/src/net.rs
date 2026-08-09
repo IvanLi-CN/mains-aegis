@@ -64,6 +64,9 @@ pub const HTTP_RESPONSE_BODY_CAP: usize = 3072;
 const HTTP_DIAG_SNAPSHOT_BODY_CAP: usize = 8192;
 const SSE_FRAME_CAP: usize = 3328;
 const REQUEST_BUF_CAP: usize = 1024;
+// Accommodates every stable hardware package in one repeated `package` query
+// without making request parsing unbounded. That request target is 217 bytes.
+const REQUEST_TARGET_CAP: usize = 384;
 const STATUS_PUSH_INTERVAL: Duration = Duration::from_millis(500);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const RSSI_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
@@ -715,7 +718,7 @@ async fn handle_http_connection(socket: &mut TcpSocket<'_>) -> Result<(), embass
     }
 
     let mut method_buf = String::<8>::new();
-    let mut path_buf = String::<128>::new();
+    let mut path_buf = String::<REQUEST_TARGET_CAP>::new();
     if method_buf.push_str(method).is_err() || path_buf.push_str(path).is_err() {
         let mut body = String::<HTTP_RESPONSE_BODY_CAP>::new();
         write_error_body(
@@ -1459,7 +1462,10 @@ pub(crate) const fn status_push_interval_millis_for_test() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{diag_package_mask, parse_diag_snapshot_query_packages, split_request_target};
+    use super::{
+        diag_package_mask, parse_diag_snapshot_query_packages, split_request_target,
+        REQUEST_TARGET_CAP,
+    };
 
     #[test]
     fn splits_request_target_query() {
@@ -1481,6 +1487,19 @@ mod tests {
         assert_eq!(packages.len(), 2);
         assert_eq!(packages[0].as_str(), "bq40.manufacturing");
         assert_eq!(packages[1].as_str(), "bq25792.regs");
+    }
+
+    #[test]
+    fn full_hardware_diag_request_target_fits_bounded_parser_capacity() {
+        let target = "/api/v1/diag-snapshot?package=bq40.core&package=bq40.manufacturing&package=bq25792.regs&package=tps55288.out_a&package=tps55288.out_b&package=ina3221.regs&package=tmp112.out_a&package=tmp112.out_b&package=fusb302.regs";
+        assert!(target.len() <= REQUEST_TARGET_CAP);
+
+        let (path, query) = split_request_target(target);
+        assert_eq!(path, "/api/v1/diag-snapshot");
+        let packages = parse_diag_snapshot_query_packages(query);
+        assert_eq!(packages.len(), 9);
+        assert_eq!(packages[0].as_str(), "bq40.core");
+        assert_eq!(packages[8].as_str(), "fusb302.regs");
     }
 
     #[test]
