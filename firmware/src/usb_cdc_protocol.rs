@@ -1559,6 +1559,10 @@ mod tests {
             register: "SAFETY_STATUS",
             code: "i2c_nack_data",
         });
+        diag.hardware.bq40_errors[1] = Some(crate::net_types::DiagReadError {
+            register: "CHARGING_STATUS",
+            code: "invalid_response",
+        });
 
         let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
         packages
@@ -1590,6 +1594,41 @@ mod tests {
         assert_eq!(bq40["duration_ms"], serde_json::json!(9));
         assert_eq!(bq40["read_errors"][0]["register"], "SAFETY_STATUS");
         assert_eq!(bq40["read_errors"][0]["code"], "i2c_nack_data");
+        assert_eq!(bq40["read_errors"][1]["register"], "CHARGING_STATUS");
+        assert_eq!(bq40["read_errors"][1]["code"], "invalid_response");
+        assert_eq!(bq40["read_errors"][1]["retryable"], false);
+    }
+
+    #[test]
+    fn diag_snapshot_marks_bq_unavailable_capture_as_current_failure() {
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.hardware.bq40_captured_at_ms = 789;
+        diag.hardware.bq40_errors[0] = Some(crate::net_types::DiagReadError {
+            register: "DEVICE",
+            code: "bms_unavailable",
+        });
+
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("bq40.manufacturing").unwrap())
+            .unwrap();
+        let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+        render_diag_snapshot_json(
+            &mut body,
+            packages.as_slice(),
+            UpsStatusSnapshot::empty(),
+            diag,
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+        let bq40 = &parsed["packages"]["bq40.manufacturing"];
+        assert_eq!(bq40["ok"], serde_json::json!(false));
+        assert_eq!(bq40["captured_at_ms"], serde_json::json!(789));
+        assert_eq!(bq40["duration_ms"], serde_json::json!(0));
+        assert_eq!(bq40["payload"]["device"]["address"], 0);
+        assert_eq!(bq40["read_errors"][0]["register"], "DEVICE");
+        assert_eq!(bq40["read_errors"][0]["code"], "bms_unavailable");
+        assert_eq!(bq40["read_errors"][0]["retryable"], false);
     }
 
     #[test]

@@ -2104,7 +2104,11 @@ fn diag_bq40_optional<T>(
     errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
 ) -> Option<T> {
     match result {
-        Ok(value) => value,
+        Ok(Some(value)) => Some(value),
+        Ok(None) => {
+            push_diag_read_error(errors, register, "invalid_response");
+            None
+        }
         Err(error) => {
             push_diag_read_error(errors, register, diag_i2c_error_kind(error));
             None
@@ -2118,7 +2122,11 @@ fn diag_bq40_trace(
     errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
 ) -> Option<bq40z50::ChargingStatusTrace> {
     match result {
-        Ok(value) => Some(value),
+        Ok(value) if value.value.is_some() => Some(value),
+        Ok(_) => {
+            push_diag_read_error(errors, register, "invalid_response");
+            None
+        }
         Err(error) => {
             push_diag_read_error(errors, register, diag_i2c_error_kind(error));
             None
@@ -2142,12 +2150,16 @@ where
         }
     };
     let Some(raw) = trace.raw else {
+        push_diag_read_error(errors, "OPERATION_STATUS", "invalid_response");
         return (None, None, None);
     };
     let mut bytes = [0u8; 4];
     let copy_len = core::cmp::min(raw.payload_len as usize, bytes.len());
     bytes[..copy_len].copy_from_slice(&raw.payload[..copy_len]);
     let op_status = (raw.payload_len >= 4).then(|| u32::from_le_bytes(bytes));
+    if op_status.is_none() {
+        push_diag_read_error(errors, "OPERATION_STATUS", "invalid_response");
+    }
     (op_status, Some(raw.payload_len), Some(bytes))
 }
 
@@ -5778,8 +5790,15 @@ where
     }
 
     fn refresh_bq40_manufacturing_diag_snapshot(&mut self) {
+        let captured_at_ms = self.fan_now_ms();
+        let started = Instant::now();
         self.diag_snapshot.hardware.bq40_errors = [None; DIAG_READ_ERROR_CAP];
         let Some(addr) = self.bms_addr else {
+            self.diag_snapshot.bms = DerivedPowerBmsSnapshot::empty();
+            self.diag_snapshot.bms.state = self_check_comm_state_name(self.ui_snapshot.bq40z50);
+            self.diag_snapshot.hardware.bq40_captured_at_ms = captured_at_ms;
+            self.diag_snapshot.hardware.bq40_duration_ms =
+                started.elapsed().as_millis().min(u16::MAX as u64) as u16;
             push_diag_read_error(
                 &mut self.diag_snapshot.hardware.bq40_errors,
                 "DEVICE",
@@ -5787,8 +5806,6 @@ where
             );
             return;
         };
-        let captured_at_ms = self.fan_now_ms();
-        let started = Instant::now();
         let mut errors = [None; DIAG_READ_ERROR_CAP];
         let lock_diag = read_bq40_lock_diag_snapshot_diag(&mut self.i2c, addr, &mut errors);
         let (op_status, op_status_raw_len, op_status_raw_bytes) =
