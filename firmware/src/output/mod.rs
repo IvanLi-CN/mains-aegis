@@ -12526,10 +12526,13 @@ where
     }
 
     fn try_configure_tps(&mut self, ch: OutputChannel) {
-        let enabled = self.output_state.active_outputs.is_enabled(ch)
-            || (self.output_state.requested_outputs.is_enabled(ch)
-                && self.output_state.recoverable_outputs.is_enabled(ch)
-                && self.output_state.gate_reason == OutputGateReason::None);
+        let enabled = tps_retry_should_enable_output(
+            self.output_state.requested_outputs,
+            self.output_state.active_outputs,
+            self.output_state.recoverable_outputs,
+            self.output_state.gate_reason,
+            ch,
+        );
         let addr = ch.addr();
         let ilimit_ma = self.current_output_ilimit_ma();
         let target_vout_mv = self.active_output_target_vout_mv();

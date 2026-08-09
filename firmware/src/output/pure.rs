@@ -3304,6 +3304,19 @@ pub(super) fn missing_tps_recovery_should_schedule(
         && !retry_scheduled
 }
 
+pub(super) fn tps_retry_should_enable_output(
+    requested: EnabledOutputs,
+    active: EnabledOutputs,
+    recoverable: EnabledOutputs,
+    gate_reason: OutputGateReason,
+    channel: OutputChannel,
+) -> bool {
+    active.is_enabled(channel)
+        || (requested.is_enabled(channel)
+            && recoverable.is_enabled(channel)
+            && gate_reason == OutputGateReason::None)
+}
+
 pub(super) fn confirmed_active_outputs_from_tps_readback(
     active_outputs: EnabledOutputs,
     out_a_enabled: Option<bool>,
@@ -7582,6 +7595,24 @@ mod tests {
             recoverable,
             true,
             false,
+            OutputChannel::OutA,
+        ));
+    }
+
+    #[test]
+    fn missing_tps_retry_enables_the_recovered_peer() {
+        assert!(tps_retry_should_enable_output(
+            EnabledOutputs::Both,
+            EnabledOutputs::Only(OutputChannel::OutB),
+            EnabledOutputs::Both,
+            OutputGateReason::None,
+            OutputChannel::OutA,
+        ));
+        assert!(!tps_retry_should_enable_output(
+            EnabledOutputs::Both,
+            EnabledOutputs::Only(OutputChannel::OutB),
+            EnabledOutputs::Both,
+            OutputGateReason::BmsNotReady,
             OutputChannel::OutA,
         ));
     }
