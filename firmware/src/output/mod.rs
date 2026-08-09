@@ -11786,9 +11786,10 @@ where
                 continue;
             }
             let latch = self.tps_fault_latch(ch);
-            if latch.config_failure_active()
-                && tps_config_failure_blocks_active_outputs(self.output_state.active_outputs, ch)
-            {
+            // A latched configuration failure means the requested TPS has
+            // stopped responding after bounded recovery. Treat it as a
+            // system-wide protective stop, even when its peer remains active.
+            if latch.config_failure_active() {
                 return OutputGateReason::TpsConfigFailed;
             }
             if latch.fault_active() {

@@ -3282,13 +3282,6 @@ pub(super) fn output_admission_retry_needed(
         && gate_reason == OutputGateReason::None
 }
 
-pub(super) fn tps_config_failure_blocks_active_outputs(
-    active: EnabledOutputs,
-    failed: OutputChannel,
-) -> bool {
-    active.is_enabled(failed)
-}
-
 pub(super) fn missing_tps_recovery_should_schedule(
     requested: EnabledOutputs,
     active: EnabledOutputs,
@@ -7552,18 +7545,6 @@ mod tests {
             EnabledOutputs::Only(OutputChannel::OutB),
             EnabledOutputs::Only(OutputChannel::OutB),
             OutputGateReason::None,
-        ));
-    }
-
-    #[test]
-    fn inactive_tps_config_failure_does_not_gate_a_healthy_peer() {
-        assert!(!tps_config_failure_blocks_active_outputs(
-            EnabledOutputs::Only(OutputChannel::OutB),
-            OutputChannel::OutA,
-        ));
-        assert!(tps_config_failure_blocks_active_outputs(
-            EnabledOutputs::Only(OutputChannel::OutB),
-            OutputChannel::OutB,
         ));
     }
 

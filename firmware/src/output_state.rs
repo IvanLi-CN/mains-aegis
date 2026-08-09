@@ -170,6 +170,22 @@ pub struct OutputRuntimeState {
     pub gate_reason: OutputGateReason,
 }
 
+const fn combined_enabled_outputs(left: EnabledOutputs, right: EnabledOutputs) -> EnabledOutputs {
+    match (left, right) {
+        (EnabledOutputs::Both, _) | (_, EnabledOutputs::Both) => EnabledOutputs::Both,
+        (EnabledOutputs::None, outputs) | (outputs, EnabledOutputs::None) => outputs,
+        (
+            EnabledOutputs::Only(OutputSelector::OutA),
+            EnabledOutputs::Only(OutputSelector::OutB),
+        )
+        | (
+            EnabledOutputs::Only(OutputSelector::OutB),
+            EnabledOutputs::Only(OutputSelector::OutA),
+        ) => EnabledOutputs::Both,
+        (outputs, _) => outputs,
+    }
+}
+
 impl OutputRuntimeState {
     pub const fn new(
         requested_outputs: EnabledOutputs,
@@ -201,11 +217,8 @@ pub fn output_state_gate_transition(
         return state;
     }
 
-    let recoverable_outputs = if state.active_outputs != EnabledOutputs::None {
-        state.active_outputs
-    } else {
-        state.recoverable_outputs
-    };
+    let recoverable_outputs =
+        combined_enabled_outputs(state.active_outputs, state.recoverable_outputs);
 
     OutputRuntimeState {
         active_outputs: EnabledOutputs::None,
@@ -452,6 +465,23 @@ mod tests {
         assert_eq!(gated.gate_reason, OutputGateReason::BmsNotReady);
         assert!(!output_restore_pending_from_state(gated, Some(false)));
         assert!(!output_restore_pending_from_state(gated, None));
+    }
+
+    #[test]
+    fn tps_config_failure_stops_the_active_peer_and_preserves_manual_restore() {
+        let state = OutputRuntimeState::new(
+            EnabledOutputs::Both,
+            EnabledOutputs::Only(OutputSelector::OutB),
+            EnabledOutputs::Both,
+            OutputGateReason::None,
+        );
+
+        let gated = output_state_gate_transition(state, OutputGateReason::TpsConfigFailed);
+
+        assert_eq!(gated.requested_outputs, EnabledOutputs::Both);
+        assert_eq!(gated.active_outputs, EnabledOutputs::None);
+        assert_eq!(gated.recoverable_outputs, EnabledOutputs::Both);
+        assert_eq!(gated.gate_reason, OutputGateReason::TpsConfigFailed);
     }
 
     #[test]
