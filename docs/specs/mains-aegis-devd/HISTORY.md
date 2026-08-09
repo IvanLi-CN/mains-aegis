@@ -8,6 +8,7 @@
 - 2026-08-08: `diag-snapshot` 升级为 schema v2，保留 endpoint/package id，采用逐包 fresh capture、部分失败与流式传输；Read/Clear 数据只由业务 owner 锁存，并补齐 INA3221 IRQ 到现有保护链路。
 - 2026-08-09: fresh I2C diagnostics 保留 ESP HAL 的 ACK 失败阶段，区分地址、数据与未知 NACK；该信息只扩展 `read_errors.code`，不改变既有保护与重试路径的通用错误分类。
 - 2026-08-09: TPS55288 的 `VREF` 读取纳入同一阶段映射，保证数据阶段 NACK 不再以通用错误呈现；同包其余寄存器继续逐项保留自己的错误阶段。
+- 2026-08-09: BQ40 manufacturing 与 BQ25792 register fresh capture 开始保留底层读取错误、采集时间和耗时，避免用空字段把不完整采集误报为成功。
 
 - 2026-06-14: `power event`、`status` 与 `diag-snapshot` 统一补充 `tps_total_iout_ma` / `tps_limit_threshold_ma`，用于解释 `pressure_tps_output_current`；DC IN profile 的 `iindpm_ma` 基线更新为 `1000mA`。
 - 2026-06-04: `diag-snapshot` 增加 `charger.vbat_lowv_pct_x10`、`charger.iprechg_ma`、`policy.recovery_stage`、`bms.cuv_recovery_mv` 与 `bms.cuv_recov_chg`，支持确认 `REG08=71.4%/120mA` 与 BQ40 `2550mV + CUV_RECOV_CHG=0` baseline。

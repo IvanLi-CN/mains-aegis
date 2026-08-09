@@ -28,8 +28,8 @@ use mains_aegis_firmware::net_types::{
     ChargeControlLoopOverrideSnapshot, ChargeControlReadinessSnapshot, ChargeControlSnapshot,
     ChargeControlTelemetrySnapshot, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot,
     DerivedPowerInputSnapshot, DerivedPowerPolicySnapshot, DerivedPowerSnapshot, DiagI2cNackReason,
-    DiagReadU16, DiagReadU8, RuntimeModePolicySnapshot, Tmp112DiagSnapshot, Tps55288DiagSnapshot,
-    CHARGE_CONTROL_EVIDENCE_CAP,
+    DiagReadError, DiagReadU16, DiagReadU8, RuntimeModePolicySnapshot, Tmp112DiagSnapshot,
+    Tps55288DiagSnapshot, CHARGE_CONTROL_EVIDENCE_CAP, DIAG_READ_ERROR_CAP,
 };
 use mains_aegis_firmware::output_protection;
 use mains_aegis_firmware::output_retry::{self, TpsConfigRetryDecision};
@@ -2098,6 +2098,152 @@ where
     }
 }
 
+fn diag_bq40_optional<T>(
+    result: Result<Option<T>, esp_hal::i2c::master::Error>,
+    register: &'static str,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> Option<T> {
+    match result {
+        Ok(value) => value,
+        Err(error) => {
+            push_diag_read_error(errors, register, diag_i2c_error_kind(error));
+            None
+        }
+    }
+}
+
+fn diag_bq40_trace(
+    result: Result<bq40z50::ChargingStatusTrace, esp_hal::i2c::master::Error>,
+    register: &'static str,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> Option<bq40z50::ChargingStatusTrace> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            push_diag_read_error(errors, register, diag_i2c_error_kind(error));
+            None
+        }
+    }
+}
+
+fn read_bq40_op_status_with_raw_trace_diag<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> (Option<u32>, Option<u8>, Option<[u8; 4]>)
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let trace = match bq40z50::read_block_raw_trace(i2c, addr, bq40z50::cmd::OPERATION_STATUS) {
+        Ok(trace) => trace,
+        Err(error) => {
+            push_diag_read_error(errors, "OPERATION_STATUS", diag_i2c_error_kind(error));
+            return (None, None, None);
+        }
+    };
+    let Some(raw) = trace.raw else {
+        return (None, None, None);
+    };
+    let mut bytes = [0u8; 4];
+    let copy_len = core::cmp::min(raw.payload_len as usize, bytes.len());
+    bytes[..copy_len].copy_from_slice(&raw.payload[..copy_len]);
+    let op_status = (raw.payload_len >= 4).then(|| u32::from_le_bytes(bytes));
+    (op_status, Some(raw.payload_len), Some(bytes))
+}
+
+fn read_bq40_lock_diag_snapshot_diag<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> Bq40LockDiagSnapshot
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    Bq40LockDiagSnapshot {
+        charging: diag_bq40_trace(
+            bq40z50::read_charging_status_trace(i2c, addr),
+            "CHARGING_STATUS",
+            errors,
+        ),
+        safety_alert: diag_bq40_optional(
+            bq40z50::read_safety_alert(i2c, addr),
+            "SAFETY_ALERT",
+            errors,
+        ),
+        safety_status: diag_bq40_optional(
+            bq40z50::read_safety_status(i2c, addr),
+            "SAFETY_STATUS",
+            errors,
+        ),
+        pf_status: diag_bq40_optional(bq40z50::read_pf_status(i2c, addr), "PF_STATUS", errors),
+        manufacturing_status: diag_bq40_optional(
+            bq40z50::read_manufacturing_status(i2c, addr),
+            "MANUFACTURING_STATUS",
+            errors,
+        ),
+        gauging_status: diag_bq40_optional(
+            bq40z50::read_gauging_status(i2c, addr),
+            "GAUGING_STATUS",
+            errors,
+        ),
+        op_status: diag_bq40_optional(
+            bq40z50::read_operation_status(i2c, addr),
+            "OPERATION_STATUS",
+            errors,
+        ),
+        update_status: diag_bq40_optional(
+            bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::UPDATE_STATUS),
+            "UPDATE_STATUS",
+            errors,
+        ),
+        current_at_eoc_ma: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::CURRENT_AT_EOC),
+            "CURRENT_AT_EOC",
+            errors,
+        ),
+        no_valid_charge_term: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::NO_VALID_CHARGE_TERM),
+            "NO_VALID_CHARGE_TERM",
+            errors,
+        ),
+        last_valid_charge_term: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::LAST_VALID_CHARGE_TERM),
+            "LAST_VALID_CHARGE_TERM",
+            errors,
+        ),
+        no_of_qmax_updates: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::NO_OF_QMAX_UPDATES),
+            "NO_OF_QMAX_UPDATES",
+            errors,
+        ),
+        no_of_ra_updates: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::NO_OF_RA_UPDATES),
+            "NO_OF_RA_UPDATES",
+            errors,
+        ),
+        cuv_recovery_mv: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::CUV_RECOVERY),
+            "CUV_RECOVERY",
+            errors,
+        ),
+        protection_configuration: diag_bq40_optional(
+            bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::PROTECTION_CONFIGURATION),
+            "PROTECTION_CONFIGURATION",
+            errors,
+        ),
+        da_configuration: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::DA_CONFIGURATION),
+            "DA_CONFIGURATION",
+            errors,
+        ),
+        power_config: diag_bq40_optional(
+            bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::POWER_CONFIG),
+            "POWER_CONFIG",
+            errors,
+        ),
+    }
+}
+
 fn log_bq40_lock_diag_snapshot(addr: u8, stage: &'static str, diag: &Bq40LockDiagSnapshot) {
     log_bq40_charging_status_trace(addr, stage, diag.charging.as_ref());
     defmt::info!(
@@ -2398,6 +2544,77 @@ fn diag_ina_error_kind(err: ina3221::Error<esp_hal::i2c::master::Error>) -> &'st
     match err {
         ina3221::Error::I2c(error) => diag_i2c_error_kind(error),
         other => ina_error_kind(other),
+    }
+}
+
+fn push_diag_read_error(
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+    register: &'static str,
+    code: &'static str,
+) {
+    if errors
+        .iter()
+        .flatten()
+        .any(|error| error.register == register)
+    {
+        return;
+    }
+    if let Some(slot) = errors.iter_mut().find(|slot| slot.is_none()) {
+        *slot = Some(DiagReadError { register, code });
+    }
+}
+
+fn diag_bq25792_u8<I2C>(
+    i2c: &mut I2C,
+    register: u8,
+    name: &'static str,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> Option<u8>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    match bq25792::read_u8(i2c, register) {
+        Ok(raw) => Some(raw),
+        Err(error) => {
+            push_diag_read_error(errors, name, diag_i2c_error_kind(error));
+            None
+        }
+    }
+}
+
+fn diag_bq25792_adc_i16<I2C>(
+    i2c: &mut I2C,
+    register: u8,
+    name: &'static str,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> Option<i16>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    match bq25792::read_adc_i16(i2c, register) {
+        Ok(raw) => Some(raw),
+        Err(error) => {
+            push_diag_read_error(errors, name, diag_i2c_error_kind(error));
+            None
+        }
+    }
+}
+
+fn diag_bq25792_adc_u16<I2C>(
+    i2c: &mut I2C,
+    register: u8,
+    name: &'static str,
+    errors: &mut [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) -> Option<u16>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    match bq25792::read_adc_u16(i2c, register) {
+        Ok(raw) => Some(raw),
+        Err(error) => {
+            push_diag_read_error(errors, name, diag_i2c_error_kind(error));
+            None
+        }
     }
 }
 
@@ -5387,7 +5604,8 @@ where
             let shunt = ina3221::read_shunt_uv(&mut self.i2c, channel);
             snapshot.bus_mv[index] = bus.as_ref().ok().copied();
             snapshot.shunt_uv[index] = shunt.as_ref().ok().copied();
-            snapshot.channel_errors[index] = bus.err().or_else(|| shunt.err()).map(ina_error_kind);
+            snapshot.channel_errors[index] =
+                bus.err().or_else(|| shunt.err()).map(diag_ina_error_kind);
         }
         snapshot.duration_ms = started.elapsed().as_millis().min(u16::MAX as u64) as u16;
         self.diag_snapshot.hardware.ina3221 = snapshot;
@@ -5416,40 +5634,172 @@ where
     }
 
     fn refresh_bq25792_diag_snapshot(&mut self) {
+        let captured_at_ms = self.fan_now_ms();
+        let started = Instant::now();
+        let mut errors = [None; DIAG_READ_ERROR_CAP];
+        let ctrl0 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_CONTROL_0,
+            "CTRL0",
+            &mut errors,
+        );
+        let ctrl2 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_CONTROL_2,
+            "CTRL2",
+            &mut errors,
+        );
+        let ctrl3 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_CONTROL_3,
+            "CTRL3",
+            &mut errors,
+        );
+        let ctrl4 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_CONTROL_4,
+            "CTRL4",
+            &mut errors,
+        );
+        let ctrl5 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_CONTROL_5,
+            "CTRL5",
+            &mut errors,
+        );
+        let st0 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_STATUS_0,
+            "STATUS0",
+            &mut errors,
+        );
+        let st1 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_STATUS_1,
+            "STATUS1",
+            &mut errors,
+        );
+        let st2 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_STATUS_2,
+            "STATUS2",
+            &mut errors,
+        );
+        let st3 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_STATUS_3,
+            "STATUS3",
+            &mut errors,
+        );
+        let st4 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::CHARGER_STATUS_4,
+            "STATUS4",
+            &mut errors,
+        );
+        let fault0 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::FAULT_STATUS_0,
+            "FAULT0",
+            &mut errors,
+        );
+        let fault1 = diag_bq25792_u8(
+            &mut self.i2c,
+            bq25792::reg::FAULT_STATUS_1,
+            "FAULT1",
+            &mut errors,
+        );
+        let ibus_adc_ma = diag_bq25792_adc_i16(
+            &mut self.i2c,
+            bq25792::reg::IBUS_ADC,
+            "IBUS_ADC",
+            &mut errors,
+        );
+        let ibat_adc_ma = diag_bq25792_adc_i16(
+            &mut self.i2c,
+            bq25792::reg::IBAT_ADC,
+            "IBAT_ADC",
+            &mut errors,
+        );
+        let vbus_adc_mv = diag_bq25792_adc_u16(
+            &mut self.i2c,
+            bq25792::reg::VBUS_ADC,
+            "VBUS_ADC",
+            &mut errors,
+        );
+        let vbat_adc_mv = diag_bq25792_adc_u16(
+            &mut self.i2c,
+            bq25792::reg::VBAT_ADC,
+            "VBAT_ADC",
+            &mut errors,
+        );
+        let vsys_adc_mv = diag_bq25792_adc_u16(
+            &mut self.i2c,
+            bq25792::reg::VSYS_ADC,
+            "VSYS_ADC",
+            &mut errors,
+        );
+        let vac1_adc_mv = diag_bq25792_adc_u16(
+            &mut self.i2c,
+            bq25792::reg::VAC1_ADC,
+            "VAC1_ADC",
+            &mut errors,
+        );
+        let vac2_adc_mv = diag_bq25792_adc_u16(
+            &mut self.i2c,
+            bq25792::reg::VAC2_ADC,
+            "VAC2_ADC",
+            &mut errors,
+        );
         let charger = &mut self.diag_snapshot.charger;
-        charger.ctrl0 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0).ok();
-        charger.ctrl2 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_2).ok();
-        charger.ctrl3 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_3).ok();
-        charger.ctrl4 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_4).ok();
-        charger.ctrl5 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_5).ok();
-        charger.st0 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_0).ok();
-        charger.st1 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_1).ok();
-        charger.st2 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_2).ok();
-        charger.st3 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_3).ok();
-        charger.st4 = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_STATUS_4).ok();
-        charger.fault0 = bq25792::read_u8(&mut self.i2c, bq25792::reg::FAULT_STATUS_0).ok();
-        charger.fault1 = bq25792::read_u8(&mut self.i2c, bq25792::reg::FAULT_STATUS_1).ok();
-        charger.ibus_adc_ma = bq25792::read_adc_i16(&mut self.i2c, bq25792::reg::IBUS_ADC).ok();
-        charger.ibat_adc_ma = bq25792::read_adc_i16(&mut self.i2c, bq25792::reg::IBAT_ADC).ok();
-        charger.vbus_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VBUS_ADC).ok();
-        charger.vbat_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VBAT_ADC).ok();
-        charger.vsys_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VSYS_ADC).ok();
-        charger.vac1_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VAC1_ADC).ok();
-        charger.vac2_adc_mv = bq25792::read_adc_u16(&mut self.i2c, bq25792::reg::VAC2_ADC).ok();
+        charger.ctrl0 = ctrl0;
+        charger.ctrl2 = ctrl2;
+        charger.ctrl3 = ctrl3;
+        charger.ctrl4 = ctrl4;
+        charger.ctrl5 = ctrl5;
+        charger.st0 = st0;
+        charger.st1 = st1;
+        charger.st2 = st2;
+        charger.st3 = st3;
+        charger.st4 = st4;
+        charger.fault0 = fault0;
+        charger.fault1 = fault1;
+        charger.ibus_adc_ma = ibus_adc_ma;
+        charger.ibat_adc_ma = ibat_adc_ma;
+        charger.vbus_adc_mv = vbus_adc_mv;
+        charger.vbat_adc_mv = vbat_adc_mv;
+        charger.vsys_adc_mv = vsys_adc_mv;
+        charger.vac1_adc_mv = vac1_adc_mv;
+        charger.vac2_adc_mv = vac2_adc_mv;
+        self.diag_snapshot.hardware.bq25792_captured_at_ms = captured_at_ms;
+        self.diag_snapshot.hardware.bq25792_duration_ms =
+            started.elapsed().as_millis().min(u16::MAX as u64) as u16;
+        self.diag_snapshot.hardware.bq25792_errors = errors;
     }
 
     fn refresh_bq40_manufacturing_diag_snapshot(&mut self) {
+        self.diag_snapshot.hardware.bq40_errors = [None; DIAG_READ_ERROR_CAP];
         let Some(addr) = self.bms_addr else {
+            push_diag_read_error(
+                &mut self.diag_snapshot.hardware.bq40_errors,
+                "DEVICE",
+                "bms_unavailable",
+            );
             return;
         };
-        let lock_diag = read_bq40_lock_diag_snapshot(&mut self.i2c, addr);
+        let captured_at_ms = self.fan_now_ms();
+        let started = Instant::now();
+        let mut errors = [None; DIAG_READ_ERROR_CAP];
+        let lock_diag = read_bq40_lock_diag_snapshot_diag(&mut self.i2c, addr, &mut errors);
         let (op_status, op_status_raw_len, op_status_raw_bytes) =
-            read_bq40_op_status_with_raw_trace(&mut self.i2c, addr);
+            read_bq40_op_status_with_raw_trace_diag(&mut self.i2c, addr, &mut errors);
         let op_status = op_status.or(lock_diag.op_status);
         let charging_status = lock_diag.charging.and_then(|charging| charging.value);
-        let afe_register = bq40z50::read_afe_register(&mut self.i2c, addr)
-            .ok()
-            .flatten();
+        let afe_register = diag_bq40_optional(
+            bq40z50::read_afe_register(&mut self.i2c, addr),
+            "AFE_REGISTER",
+            &mut errors,
+        );
 
         self.diag_snapshot.bms.addr = Some(addr);
         self.diag_snapshot.bms.state = self_check_comm_state_name(self.ui_snapshot.bq40z50);
@@ -5554,6 +5904,10 @@ where
             lock_diag.power_config,
             bq40z50::power_config::EMSHUT_EXIT_VPACK,
         );
+        self.diag_snapshot.hardware.bq40_captured_at_ms = captured_at_ms;
+        self.diag_snapshot.hardware.bq40_duration_ms =
+            started.elapsed().as_millis().min(u16::MAX as u64) as u16;
+        self.diag_snapshot.hardware.bq40_errors = errors;
     }
 
     fn refresh_derived_power_input_snapshot(&mut self) {

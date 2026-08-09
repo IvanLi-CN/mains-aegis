@@ -1545,6 +1545,54 @@ mod tests {
     }
 
     #[test]
+    fn diag_snapshot_marks_bq_fresh_read_failures() {
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.hardware.bq25792_captured_at_ms = 123;
+        diag.hardware.bq25792_duration_ms = 7;
+        diag.hardware.bq25792_errors[0] = Some(crate::net_types::DiagReadError {
+            register: "STATUS0",
+            code: "i2c_nack_address",
+        });
+        diag.hardware.bq40_captured_at_ms = 456;
+        diag.hardware.bq40_duration_ms = 9;
+        diag.hardware.bq40_errors[0] = Some(crate::net_types::DiagReadError {
+            register: "SAFETY_STATUS",
+            code: "i2c_nack_data",
+        });
+
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("bq25792.regs").unwrap())
+            .unwrap();
+        packages
+            .push(String::try_from("bq40.manufacturing").unwrap())
+            .unwrap();
+        let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+        render_diag_snapshot_json(
+            &mut body,
+            packages.as_slice(),
+            UpsStatusSnapshot::empty(),
+            diag,
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+        let package = &parsed["packages"]["bq25792.regs"];
+        assert_eq!(package["ok"], serde_json::json!(false));
+        assert_eq!(package["captured_at_ms"], serde_json::json!(123));
+        assert_eq!(package["duration_ms"], serde_json::json!(7));
+        assert_eq!(package["read_errors"][0]["register"], "STATUS0");
+        assert_eq!(package["read_errors"][0]["code"], "i2c_nack_address");
+        assert_eq!(package["read_errors"][0]["retryable"], true);
+
+        let bq40 = &parsed["packages"]["bq40.manufacturing"];
+        assert_eq!(bq40["ok"], serde_json::json!(false));
+        assert_eq!(bq40["captured_at_ms"], serde_json::json!(456));
+        assert_eq!(bq40["duration_ms"], serde_json::json!(9));
+        assert_eq!(bq40["read_errors"][0]["register"], "SAFETY_STATUS");
+        assert_eq!(bq40["read_errors"][0]["code"], "i2c_nack_data");
+    }
+
+    #[test]
     fn keeps_request_id_available_after_validation_errors() {
         let line = r#"{"type":"request","request_id":"req-err","op":"output_enable"}"#;
         assert_eq!(

@@ -6,8 +6,9 @@ use crate::{
     mdns_wire::DeviceIdentity,
     net_types::{
         format_ipv4, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerSnapshot,
-        DeviceSettingsSnapshot, DiagReadU16, DiagReadU8, Ina3221DiagSnapshot, Tmp112DiagSnapshot,
-        Tps55288DiagSnapshot, UpsStatusSnapshot, WifiSnapshot, API_VERSION,
+        DeviceSettingsSnapshot, DiagReadError, DiagReadU16, DiagReadU8, Ina3221DiagSnapshot,
+        Tmp112DiagSnapshot, Tps55288DiagSnapshot, UpsStatusSnapshot, WifiSnapshot, API_VERSION,
+        DIAG_READ_ERROR_CAP,
     },
 };
 
@@ -1036,20 +1037,40 @@ fn render_diag_snapshot_package<'a, const N: usize>(
             let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[]}");
         }
         "bq40.manufacturing" => {
-            render_diag_package_header(buf, emitted, id, "fresh_i2c", 0);
+            begin_diag_v2_package_with_source(
+                buf,
+                emitted,
+                id,
+                diag.hardware.bq40_errors.iter().all(Option::is_none),
+                "fresh_i2c",
+                diag.hardware.bq40_captured_at_ms,
+                diag.hardware.bq40_duration_ms,
+            );
             let _ = write!(
                 buf,
                 "{{\"device\":{{\"address\":{}}},\"registers\":{{}},\"decoded\":",
                 diag.bms.addr.unwrap_or(0)
             );
             render_diag_bms_payload(buf, diag.bms);
-            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[]}");
+            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[");
+            render_diag_error_list(buf, &diag.hardware.bq40_errors);
+            let _ = buf.push_str("]}");
         }
         "bq25792.regs" => {
-            render_diag_package_header(buf, emitted, id, "fresh_i2c", 0);
+            begin_diag_v2_package_with_source(
+                buf,
+                emitted,
+                id,
+                diag.hardware.bq25792_errors.iter().all(Option::is_none),
+                "fresh_i2c",
+                diag.hardware.bq25792_captured_at_ms,
+                diag.hardware.bq25792_duration_ms,
+            );
             let _ = buf.push_str("{\"device\":{\"address\":107},\"registers\":{},\"decoded\":");
             render_diag_charger_payload(buf, diag.charger);
-            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[]}");
+            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[");
+            render_diag_error_list(buf, &diag.hardware.bq25792_errors);
+            let _ = buf.push_str("]}");
         }
         "tps55288.out_a" => {
             render_diag_tps_package(buf, emitted, id, diag.hardware.tps_a);
@@ -1274,16 +1295,38 @@ fn begin_diag_v2_package<'a, const N: usize>(
     captured_at_ms: u64,
     duration_ms: u16,
 ) {
+    begin_diag_v2_package_with_source(
+        buf,
+        emitted,
+        id,
+        ok,
+        "fresh_i2c",
+        captured_at_ms,
+        duration_ms,
+    );
+}
+
+fn begin_diag_v2_package_with_source<'a, const N: usize>(
+    buf: &mut String<N>,
+    emitted: &mut DiagEmitState<'a>,
+    id: &'a str,
+    ok: bool,
+    source: &str,
+    captured_at_ms: u64,
+    duration_ms: u16,
+) {
     if !emitted.packages.is_empty() {
         let _ = buf.push(',');
     }
     let _ = emitted.packages.push(id);
     let _ = buf.push('"');
     write_json_string_escaped(buf, id);
+    let _ = write!(buf, "\":{{\"ok\":{},\"source\":\"", ok);
+    write_json_string_escaped(buf, source);
     let _ = write!(
         buf,
-        "\":{{\"ok\":{},\"source\":\"fresh_i2c\",\"captured_at_ms\":{},\"age_ms\":0,\"duration_ms\":{},\"payload\":",
-        ok, captured_at_ms, duration_ms
+        "\",\"captured_at_ms\":{},\"age_ms\":0,\"duration_ms\":{},\"payload\":",
+        captured_at_ms, duration_ms
     );
 }
 
@@ -1369,6 +1412,16 @@ fn render_diag_read_error<const N: usize>(
             | "i2c"
     );
     let _ = write!(buf, "\",\"retryable\":{}}}", retryable);
+}
+
+fn render_diag_error_list<const N: usize>(
+    buf: &mut String<N>,
+    errors: &[Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+) {
+    let mut first = true;
+    for error in errors.iter().flatten() {
+        render_diag_read_error(buf, &mut first, error.register, Some(error.code));
+    }
 }
 
 fn render_diag_tps_package<'a, const N: usize>(

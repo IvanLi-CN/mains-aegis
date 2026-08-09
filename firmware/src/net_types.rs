@@ -946,6 +946,14 @@ pub const fn diag_i2c_nack_code(reason: DiagI2cNackReason) -> &'static str {
     }
 }
 
+pub const DIAG_READ_ERROR_CAP: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiagReadError {
+    pub register: &'static str,
+    pub code: &'static str,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tps55288DiagSnapshot {
     pub captured_at_ms: u64,
@@ -1056,6 +1064,12 @@ pub struct HardwareDiagSnapshot {
     pub ina3221: Ina3221DiagSnapshot,
     pub tmp_a: Tmp112DiagSnapshot,
     pub tmp_b: Tmp112DiagSnapshot,
+    pub bq40_captured_at_ms: u64,
+    pub bq40_duration_ms: u16,
+    pub bq40_errors: [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+    pub bq25792_captured_at_ms: u64,
+    pub bq25792_duration_ms: u16,
+    pub bq25792_errors: [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
     pub last_fresh_capture_ms: Option<u64>,
     pub capture_error: Option<&'static str>,
     pub retry_after_ms: Option<u16>,
@@ -1069,6 +1083,12 @@ impl HardwareDiagSnapshot {
             ina3221: Ina3221DiagSnapshot::empty(),
             tmp_a: Tmp112DiagSnapshot::empty(0x48),
             tmp_b: Tmp112DiagSnapshot::empty(0x49),
+            bq40_captured_at_ms: 0,
+            bq40_duration_ms: 0,
+            bq40_errors: [None; DIAG_READ_ERROR_CAP],
+            bq25792_captured_at_ms: 0,
+            bq25792_duration_ms: 0,
+            bq25792_errors: [None; DIAG_READ_ERROR_CAP],
             last_fresh_capture_ms: None,
             capture_error: None,
             retry_after_ms: None,
