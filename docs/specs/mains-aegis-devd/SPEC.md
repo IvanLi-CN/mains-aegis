@@ -78,7 +78,7 @@
 
 显式请求 `bq40.*`、`bq25792.regs`、`tps55288.*`、`ina3221.regs`、`tmp112.*` 或 `fusb302.regs` 时，固件从硬件 owner 路径执行 fresh capture。`mcu.runtime`、`usbpd.policy`、`front_panel.io` 与 `derived.power` 保持快照，并必须准确标记 cache/latch source。FUSB302 interrupt registers 与 INA3221 Mask/Enable 等 Read/Clear 数据只能由正常业务路径读取并锁存；调试请求不得额外读取或清除它们。
 
-固件不得通过扩大完整 JSON 缓冲承载全量 package。LAN 使用 HTTP chunked transfer 逐包组成一个 JSON；USB CDC 使用同 request id 的 begin/package/error/end 有界帧，devd 校验并聚合后继续向 CLI/API 返回单个 JSON。USB 与 LAN 共用 single-flight capture；冲突返回 `diag_capture_busy`。硬件 fresh capture 最短间隔为 1 秒，过快请求返回 `diag_capture_rate_limited` 与 `retry_after_ms`；总采集超时 10 秒，单包无进展超时 2 秒。
+固件不得通过扩大完整 JSON 缓冲承载全量 package。LAN 使用 HTTP chunked transfer 逐包组成一个 JSON；USB CDC 使用同 request id 的 begin/package/error/end 有界帧，devd 校验并聚合后继续向 CLI/API 返回单个 JSON。LAN 的 request target 保持有界，但必须容纳所有稳定硬件 package 的重复 `package=` 查询，不能把合法的全包请求误报为 `invalid_request`。USB 与 LAN 共用 single-flight capture；冲突返回 `diag_capture_busy`。硬件 fresh capture 最短间隔为 1 秒，过快请求返回 `diag_capture_rate_limited` 与 `retry_after_ms`；总采集超时 10 秒，单包无进展超时 2 秒。
 
 INA3221 GPIO IRQ 由 PowerRuntime 唯一消费。IRQ 后读取一次 Mask/Enable，锁存来源、计数、原始值、即时三通道测量、采集时间与错误。Warning 进入现有 output derating 输入；Critical 进入现有 ActiveProtection 关断且保留人工恢复语义；PV 强制进入现有 input gate，恢复继续服从既有阈值与连续样本要求。初始化必须写入并回读 12V/19V PV 阈值、3250mA output warning、4000mA output critical、7000mA input critical 与 6500mA output-sum critical。
 
