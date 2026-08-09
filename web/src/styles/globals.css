@@ -1518,6 +1518,31 @@ a {
   flex-wrap: wrap;
 }
 
+.tps-enable-interlock-actions {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.tps-enable-interlock-release {
+  min-height: 32px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.tps-enable-interlock-actions .field-help {
+  margin: 0;
+}
+
+@media (pointer: coarse) {
+  .tps-enable-interlock-release {
+    min-height: var(--control-height-touch);
+    padding: 10px 16px;
+    font-size: 14px;
+  }
+}
+
 .scan-inline-actions {
   display: grid;
   grid-template-columns: auto minmax(280px, 1fr);

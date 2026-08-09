@@ -4993,9 +4993,9 @@ function TpsEnableInterlockPanel({ record }: { record: DeviceRecord }) {
           value={`${interlock.failure_channel} ${interlock.failure_stage ?? "--"} ${interlock.failure_code ?? "--"}`}
         />
       ) : null}
-      <div className="form-actions">
+      <div className="tps-enable-interlock-actions">
         <button
-          className="secondary-button danger-action"
+          className="secondary-button danger-action tps-enable-interlock-release"
           type="button"
           disabled={!leaseReady || busy || !interlock?.mcu_drive_low}
           onClick={() => setDialogOpen(true)}
@@ -5007,8 +5007,8 @@ function TpsEnableInterlockPanel({ record }: { record: DeviceRecord }) {
             text="Release MCU TPS_EN"
           />
         </button>
+        {!leaseReady ? <p className="field-help">An active USB lease is required.</p> : null}
       </div>
-      {!leaseReady ? <p className="field-help">An active USB lease is required.</p> : null}
       {feedback ? <FeedbackMessage feedback={feedback} /> : null}
       <Dialog.Root open={dialogOpen} onOpenChange={setDialogOpen}>
         <Dialog.Portal>
