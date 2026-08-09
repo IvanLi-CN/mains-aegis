@@ -151,3 +151,29 @@ PR: none
   evidence_note: 验证桌面态 hosted Connect 页不再暴露 devd URL 或 token 输入，也不再渲染 Web Serial / 手动 LAN fallback；LAN 候选只作为 direct HTTP target 出现。
 
 ![Connect devd auto discovery Storybook](./assets/connect-devd-auto-discovery-storybook.png)
+
+- source_type: ui_demo
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/device?demo=true`
+  requested_viewport: `1261x1103` desktop
+  viewport_strategy: default browser viewport
+  capture_scope: page
+  target_program: mock-only
+  scenario: Device Info TPS enable interlock without a USB lease
+  evidence_note: 验证互锁事实区位于 Device Info，mock-only 数据下不伪造硬件状态，且 release 按钮保持禁用。
+
+PR: include
+
+![TPS enable interlock desktop](./assets/tps-enable-interlock-desktop.png)
+
+- source_type: ui_demo
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/device?demo=true`
+  requested_viewport: `393x852`
+  viewport_strategy: browser viewport capability
+  capture_scope: page
+  target_program: mock-only
+  scenario: responsive Device Info TPS enable interlock without a USB lease
+  evidence_note: 验证移动布局保留全部互锁字段和被禁用的唯一 release 动作，没有泛用 GPIO 写入入口。
+
+PR: include
+
+![TPS enable interlock mobile](./assets/tps-enable-interlock-mobile.png)
