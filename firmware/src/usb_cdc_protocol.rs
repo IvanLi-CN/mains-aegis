@@ -1545,6 +1545,35 @@ mod tests {
     }
 
     #[test]
+    fn diag_snapshot_orders_tps_errors_by_capture_sequence() {
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.hardware.tps_a.mode = crate::net_types::DiagReadU8 {
+            raw: None,
+            error: Some("i2c_nack_data"),
+        };
+        diag.hardware.tps_a.vref = crate::net_types::DiagReadU16 {
+            raw: None,
+            error: Some("i2c_nack_address"),
+        };
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("tps55288.out_a").unwrap())
+            .unwrap();
+        let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+        render_diag_snapshot_json(
+            &mut body,
+            packages.as_slice(),
+            UpsStatusSnapshot::empty(),
+            diag,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+        let errors = &parsed["packages"]["tps55288.out_a"]["read_errors"];
+        assert_eq!(errors[0]["register"], "MODE");
+        assert_eq!(errors[0]["code"], "i2c_nack_data");
+        assert_eq!(errors[1]["register"], "VREF");
+    }
+
+    #[test]
     fn diag_snapshot_marks_bq_fresh_read_failures() {
         let mut diag = DerivedPowerSnapshot::empty();
         diag.hardware.bq25792_captured_at_ms = 123;

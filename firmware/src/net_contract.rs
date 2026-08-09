@@ -1554,12 +1554,14 @@ fn render_diag_tps_package<'a, const N: usize>(
     json_field_opt_i16(buf, "temp_c_x16", snapshot.temp_c_x16, false);
     let _ = buf.push_str("},\"runtime\":{}},\"read_errors\":[");
     let mut first = true;
+    // Keep read errors in wire-transaction order. MODE is deliberately probed
+    // before the register dump so the first NACK remains observable to hosts.
+    render_diag_read_error(buf, &mut first, "MODE", snapshot.mode.error);
     render_diag_read_error(buf, &mut first, "VREF", snapshot.vref.error);
     render_diag_read_error(buf, &mut first, "IOUT_LIMIT", snapshot.iout_limit.error);
     render_diag_read_error(buf, &mut first, "VOUT_SR", snapshot.vout_sr.error);
     render_diag_read_error(buf, &mut first, "VOUT_FS", snapshot.vout_fs.error);
     render_diag_read_error(buf, &mut first, "CDC", snapshot.cdc.error);
-    render_diag_read_error(buf, &mut first, "MODE", snapshot.mode.error);
     render_diag_read_error(buf, &mut first, "STATUS", snapshot.status.error);
     let _ = buf.push_str("]}");
 }

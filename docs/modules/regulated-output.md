@@ -290,7 +290,7 @@ TPS 输出准入仍未成立，系统必须保持 owner-facing `mode=blocked`，
 
 以下诊断属于固件基线能力，不是临时 bring-up 脚本：
 
-- `diag-snapshot` schema v2 可按需读取 `tps55288.out_a/out_b`、`ina3221.regs` 与 `tmp112.out_a/out_b`。TPS 包提供稳定寄存器地址/raw、VOUT/限流/OE/FPWM/SCP/OCP/OVP 解码，并关联对应 INA/TMP 测量；单个寄存器 NACK 时保留同包其余成功数据并写入 `read_errors`。
+- `diag-snapshot` schema v2 可按需读取 `tps55288.out_a/out_b`、`ina3221.regs` 与 `tmp112.out_a/out_b`。TPS 包提供稳定寄存器地址/raw、VOUT/限流/OE/FPWM/SCP/OCP/OVP 解码，并关联对应 INA/TMP 测量；单个寄存器 NACK 时保留同包其余成功数据并按实际 I2C 采集顺序写入 `read_errors`（首项为 `MODE` 探测）。
 - OUT-A 固定报告设备地址 `116 (0x74)`；即使 TPS 访问失败，单独请求 INA/TMP/runtime package 仍可保留 CH2、TMP112-A 与运行时锁存证据。
 - INA Read/Clear `Mask/Enable(0x0F)` 仅由 IRQ 业务路径读取；FUSB302 Read/Clear interrupt registers 同样只由 PD 轮询 owner 读取。诊断包只呈现业务锁存，不主动清除告警。
 
