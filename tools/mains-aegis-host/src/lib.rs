@@ -4389,12 +4389,7 @@ async fn device_tps_en_release_inner(
         ));
     }
     let target = resolve_settings_control_target(&state, Some(&id), lease_id)?;
-    if !matches!(target, SettingsControlTarget::Usb { .. }) {
-        return Err(HttpError::non_retryable(
-            "devd_usb_session_required",
-            "TPS_EN release is available only through the bound USB CDC device",
-        ));
-    }
+    ensure_bound_usb_tps_enable_release_target(&state, &target)?;
     send_settings_frame(
         &state,
         &target,
@@ -7343,6 +7338,30 @@ fn resolve_settings_control_target(
             "multiple devices can accept settings writes; provide device_id",
         )),
     }
+}
+
+fn ensure_bound_usb_tps_enable_release_target(
+    state: &AppState,
+    target: &SettingsControlTarget,
+) -> Result<(), HttpError> {
+    let SettingsControlTarget::Usb { device_id, .. } = target else {
+        return Err(HttpError::non_retryable(
+            "devd_usb_session_required",
+            "TPS_EN release is available only through the bound USB CDC device",
+        ));
+    };
+    let guard = state.inner.lock().expect("state lock");
+    let device = guard
+        .devices
+        .get(device_id)
+        .ok_or_else(|| HttpError::not_found("device_not_found", "USB device is not known"))?;
+    if device.binding.is_none() {
+        return Err(HttpError::non_retryable(
+            "devd_bound_usb_required",
+            "TPS_EN release requires a bound USB CDC device",
+        ));
+    }
+    Ok(())
 }
 
 async fn send_settings_command<F>(
@@ -11996,6 +12015,47 @@ mod tests {
                 .expect_err("TPS_EN release must not be sent over LAN");
 
         assert_eq!(error.0.code, "devd_usb_session_required");
+    }
+
+    #[tokio::test]
+    async fn tps_enable_release_rejects_unbound_native_usb() {
+        let state = create_app_state(false);
+        let device_id = "fixture-unbound-usb-device".to_string();
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.devices.insert(
+                device_id.clone(),
+                DeviceRecord {
+                    id: device_id.clone(),
+                    display_name: "Unbound USB CDC device".to_string(),
+                    port_path: Some("/tmp/fixture-usb-unbound".to_string()),
+                    lan_address: None,
+                    lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
+                    transport: DeviceTransport::NativeSerial,
+                    binding: None,
+                    connection: ConnectionState::Connected,
+                    identity: Some(json!({"device_id": "fixture-unbound-usb-device"})),
+                    status: None,
+                    status_updated_at: None,
+                    diag_snapshot: None,
+                    diag_snapshot_updated_at: None,
+                    selected_artifact_id: None,
+                    log_decode: LogDecodeState::default(),
+                    settings: default_settings(),
+                    logs: VecDeque::new(),
+                    trace: VecDeque::new(),
+                    last_power_event_signature: None,
+                },
+            );
+        }
+
+        let error =
+            device_tps_en_release_inner(state, device_id, "release-tps-en".to_string(), None)
+                .await
+                .expect_err("TPS_EN release must reject an unbound USB device");
+
+        assert_eq!(error.0.code, "devd_bound_usb_required");
     }
 
     #[test]
