@@ -4897,43 +4897,73 @@ function TpsEnableInterlockPanel({ record }: { record: DeviceRecord }) {
   const [feedback, setFeedback] = useState<UiFeedback | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const targetKey = target
+    ? `${target.baseUrl}\u0000${target.deviceId}\u0000${target.leaseId ?? ""}`
+    : null;
+  const currentTargetKey = useRef(targetKey);
+  currentTargetKey.current = targetKey;
 
-  const refresh = useCallback(async () => {
-    if (!target || record.target.mock) return;
+  const refresh = useCallback(async (isActive: () => boolean = () => true) => {
+    const refreshTarget = target;
+    const refreshTargetKey = targetKey;
+    const isCurrent = () =>
+      isActive() && currentTargetKey.current === refreshTargetKey;
+    if (!refreshTarget || record.target.mock) {
+      if (isCurrent()) {
+        setInterlock(null);
+        setFeedback(null);
+      }
+      return;
+    }
     try {
       const snapshot = await getDevdDeviceDiagSnapshot(
-        target.baseUrl,
-        target.deviceId,
+        refreshTarget.baseUrl,
+        refreshTarget.deviceId,
       );
+      if (!isCurrent()) return;
       const next = snapshot.packages["mcu.runtime"]?.payload
         ?.tps_enable_interlock;
       if (next) {
         setInterlock(next);
         setFeedback(null);
       } else {
+        setInterlock(null);
         setFeedback({
           tone: "error",
           message: "TPS enable interlock diagnostics are unavailable on this firmware.",
         });
       }
     } catch (error) {
+      if (!isCurrent()) return;
+      setInterlock(null);
       setFeedback(errorFeedback(toErrorEnvelope(error)));
     }
-  }, [record.target.mock, target]);
+  }, [record.target.mock, target, targetKey]);
 
   useEffect(() => {
-    void refresh();
+    let active = true;
+    setInterlock(null);
+    setFeedback(null);
+    setDialogOpen(false);
+    setBusy(false);
+    void refresh(() => active);
+    return () => {
+      active = false;
+    };
   }, [refresh]);
 
   async function release() {
-    if (!target?.leaseId) return;
+    const releaseTarget = target;
+    const releaseTargetKey = targetKey;
+    if (!releaseTarget?.leaseId) return;
     setBusy(true);
     try {
       const result = await releaseDevdTpsEnableInterlock(
-        target.baseUrl,
-        target.deviceId,
-        target.leaseId,
+        releaseTarget.baseUrl,
+        releaseTarget.deviceId,
+        releaseTarget.leaseId,
       );
+      if (currentTargetKey.current !== releaseTargetKey) return;
       setFeedback(
         result.warning
           ? {
@@ -4950,9 +4980,10 @@ function TpsEnableInterlockPanel({ record }: { record: DeviceRecord }) {
       setDialogOpen(false);
       await refresh();
     } catch (error) {
+      if (currentTargetKey.current !== releaseTargetKey) return;
       setFeedback(errorFeedback(toErrorEnvelope(error)));
     } finally {
-      setBusy(false);
+      if (currentTargetKey.current === releaseTargetKey) setBusy(false);
     }
   }
 

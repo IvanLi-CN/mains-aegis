@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   getDeviceChargeControl,
+  getDevdDeviceDiagSnapshot,
   getStatus,
   getSettings,
   previewDeviceChargeControl,
@@ -338,6 +339,62 @@ describe("mock advanced power reset", () => {
 });
 
 describe("TPS enable interlock release", () => {
+  test("provides the MCU runtime latch through the devd mock", async () => {
+    const snapshot = await getDevdDeviceDiagSnapshot(
+      "mock:devd",
+      "mains-aegis-devd-service",
+    );
+
+    expect(snapshot.packages["mcu.runtime"]?.payload?.tps_enable_interlock).toEqual({
+      therm_kill_n_low: false,
+      mcu_drive_low: false,
+      tps_en_effective_inhibit: false,
+      source: "released",
+      asserted_at_ms: null,
+      last_release_at_ms: null,
+      failure_channel: null,
+      failure_stage: null,
+      failure_code: null,
+    });
+  });
+
+  test("reads the live MCU runtime diagnostic package", async () => {
+    let requestUrl = "";
+
+    await withFetchMock(
+      async (input) => {
+        requestUrl = String(input);
+        return jsonResponse({
+          schema_version: 2,
+          packages: {
+            "mcu.runtime": {
+              payload: {
+                tps_enable_interlock: {
+                  therm_kill_n_low: false,
+                  mcu_drive_low: false,
+                  tps_en_effective_inhibit: false,
+                  source: "none",
+                  asserted_at_ms: null,
+                  last_release_at_ms: null,
+                },
+              },
+            },
+          },
+          errors: {},
+        });
+      },
+      async () =>
+        getDevdDeviceDiagSnapshot(
+          "http://127.0.0.1:30080",
+          "mains-aegis-198840",
+        ),
+    );
+
+    expect(requestUrl).toBe(
+      "http://127.0.0.1:30080/api/v1/devices/mains-aegis-198840/diag-snapshot?package=mcu.runtime",
+    );
+  });
+
   test("uses the USB lease and exact confirmation token", async () => {
     let requestUrl = "";
     let requestInit: RequestInit | undefined;
