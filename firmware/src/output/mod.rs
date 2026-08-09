@@ -5566,6 +5566,10 @@ where
         let mut snapshot = Tps55288DiagSnapshot::empty(ch.addr());
         snapshot.captured_at_ms = captured_at_ms;
         let mut tps = ::tps55288::Tps55288::with_address(&mut self.i2c, ch.addr());
+        // Read the configuration register first. This makes the first NACK in a
+        // fresh capture distinguish a dead/unpowered device from a VREF access
+        // problem without writing any TPS state.
+        snapshot.mode = diag_tps_u8(tps.read_reg(addr::MODE));
         let mut vref = [0u8; 2];
         snapshot.vref = match tps.read_regs(addr::REF0, &mut vref) {
             Ok(()) => DiagReadU16 {
@@ -5581,7 +5585,6 @@ where
         snapshot.vout_sr = diag_tps_u8(tps.read_reg(addr::VOUT_SR));
         snapshot.vout_fs = diag_tps_u8(tps.read_reg(addr::VOUT_FS));
         snapshot.cdc = diag_tps_u8(tps.read_reg(addr::CDC));
-        snapshot.mode = diag_tps_u8(tps.read_reg(addr::MODE));
         snapshot.status = diag_tps_u8(tps.read_reg(addr::STATUS));
         match ch {
             OutputChannel::OutA => {
