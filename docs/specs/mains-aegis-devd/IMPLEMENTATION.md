@@ -48,6 +48,7 @@
 - `tools/mains-aegis-host`: 提供 IPC `device.tps_en.release` 和 devd HTTP `POST /api/v1/devices/{id}/tps-en/release`。HTTP 只能由有效 USB Web lease 调用，CLI/IPC 也只选择已绑定 USB CDC；任意 LAN 写路径被拒绝。Web Device Info 显示互锁事实并只提供带确认弹窗的 MCU release 动作。
 - `tools/mains-aegis-host`: 提供 Alerts HTTP/IPC bridge；USB CDC error frame 与 LAN `409` 均映射为带 `stale|inactive` details 的 conflict，供 CLI 和 Web 保留固件权威结果。
 - `tools/mains-aegis-host`: 仅在 Alerts 调用点对旧固件的 CDC `unsupported_operation` 与 Alerts 路由 LAN `404` 进行兼容映射，统一返回带 `result=unsupported` details 的 HTTP `501`，并保留其它操作既有 fallback code。
+- `tools/mains-aegis-host`: Alerts list/mute IPC 对 conflict 与 unsupported 均返回机器可读 result；mock 对重复实例消音返回 `already_muted`。
 
 
 ## References

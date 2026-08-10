@@ -26,12 +26,14 @@
   - devd 提供设备 Alerts HTTP/IPC bridge，按 native serial、LAN 与 mock 路由。
   - devd 对所有传输统一保留 stale/inactive 的 `409` 状态与结构化详情。
   - 仅在 Alerts 调用点把旧固件 CDC `unsupported_operation` 与 Alerts LAN `404` 归一化为 `unsupported`/`501`，不改变其它 CDC 操作的兼容 fallback，也不从遥测推断写能力。
+  - Alerts list/mute IPC 均把 conflict/unsupported 保留为机器可读 result；mock 重复消音返回 `already_muted`。
   - CLI 提供 `alerts list|mute`；mute 先读取当前实例再写回，预读时已解除的告警也输出机器可读 inactive JSON。
 - `web/src/app/App.tsx`
   - 设备导航新增 `Alerts` 页，支持 direct HTTP、devd/Web lease 与 Web Serial。
   - 每行独立消音、写入中锁定、完成后权威回读，并呈现 unsupported、stale 与传输错误。
   - direct LAN 的旧固件 Alerts `404` 在客户端限定归一化为 `unsupported`，升级提示与 devd/Web Serial 一致。
   - offline、unsupported 或刷新失败时清空旧告警快照，不保留基于过期数据的消音按钮。
+  - Web Serial 保留 CDC error envelope；刷新使用代次保护，mute 冲突后的权威回读不清除 stale/inactive 提示。
 
 - `firmware/src/front_panel_scene.rs`
   - 提供同源 Dashboard 指示器、`ALERTS` 列表、详情 `CLEARED` 终态与热区。

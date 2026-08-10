@@ -3579,9 +3579,11 @@ function AlertsPage({ record }: { record: DeviceRecord }) {
   const [loading, setLoading] = useState(true);
   const [muting, setMuting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const refreshGeneration = useRef(0);
   const target = useMemo(() => alertControlTarget(record), [record]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options?: { preserveError?: boolean }) => {
+    const generation = ++refreshGeneration.current;
     if (record.connectionState === "offline") {
       setSnapshot(null);
       setLoading(false);
@@ -3596,19 +3598,21 @@ function AlertsPage({ record }: { record: DeviceRecord }) {
     }
     setLoading(true);
     try {
-      setSnapshot(
+      const nextSnapshot =
         target.kind === "devd"
           ? await getDevdDeviceAlerts(target.baseUrl, target.deviceId)
           : target.kind === "serial"
             ? await getSerialAlerts(target.deviceId)
-            : await getDeviceAlerts(target.baseUrl),
-      );
-      setError(null);
+            : await getDeviceAlerts(target.baseUrl);
+      if (generation !== refreshGeneration.current) return;
+      setSnapshot(nextSnapshot);
+      if (!options?.preserveError) setError(null);
     } catch (cause) {
+      if (generation !== refreshGeneration.current) return;
       setSnapshot(null);
       setError(alertErrorMessage(cause));
     } finally {
-      setLoading(false);
+      if (generation === refreshGeneration.current) setLoading(false);
     }
   }, [getSerialAlerts, record.connectionState, target]);
 
@@ -3638,7 +3642,7 @@ function AlertsPage({ record }: { record: DeviceRecord }) {
       await refresh();
     } catch (cause) {
       setError(alertErrorMessage(cause));
-      await refresh();
+      await refresh({ preserveError: true });
     } finally {
       setMuting(null);
     }

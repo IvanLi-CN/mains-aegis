@@ -1877,11 +1877,7 @@ async fn dispatch_ipc_request(
             let id = require_param(&params, "device_id")?;
             match device_alerts(State(state.clone()), Path(id)).await {
                 Ok(Json(result)) => Ok(result),
-                Err(error) if error.1 == StatusCode::NOT_IMPLEMENTED => Ok(error
-                    .0
-                    .details
-                    .unwrap_or_else(|| json!({"ok": false, "result": "unsupported"}))),
-                Err(error) => Err(error.into()),
+                Err(error) => alert_ipc_error_result(error),
             }
         }
         "device.alerts.mute" => {
@@ -1900,11 +1896,7 @@ async fn dispatch_ipc_request(
             .await
             {
                 Ok(Json(result)) => Ok(result),
-                Err(error) if error.1 == StatusCode::CONFLICT => Ok(error
-                    .0
-                    .details
-                    .unwrap_or_else(|| json!({"ok": false, "result": error.0.code}))),
-                Err(error) => Err(error.into()),
+                Err(error) => alert_ipc_error_result(error),
             }
         }
         "device.diag_snapshot" => {
@@ -2098,6 +2090,17 @@ async fn dispatch_ipc_request(
             json_result(reset_advanced_power(State(state.clone()), Query(query)).await)
         }
         _ => anyhow::bail!("unsupported IPC method: {method}"),
+    }
+}
+
+fn alert_ipc_error_result(error: HttpError) -> anyhow::Result<Value> {
+    if matches!(error.1, StatusCode::CONFLICT | StatusCode::NOT_IMPLEMENTED) {
+        Ok(error
+            .0
+            .details
+            .unwrap_or_else(|| json!({"ok": false, "result": error.0.code})))
+    } else {
+        Err(error.into())
     }
 }
 
@@ -4375,7 +4378,7 @@ async fn device_mute_alert(
                     }),
                 ));
             }
-            state
+            let previous = state
                 .inner
                 .lock()
                 .expect("state lock")
@@ -4388,7 +4391,7 @@ async fn device_mute_alert(
                 "severity": "warning",
                 "sound_state": "muted",
                 "summary": "RUNNING ON BATTERY",
-                "result": "muted"
+                "result": if previous == Some(input.instance_id) { "already_muted" } else { "muted" }
             })
         }
         DeviceTransport::Lan => {
@@ -12164,6 +12167,14 @@ mod tests {
     }
 
     #[test]
+    fn alert_ipc_preserves_machine_readable_unsupported_result() {
+        let result =
+            alert_ipc_error_result(HttpError::unsupported("unsupported operation")).unwrap();
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["result"], "unsupported");
+    }
+
+    #[test]
     fn service_event_token_query_decodes_urlsafe_tokens() {
         let uri: Uri = "/api/v1/serial/events?lease_id=abc&bridge_token=a%2Bb%3D%3D"
             .parse()
@@ -12479,6 +12490,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(after.0["alerts"][0]["sound_state"], "muted");
+
+        let duplicate = device_mute_alert(
+            State(state.clone()),
+            Path(("mock-devkit".to_string(), "mains_absent_dc".to_string())),
+            Json(MuteAlertRequest { instance_id: 1 }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(duplicate.0["result"], "already_muted");
 
         let stale = device_mute_alert(
             State(state),

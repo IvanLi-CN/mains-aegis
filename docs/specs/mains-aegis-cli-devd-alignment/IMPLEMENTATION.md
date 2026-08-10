@@ -23,6 +23,7 @@
 - host-tools 新增 USB-only `device.tps_en.release` IPC、`POST /api/v1/devices/{id}/tps-en/release` 与 `mains-aegis device <id> tps-en release --confirm release-tps-en`。HTTP 要求有效 Web USB lease；错误确认和 LAN target 均被拒绝。Web Device Info 只显示互锁诊断并提供一个确认后的 MCU release 动作。
 - host-tools 新增 `device.alerts.list|mute` IPC、Alerts HTTP bridge 与 `mains-aegis device <id> alerts list|mute`。CLI 始终输出机器可读 JSON；预读时告警已解除返回 `inactive`，并发实例变化返回固件权威 `stale`。
 - 旧固件的 CDC `unsupported_operation` 与 Alerts 路由 LAN `404` 仅在 Alerts 调用点由 host-tools 归一化为 `unsupported`/HTTP `501`；Alerts IPC 保留机器可读 result，CLI list/mute、devd HTTP 与 Web 获得同一升级判定。
+- Alerts list/mute IPC 对 conflict/unsupported 使用同一机器可读结果通道，避免 CLI 在部分实现或并发变化场景退化为纯文本错误。
 - Repo skill routing defaults Codex work inside this repository to `$mains-aegis-devd-flow` for development, validation, diagnostics, field investigation, and hardware read/session-read checks. `$mains-aegis-user-operations` remains the explicit end-user/released host-tools route.
 
 ## 验证

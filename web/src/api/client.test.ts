@@ -14,6 +14,7 @@ import {
   setDeviceManualChargeControl,
   setDeviceManualChargePrefs,
   setDeviceAdvancedPower,
+  toErrorEnvelope,
 } from "./client";
 import type { DeviceSettings, UpsStatus } from "./types";
 
@@ -124,6 +125,10 @@ describe("active alerts", () => {
       sound_state: "muted",
       result: "muted",
     });
+
+    await expect(
+      muteDeviceAlert(baseUrl, alert!.alert_id, alert!.instance_id),
+    ).resolves.toMatchObject({ result: "already_muted" });
     const after = await getDeviceAlerts(baseUrl);
     expect(after.alerts.find((item) => item.alert_id === alert!.alert_id)?.sound_state).toBe(
       "muted",
@@ -239,6 +244,19 @@ async function withFetchMock<T>(
 }
 
 describe("alert mute errors", () => {
+  test("preserves structured Web Serial error envelopes", () => {
+    const serialError = Object.assign(new Error("unsupported operation"), {
+      envelope: {
+        code: "unsupported_operation",
+        message: "unsupported operation",
+        retryable: false,
+        details: null,
+      },
+    });
+
+    expect(toErrorEnvelope(serialError)).toEqual(serialError.envelope);
+  });
+
   test("maps old firmware direct LAN alert 404 to unsupported", async () => {
     const error = await withFetchMock(
       async () =>

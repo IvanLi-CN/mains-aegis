@@ -1435,9 +1435,10 @@ function muteMockAlert(baseUrl: string, path: string, body: unknown): unknown {
       details: null,
     });
   }
+  const result = alert.sound_state === "muted" ? "already_muted" : "muted";
   alert.sound_state = "muted";
   mockAlertsByBaseUrl.set(baseUrl, snapshot);
-  return { ok: true, ...alert, result: "muted" };
+  return { ok: true, ...alert, result };
 }
 export const setDeviceManualChargeControl = (
   baseUrl: string,
@@ -1622,6 +1623,14 @@ export async function probeDevice(
 
 export function toErrorEnvelope(error: unknown): ApiErrorEnvelope["error"] {
   if (error instanceof MainsAegisApiError) return error.envelope;
+  if (
+    error &&
+    typeof error === "object" &&
+    "envelope" in error &&
+    isApiError(error.envelope)
+  ) {
+    return error.envelope;
+  }
   if (error instanceof Error) {
     return {
       code: "transport_error",
@@ -1636,6 +1645,19 @@ export function toErrorEnvelope(error: unknown): ApiErrorEnvelope["error"] {
     retryable: true,
     details: null,
   };
+}
+
+function isApiError(value: unknown): value is ApiErrorEnvelope["error"] {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      "code" in value &&
+      typeof value.code === "string" &&
+      "message" in value &&
+      typeof value.message === "string" &&
+      "retryable" in value &&
+      typeof value.retryable === "boolean",
+  );
 }
 
 export const loadBundledFirmwareCatalog = () =>
