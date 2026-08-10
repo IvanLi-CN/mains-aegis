@@ -3730,6 +3730,9 @@ function alertErrorMessage(cause: unknown): string {
   if (envelope.code.includes("stale")) {
     return "The alert changed before it could be muted. The list has been refreshed.";
   }
+  if (envelope.code.includes("inactive")) {
+    return "The alert cleared before it could be muted. The list has been refreshed.";
+  }
   return `${envelope.code}: ${envelope.message}`;
 }
 

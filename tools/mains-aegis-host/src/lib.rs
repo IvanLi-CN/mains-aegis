@@ -2896,6 +2896,19 @@ fn parse_lan_http_json_response(
                         status_code,
                     ));
                 }
+                if status == StatusCode::CONFLICT.as_u16() {
+                    let alert_result = value
+                        .get("result")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                    if let Some(result @ ("stale" | "inactive")) = alert_result.as_deref() {
+                        return Err(HttpError::conflict_with_details(
+                            result,
+                            format!("alert mute returned {result}"),
+                            value,
+                        ));
+                    }
+                }
                 return Err(HttpError(
                     ApiError {
                         code: "lan_http_status_failed".to_string(),
@@ -4316,15 +4329,28 @@ async fn device_mute_alert(
     let result = match transport {
         DeviceTransport::Mock => {
             if alert_id != "mains_absent_dc" {
-                return Err(HttpError::not_found(
-                    "alert_inactive",
+                return Err(HttpError::conflict_with_details(
+                    "inactive",
                     "alert is not active",
+                    json!({
+                        "ok": false,
+                        "alert_id": alert_id,
+                        "instance_id": input.instance_id,
+                        "result": "inactive"
+                    }),
                 ));
             }
             if input.instance_id != 1 {
-                return Err(HttpError::non_retryable(
-                    "stale_alert_instance",
+                return Err(HttpError::conflict_with_details(
+                    "stale",
                     "alert instance is stale",
+                    json!({
+                        "ok": false,
+                        "alert_id": alert_id,
+                        "instance_id": input.instance_id,
+                        "current_instance_id": 1,
+                        "result": "stale"
+                    }),
                 ));
             }
             state
@@ -4337,6 +4363,9 @@ async fn device_mute_alert(
                 "ok": true,
                 "alert_id": alert_id,
                 "instance_id": input.instance_id,
+                "severity": "warning",
+                "sound_state": "muted",
+                "summary": "RUNNING ON BATTERY",
                 "result": "muted"
             })
         }
@@ -4368,6 +4397,17 @@ async fn device_mute_alert(
             .await?
         }
     };
+    let alert_result = result
+        .get("result")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if let Some(code @ ("stale" | "inactive")) = alert_result.as_deref() {
+        return Err(HttpError::conflict_with_details(
+            code,
+            format!("alert mute returned {code}"),
+            result,
+        ));
+    }
     Ok(Json(result))
 }
 
@@ -12002,6 +12042,18 @@ impl HttpError {
             StatusCode::NOT_FOUND,
         )
     }
+
+    fn conflict_with_details(code: &str, message: impl Into<String>, details: Value) -> Self {
+        Self(
+            ApiError {
+                code: code.to_string(),
+                message: message.into(),
+                retryable: false,
+                details: Some(details),
+            },
+            StatusCode::CONFLICT,
+        )
+    }
 }
 
 impl IntoResponse for HttpError {
@@ -12342,7 +12394,9 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(stale.0.code, "stale_alert_instance");
+        assert_eq!(stale.0.code, "stale");
+        assert_eq!(stale.1, StatusCode::CONFLICT);
+        assert_eq!(stale.0.details.as_ref().unwrap()["result"], "stale");
     }
 
     #[cfg(unix)]
@@ -14143,6 +14197,23 @@ mod tests {
 
         assert_eq!(error.0.code, "not_found");
         assert_eq!(error.1, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn preserves_lan_alert_conflict_result() {
+        let response = b"HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\n\r\n{\"ok\":false,\"alert_id\":\"module_fault\",\"instance_id\":7,\"result\":\"stale\",\"current_instance_id\":8}";
+
+        let error = parse_lan_http_json_response(
+            response,
+            "POST",
+            "/api/v1/alerts/module_fault/mute",
+            "192.168.4.25",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.0.code, "stale");
+        assert_eq!(error.1, StatusCode::CONFLICT);
+        assert_eq!(error.0.details.as_ref().unwrap()["current_instance_id"], 8);
     }
 
     #[test]

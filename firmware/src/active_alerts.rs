@@ -318,9 +318,11 @@ pub fn render_mute_result_json<const N: usize>(
             };
             let _ = write!(
                 out,
-                r#"{{"ok":true,"alert_id":"{}","instance_id":{},"result":"{}"}}"#,
+                r#"{{"ok":true,"alert_id":"{}","instance_id":{},"severity":"{}","sound_state":"muted","summary":"{}","result":"{}"}}"#,
                 id.as_str(),
                 instance_id,
+                id.severity().as_str(),
+                id.summary(),
                 result
             );
         }
@@ -463,6 +465,12 @@ mod tests {
         assert_eq!(
             json.as_str(),
             r#"{"alerts":[{"alert_id":"module_fault","instance_id":1,"severity":"critical","sound_state":"audible","summary":"CHECK DEVICE DIAGNOSTICS"}]}"#
+        );
+
+        render_mute_result_json(&mut json, AlertId::ModuleFault, 1, MuteResult::Muted);
+        assert_eq!(
+            json.as_str(),
+            r#"{"ok":true,"alert_id":"module_fault","instance_id":1,"severity":"critical","sound_state":"muted","summary":"CHECK DEVICE DIAGNOSTICS","result":"muted"}"#
         );
     }
 }

@@ -1237,19 +1237,26 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
 
     macro_rules! service_runtime_audio {
         ($power:ident) => {{
+            let now = Instant::now();
+            let audio_edges = $power.take_audio_edges();
+            let audio_signals = $power.audio_signals();
+            let system_silent = $power.beeper_prefs_snapshot().system_volume.step() == 0;
+            sync_active_alerts(
+                &mut active_alerts,
+                audio_signals,
+                audio_edges,
+                system_silent,
+            );
             if audio_enabled {
-                let now = Instant::now();
-                let audio_edges = $power.take_audio_edges();
                 let flush_runtime_audio = audio_edges.battery_low_changed.is_some()
                     || audio_edges.module_fault_changed.is_some()
                     || audio_edges.battery_protection_changed.is_some();
                 sync_runtime_audio(
                     &mut audio_manager,
-                    &mut active_alerts,
+                    &active_alerts,
                     now,
-                    $power.audio_signals(),
                     audio_edges,
-                    $power.beeper_prefs_snapshot().system_volume.step() == 0,
+                    system_silent,
                 );
                 audio_manager.tick(now);
                 if flush_runtime_audio {
@@ -1747,14 +1754,22 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     }
     power.set_applied_fan_state(applied_fan_state);
 
+    let boot_audio_edges = power.take_audio_edges();
+    let boot_audio_signals = power.audio_signals();
+    let boot_system_silent = power.beeper_prefs_snapshot().system_volume.step() == 0;
+    sync_active_alerts(
+        &mut active_alerts,
+        boot_audio_signals,
+        boot_audio_edges,
+        boot_system_silent,
+    );
     if audio_enabled {
         sync_runtime_audio(
             &mut audio_manager,
-            &mut active_alerts,
+            &active_alerts,
             Instant::now(),
-            power.audio_signals(),
-            power.take_audio_edges(),
-            power.beeper_prefs_snapshot().system_volume.step() == 0,
+            boot_audio_edges,
+            boot_system_silent,
         );
         audio_manager.tick(Instant::now());
     }
@@ -3321,29 +3336,12 @@ fn push_opt_bool<const N: usize>(out: &mut heapless::String<N>, value: Option<bo
     }
 }
 
-fn sync_runtime_audio(
-    audio_manager: &mut AudioManager,
+fn sync_active_alerts(
     active_alerts: &mut ActiveAlerts,
-    now: Instant,
     signals: output::AudioSignalSnapshot,
     edges: output::AudioSignalEvents,
     system_silent: bool,
 ) {
-    if edges.mains_present_changed == Some(true) {
-        audio_manager.trigger(AudioCue::MainsPresentDc);
-    }
-    if matches!(
-        edges.charge_phase_changed,
-        Some(output::AudioChargePhase::Charging)
-    ) {
-        audio_manager.trigger(AudioCue::ChargeStarted);
-    }
-    if matches!(
-        edges.charge_phase_changed,
-        Some(output::AudioChargePhase::Completed)
-    ) {
-        audio_manager.trigger(AudioCue::ChargeCompleted);
-    }
     let mains_absent_active = signals.mains_present == Some(false);
 
     let mut alert_signals = AlertSignals::default();
@@ -3372,6 +3370,30 @@ fn sync_runtime_audio(
     active_alerts.update(alert_signals);
     #[cfg(feature = "net_http")]
     mains_aegis_firmware::net::publish_active_alerts(active_alerts, system_silent);
+}
+
+fn sync_runtime_audio(
+    audio_manager: &mut AudioManager,
+    active_alerts: &ActiveAlerts,
+    now: Instant,
+    edges: output::AudioSignalEvents,
+    system_silent: bool,
+) {
+    if edges.mains_present_changed == Some(true) {
+        audio_manager.trigger(AudioCue::MainsPresentDc);
+    }
+    if matches!(
+        edges.charge_phase_changed,
+        Some(output::AudioChargePhase::Charging)
+    ) {
+        audio_manager.trigger(AudioCue::ChargeStarted);
+    }
+    if matches!(
+        edges.charge_phase_changed,
+        Some(output::AudioChargePhase::Completed)
+    ) {
+        audio_manager.trigger(AudioCue::ChargeCompleted);
+    }
     for id in AlertId::ALL {
         audio_manager.set_cue_active(
             id.audio_cue(),
