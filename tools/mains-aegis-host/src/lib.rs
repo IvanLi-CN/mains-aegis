@@ -1885,14 +1885,20 @@ async fn dispatch_ipc_request(
                 .and_then(Value::as_u64)
                 .and_then(|value| u32::try_from(value).ok())
                 .ok_or_else(|| anyhow::anyhow!("instance_id is required"))?;
-            json_result(
-                device_mute_alert(
-                    State(state.clone()),
-                    Path((id, alert_id)),
-                    Json(MuteAlertRequest { instance_id }),
-                )
-                .await,
+            match device_mute_alert(
+                State(state.clone()),
+                Path((id, alert_id)),
+                Json(MuteAlertRequest { instance_id }),
             )
+            .await
+            {
+                Ok(Json(result)) => Ok(result),
+                Err(error) if error.1 == StatusCode::CONFLICT => Ok(error
+                    .0
+                    .details
+                    .unwrap_or_else(|| json!({"ok": false, "result": error.0.code}))),
+                Err(error) => Err(error.into()),
+            }
         }
         "device.diag_snapshot" => {
             let id = require_param(&params, "device_id")?;
@@ -12397,6 +12403,22 @@ mod tests {
         assert_eq!(stale.0.code, "stale");
         assert_eq!(stale.1, StatusCode::CONFLICT);
         assert_eq!(stale.0.details.as_ref().unwrap()["result"], "stale");
+
+        let ipc_state = create_app_state(false);
+        seed_mock_device(&ipc_state);
+        let ipc_result = dispatch_ipc_request(
+            &ipc_state,
+            "device.alerts.mute",
+            json!({
+                "device_id": "mock-devkit",
+                "alert_id": "mains_absent_dc",
+                "instance_id": 2
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ipc_result["ok"], false);
+        assert_eq!(ipc_result["result"], "stale");
     }
 
     #[cfg(unix)]

@@ -115,7 +115,14 @@ describe("active alerts", () => {
     const before = await getDeviceAlerts(baseUrl);
     const alert = before.alerts.find((item) => item.alert_id === "mains_absent_dc");
     expect(alert?.sound_state).toBe("audible");
-    await muteDeviceAlert(baseUrl, alert!.alert_id, alert!.instance_id);
+    const result = await muteDeviceAlert(baseUrl, alert!.alert_id, alert!.instance_id);
+    expect(result).toMatchObject({
+      alert_id: alert!.alert_id,
+      instance_id: alert!.instance_id,
+      severity: "warning",
+      sound_state: "muted",
+      result: "muted",
+    });
     const after = await getDeviceAlerts(baseUrl);
     expect(after.alerts.find((item) => item.alert_id === alert!.alert_id)?.sound_state).toBe(
       "muted",

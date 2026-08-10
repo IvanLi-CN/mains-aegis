@@ -1410,7 +1410,7 @@ function muteMockAlert(baseUrl: string, path: string, body: unknown): unknown {
   }
   alert.sound_state = "muted";
   mockAlertsByBaseUrl.set(baseUrl, snapshot);
-  return { ok: true, alert_id: alertId, instance_id: instanceId, result: "muted" };
+  return { ok: true, ...alert, result: "muted" };
 }
 export const setDeviceManualChargeControl = (
   baseUrl: string,
