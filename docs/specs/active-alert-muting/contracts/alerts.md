@@ -51,6 +51,8 @@ The HTTP request body is:
 
 CDC uses the same `result` values in its response envelope. In every success and failure response the device remains the authority; a client refreshes `get_alerts` before completing a user action.
 
+Compatibility layers normalize pre-contract firmware responses without inferring writable capability: CDC `unsupported_operation` and an Alerts-route LAN `404` become `unsupported` with HTTP `501`. Other operations and unrelated `404` responses retain their original semantics.
+
 ## devd and CLI
 
 devd exposes IPC methods corresponding one-to-one with `get_alerts` and `mute_alert`, and forwards the same response envelope through its device HTTP bridge. It must not infer muting support from telemetry.

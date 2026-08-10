@@ -22,6 +22,7 @@
 - host-tools 新增 devd HTTP `POST /api/v1/devices/{id}/recovery/bms-discharge-authorization`、IPC `device.recovery.bms_discharge_authorization` 与 CLI `device <id> recovery bms-discharge-authorization`。native serial 设备只有显式绑定 companion LAN 时才优先尝试设备 LAN HTTP，失败后回退 USB CDC；无 companion LAN 时只走绑定 USB CDC，不把缓存的 `identity/status.network.ipv4` 当作恢复写目标；LAN 设备直接走设备本体 HTTP；mock 设备返回结构化 rejected。devd 会等待固件非 `pending` 终态并刷新 status/diag cache。
 - host-tools 新增 USB-only `device.tps_en.release` IPC、`POST /api/v1/devices/{id}/tps-en/release` 与 `mains-aegis device <id> tps-en release --confirm release-tps-en`。HTTP 要求有效 Web USB lease；错误确认和 LAN target 均被拒绝。Web Device Info 只显示互锁诊断并提供一个确认后的 MCU release 动作。
 - host-tools 新增 `device.alerts.list|mute` IPC、Alerts HTTP bridge 与 `mains-aegis device <id> alerts list|mute`。CLI 始终输出机器可读 JSON；预读时告警已解除返回 `inactive`，并发实例变化返回固件权威 `stale`。
+- 旧固件的 CDC `unsupported_operation` 与 Alerts 路由 LAN `404` 由 host-tools 归一化为 `unsupported`/HTTP `501`，CLI、devd HTTP 与 Web 获得同一升级判定。
 - Repo skill routing defaults Codex work inside this repository to `$mains-aegis-devd-flow` for development, validation, diagnostics, field investigation, and hardware read/session-read checks. `$mains-aegis-user-operations` remains the explicit end-user/released host-tools route.
 
 ## 验证

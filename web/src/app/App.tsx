@@ -3724,7 +3724,11 @@ function alertSoundLabel(sound: ActiveAlert["sound_state"]): string {
 
 function alertErrorMessage(cause: unknown): string {
   const envelope = toErrorEnvelope(cause);
-  if (envelope.code === "not_found" || envelope.code === "unsupported_operation") {
+  if (
+    envelope.code === "not_found" ||
+    envelope.code === "unsupported_operation" ||
+    envelope.code === "unsupported"
+  ) {
     return "Alerts are unavailable on this firmware. Upgrade the device to enable per-alert muting.";
   }
   if (envelope.code.includes("stale")) {

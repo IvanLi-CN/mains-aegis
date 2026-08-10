@@ -25,10 +25,12 @@
 - `tools/mains-aegis-host`
   - devd 提供设备 Alerts HTTP/IPC bridge，按 native serial、LAN 与 mock 路由。
   - devd 对所有传输统一保留 stale/inactive 的 `409` 状态与结构化详情。
+  - 旧固件 CDC `unsupported_operation` 与 Alerts LAN `404` 被限定归一化为 `unsupported`/`501`，不从遥测推断写能力。
   - CLI 提供 `alerts list|mute`；mute 先读取当前实例再写回，预读时已解除的告警也输出机器可读 inactive JSON。
 - `web/src/app/App.tsx`
   - 设备导航新增 `Alerts` 页，支持 direct HTTP、devd/Web lease 与 Web Serial。
   - 每行独立消音、写入中锁定、完成后权威回读，并呈现 unsupported、stale 与传输错误。
+  - direct LAN 的旧固件 Alerts `404` 在客户端限定归一化为 `unsupported`，升级提示与 devd/Web Serial 一致。
 
 - `firmware/src/front_panel_scene.rs`
   - 提供同源 Dashboard 指示器、`ALERTS` 列表、详情 `CLEARED` 终态与热区。

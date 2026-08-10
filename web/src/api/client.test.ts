@@ -239,6 +239,31 @@ async function withFetchMock<T>(
 }
 
 describe("alert mute errors", () => {
+  test("maps old firmware direct LAN alert 404 to unsupported", async () => {
+    const error = await withFetchMock(
+      async () =>
+        jsonResponse(
+          { error: { code: "not_found", message: "not found" } },
+          { status: 404 },
+        ),
+      async () => {
+        try {
+          await getDeviceAlerts("http://old-mains-aegis.local");
+          throw new Error("expected getDeviceAlerts to reject");
+        } catch (caught) {
+          return caught;
+        }
+      },
+    );
+
+    expect(error).toBeInstanceOf(MainsAegisApiError);
+    expect((error as MainsAegisApiError).envelope).toMatchObject({
+      code: "unsupported",
+      retryable: false,
+      details: { result: "unsupported" },
+    });
+  });
+
   test("preserves direct LAN stale results as structured API errors", async () => {
     const error = await withFetchMock(
       async () =>

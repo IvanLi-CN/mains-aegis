@@ -2878,6 +2878,13 @@ fn parse_lan_http_json_response(
     if !(200..300).contains(&status) {
         let status_code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
         let trimmed_body = body.trim();
+        if status == StatusCode::NOT_FOUND.as_u16()
+            && (path == "/api/v1/alerts" || path.starts_with("/api/v1/alerts/"))
+        {
+            return Err(HttpError::unsupported(
+                "alerts are unavailable on this firmware",
+            ));
+        }
         if !trimmed_body.is_empty() {
             if let Ok(value) = serde_json::from_str::<Value>(trimmed_body) {
                 if let Some(error) = value.get("error") {
@@ -9449,6 +9456,9 @@ fn error_from_cdc_response(response: &Value) -> HttpError {
         .and_then(Value::as_bool)
         .unwrap_or(true);
     let details = error.and_then(|error| error.get("details")).cloned();
+    if code == "unsupported_operation" {
+        return HttpError::unsupported(message);
+    }
     if matches!(code, "stale" | "inactive") {
         return HttpError::conflict_with_details(
             code,
@@ -12056,6 +12066,18 @@ impl HttpError {
         )
     }
 
+    fn unsupported(message: impl Into<String>) -> Self {
+        Self(
+            ApiError {
+                code: "unsupported".to_string(),
+                message: message.into(),
+                retryable: false,
+                details: Some(json!({ "ok": false, "result": "unsupported" })),
+            },
+            StatusCode::NOT_IMPLEMENTED,
+        )
+    }
+
     fn conflict_with_details(code: &str, message: impl Into<String>, details: Value) -> Self {
         Self(
             ApiError {
@@ -12105,6 +12127,23 @@ mod tests {
         assert_eq!(error.1, StatusCode::CONFLICT);
         assert_eq!(error.0.details.as_ref().unwrap()["result"], "stale");
         assert_eq!(error.0.details.as_ref().unwrap()["current_instance_id"], 42);
+    }
+
+    #[test]
+    fn cdc_old_firmware_alert_error_maps_to_unsupported() {
+        let error = error_from_cdc_response(&json!({
+            "type": "error",
+            "error": {
+                "code": "unsupported_operation",
+                "message": "unsupported operation",
+                "retryable": false,
+                "details": null
+            }
+        }));
+
+        assert_eq!(error.0.code, "unsupported");
+        assert_eq!(error.1, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(error.0.details.as_ref().unwrap()["result"], "unsupported");
     }
 
     #[test]
@@ -14250,6 +14289,18 @@ mod tests {
 
         assert_eq!(error.0.code, "not_found");
         assert_eq!(error.1, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn maps_old_firmware_lan_alert_404_to_unsupported() {
+        let response = b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n\r\n{\"error\":{\"code\":\"not_found\"}}";
+
+        let error = parse_lan_http_json_response(response, "GET", "/api/v1/alerts", "192.168.4.25")
+            .unwrap_err();
+
+        assert_eq!(error.0.code, "unsupported");
+        assert_eq!(error.1, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(error.0.details.as_ref().unwrap()["result"], "unsupported");
     }
 
     #[test]

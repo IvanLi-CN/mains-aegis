@@ -151,6 +151,17 @@ async function requestWithBody<T>(
   const payload = parseJsonPayload<T>(responseText);
 
   if (!response.ok) {
+    if (
+      response.status === 404 &&
+      (path === "/api/v1/alerts" || path.startsWith("/api/v1/alerts/"))
+    ) {
+      throw new MainsAegisApiError({
+        code: "unsupported",
+        message: "Alerts are unavailable on this firmware",
+        retryable: false,
+        details: { ok: false, result: "unsupported" },
+      });
+    }
     if (payload && typeof payload === "object" && "error" in payload) {
       throw new MainsAegisApiError(payload.error);
     }
