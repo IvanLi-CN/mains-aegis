@@ -89,3 +89,25 @@
 - stale 或 inactive 消音请求不影响新实例；一个实例消音不移除或停止任何其它活动告警。
 - CDC、LAN、devd、CLI 和 Web 对同一设备返回一致的告警状态；旧固件、offline 和 transport error 有显式结果。
 - 前面板按本 spec 的矩阵导出真实 framebuffer/PNG，获批准后才连接运行时输入、触摸与按键路由。
+
+## Visual Evidence
+
+PR: include
+前面板 Dashboard 状态矩阵。
+![Front-panel dashboard alert matrix](./assets/front-panel-alerts/review-sheets/dashboard.png)
+
+PR: include
+前面板告警列表状态矩阵。
+![Front-panel alert list matrix](./assets/front-panel-alerts/review-sheets/list.png)
+
+PR: include
+Dashboard 与告警列表热区。
+![Front-panel alert hotspots](./assets/front-panel-alerts/review-sheets/hotspots.png)
+
+PR: include
+Web Alerts 桌面端。
+![Web Alerts desktop](./assets/web-alerts-desktop.png)
+
+PR: include
+Web Alerts 移动端（`393x852`）。
+![Web Alerts mobile](./assets/web-alerts-mobile.png)

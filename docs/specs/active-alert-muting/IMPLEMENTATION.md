@@ -57,9 +57,3 @@
   - 通过。
 - 前面板矩阵
   - 46 个场景；每个 `framebuffer.bin` 均为 `110080` 字节，并生成 7 张 review sheet。
-
-## Visual Evidence
-
-- Web `ui_demo` desktop: [`assets/web-alerts-desktop.png`](./assets/web-alerts-desktop.png)
-- Web `ui_demo` mobile (`393x852`): [`assets/web-alerts-mobile.png`](./assets/web-alerts-mobile.png)
-- 前面板获批 framebuffer 矩阵与热区证据保存在 [`assets/front-panel-alerts/`](./assets/front-panel-alerts/)。
