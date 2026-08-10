@@ -65,7 +65,7 @@
 
 ### Dashboard
 
-- WiFi 图标右侧显示与 WiFi glyph 视觉尺寸一致的 `14px` 告警三角。
+- WiFi 图标右侧显示约 `16px` 的告警三角，较 WiFi glyph 增加约 2px 以保证告警可见性。
 - 存在至少一个 `audible` 告警时，三角按最高严重度在白色与严重度色之间双相交替；`warning` 使用黄色，`critical` 使用红色。
 - 仅存在 `muted`、`system_silent` 或 `policy_silent` 告警时，三角以最高严重度色静态显示。
 - 没有活动告警时不显示三角；点击三角进入 `ALERTS` 列表。

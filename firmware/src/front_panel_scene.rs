@@ -1416,7 +1416,7 @@ const DASHBOARD_HOME_WIFI_TOUCH_W: u16 = 32;
 const DASHBOARD_HOME_WIFI_TOUCH_H: u16 = 22;
 const DASHBOARD_HOME_ALERT_ICON_X: u16 = 150;
 const DASHBOARD_HOME_ALERT_ICON_Y: u16 = 2;
-const DASHBOARD_HOME_ALERT_ICON_SIZE: u16 = 14;
+const DASHBOARD_HOME_ALERT_ICON_SIZE: u16 = 16;
 const DASHBOARD_HOME_ALERT_TOUCH_X: u16 = 150;
 const DASHBOARD_HOME_ALERT_TOUCH_Y: u16 = 0;
 const DASHBOARD_HOME_ALERT_TOUCH_W: u16 = 26;
@@ -15107,8 +15107,12 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_alert_preview_icon_matches_the_wifi_glyph_size() {
-        assert_eq!(DASHBOARD_HOME_ALERT_ICON_SIZE, 14);
+    fn dashboard_alert_preview_icon_is_two_pixels_larger_than_wifi() {
+        assert_eq!(DASHBOARD_HOME_ALERT_ICON_SIZE, 16);
+        assert_eq!(
+            DASHBOARD_HOME_ALERT_ICON_SIZE,
+            DASHBOARD_HOME_WIFI_ICON_H + 2
+        );
         assert_eq!(
             DASHBOARD_HOME_ALERT_TOUCH_X,
             DASHBOARD_HOME_WIFI_TOUCH_X + 32
