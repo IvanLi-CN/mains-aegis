@@ -501,7 +501,6 @@ pub enum AlertPreviewTouchTarget {
 pub const fn dashboard_alert_hit_test(x: u16, y: u16) -> bool {
     x >= DASHBOARD_HOME_ALERT_TOUCH_X
         && x < DASHBOARD_HOME_ALERT_TOUCH_X + DASHBOARD_HOME_ALERT_TOUCH_W
-        && y >= DASHBOARD_HOME_ALERT_TOUCH_Y
         && y < DASHBOARD_HOME_ALERT_TOUCH_Y + DASHBOARD_HOME_ALERT_TOUCH_H
 }
 
