@@ -451,6 +451,10 @@ async fn main() -> anyhow::Result<()> {
                 json!({ "device_id": &device_id }),
             )
             .await?;
+            if alert_list_terminal_result(&snapshot).is_some() {
+                println!("{}", serde_json::to_string_pretty(&snapshot)?);
+                return Ok(());
+            }
             let instance_id = snapshot
                 .get("alerts")
                 .and_then(Value::as_array)
@@ -512,6 +516,13 @@ fn inactive_alert_result(alert_id: &str) -> Value {
         "alert_id": alert_id,
         "result": "inactive",
     })
+}
+
+fn alert_list_terminal_result(snapshot: &Value) -> Option<&str> {
+    snapshot
+        .get("result")
+        .and_then(Value::as_str)
+        .filter(|result| *result == "unsupported")
 }
 
 async fn run_daemon_command(endpoint: &str, command: DaemonCommand) -> anyhow::Result<()> {
@@ -1030,9 +1041,10 @@ async fn maybe_confirm_companion_lan(
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_new_matching_entries, device_read_ipc_params, device_to_ipc, inactive_alert_result,
-        looks_like_ipc_connect_error, seed_seen_ids, trace_entry_matches_kind, AlertsCommand, Cli,
-        Command, DaemonCommand, DeviceCommand, DeviceReadArgs, RecoveryCommand, TpsEnCommand,
+        alert_list_terminal_result, collect_new_matching_entries, device_read_ipc_params,
+        device_to_ipc, inactive_alert_result, looks_like_ipc_connect_error, seed_seen_ids,
+        trace_entry_matches_kind, AlertsCommand, Cli, Command, DaemonCommand, DeviceCommand,
+        DeviceReadArgs, RecoveryCommand, TpsEnCommand,
     };
     use clap::Parser as _;
     use serde_json::json;
@@ -1148,6 +1160,13 @@ mod tests {
                 "result": "inactive",
             })
         );
+    }
+
+    #[test]
+    fn cli_preserves_machine_readable_unsupported_alert_result() {
+        let result = json!({ "ok": false, "result": "unsupported" });
+        assert_eq!(alert_list_terminal_result(&result), Some("unsupported"));
+        assert_eq!(alert_list_terminal_result(&json!({ "alerts": [] })), None);
     }
 
     #[test]

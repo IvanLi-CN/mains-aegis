@@ -3583,11 +3583,13 @@ function AlertsPage({ record }: { record: DeviceRecord }) {
 
   const refresh = useCallback(async () => {
     if (record.connectionState === "offline") {
+      setSnapshot(null);
       setLoading(false);
       setError("Device offline. Reconnect to view or mute active alerts.");
       return;
     }
     if (!target) {
+      setSnapshot(null);
       setLoading(false);
       setError("This connected device does not expose the alerts contract yet.");
       return;
@@ -3603,6 +3605,7 @@ function AlertsPage({ record }: { record: DeviceRecord }) {
       );
       setError(null);
     } catch (cause) {
+      setSnapshot(null);
       setError(alertErrorMessage(cause));
     } finally {
       setLoading(false);

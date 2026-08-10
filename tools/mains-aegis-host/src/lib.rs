@@ -1875,7 +1875,14 @@ async fn dispatch_ipc_request(
         }
         "device.alerts.list" => {
             let id = require_param(&params, "device_id")?;
-            json_result(device_alerts(State(state.clone()), Path(id)).await)
+            match device_alerts(State(state.clone()), Path(id)).await {
+                Ok(Json(result)) => Ok(result),
+                Err(error) if error.1 == StatusCode::NOT_IMPLEMENTED => Ok(error
+                    .0
+                    .details
+                    .unwrap_or_else(|| json!({"ok": false, "result": "unsupported"}))),
+                Err(error) => Err(error.into()),
+            }
         }
         "device.alerts.mute" => {
             let id = require_param(&params, "device_id")?;
@@ -4319,7 +4326,9 @@ async fn device_alerts(
             lan_http_json(&address, "GET", "/api/v1/alerts", None).await?
         }
         DeviceTransport::NativeSerial => {
-            send_device_cdc_request(&state, &id, "get_alerts", "devd-alerts").await?
+            send_device_cdc_request(&state, &id, "get_alerts", "devd-alerts")
+                .await
+                .map_err(normalize_alert_transport_error)?
         }
     };
     Ok(Json(alerts))
@@ -4395,20 +4404,19 @@ async fn device_mute_alert(
             )
             .await?
         }
-        DeviceTransport::NativeSerial => {
-            send_device_cdc_request_frame(
-                &state,
-                &id,
-                json!({
-                    "type": "request",
-                    "op": "mute_alert",
-                    "alert_id": alert_id,
-                    "instance_id": input.instance_id,
-                }),
-                "devd-alert-mute",
-            )
-            .await?
-        }
+        DeviceTransport::NativeSerial => send_device_cdc_request_frame(
+            &state,
+            &id,
+            json!({
+                "type": "request",
+                "op": "mute_alert",
+                "alert_id": alert_id,
+                "instance_id": input.instance_id,
+            }),
+            "devd-alert-mute",
+        )
+        .await
+        .map_err(normalize_alert_transport_error)?,
     };
     let alert_result = result
         .get("result")
@@ -9456,9 +9464,6 @@ fn error_from_cdc_response(response: &Value) -> HttpError {
         .and_then(Value::as_bool)
         .unwrap_or(true);
     let details = error.and_then(|error| error.get("details")).cloned();
-    if code == "unsupported_operation" {
-        return HttpError::unsupported(message);
-    }
     if matches!(code, "stale" | "inactive") {
         return HttpError::conflict_with_details(
             code,
@@ -9474,6 +9479,14 @@ fn error_from_cdc_response(response: &Value) -> HttpError {
         }
     } else {
         HttpError::non_retryable_with_details(code, message, details)
+    }
+}
+
+fn normalize_alert_transport_error(error: HttpError) -> HttpError {
+    if error.0.code == "unsupported_operation" {
+        HttpError::unsupported(error.0.message)
+    } else {
+        error
     }
 }
 
@@ -12130,8 +12143,8 @@ mod tests {
     }
 
     #[test]
-    fn cdc_old_firmware_alert_error_maps_to_unsupported() {
-        let error = error_from_cdc_response(&json!({
+    fn cdc_old_firmware_alert_error_maps_to_unsupported_only_in_alert_context() {
+        let generic = error_from_cdc_response(&json!({
             "type": "error",
             "error": {
                 "code": "unsupported_operation",
@@ -12141,9 +12154,13 @@ mod tests {
             }
         }));
 
-        assert_eq!(error.0.code, "unsupported");
-        assert_eq!(error.1, StatusCode::NOT_IMPLEMENTED);
-        assert_eq!(error.0.details.as_ref().unwrap()["result"], "unsupported");
+        assert_eq!(generic.0.code, "unsupported_operation");
+        assert_eq!(generic.1, StatusCode::BAD_REQUEST);
+
+        let alert = normalize_alert_transport_error(generic);
+        assert_eq!(alert.0.code, "unsupported");
+        assert_eq!(alert.1, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(alert.0.details.as_ref().unwrap()["result"], "unsupported");
     }
 
     #[test]
