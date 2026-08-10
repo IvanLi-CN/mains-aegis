@@ -1414,6 +1414,13 @@ const DASHBOARD_HOME_WIFI_TOUCH_X: u16 = 118;
 const DASHBOARD_HOME_WIFI_TOUCH_Y: u16 = 0;
 const DASHBOARD_HOME_WIFI_TOUCH_W: u16 = 32;
 const DASHBOARD_HOME_WIFI_TOUCH_H: u16 = 22;
+const DASHBOARD_HOME_ALERT_ICON_X: u16 = 150;
+const DASHBOARD_HOME_ALERT_ICON_Y: u16 = 2;
+const DASHBOARD_HOME_ALERT_ICON_SIZE: u16 = 14;
+const DASHBOARD_HOME_ALERT_TOUCH_X: u16 = 150;
+const DASHBOARD_HOME_ALERT_TOUCH_Y: u16 = 0;
+const DASHBOARD_HOME_ALERT_TOUCH_W: u16 = 26;
+const DASHBOARD_HOME_ALERT_TOUCH_H: u16 = 22;
 
 const DASHBOARD_HOME_THERMAL_X: u16 = 6;
 const DASHBOARD_HOME_THERMAL_Y: u16 = 76;
@@ -9441,11 +9448,36 @@ pub fn draw_dashboard_alert_preview_indicator<P: UiPainter>(
 ) -> Result<(), P::Error> {
     let palette = palette_for(variant);
     let color = alert_preview_indicator_color(palette, severity, sound, frame_no);
-    draw_bms_glyph_warning_triangle(
+    draw_icon_blocks_scaled(
         painter,
-        DASHBOARD_HOME_WIFI_ICON_X + DASHBOARD_HOME_WIFI_ICON_W + 4,
-        0,
+        DASHBOARD_HOME_ALERT_ICON_X,
+        DASHBOARD_HOME_ALERT_ICON_Y,
+        LUCIDE_TRIANGLE_ALERT_22,
+        22,
+        DASHBOARD_HOME_ALERT_ICON_SIZE,
         color,
+    )
+}
+
+/// Draw the proposed Dashboard alert entry on top of the existing runtime
+/// touch-region overlay. This remains preview-only until owner approval.
+pub fn draw_dashboard_alert_preview_touch_overlay<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+) -> Result<(), P::Error> {
+    let palette = palette_for(variant);
+    draw_dashboard_touch_region_overlay(
+        painter,
+        variant,
+        palette,
+        DASHBOARD_HOME_ALERT_TOUCH_X,
+        DASHBOARD_HOME_ALERT_TOUCH_Y,
+        DASHBOARD_HOME_ALERT_TOUCH_W,
+        DASHBOARD_HOME_ALERT_TOUCH_H,
+        "A",
+        palette.center,
+        166,
+        2,
     )
 }
 
@@ -12521,6 +12553,35 @@ fn draw_icon_blocks<P: UiPainter>(
     Ok(())
 }
 
+fn draw_icon_blocks_scaled<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    blocks: &[(u8, u8, u8, u8)],
+    source_size: u16,
+    target_size: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    for &(bx, by, bw, bh) in blocks {
+        if bw == 0 || bh == 0 {
+            continue;
+        }
+        let left = u16::from(bx) * target_size / source_size;
+        let top = u16::from(by) * target_size / source_size;
+        let right = (u16::from(bx + bw) * target_size).div_ceil(source_size);
+        let bottom = (u16::from(by + bh) * target_size).div_ceil(source_size);
+        fill(
+            painter,
+            x + left,
+            y + top,
+            right.saturating_sub(left).max(1),
+            bottom.saturating_sub(top).max(1),
+            rgb565,
+        )?;
+    }
+    Ok(())
+}
+
 fn icon_block_bounds(blocks: &[(u8, u8, u8, u8)]) -> Option<(u8, u8, u8, u8)> {
     let mut iter = blocks
         .iter()
@@ -15043,6 +15104,15 @@ mod tests {
     #[test]
     fn dashboard_focus_label_background_covers_detail_body_text() {
         assert!(DASHBOARD_HOME_FOCUS_LABEL_H >= 17);
+    }
+
+    #[test]
+    fn dashboard_alert_preview_icon_matches_the_wifi_glyph_size() {
+        assert_eq!(DASHBOARD_HOME_ALERT_ICON_SIZE, 14);
+        assert_eq!(
+            DASHBOARD_HOME_ALERT_TOUCH_X,
+            DASHBOARD_HOME_WIFI_TOUCH_X + 32
+        );
     }
 
     #[test]

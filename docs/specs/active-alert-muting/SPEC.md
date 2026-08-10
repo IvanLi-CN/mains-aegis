@@ -65,7 +65,7 @@
 
 ### Dashboard
 
-- WiFi 图标右侧显示告警三角。
+- WiFi 图标右侧显示与 WiFi glyph 视觉尺寸一致的 `14px` 告警三角。
 - 存在至少一个 `audible` 告警时，三角按最高严重度在白色与严重度色之间双相交替；`warning` 使用黄色，`critical` 使用红色。
 - 仅存在 `muted`、`system_silent` 或 `policy_silent` 告警时，三角以最高严重度色静态显示。
 - 没有活动告警时不显示三角；点击三角进入 `ALERTS` 列表。
@@ -80,7 +80,7 @@
 ### 评审门禁与矩阵
 
 - 预览必须由 `firmware/src/front_panel_scene.rs` 同源渲染，并为每个场景输出 `320x172` PNG 与 `110080` 字节 little-endian RGB565 framebuffer。
-- 评审矩阵包含：首页无告警、warning/critical 双相、`muted`、`system_silent`、`policy_silent`、mixed；列表空/单/mixed/溢出首中末及触摸区；9 类详情的 active、muted、cleared，以及详情触摸区。
+- 评审矩阵包含：首页无告警、warning/critical 双相、`muted`、`system_silent`、`policy_silent`、mixed 及 Dashboard 告警入口热区；列表空/单/mixed/溢出首中末及逐行详情/消音热区；9 类详情的 active、muted、cleared，以及详情触摸区。
 - 主人明确批准 Chat 中展示的不可变快照前，任何运行时、协议、CLI 和 Web 消音实现均不得开始。
 
 ## 验收标准

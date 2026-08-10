@@ -96,6 +96,11 @@ def matrix() -> list[Entry]:
             "Mixed / highest critical audible",
             ("--scenario", "dashboard-alert", "--alert-severity", "critical", "--alert-sound", "audible", "--frame-no", "3"),
         ),
+        Entry(
+            "hotspots",
+            "Dashboard touch zones / A = Alerts",
+            ("--scenario", "dashboard-alert", "--alert-severity", "warning", "--alert-sound", "audible", "--alert-touch-zones"),
+        ),
         Entry("list", "Empty", ("--scenario", "alert-list", "--alert-list", "empty")),
         Entry(
             "list",
@@ -124,8 +129,8 @@ def matrix() -> list[Entry]:
             ("--scenario", "alert-list", "--alert-list", "overflow", "--alert-selected", "8", "--alert-top", "6"),
         ),
         Entry(
-            "list",
-            "Touch zones",
+            "hotspots",
+            "Alert list / rows = Detail, M = Mute",
             ("--scenario", "alert-list", "--alert-list", "overflow", "--alert-touch-zones"),
         ),
         Entry(

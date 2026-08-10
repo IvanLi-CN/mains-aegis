@@ -1446,6 +1446,19 @@ fn run() -> Result<(), String> {
                 args.frame_no,
             )
             .map_err(|_| "alert indicator render failed unexpectedly".to_string())?;
+            if args.alert_touch_overlay {
+                front_panel_scene::render_dashboard_touch_regions_overlay(
+                    &mut framebuffer,
+                    UiVariant::InstrumentB,
+                    DashboardRoute::Home,
+                )
+                .map_err(|_| "dashboard touch overlay render failed unexpectedly".to_string())?;
+                front_panel_scene::draw_dashboard_alert_preview_touch_overlay(
+                    &mut framebuffer,
+                    UiVariant::InstrumentB,
+                )
+                .map_err(|_| "alert touch overlay render failed unexpectedly".to_string())?;
+            }
         }
         ScenarioArg::AlertList => {
             let alerts = alert_preview_items(args.alert_list, &args);
@@ -2777,7 +2790,7 @@ impl Args {
     fn output_tag(&self) -> String {
         match self.scenario {
             ScenarioArg::DashboardAlert => format!(
-                "dashboard-alert-{}-{}-phase-{}-frame-{}",
+                "dashboard-alert-{}-{}-phase-{}-frame-{}{}",
                 alert_severity_tag(self.alert_severity),
                 alert_sound_tag(self.alert_sound),
                 if self.frame_no % 2 == 0 {
@@ -2786,6 +2799,11 @@ impl Args {
                     "severity"
                 },
                 self.frame_no,
+                if self.alert_touch_overlay {
+                    "-touch-zones"
+                } else {
+                    ""
+                },
             ),
             ScenarioArg::AlertList => format!(
                 "alert-list-{}-{}-{}-selected-{}-top-{}{}",

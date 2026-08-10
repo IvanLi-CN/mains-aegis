@@ -30,6 +30,6 @@
 ## 验证记录
 
 - `cargo test --manifest-path tools/front-panel-preview/Cargo.toml`
-  - 109 passed。
+  - 112 passed。
 - `cargo fmt --manifest-path tools/front-panel-preview/Cargo.toml --check`
   - 通过。
