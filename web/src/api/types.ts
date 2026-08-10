@@ -413,6 +413,25 @@ export type DeviceRecord = {
   };
 };
 
+export type ActiveAlert = {
+  alert_id:
+    | "mains_absent_dc"
+    | "high_stress"
+    | "battery_low_no_mains"
+    | "battery_low_with_mains"
+    | "shutdown_protection"
+    | "io_over_voltage"
+    | "io_over_current"
+    | "module_fault"
+    | "battery_protection";
+  instance_id: number;
+  severity: "warning" | "critical";
+  sound_state: "audible" | "muted" | "system_silent" | "policy_silent";
+  summary?: string;
+};
+
+export type ActiveAlertsSnapshot = { alerts: ActiveAlert[] };
+
 export type ProbeResult = {
   identity: Identity;
   network: NetworkSummary;

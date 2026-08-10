@@ -7,6 +7,7 @@ import {
 } from "./runtimeModeProfiles";
 import type {
   AdvancedPowerSettings,
+  ActiveAlertsSnapshot,
   AppRuntimeMode,
   ApiErrorEnvelope,
   ChargeCapabilities,
@@ -47,6 +48,7 @@ type MockBindTargetState = {
 const mockBindTargetStateByBaseUrl = new Map<string, MockBindTargetState>();
 const mockSettingsByBaseUrl = new Map<string, DeviceSettings>();
 const mockStatusByBaseUrl = new Map<string, UpsStatus>();
+const mockAlertsByBaseUrl = new Map<string, ActiveAlertsSnapshot>();
 
 export type ManualChargeControlRequest = {
   action: "start" | "stop";
@@ -301,6 +303,12 @@ function requestMock<T>(
   if (path === "/api/v1/status") {
     return Promise.resolve(mockStatusForBaseUrl(baseUrl) as T);
   }
+  if (path === "/api/v1/alerts") {
+    return Promise.resolve(mockAlerts(baseUrl) as T);
+  }
+  if (path.match(/^\/api\/v1\/alerts\/[^/]+\/mute$/) && method === "POST") {
+    return Promise.resolve(muteMockAlert(baseUrl, path, body) as T);
+  }
   if (path === "/api/v1/charge-control") {
     return Promise.resolve(mockChargeControlDetailForBaseUrl(baseUrl) as T);
   }
@@ -493,6 +501,7 @@ function requestMockDevd<T>(
   if (path === "/api/v1/identity") return Promise.resolve(identity as T);
   if (path === "/api/v1/network") return Promise.resolve(network as T);
   if (path === "/api/v1/status") return Promise.resolve(status as T);
+  if (path === "/api/v1/alerts") return Promise.resolve(mockAlerts(baseUrl) as T);
   if (path === "/api/v1/charge-control")
     return Promise.resolve(mockChargeControlDetailForBaseUrl(baseUrl) as T);
   if (path === "/api/v1/settings")
@@ -524,6 +533,15 @@ function requestMockDevd<T>(
   }
   if (path.match(/^\/api\/v1\/devices\/[^/]+\/settings$/)) {
     return Promise.resolve(mockSettingsForBaseUrl(baseUrl) as T);
+  }
+  if (path.match(/^\/api\/v1\/devices\/[^/]+\/alerts$/)) {
+    return Promise.resolve(mockAlerts(baseUrl) as T);
+  }
+  if (
+    path.match(/^\/api\/v1\/devices\/[^/]+\/alerts\/[^/]+\/mute$/) &&
+    method === "POST"
+  ) {
+    return Promise.resolve(muteMockAlert(baseUrl, path, body) as T);
   }
   if (path.match(/^\/api\/v1\/devices\/[^/]+\/diag-snapshot(?:\?.*)?$/)) {
     return Promise.resolve({
@@ -1316,7 +1334,84 @@ export const setDeviceManualChargePrefs = (
     "/api/v1/settings/manual-charge",
     "POST",
     prefs,
+);
+
+export const getDeviceAlerts = (baseUrl: string) =>
+  requestJson<ActiveAlertsSnapshot>(baseUrl, "/api/v1/alerts");
+
+export const muteDeviceAlert = (
+  baseUrl: string,
+  alertId: string,
+  instanceId: number,
+) =>
+  requestWithBody<unknown>(
+    baseUrl,
+    `/api/v1/alerts/${encodeURIComponent(alertId)}/mute`,
+    "POST",
+    { instance_id: instanceId },
   );
+
+export const getDevdDeviceAlerts = (baseUrl: string, deviceId: string) =>
+  requestJson<ActiveAlertsSnapshot>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/alerts`,
+    { bridgeAuth: true },
+  );
+
+export const muteDevdDeviceAlert = (
+  baseUrl: string,
+  deviceId: string,
+  alertId: string,
+  instanceId: number,
+) =>
+  requestWithBody<unknown>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/alerts/${encodeURIComponent(alertId)}/mute`,
+    "POST",
+    { instance_id: instanceId },
+    { bridgeAuth: true },
+  );
+
+function mockAlerts(baseUrl: string): ActiveAlertsSnapshot {
+  const current = mockAlertsByBaseUrl.get(baseUrl);
+  if (current) return structuredClone(current);
+  const initial: ActiveAlertsSnapshot = {
+    alerts: [
+      {
+        alert_id: "mains_absent_dc",
+        instance_id: 1,
+        severity: "warning",
+        sound_state: "audible",
+      },
+      {
+        alert_id: "module_fault",
+        instance_id: 2,
+        severity: "critical",
+        sound_state: "system_silent",
+      },
+    ],
+  };
+  mockAlertsByBaseUrl.set(baseUrl, initial);
+  return structuredClone(initial);
+}
+
+function muteMockAlert(baseUrl: string, path: string, body: unknown): unknown {
+  const alertId = decodeURIComponent(path.split("/").at(-2) ?? "");
+  const instanceId = Number((body as { instance_id?: unknown } | undefined)?.instance_id);
+  const snapshot = mockAlerts(baseUrl);
+  const alert = snapshot.alerts.find((item) => item.alert_id === alertId);
+  if (!alert || alert.instance_id !== instanceId) {
+    throw new MainsAegisApiError({
+      code: "stale_alert_instance",
+      message: "The alert instance changed before it could be muted.",
+      retryable: true,
+      details: null,
+    });
+  }
+  alert.sound_state = "muted";
+  mockAlertsByBaseUrl.set(baseUrl, snapshot);
+  return { ok: true, alert_id: alertId, instance_id: instanceId, result: "muted" };
+}
 export const setDeviceManualChargeControl = (
   baseUrl: string,
   input: ManualChargeControlRequest,

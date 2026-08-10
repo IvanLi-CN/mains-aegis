@@ -491,6 +491,36 @@ pub struct AlertPreviewItem {
     pub cleared: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlertPreviewTouchTarget {
+    Back,
+    Row(usize),
+    Mute(usize),
+}
+
+pub const fn dashboard_alert_hit_test(x: u16, y: u16) -> bool {
+    x >= DASHBOARD_HOME_ALERT_TOUCH_X
+        && x < DASHBOARD_HOME_ALERT_TOUCH_X + DASHBOARD_HOME_ALERT_TOUCH_W
+        && y >= DASHBOARD_HOME_ALERT_TOUCH_Y
+        && y < DASHBOARD_HOME_ALERT_TOUCH_Y + DASHBOARD_HOME_ALERT_TOUCH_H
+}
+
+pub const fn alert_list_hit_test(x: u16, y: u16, top: usize) -> Option<AlertPreviewTouchTarget> {
+    if y >= 142 {
+        return Some(AlertPreviewTouchTarget::Back);
+    }
+    if y < 24 || y >= 132 {
+        return None;
+    }
+    let slot = (y - 24) / 36;
+    let index = top + slot as usize;
+    if x >= 272 {
+        Some(AlertPreviewTouchTarget::Mute(index))
+    } else {
+        Some(AlertPreviewTouchTarget::Row(index))
+    }
+}
+
 impl AlertPreviewItem {
     pub const fn active(
         kind: AlertPreviewKind,

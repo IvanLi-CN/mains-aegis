@@ -50,6 +50,7 @@ import {
 } from "../api/runtimeModeProfiles";
 import type {
   AdvancedPowerSettings,
+  ActiveAlertsSnapshot,
   ChargeControlDetail,
   DevdDevice,
   DevdWebLease,
@@ -2806,6 +2807,21 @@ export function DeviceRegistryProvider({
     setRecords(makeMockRecords(DEFAULT_DEMO_SEED));
   }, [records]);
 
+  const getSerialAlerts = useCallback(async (deviceId: string): Promise<ActiveAlertsSnapshot> => {
+    const session = serialSessions.current.get(deviceId);
+    if (!session) throw new Error("serial_session_unavailable: connect the USB device first");
+    return session.requestAlerts();
+  }, []);
+
+  const muteSerialAlert = useCallback(
+    async (deviceId: string, alertId: string, instanceId: number): Promise<void> => {
+      const session = serialSessions.current.get(deviceId);
+      if (!session) throw new Error("serial_session_unavailable: connect the USB device first");
+      await session.muteAlert(alertId, instanceId);
+    },
+    [],
+  );
+
   const value = useMemo(
     () => ({
       records,
@@ -2830,6 +2846,8 @@ export function DeviceRegistryProvider({
       controlManualCharge,
       setAdvancedPower,
       resetAdvancedPower,
+      getSerialAlerts,
+      muteSerialAlert,
       removeDevice,
       refreshDevice,
       setDemoSeed,
@@ -2858,6 +2876,8 @@ export function DeviceRegistryProvider({
       controlManualCharge,
       setAdvancedPower,
       resetAdvancedPower,
+      getSerialAlerts,
+      muteSerialAlert,
       removeDevice,
       refreshDevice,
       setDemoSeed,

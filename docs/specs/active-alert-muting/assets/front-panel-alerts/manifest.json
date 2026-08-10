@@ -1,0 +1,232 @@
+[
+  {
+    "group": "dashboard",
+    "title": "No active alert",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-runtime-standby/preview.png"
+  },
+  {
+    "group": "dashboard",
+    "title": "Warning audible / white phase",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-white-frame-0/preview.png"
+  },
+  {
+    "group": "dashboard",
+    "title": "Warning audible / severity phase",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-severity-frame-1/preview.png"
+  },
+  {
+    "group": "dashboard",
+    "title": "Critical audible / white phase",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-audible-phase-white-frame-0/preview.png"
+  },
+  {
+    "group": "dashboard",
+    "title": "Critical audible / severity phase",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-audible-phase-severity-frame-1/preview.png"
+  },
+  {
+    "group": "dashboard",
+    "title": "Muted / static",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-muted-phase-white-frame-0/preview.png"
+  },
+  {
+    "group": "dashboard",
+    "title": "System silent / static",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-system-silent-phase-white-frame-0/preview.png"
+  },
+  {
+    "group": "dashboard",
+    "title": "Policy silent / static",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-policy-silent-phase-white-frame-0/preview.png"
+  },
+  {
+    "group": "dashboard",
+    "title": "Mixed / highest critical audible",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-audible-phase-severity-frame-3/preview.png"
+  },
+  {
+    "group": "hotspots",
+    "title": "Dashboard touch zones / A = Alerts",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-white-frame-0-touch-zones/preview.png"
+  },
+  {
+    "group": "list",
+    "title": "Empty",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-empty-mains-absent-dc-audible-selected-0-top-0/preview.png"
+  },
+  {
+    "group": "list",
+    "title": "Single / audible",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-single-mains-absent-dc-audible-selected-0-top-0/preview.png"
+  },
+  {
+    "group": "list",
+    "title": "Single / muted",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-single-mains-absent-dc-muted-selected-0-top-0/preview.png"
+  },
+  {
+    "group": "list",
+    "title": "Mixed / selection",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-mixed-mains-absent-dc-audible-selected-1-top-0/preview.png"
+  },
+  {
+    "group": "list",
+    "title": "Overflow / top",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-0-top-0/preview.png"
+  },
+  {
+    "group": "list",
+    "title": "Overflow / middle",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-4-top-3/preview.png"
+  },
+  {
+    "group": "list",
+    "title": "Overflow / end",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-8-top-6/preview.png"
+  },
+  {
+    "group": "hotspots",
+    "title": "Alert list / rows = Detail, M = Mute",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-0-top-0-touch-zones/preview.png"
+  },
+  {
+    "group": "detail-touch",
+    "title": "Detail touch zones",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-active-audible-touch-zones/preview.png"
+  },
+  {
+    "group": "details-active",
+    "title": "mains-absent-dc / active",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-active-audible/preview.png"
+  },
+  {
+    "group": "details-active",
+    "title": "high-stress / active",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-high-stress-active-audible/preview.png"
+  },
+  {
+    "group": "details-active",
+    "title": "battery-low-no-mains / active",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-no-mains-active-audible/preview.png"
+  },
+  {
+    "group": "details-active",
+    "title": "battery-low-with-mains / active",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-with-mains-active-audible/preview.png"
+  },
+  {
+    "group": "details-active",
+    "title": "shutdown-protection / active",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-shutdown-protection-active-audible/preview.png"
+  },
+  {
+    "group": "details-active",
+    "title": "io-over-voltage / active",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-voltage-active-audible/preview.png"
+  },
+  {
+    "group": "details-active",
+    "title": "io-over-current / active",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-current-active-audible/preview.png"
+  },
+  {
+    "group": "details-active",
+    "title": "module-fault / active",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-module-fault-active-audible/preview.png"
+  },
+  {
+    "group": "details-active",
+    "title": "battery-protection / active",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-protection-active-audible/preview.png"
+  },
+  {
+    "group": "details-muted",
+    "title": "mains-absent-dc / muted",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-active-muted/preview.png"
+  },
+  {
+    "group": "details-muted",
+    "title": "high-stress / muted",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-high-stress-active-muted/preview.png"
+  },
+  {
+    "group": "details-muted",
+    "title": "battery-low-no-mains / muted",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-no-mains-active-muted/preview.png"
+  },
+  {
+    "group": "details-muted",
+    "title": "battery-low-with-mains / muted",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-with-mains-active-muted/preview.png"
+  },
+  {
+    "group": "details-muted",
+    "title": "shutdown-protection / muted",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-shutdown-protection-active-muted/preview.png"
+  },
+  {
+    "group": "details-muted",
+    "title": "io-over-voltage / muted",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-voltage-active-muted/preview.png"
+  },
+  {
+    "group": "details-muted",
+    "title": "io-over-current / muted",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-current-active-muted/preview.png"
+  },
+  {
+    "group": "details-muted",
+    "title": "module-fault / muted",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-module-fault-active-muted/preview.png"
+  },
+  {
+    "group": "details-muted",
+    "title": "battery-protection / muted",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-protection-active-muted/preview.png"
+  },
+  {
+    "group": "details-cleared",
+    "title": "mains-absent-dc / cleared",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-cleared/preview.png"
+  },
+  {
+    "group": "details-cleared",
+    "title": "high-stress / cleared",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-high-stress-cleared/preview.png"
+  },
+  {
+    "group": "details-cleared",
+    "title": "battery-low-no-mains / cleared",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-no-mains-cleared/preview.png"
+  },
+  {
+    "group": "details-cleared",
+    "title": "battery-low-with-mains / cleared",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-with-mains-cleared/preview.png"
+  },
+  {
+    "group": "details-cleared",
+    "title": "shutdown-protection / cleared",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-shutdown-protection-cleared/preview.png"
+  },
+  {
+    "group": "details-cleared",
+    "title": "io-over-voltage / cleared",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-voltage-cleared/preview.png"
+  },
+  {
+    "group": "details-cleared",
+    "title": "io-over-current / cleared",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-current-cleared/preview.png"
+  },
+  {
+    "group": "details-cleared",
+    "title": "module-fault / cleared",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-module-fault-cleared/preview.png"
+  },
+  {
+    "group": "details-cleared",
+    "title": "battery-protection / cleared",
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-protection-cleared/preview.png"
+  }
+]

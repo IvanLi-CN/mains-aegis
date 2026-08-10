@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  getDeviceAlerts,
   getDeviceChargeControl,
   getDevdDeviceDiagSnapshot,
   getStatus,
   getSettings,
   previewDeviceChargeControl,
   releaseDevdTpsEnableInterlock,
+  muteDeviceAlert,
   resetDeviceAdvancedPower,
   setDeviceManualChargeControl,
   setDeviceManualChargePrefs,
@@ -106,6 +108,23 @@ function baseLanStatus(): UpsStatus {
     },
   };
 }
+
+describe("active alerts", () => {
+  test("mutes one mock alert instance and returns the authoritative reread", async () => {
+    const baseUrl = "mock:alerts-test";
+    const before = await getDeviceAlerts(baseUrl);
+    const alert = before.alerts.find((item) => item.alert_id === "mains_absent_dc");
+    expect(alert?.sound_state).toBe("audible");
+    await muteDeviceAlert(baseUrl, alert!.alert_id, alert!.instance_id);
+    const after = await getDeviceAlerts(baseUrl);
+    expect(after.alerts.find((item) => item.alert_id === alert!.alert_id)?.sound_state).toBe(
+      "muted",
+    );
+    expect(after.alerts.find((item) => item.alert_id === "module_fault")?.sound_state).toBe(
+      "system_silent",
+    );
+  });
+});
 
 function baseLanSettings(): DeviceSettings {
   return {

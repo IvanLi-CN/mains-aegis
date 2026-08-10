@@ -3,6 +3,7 @@ use core::fmt::Write as _;
 use heapless::{String, Vec};
 
 use crate::{
+    active_alerts::AlertId,
     net_contract::write_json_string_escaped,
     net_types::{
         validate_advanced_power_settings, AdvancedPowerSettingsSnapshot,
@@ -47,6 +48,8 @@ pub enum UsbCdcFrame {
 pub enum UsbCdcRequest {
     GetIdentity,
     GetStatus,
+    GetAlerts,
+    MuteAlert(MuteAlertCommand),
     GetSettings,
     GetChargeControl,
     GetDiagSnapshot(DiagSnapshotRequest),
@@ -60,6 +63,12 @@ pub enum UsbCdcRequest {
     EnableOutputBypass,
     RestoreOutput,
     ReleaseTpsEn,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MuteAlertCommand {
+    pub alert_id: AlertId,
+    pub instance_id: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,6 +211,7 @@ pub enum UsbCdcProtocolError {
     InvalidManualChargePrefs,
     InvalidManualChargeControl,
     InvalidAdvancedPowerSettings,
+    InvalidAlert,
     InvalidWifiSsid,
     InvalidWifiPsk,
     FrameTooLarge,
@@ -221,6 +231,7 @@ impl UsbCdcProtocolError {
             Self::InvalidManualChargePrefs => "invalid_manual_charge_prefs",
             Self::InvalidManualChargeControl => "invalid_manual_charge_control",
             Self::InvalidAdvancedPowerSettings => "invalid_advanced_power_settings",
+            Self::InvalidAlert => "invalid_alert",
             Self::InvalidWifiSsid => "invalid_wifi_ssid",
             Self::InvalidWifiPsk => "invalid_wifi_psk",
             Self::FrameTooLarge => "frame_too_large",
@@ -244,6 +255,7 @@ impl UsbCdcProtocolError {
             Self::InvalidAdvancedPowerSettings => {
                 "advanced power settings are outside the supported range or ordering"
             }
+            Self::InvalidAlert => "alert_id or instance_id is not a mutable active alert instance",
             Self::InvalidWifiSsid => "WiFi SSID must be 1..32 non-control bytes",
             Self::InvalidWifiPsk => "WiFi PSK must be 8..63 non-control bytes",
             Self::FrameTooLarge => "CDC frame exceeds line buffer capacity",
@@ -638,6 +650,18 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
     match op {
         "get_identity" => Ok(UsbCdcRequest::GetIdentity),
         "get_status" => Ok(UsbCdcRequest::GetStatus),
+        "get_alerts" => Ok(UsbCdcRequest::GetAlerts),
+        "mute_alert" => {
+            let alert_id = json_string_field::<32>(line, "alert_id")?
+                .and_then(|value| AlertId::parse(value.as_str()))
+                .ok_or(UsbCdcProtocolError::InvalidAlert)?;
+            let instance_id =
+                json_u32_field(line, "instance_id")?.ok_or(UsbCdcProtocolError::MissingField)?;
+            Ok(UsbCdcRequest::MuteAlert(MuteAlertCommand {
+                alert_id,
+                instance_id,
+            }))
+        }
         "get_settings" => Ok(UsbCdcRequest::GetSettings),
         "get_charge_control" => Ok(UsbCdcRequest::GetChargeControl),
         "get_diag_snapshot" => Ok(UsbCdcRequest::GetDiagSnapshot(parse_diag_snapshot_request(
@@ -680,6 +704,19 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
         }
         _ => Err(UsbCdcProtocolError::UnsupportedOperation),
     }
+}
+
+pub fn parse_http_mute_alert_request(
+    alert_id: &str,
+    body: &str,
+) -> Result<MuteAlertCommand, UsbCdcProtocolError> {
+    let alert_id = AlertId::parse(alert_id).ok_or(UsbCdcProtocolError::InvalidAlert)?;
+    let instance_id =
+        json_u32_field(body, "instance_id")?.ok_or(UsbCdcProtocolError::MissingField)?;
+    Ok(MuteAlertCommand {
+        alert_id,
+        instance_id,
+    })
 }
 
 fn parse_diag_snapshot_request(line: &str) -> Result<DiagSnapshotRequest, UsbCdcProtocolError> {
@@ -1024,6 +1061,24 @@ fn json_u16_field(line: &str, key: &str) -> Result<Option<u16>, UsbCdcProtocolEr
     validate_json_number_terminator(bytes, idx)?;
     line[start..idx]
         .parse::<u16>()
+        .map(Some)
+        .map_err(|_| UsbCdcProtocolError::InvalidJson)
+}
+
+fn json_u32_field(line: &str, key: &str) -> Result<Option<u32>, UsbCdcProtocolError> {
+    let Some(mut idx) = json_value_offset(line, key) else {
+        return Ok(None);
+    };
+    let bytes = line.as_bytes();
+    let start = idx;
+    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+        idx += 1;
+    }
+    if idx == start {
+        return Err(UsbCdcProtocolError::InvalidJson);
+    }
+    line[start..idx]
+        .parse::<u32>()
         .map(Some)
         .map_err(|_| UsbCdcProtocolError::InvalidJson)
 }
@@ -1817,6 +1872,42 @@ mod tests {
                     power_path: ManualChargePowerPath::Auto,
                 })
             }
+        );
+    }
+
+    #[test]
+    fn parses_instance_bound_alert_mute_request() {
+        let frame = parse_frame(
+            r#"{"type":"request","request_id":"req-alert","op":"mute_alert","alert_id":"module_fault","instance_id":42}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            frame,
+            UsbCdcFrame::Request {
+                request_id: String::try_from("req-alert").unwrap(),
+                op: UsbCdcRequest::MuteAlert(MuteAlertCommand {
+                    alert_id: AlertId::ModuleFault,
+                    instance_id: 42,
+                })
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_or_unbound_alert_mute_request() {
+        assert_eq!(
+            parse_frame(
+                r#"{"type":"request","request_id":"req-alert","op":"mute_alert","alert_id":"io_over_power","instance_id":42}"#,
+            )
+            .unwrap_err(),
+            UsbCdcProtocolError::InvalidAlert
+        );
+        assert_eq!(
+            parse_frame(
+                r#"{"type":"request","request_id":"req-alert","op":"mute_alert","alert_id":"module_fault"}"#,
+            )
+            .unwrap_err(),
+            UsbCdcProtocolError::MissingField
         );
     }
 

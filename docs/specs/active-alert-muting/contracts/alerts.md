@@ -1,13 +1,13 @@
 # Active Alert Muting Contract
 
-> This contract is implemented only after the front-panel preview approval gate in [`../SPEC.md`](../SPEC.md). Until then, no transport exposes a write path.
+> This contract is authoritative after the approved front-panel preview gate in [`../SPEC.md`](../SPEC.md).
 
 ## Common model
 
 ```json
 {
   "alert_id": "mains_absent_dc",
-  "instance_id": "opaque-current-instance-id",
+  "instance_id": 42,
   "severity": "warning",
   "sound_state": "audible",
   "summary": "RUNNING ON BATTERY"
@@ -38,7 +38,7 @@ POST /api/v1/alerts/{alert_id}/mute
 The HTTP request body is:
 
 ```json
-{ "instance_id": "opaque-current-instance-id" }
+{ "instance_id": 42 }
 ```
 
 `GET` returns `200` with `{"alerts":[...]}`. A successful `POST` returns `200` with the authoritative current alert item and `{"result":"muted"}`. The device returns structured failure payloads:

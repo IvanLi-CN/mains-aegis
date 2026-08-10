@@ -277,6 +277,7 @@ struct DevdState {
     device_host_power: HashMap<String, DeviceHostPowerRuntime>,
     scan_trace: VecDeque<SerialTraceEntry>,
     persisted_device_trace: HashMap<String, VecDeque<SerialTraceEntry>>,
+    mock_muted_alerts: HashMap<String, u32>,
 }
 
 #[derive(Debug, Default)]
@@ -875,6 +876,11 @@ struct AdvancedPowerRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct MuteAlertRequest {
+    instance_id: u32,
+}
+
+#[derive(Debug, Deserialize)]
 struct SettingsTargetQuery {
     device_id: Option<String>,
     lease_id: Option<String>,
@@ -1002,6 +1008,11 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
         .route("/api/v1/devices/{id}/binding", delete(unbind_device))
         .route("/api/v1/devices/{id}/identity", get(device_identity))
         .route("/api/v1/devices/{id}/status", get(device_status))
+        .route("/api/v1/devices/{id}/alerts", get(device_alerts))
+        .route(
+            "/api/v1/devices/{id}/alerts/{alert_id}/mute",
+            post(device_mute_alert),
+        )
         .route(
             "/api/v1/devices/{id}/charge-control",
             get(device_charge_control),
@@ -1861,6 +1872,27 @@ async fn dispatch_ipc_request(
             let id = require_param(&params, "device_id")?;
             let query = serde_json::from_value(params).unwrap_or_default();
             json_result(device_status(Query(query), State(state.clone()), Path(id)).await)
+        }
+        "device.alerts.list" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(device_alerts(State(state.clone()), Path(id)).await)
+        }
+        "device.alerts.mute" => {
+            let id = require_param(&params, "device_id")?;
+            let alert_id = require_param(&params, "alert_id")?;
+            let instance_id = params
+                .get("instance_id")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| anyhow::anyhow!("instance_id is required"))?;
+            json_result(
+                device_mute_alert(
+                    State(state.clone()),
+                    Path((id, alert_id)),
+                    Json(MuteAlertRequest { instance_id }),
+                )
+                .await,
+            )
         }
         "device.diag_snapshot" => {
             let id = require_param(&params, "device_id")?;
@@ -4219,6 +4251,124 @@ async fn device_status(
         &transport,
         Some(freshness_budget_ms),
     )))
+}
+
+async fn device_alerts(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    ensure_bound_device_record(&state, &id)?;
+    let (transport, lan_address) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (device.transport.clone(), device.lan_address.clone())
+    };
+    let alerts = match transport {
+        DeviceTransport::Mock => {
+            let muted = state
+                .inner
+                .lock()
+                .expect("state lock")
+                .mock_muted_alerts
+                .get(&format!("{id}:mains_absent_dc"))
+                .copied()
+                == Some(1);
+            json!({
+                "alerts": [{
+                    "alert_id": "mains_absent_dc",
+                    "instance_id": 1,
+                    "severity": "warning",
+                    "sound_state": if muted { "muted" } else { "audible" },
+                    "summary": "RUNNING ON BATTERY"
+                }]
+            })
+        }
+        DeviceTransport::Lan => {
+            let address = lan_address.ok_or_else(|| {
+                HttpError::retryable("lan_address_missing", "LAN device has no address")
+            })?;
+            lan_http_json(&address, "GET", "/api/v1/alerts", None).await?
+        }
+        DeviceTransport::NativeSerial => {
+            send_device_cdc_request(&state, &id, "get_alerts", "devd-alerts").await?
+        }
+    };
+    Ok(Json(alerts))
+}
+
+async fn device_mute_alert(
+    State(state): State<AppState>,
+    Path((id, alert_id)): Path<(String, String)>,
+    Json(input): Json<MuteAlertRequest>,
+) -> Result<Json<Value>, HttpError> {
+    ensure_bound_device_record(&state, &id)?;
+    let (transport, lan_address) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (device.transport.clone(), device.lan_address.clone())
+    };
+    let result = match transport {
+        DeviceTransport::Mock => {
+            if alert_id != "mains_absent_dc" {
+                return Err(HttpError::not_found(
+                    "alert_inactive",
+                    "alert is not active",
+                ));
+            }
+            if input.instance_id != 1 {
+                return Err(HttpError::non_retryable(
+                    "stale_alert_instance",
+                    "alert instance is stale",
+                ));
+            }
+            state
+                .inner
+                .lock()
+                .expect("state lock")
+                .mock_muted_alerts
+                .insert(format!("{id}:{alert_id}"), input.instance_id);
+            json!({
+                "ok": true,
+                "alert_id": alert_id,
+                "instance_id": input.instance_id,
+                "result": "muted"
+            })
+        }
+        DeviceTransport::Lan => {
+            let address = lan_address.ok_or_else(|| {
+                HttpError::retryable("lan_address_missing", "LAN device has no address")
+            })?;
+            let path = format!("/api/v1/alerts/{alert_id}/mute");
+            lan_http_json(
+                &address,
+                "POST",
+                &path,
+                Some(&json!({"instance_id": input.instance_id})),
+            )
+            .await?
+        }
+        DeviceTransport::NativeSerial => {
+            send_device_cdc_request_frame(
+                &state,
+                &id,
+                json!({
+                    "type": "request",
+                    "op": "mute_alert",
+                    "alert_id": alert_id,
+                    "instance_id": input.instance_id,
+                }),
+                "devd-alert-mute",
+            )
+            .await?
+        }
+    };
+    Ok(Json(result))
 }
 
 async fn device_diag_snapshot(
@@ -12161,6 +12311,38 @@ mod tests {
 
         assert_eq!(response.0["token_required"], true);
         assert_eq!(response.0["app"]["mode"], "http_service");
+    }
+
+    #[tokio::test]
+    async fn mock_alert_mute_is_instance_bound_and_survives_authoritative_reread() {
+        let state = create_app_state(false);
+        seed_mock_device(&state);
+
+        let before = device_alerts(State(state.clone()), Path("mock-devkit".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(before.0["alerts"][0]["sound_state"], "audible");
+
+        let _ = device_mute_alert(
+            State(state.clone()),
+            Path(("mock-devkit".to_string(), "mains_absent_dc".to_string())),
+            Json(MuteAlertRequest { instance_id: 1 }),
+        )
+        .await
+        .unwrap();
+        let after = device_alerts(State(state.clone()), Path("mock-devkit".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(after.0["alerts"][0]["sound_state"], "muted");
+
+        let stale = device_mute_alert(
+            State(state),
+            Path(("mock-devkit".to_string(), "mains_absent_dc".to_string())),
+            Json(MuteAlertRequest { instance_id: 2 }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(stale.0.code, "stale_alert_instance");
     }
 
     #[cfg(unix)]

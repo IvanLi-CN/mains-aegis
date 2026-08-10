@@ -1,6 +1,7 @@
 import {
   Activity,
   AlertTriangle,
+  BellRing,
   BatteryFull,
   BatteryLow,
   BatteryMedium,
@@ -33,6 +34,8 @@ import {
   Trash2,
   Usb,
   Wifi,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import {
@@ -54,17 +57,23 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   bindDevdDevice,
   getDevdDeviceDiagSnapshot,
+  getDevdDeviceAlerts,
+  getDeviceAlerts,
   getIdentity,
   isHostedHttpServiceApp,
   isPublicStaticApp,
   listDevdDevices,
   normalizeBaseUrl,
+  muteDevdDeviceAlert,
+  muteDeviceAlert,
   releaseDevdTpsEnableInterlock,
   subscribeDevdDeviceEvents,
   toErrorEnvelope,
 } from "../api/client";
 import type {
   AdvancedPowerSettings,
+  ActiveAlert,
+  ActiveAlertsSnapshot,
   ChargeControlDetail,
   DeviceRecord,
   DeviceSettings,
@@ -127,6 +136,7 @@ type Route = {
     | "fleet"
     | "connect"
     | "overview"
+    | "alerts"
     | "power"
     | "battery"
     | "thermal"
@@ -238,6 +248,7 @@ type UpsHardwareCapability = {
 
 const deviceSections = [
   { id: "overview", label: "Overview", icon: Gauge },
+  { id: "alerts", label: "Alerts", icon: BellRing },
   { id: "power", label: "Power", icon: PlugZap },
   { id: "battery", label: "Battery", icon: BatteryCharging },
   { id: "thermal", label: "Thermal", icon: Thermometer },
@@ -500,6 +511,8 @@ function renderRoute(
   if (!selected) return <MissingDevice />;
 
   switch (route.section) {
+    case "alerts":
+      return <AlertsPage record={selected} />;
     case "power":
       return <PowerPage record={selected} />;
     case "battery":
@@ -3546,6 +3559,178 @@ function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
       </div>
     </section>
   );
+}
+
+const alertCopy: Record<ActiveAlert["alert_id"], { title: string; summary: string }> = {
+  mains_absent_dc: { title: "Mains absent", summary: "DC input power is unavailable." },
+  high_stress: { title: "High stress", summary: "The system is operating under thermal stress." },
+  battery_low_no_mains: { title: "Battery low", summary: "Battery is low with no mains input." },
+  battery_low_with_mains: { title: "Battery low", summary: "Battery remains low while mains is present." },
+  shutdown_protection: { title: "Shutdown protection", summary: "A protection shutdown is active." },
+  io_over_voltage: { title: "Output over-voltage", summary: "An output voltage limit was exceeded." },
+  io_over_current: { title: "Output over-current", summary: "An output current limit was exceeded." },
+  module_fault: { title: "Module fault", summary: "A required hardware module reported a fault." },
+  battery_protection: { title: "Battery protection", summary: "The battery protection path is active." },
+};
+
+function AlertsPage({ record }: { record: DeviceRecord }) {
+  const { getSerialAlerts, muteSerialAlert } = useDeviceRegistry();
+  const [snapshot, setSnapshot] = useState<ActiveAlertsSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [muting, setMuting] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const target = useMemo(() => alertControlTarget(record), [record]);
+
+  const refresh = useCallback(async () => {
+    if (record.connectionState === "offline") {
+      setLoading(false);
+      setError("Device offline. Reconnect to view or mute active alerts.");
+      return;
+    }
+    if (!target) {
+      setLoading(false);
+      setError("This connected device does not expose the alerts contract yet.");
+      return;
+    }
+    setLoading(true);
+    try {
+      setSnapshot(
+        target.kind === "devd"
+          ? await getDevdDeviceAlerts(target.baseUrl, target.deviceId)
+          : target.kind === "serial"
+            ? await getSerialAlerts(target.deviceId)
+            : await getDeviceAlerts(target.baseUrl),
+      );
+      setError(null);
+    } catch (cause) {
+      setError(alertErrorMessage(cause));
+    } finally {
+      setLoading(false);
+    }
+  }, [getSerialAlerts, record.connectionState, target]);
+
+  useEffect(() => void refresh(), [refresh]);
+
+  const mute = async (alert: ActiveAlert) => {
+    if (!target || alert.sound_state !== "audible") return;
+    setMuting(alert.alert_id);
+    setError(null);
+    try {
+      if (target.kind === "devd") {
+        await muteDevdDeviceAlert(
+          target.baseUrl,
+          target.deviceId,
+          alert.alert_id,
+          alert.instance_id,
+        );
+      } else if (target.kind === "serial") {
+        await muteSerialAlert(
+          target.deviceId,
+          alert.alert_id,
+          alert.instance_id,
+        );
+      } else {
+        await muteDeviceAlert(target.baseUrl, alert.alert_id, alert.instance_id);
+      }
+      await refresh();
+    } catch (cause) {
+      setError(alertErrorMessage(cause));
+      await refresh();
+    } finally {
+      setMuting(null);
+    }
+  };
+
+  const alerts = snapshot?.alerts ?? [];
+  return (
+    <section className="page-flow alerts-page" data-evidence-target="device-alerts">
+      <DeviceStatusBand record={record} />
+      <section className="info-panel alerts-panel">
+        <div className="alerts-heading">
+          <div>
+            <span className="eyebrow">Active alerts</span>
+            <h2>{alerts.length === 0 ? "No active alerts" : `${alerts.length} active`}</h2>
+          </div>
+          <button className="icon-button" type="button" onClick={() => void refresh()} title="Refresh alerts" aria-label="Refresh alerts">
+            <RefreshCw size={18} className={loading ? "spin-icon" : ""} />
+          </button>
+        </div>
+        {error ? <p className="form-message is-error" role="alert">{error}</p> : null}
+        {!loading && alerts.length === 0 && !error ? (
+          <div className="alerts-empty"><BellRing size={24} /><span>All monitored conditions are clear.</span></div>
+        ) : null}
+        <div className="alerts-list">
+          {alerts.map((alert) => {
+            const copy = alertCopy[alert.alert_id];
+            const busy = muting === alert.alert_id;
+            return (
+              <article className={`alert-row is-${alert.severity}`} key={`${alert.alert_id}:${alert.instance_id}`}>
+                <AlertTriangle size={20} aria-hidden="true" />
+                <div className="alert-row-copy">
+                  <div><strong>{copy.title}</strong><span className="alert-severity">{alert.severity}</span></div>
+                  <p>{alert.summary ?? copy.summary}</p>
+                </div>
+                <div className="alert-sound">
+                  <span>{alertSoundLabel(alert.sound_state)}</span>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    disabled={alert.sound_state !== "audible" || busy}
+                    onClick={() => void mute(alert)}
+                    title={alert.sound_state === "audible" ? "Mute this alert" : alertSoundLabel(alert.sound_state)}
+                    aria-label={`Mute ${copy.title}`}
+                  >
+                    {busy ? <Loader2 className="spin-icon" size={18} /> : alert.sound_state === "audible" ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function alertControlTarget(record: DeviceRecord):
+  | { kind: "devd"; baseUrl: string; deviceId: string }
+  | { kind: "http"; baseUrl: string }
+  | { kind: "serial"; deviceId: string }
+  | null {
+  const devdBaseUrl = record.target.rememberedChannels?.devd?.baseUrl ??
+    (record.target.transport === "devd" ? record.target.baseUrl : undefined) ??
+    (record.serial?.source === "devd" ? record.serial.baseUrl : undefined);
+  if (devdBaseUrl !== undefined) {
+    return {
+      kind: "devd",
+      baseUrl: devdBaseUrl,
+      deviceId: record.target.rememberedChannels?.devd?.devdDeviceId ?? record.target.deviceId,
+    };
+  }
+  if (record.target.transport === "serial" && record.serial?.source === "web_serial") {
+    return { kind: "serial", deviceId: record.target.deviceId };
+  }
+  const httpBaseUrl = record.target.rememberedChannels?.http?.baseUrl ??
+    ((record.target.transport ?? "http") === "http" ? record.target.baseUrl : undefined);
+  return httpBaseUrl === undefined ? null : { kind: "http", baseUrl: httpBaseUrl };
+}
+
+function alertSoundLabel(sound: ActiveAlert["sound_state"]): string {
+  if (sound === "audible") return "Sounding";
+  if (sound === "muted") return "Muted";
+  if (sound === "system_silent") return "System silent";
+  return "Policy silent";
+}
+
+function alertErrorMessage(cause: unknown): string {
+  const envelope = toErrorEnvelope(cause);
+  if (envelope.code === "not_found" || envelope.code === "unsupported_operation") {
+    return "Alerts are unavailable on this firmware. Upgrade the device to enable per-alert muting.";
+  }
+  if (envelope.code.includes("stale")) {
+    return "The alert changed before it could be muted. The list has been refreshed.";
+  }
+  return `${envelope.code}: ${envelope.message}`;
 }
 
 function PowerPage({ record }: { record: DeviceRecord }) {
