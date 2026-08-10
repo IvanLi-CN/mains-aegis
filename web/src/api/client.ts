@@ -154,6 +154,22 @@ async function requestWithBody<T>(
     if (payload && typeof payload === "object" && "error" in payload) {
       throw new MainsAegisApiError(payload.error);
     }
+    if (
+      payload &&
+      typeof payload === "object" &&
+      "result" in payload &&
+      (payload.result === "stale" || payload.result === "inactive")
+    ) {
+      throw new MainsAegisApiError({
+        code: payload.result,
+        message:
+          payload.result === "stale"
+            ? "The alert instance is stale"
+            : "The alert is no longer active",
+        retryable: false,
+        details: payload,
+      });
+    }
     throw new MainsAegisApiError({
       code: `http_${response.status}`,
       message: describeHttpFailure(response, path, responseText),

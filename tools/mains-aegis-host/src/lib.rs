@@ -9449,6 +9449,13 @@ fn error_from_cdc_response(response: &Value) -> HttpError {
         .and_then(Value::as_bool)
         .unwrap_or(true);
     let details = error.and_then(|error| error.get("details")).cloned();
+    if matches!(code, "stale" | "inactive") {
+        return HttpError::conflict_with_details(
+            code,
+            message,
+            details.unwrap_or_else(|| json!({ "ok": false, "result": code })),
+        );
+    }
     if retryable {
         if let Some(details) = details {
             HttpError::retryable_with_details(code, message, details)
@@ -12074,6 +12081,30 @@ mod tests {
 
     fn derived_power_payload(diag: &Value) -> &Value {
         &diag["packages"]["derived.power"]["payload"]
+    }
+
+    #[test]
+    fn cdc_stale_alert_error_preserves_conflict_details() {
+        let error = error_from_cdc_response(&json!({
+            "type": "error",
+            "error": {
+                "code": "stale",
+                "message": "the alert instance is stale",
+                "retryable": false,
+                "details": {
+                    "ok": false,
+                    "alert_id": "module_fault",
+                    "instance_id": 41,
+                    "result": "stale",
+                    "current_instance_id": 42
+                }
+            }
+        }));
+
+        assert_eq!(error.0.code, "stale");
+        assert_eq!(error.1, StatusCode::CONFLICT);
+        assert_eq!(error.0.details.as_ref().unwrap()["result"], "stale");
+        assert_eq!(error.0.details.as_ref().unwrap()["current_instance_id"], 42);
     }
 
     #[test]

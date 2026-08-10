@@ -2585,7 +2585,32 @@ fn handle_web_serial_frame<'d, I2C>(
                     command.instance_id,
                     result,
                 );
-                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                match result {
+                    mains_aegis_firmware::active_alerts::MuteResult::Muted
+                    | mains_aegis_firmware::active_alerts::MuteResult::AlreadyMuted => {
+                        render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                    }
+                    mains_aegis_firmware::active_alerts::MuteResult::Stale { .. } => {
+                        render_error_json_with_details(
+                            &mut frame,
+                            Some(request_id.as_str()),
+                            "stale",
+                            "the alert instance is stale",
+                            false,
+                            Some(body.as_str()),
+                        );
+                    }
+                    mains_aegis_firmware::active_alerts::MuteResult::Inactive => {
+                        render_error_json_with_details(
+                            &mut frame,
+                            Some(request_id.as_str()),
+                            "inactive",
+                            "the alert is no longer active",
+                            false,
+                            Some(body.as_str()),
+                        );
+                    }
+                }
                 write_web_serial_line(serial, frame.as_str());
             }
             UsbCdcRequest::GetSettings => {

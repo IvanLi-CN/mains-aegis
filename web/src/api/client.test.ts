@@ -6,6 +6,7 @@ import {
   getDevdDeviceDiagSnapshot,
   getStatus,
   getSettings,
+  MainsAegisApiError,
   previewDeviceChargeControl,
   releaseDevdTpsEnableInterlock,
   muteDeviceAlert,
@@ -236,6 +237,39 @@ async function withFetchMock<T>(
     }
   }
 }
+
+describe("alert mute errors", () => {
+  test("preserves direct LAN stale results as structured API errors", async () => {
+    const error = await withFetchMock(
+      async () =>
+        jsonResponse(
+          {
+            ok: false,
+            alert_id: "module_fault",
+            instance_id: 41,
+            result: "stale",
+            current_instance_id: 42,
+          },
+          { status: 409 },
+        ),
+      async () => {
+        try {
+          await muteDeviceAlert("http://mains-aegis.local", "module_fault", 41);
+          throw new Error("expected muteDeviceAlert to reject");
+        } catch (caught) {
+          return caught;
+        }
+      },
+    );
+
+    expect(error).toBeInstanceOf(MainsAegisApiError);
+    expect((error as MainsAegisApiError).envelope).toMatchObject({
+      code: "stale",
+      retryable: false,
+      details: { result: "stale", current_instance_id: 42 },
+    });
+  });
+});
 
 describe("mock advanced power reset", () => {
   test("preserves 19V mock capabilities when resetting advanced power", async () => {

@@ -21,11 +21,11 @@
   - 前面板、USB CDC 和 LAN 命令均修改同一份 `ActiveAlerts`。
 - `firmware/src/usb_cdc_protocol.rs`、`firmware/src/net.rs`
   - 实现 `get_alerts`、`mute_alert`、`GET /api/v1/alerts` 与实例绑定的 mute POST。
-  - LAN 对 stale/inactive 返回 `409`，CDC 保留结构化结果。
+  - LAN 对 stale/inactive 返回 `409`；CDC 使用结构化 error frame，并在 `details` 中保留同一结果体。
 - `tools/mains-aegis-host`
   - devd 提供设备 Alerts HTTP/IPC bridge，按 native serial、LAN 与 mock 路由。
   - devd 对所有传输统一保留 stale/inactive 的 `409` 状态与结构化详情。
-  - CLI 提供 `alerts list|mute`；mute 先读取当前实例再写回。
+  - CLI 提供 `alerts list|mute`；mute 先读取当前实例再写回，预读时已解除的告警也输出机器可读 inactive JSON。
 - `web/src/app/App.tsx`
   - 设备导航新增 `Alerts` 页，支持 direct HTTP、devd/Web lease 与 Web Serial。
   - 每行独立消音、写入中锁定、完成后权威回读，并呈现 unsupported、stale 与传输错误。

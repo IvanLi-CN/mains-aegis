@@ -460,18 +460,21 @@ async fn main() -> anyhow::Result<()> {
                     })
                 })
                 .and_then(|alert| alert.get("instance_id"))
-                .and_then(Value::as_u64)
-                .ok_or_else(|| anyhow::anyhow!("alert_inactive: {alert_id} is not active"))?;
-            let result = devd_ipc_call(
-                &devd,
-                "device.alerts.mute",
-                json!({
-                    "device_id": device_id,
-                    "alert_id": alert_id,
-                    "instance_id": instance_id,
-                }),
-            )
-            .await?;
+                .and_then(Value::as_u64);
+            let result = if let Some(instance_id) = instance_id {
+                devd_ipc_call(
+                    &devd,
+                    "device.alerts.mute",
+                    json!({
+                        "device_id": device_id,
+                        "alert_id": alert_id,
+                        "instance_id": instance_id,
+                    }),
+                )
+                .await?
+            } else {
+                inactive_alert_result(&alert_id)
+            };
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         command => {
@@ -501,6 +504,14 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn inactive_alert_result(alert_id: &str) -> Value {
+    json!({
+        "ok": false,
+        "alert_id": alert_id,
+        "result": "inactive",
+    })
 }
 
 async fn run_daemon_command(endpoint: &str, command: DaemonCommand) -> anyhow::Result<()> {
@@ -1019,7 +1030,7 @@ async fn maybe_confirm_companion_lan(
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_new_matching_entries, device_read_ipc_params, device_to_ipc,
+        collect_new_matching_entries, device_read_ipc_params, device_to_ipc, inactive_alert_result,
         looks_like_ipc_connect_error, seed_seen_ids, trace_entry_matches_kind, AlertsCommand, Cli,
         Command, DaemonCommand, DeviceCommand, DeviceReadArgs, RecoveryCommand, TpsEnCommand,
     };
@@ -1125,6 +1136,18 @@ mod tests {
                 ..
             } if alert_id == "module_fault"
         ));
+    }
+
+    #[test]
+    fn cli_renders_inactive_alert_mute_as_machine_readable_json() {
+        assert_eq!(
+            inactive_alert_result("module_fault"),
+            json!({
+                "ok": false,
+                "alert_id": "module_fault",
+                "result": "inactive",
+            })
+        );
     }
 
     #[test]
