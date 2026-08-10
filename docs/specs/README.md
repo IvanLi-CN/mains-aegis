@@ -74,3 +74,4 @@ Spec 不使用 ID。`Implementation` 只保留轻量摘要；详细状态写入�
 | Firmware fault recovery | active | [in progress](firmware-fault-recovery/IMPLEMENTATION.md) | [SPEC](firmware-fault-recovery/SPEC.md) | - | MCU watchdog、boot-health、安全模式与真实 rollback 能力边界 |
 | BQ40Z50 BMS bring-up (SMBus poll + fault expectations) | archived | [complete](bq40z50-bms-bringup/IMPLEMENTATION.md) | [SPEC](bq40z50-bms-bringup/SPEC.md) | - | Migrated from the retired planning catalog. |
 | TMP112A 过温告警输出：Comparator 模式保持输出 | archived | [complete](tps-tmp112-alert-overtemp-hold/IMPLEMENTATION.md) | [SPEC](tps-tmp112-alert-overtemp-hold/SPEC.md) | - | Migrated from the retired planning catalog. |
+| 主动告警逐实例消音 | active | [current](active-alert-muting/IMPLEMENTATION.md) | [SPEC](active-alert-muting/SPEC.md) | - | 固件权威的当前告警实例消音、跨端合同与前面板审批门禁 |

@@ -375,6 +375,146 @@ pub enum DashboardRoute {
     ManualCharge,
 }
 
+/// Preview-facing alert categories. Runtime alert state is intentionally not
+/// connected until the owner approves the rendered interaction set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlertPreviewKind {
+    MainsAbsentDc,
+    HighStress,
+    BatteryLowNoMains,
+    BatteryLowWithMains,
+    ShutdownProtection,
+    IoOverVoltage,
+    IoOverCurrent,
+    ModuleFault,
+    BatteryProtection,
+}
+
+impl AlertPreviewKind {
+    pub const ALL: [Self; 9] = [
+        Self::MainsAbsentDc,
+        Self::HighStress,
+        Self::BatteryLowNoMains,
+        Self::BatteryLowWithMains,
+        Self::ShutdownProtection,
+        Self::IoOverVoltage,
+        Self::IoOverCurrent,
+        Self::ModuleFault,
+        Self::BatteryProtection,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::MainsAbsentDc => "MAINS LOST",
+            Self::HighStress => "HIGH STRESS",
+            Self::BatteryLowNoMains | Self::BatteryLowWithMains => "BATTERY LOW",
+            Self::ShutdownProtection => "SHUTDOWN PROTECT",
+            Self::IoOverVoltage => "IO OVER VOLTAGE",
+            Self::IoOverCurrent => "IO OVER CURRENT",
+            Self::ModuleFault => "MODULE FAULT",
+            Self::BatteryProtection => "BATTERY PROTECT",
+        }
+    }
+
+    pub const fn summary(self) -> &'static str {
+        match self {
+            Self::MainsAbsentDc => "RUNNING ON BATTERY",
+            Self::HighStress => "CHECK THERMAL LOAD",
+            Self::BatteryLowNoMains => "NO MAINS - REDUCE LOAD",
+            Self::BatteryLowWithMains => "CHECK CHARGING PATH",
+            Self::ShutdownProtection => "OUTPUT PROTECTION ACTIVE",
+            Self::IoOverVoltage => "CHECK OUTPUT LOAD",
+            Self::IoOverCurrent => "REDUCE OUTPUT LOAD",
+            Self::ModuleFault => "CHECK DEVICE DIAGNOSTICS",
+            Self::BatteryProtection => "CHECK BATTERY STATUS",
+        }
+    }
+
+    pub const fn default_severity(self) -> AlertPreviewSeverity {
+        match self {
+            Self::MainsAbsentDc
+            | Self::HighStress
+            | Self::BatteryLowNoMains
+            | Self::BatteryLowWithMains => AlertPreviewSeverity::Warning,
+            Self::ShutdownProtection
+            | Self::IoOverVoltage
+            | Self::IoOverCurrent
+            | Self::ModuleFault
+            | Self::BatteryProtection => AlertPreviewSeverity::Critical,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlertPreviewSeverity {
+    Warning,
+    Critical,
+}
+
+impl AlertPreviewSeverity {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Warning => "WARNING",
+            Self::Critical => "CRITICAL",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlertPreviewSoundState {
+    Audible,
+    Muted,
+    SystemSilent,
+    PolicySilent,
+}
+
+impl AlertPreviewSoundState {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Audible => "AUDIBLE",
+            Self::Muted => "MUTED",
+            Self::SystemSilent => "SYSTEM SILENT",
+            Self::PolicySilent => "POLICY SILENT",
+        }
+    }
+
+    const fn can_mute(self) -> bool {
+        matches!(self, Self::Audible)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AlertPreviewItem {
+    pub kind: AlertPreviewKind,
+    pub severity: AlertPreviewSeverity,
+    pub sound: AlertPreviewSoundState,
+    pub cleared: bool,
+}
+
+impl AlertPreviewItem {
+    pub const fn active(
+        kind: AlertPreviewKind,
+        severity: AlertPreviewSeverity,
+        sound: AlertPreviewSoundState,
+    ) -> Self {
+        Self {
+            kind,
+            severity,
+            sound,
+            cleared: false,
+        }
+    }
+
+    pub const fn cleared(kind: AlertPreviewKind) -> Self {
+        Self {
+            kind,
+            severity: kind.default_severity(),
+            sound: AlertPreviewSoundState::Muted,
+            cleared: true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DashboardHomeFocus {
     Output,
@@ -9289,6 +9429,423 @@ fn draw_dashboard_home_wifi_icon<P: UiPainter>(
     )
 }
 
+/// Draw the approved-candidate dashboard marker without changing the runtime
+/// dashboard route or alert behavior. The runtime calls will be added only
+/// after the owner accepts this scene.
+pub fn draw_dashboard_alert_preview_indicator<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    severity: AlertPreviewSeverity,
+    sound: AlertPreviewSoundState,
+    frame_no: u32,
+) -> Result<(), P::Error> {
+    let palette = palette_for(variant);
+    let color = alert_preview_indicator_color(palette, severity, sound, frame_no);
+    draw_bms_glyph_warning_triangle(
+        painter,
+        DASHBOARD_HOME_WIFI_ICON_X + DASHBOARD_HOME_WIFI_ICON_W + 4,
+        0,
+        color,
+    )
+}
+
+/// Render the alert list interaction candidate using the firmware scene,
+/// bitmap fonts, and RGB565 palette. It is preview-only until approval.
+pub fn render_alert_list_preview<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    alerts: &[AlertPreviewItem],
+    selected: usize,
+    top: usize,
+    touch_overlay: bool,
+) -> Result<(), P::Error> {
+    let palette = palette_for(variant);
+    fill(painter, 0, 0, UI_W, UI_H, palette.bg)?;
+    draw_background_grid(painter, palette)?;
+
+    let status = if alerts.is_empty() { "CLEAR" } else { "ACTIVE" };
+    let status_color = if alerts.is_empty() {
+        palette.accent
+    } else {
+        alert_preview_severity_color(palette, alerts[0].severity)
+    };
+    draw_top_bar_with_status(
+        painter,
+        variant,
+        palette,
+        UiFocus::Idle,
+        "ALERTS",
+        "",
+        status,
+        status_color,
+    )?;
+
+    if alerts.is_empty() {
+        draw_panel(painter, 8, 42, 304, 66, palette, false, palette.accent)?;
+        text(
+            painter,
+            variant,
+            FontRole::TextTitle,
+            "NO ACTIVE ALERTS",
+            Point::new((UI_W / 2) as i32, 57),
+            HorizontalAlignment::Center,
+            palette.text,
+        )?;
+        text(
+            painter,
+            variant,
+            FontRole::TextBody,
+            "ALL ALERTS CLEARED",
+            Point::new((UI_W / 2) as i32, 78),
+            HorizontalAlignment::Center,
+            palette.text_dim,
+        )?;
+        draw_alert_preview_footer(painter, variant, palette, "LEFT BACK")?;
+        return Ok(());
+    }
+
+    for slot in 0..3usize {
+        let index = top.saturating_add(slot);
+        let Some(alert) = alerts.get(index).copied() else {
+            break;
+        };
+        let y = 24 + (slot as u16) * 36;
+        let severity_color = alert_preview_severity_color(palette, alert.severity);
+        draw_panel(painter, 8, y, 304, 34, palette, false, severity_color)?;
+        if index == selected {
+            draw_outline(painter, 8, y, 304, 34, palette.center)?;
+        }
+        draw_bms_glyph_warning_triangle(painter, 13, y + 5, severity_color)?;
+        text(
+            painter,
+            variant,
+            FontRole::TextBody,
+            alert.kind.label(),
+            Point::new(42, (y + 3) as i32),
+            HorizontalAlignment::Left,
+            palette.text,
+        )?;
+        text(
+            painter,
+            variant,
+            FontRole::TextCompact,
+            alert.kind.summary(),
+            Point::new(42, (y + 18) as i32),
+            HorizontalAlignment::Left,
+            palette.text_dim,
+        )?;
+        draw_alert_preview_sound_icon(
+            painter,
+            278,
+            y + 3,
+            alert_preview_sound_color(palette, alert),
+            fade_color(palette.panel, palette.panel_alt),
+            !alert.sound.can_mute(),
+        )?;
+    }
+
+    let last_visible = top.saturating_add(3).min(alerts.len());
+    text(
+        painter,
+        variant,
+        FontRole::NumCompact,
+        format_args!("{}/{}", last_visible, alerts.len()),
+        Point::new(306, 133),
+        HorizontalAlignment::Right,
+        palette.text_dim,
+    )?;
+    draw_alert_preview_footer(
+        painter,
+        variant,
+        palette,
+        "UP/DN SELECT  RIGHT MUTE  CENTER DETAIL",
+    )?;
+
+    if touch_overlay {
+        for slot in 0..3u16 {
+            let y = 24 + slot * 36;
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                8,
+                y,
+                264,
+                34,
+                match slot {
+                    0 => "1",
+                    1 => "2",
+                    _ => "3",
+                },
+                palette.touch,
+                12,
+                y + 2,
+            )?;
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                272,
+                y,
+                40,
+                34,
+                "M",
+                palette.center,
+                298,
+                y + 2,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Render one alert instance in the design candidate. A cleared instance is
+/// retained on this screen to make the terminal state explicit to the user.
+pub fn render_alert_detail_preview<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    alert: AlertPreviewItem,
+    touch_overlay: bool,
+) -> Result<(), P::Error> {
+    let palette = palette_for(variant);
+    fill(painter, 0, 0, UI_W, UI_H, palette.bg)?;
+    draw_background_grid(painter, palette)?;
+
+    let status = if alert.cleared {
+        "CLEARED"
+    } else {
+        alert.severity.label()
+    };
+    let status_color = if alert.cleared {
+        palette.accent
+    } else {
+        alert_preview_severity_color(palette, alert.severity)
+    };
+    draw_dashboard_detail_top_bar(
+        painter,
+        variant,
+        palette,
+        "ALERT DETAIL",
+        status,
+        status_color,
+    )?;
+
+    draw_panel(painter, 8, 26, 304, 42, palette, false, status_color)?;
+    draw_bms_glyph_warning_triangle(painter, 16, 34, status_color)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextTitle,
+        alert.kind.label(),
+        Point::new(48, 30),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        alert.kind.summary(),
+        Point::new(48, 48),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+
+    let sound_label = if alert.cleared {
+        "OFF"
+    } else {
+        alert.sound.label()
+    };
+    let sound_color = if alert.cleared {
+        palette.text_dim
+    } else {
+        alert_preview_sound_color(palette, alert)
+    };
+    draw_panel(painter, 8, 74, 304, 30, palette, false, sound_color)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "SOUND",
+        Point::new(16, 80),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        sound_label,
+        Point::new(258, 80),
+        HorizontalAlignment::Right,
+        sound_color,
+    )?;
+    draw_alert_preview_sound_icon(
+        painter,
+        274,
+        76,
+        sound_color,
+        fade_color(palette.panel, palette.panel_alt),
+        alert.cleared || !alert.sound.can_mute(),
+    )?;
+
+    let action = if alert.cleared {
+        "ALERT CLEARED"
+    } else if alert.sound.can_mute() {
+        "MUTE THIS ALERT"
+    } else {
+        alert.sound.label()
+    };
+    let action_color = if alert.cleared {
+        palette.accent
+    } else if alert.sound.can_mute() {
+        palette.center
+    } else {
+        palette.text_dim
+    };
+    draw_panel(painter, 8, 112, 304, 28, palette, false, action_color)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        action,
+        Point::new((UI_W / 2) as i32, 118),
+        HorizontalAlignment::Center,
+        action_color,
+    )?;
+    draw_alert_preview_footer(
+        painter,
+        variant,
+        palette,
+        if alert.cleared {
+            "LEFT BACK"
+        } else if alert.sound.can_mute() {
+            "RIGHT MUTE  LEFT BACK"
+        } else {
+            "LEFT BACK"
+        },
+    )?;
+
+    if touch_overlay {
+        draw_dashboard_touch_region_overlay(
+            painter,
+            variant,
+            palette,
+            0,
+            0,
+            96,
+            24,
+            "1",
+            palette.touch,
+            4,
+            3,
+        )?;
+        draw_dashboard_touch_region_overlay(
+            painter,
+            variant,
+            palette,
+            8,
+            26,
+            256,
+            114,
+            "2",
+            palette.touch,
+            12,
+            28,
+        )?;
+        if !alert.cleared && alert.sound.can_mute() {
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                264,
+                74,
+                48,
+                30,
+                "M",
+                palette.center,
+                296,
+                76,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn alert_preview_severity_color(_palette: Palette, severity: AlertPreviewSeverity) -> u16 {
+    match severity {
+        AlertPreviewSeverity::Warning => ATTENTION_COLOR,
+        AlertPreviewSeverity::Critical => ERROR_COLOR,
+    }
+}
+
+fn alert_preview_indicator_color(
+    palette: Palette,
+    severity: AlertPreviewSeverity,
+    sound: AlertPreviewSoundState,
+    frame_no: u32,
+) -> u16 {
+    if sound.can_mute() && (frame_no % 2 == 0) {
+        palette.text
+    } else {
+        alert_preview_severity_color(palette, severity)
+    }
+}
+
+fn alert_preview_sound_color(palette: Palette, alert: AlertPreviewItem) -> u16 {
+    if alert.cleared {
+        return palette.text_dim;
+    }
+    match alert.sound {
+        AlertPreviewSoundState::Audible => alert_preview_severity_color(palette, alert.severity),
+        AlertPreviewSoundState::Muted => palette.center,
+        AlertPreviewSoundState::SystemSilent | AlertPreviewSoundState::PolicySilent => {
+            palette.text_dim
+        }
+    }
+}
+
+fn draw_alert_preview_footer<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    hint: &'static str,
+) -> Result<(), P::Error> {
+    fill(painter, 0, 148, UI_W, 24, palette.panel)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        hint,
+        Point::new((UI_W / 2) as i32, 153),
+        HorizontalAlignment::Center,
+        palette.text_dim,
+    )
+}
+
+fn draw_alert_preview_sound_icon<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    fg: u16,
+    bg: u16,
+    muted: bool,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, MENU_ICON_VOLUME_UP_28, fg)?;
+    if muted {
+        for step in 0..18u16 {
+            let sx = x + 5 + step;
+            let sy = y + 23 - step;
+            fill(painter, sx, sy, 1, 1, bg)?;
+            fill(painter, sx + 1, sy, 1, 1, fg)?;
+            fill(painter, sx + 2, sy, 1, 1, bg)?;
+        }
+    }
+    Ok(())
+}
+
 fn draw_dashboard_wifi_icon_at<P: UiPainter>(
     painter: &mut P,
     x: u16,
@@ -14486,6 +15043,65 @@ mod tests {
     #[test]
     fn dashboard_focus_label_background_covers_detail_body_text() {
         assert!(DASHBOARD_HOME_FOCUS_LABEL_H >= 17);
+    }
+
+    #[test]
+    fn alert_preview_catalog_covers_the_nine_mutable_runtime_alerts() {
+        assert_eq!(AlertPreviewKind::ALL.len(), 9);
+        assert_eq!(
+            AlertPreviewKind::MainsAbsentDc.default_severity(),
+            AlertPreviewSeverity::Warning
+        );
+        assert_eq!(
+            AlertPreviewKind::BatteryLowWithMains.default_severity(),
+            AlertPreviewSeverity::Warning
+        );
+        assert_eq!(
+            AlertPreviewKind::BatteryProtection.default_severity(),
+            AlertPreviewSeverity::Critical
+        );
+    }
+
+    #[test]
+    fn alert_preview_indicator_flashes_only_for_audible_alerts() {
+        let palette = palette_for(UiVariant::InstrumentB);
+
+        assert_eq!(
+            alert_preview_indicator_color(
+                palette,
+                AlertPreviewSeverity::Warning,
+                AlertPreviewSoundState::Audible,
+                0,
+            ),
+            palette.text
+        );
+        assert_eq!(
+            alert_preview_indicator_color(
+                palette,
+                AlertPreviewSeverity::Warning,
+                AlertPreviewSoundState::Audible,
+                1,
+            ),
+            ATTENTION_COLOR
+        );
+        assert_eq!(
+            alert_preview_indicator_color(
+                palette,
+                AlertPreviewSeverity::Critical,
+                AlertPreviewSoundState::Muted,
+                0,
+            ),
+            ERROR_COLOR
+        );
+        assert_eq!(
+            alert_preview_indicator_color(
+                palette,
+                AlertPreviewSeverity::Warning,
+                AlertPreviewSoundState::PolicySilent,
+                1,
+            ),
+            ATTENTION_COLOR
+        );
     }
 
     #[test]
