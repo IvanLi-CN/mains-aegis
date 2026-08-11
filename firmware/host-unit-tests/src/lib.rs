@@ -72,6 +72,9 @@ pub mod tmp112;
 #[path = "../../src/audio.rs"]
 pub mod audio;
 
+#[path = "../../src/active_alerts.rs"]
+pub mod active_alerts;
+
 #[path = "../../src/front_panel_scene.rs"]
 pub mod front_panel_scene;
 

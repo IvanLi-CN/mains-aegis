@@ -274,6 +274,23 @@ a {
   padding: 8px 10px;
 }
 
+.top-metric.is-actionable {
+  width: auto;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.top-metric.is-actionable:hover {
+  border-color: var(--color-primary);
+}
+
+.top-metric.is-actionable:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
 .top-metric span,
 .metric-label {
   display: block;
@@ -873,6 +890,82 @@ a {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 4px;
+}
+
+.alerts-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.alerts-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.alerts-heading h2 {
+  margin: 2px 0 0;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.alerts-live-status {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.alerts-list {
+  display: grid;
+}
+
+.alert-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 78px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.alert-row:last-child { border-bottom: 0; }
+.alert-row.is-warning > svg { color: var(--color-warning); }
+.alert-row.is-critical > svg { color: var(--color-critical); }
+
+.alert-row-copy { min-width: 0; }
+.alert-row-copy > div { display: flex; align-items: center; gap: 9px; }
+.alert-row-copy p { margin: 4px 0 0; color: var(--color-muted); font-size: 13px; }
+.alert-severity { color: var(--color-muted); font-size: 11px; text-transform: uppercase; }
+
+.alert-sound {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.alerts-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 150px;
+  color: var(--color-muted);
+}
+
+@media (max-width: 560px) {
+  .alert-row {
+    grid-template-columns: 22px minmax(0, 1fr) 44px;
+    gap: 10px;
+    padding: 14px 12px;
+  }
+  .alert-sound > span { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

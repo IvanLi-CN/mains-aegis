@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type {
+  ActiveAlertsSnapshot,
   AdvancedPowerSettings,
   ChargeControlDetail,
   DeviceRecord,
@@ -82,6 +83,8 @@ export type DeviceRegistryContextValue = {
   controlManualCharge: (deviceId: string, input: ManualChargeControlInput) => Promise<CommandResult>;
   setAdvancedPower: (deviceId: string, advancedPower: AdvancedPowerInput) => Promise<CommandResult>;
   resetAdvancedPower: (deviceId: string) => Promise<CommandResult>;
+  getSerialAlerts: (deviceId: string) => Promise<ActiveAlertsSnapshot>;
+  muteSerialAlert: (deviceId: string, alertId: string, instanceId: number) => Promise<void>;
   removeDevice: (deviceId: string) => void;
   refreshDevice: (deviceId: string) => Promise<void>;
   setDemoSeed: (seed: DemoSeed) => void;

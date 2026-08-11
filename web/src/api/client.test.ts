@@ -1,16 +1,20 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  getDeviceAlerts,
   getDeviceChargeControl,
   getDevdDeviceDiagSnapshot,
   getStatus,
   getSettings,
+  MainsAegisApiError,
   previewDeviceChargeControl,
   releaseDevdTpsEnableInterlock,
+  muteDeviceAlert,
   resetDeviceAdvancedPower,
   setDeviceManualChargeControl,
   setDeviceManualChargePrefs,
   setDeviceAdvancedPower,
+  toErrorEnvelope,
 } from "./client";
 import type { DeviceSettings, UpsStatus } from "./types";
 
@@ -106,6 +110,34 @@ function baseLanStatus(): UpsStatus {
     },
   };
 }
+
+describe("active alerts", () => {
+  test("mutes one mock alert instance and returns the authoritative reread", async () => {
+    const baseUrl = "mock:alerts-test";
+    const before = await getDeviceAlerts(baseUrl);
+    const alert = before.alerts.find((item) => item.alert_id === "mains_absent_dc");
+    expect(alert?.sound_state).toBe("audible");
+    const result = await muteDeviceAlert(baseUrl, alert!.alert_id, alert!.instance_id);
+    expect(result).toMatchObject({
+      alert_id: alert!.alert_id,
+      instance_id: alert!.instance_id,
+      severity: "warning",
+      sound_state: "muted",
+      result: "muted",
+    });
+
+    await expect(
+      muteDeviceAlert(baseUrl, alert!.alert_id, alert!.instance_id),
+    ).resolves.toMatchObject({ result: "already_muted" });
+    const after = await getDeviceAlerts(baseUrl);
+    expect(after.alerts.find((item) => item.alert_id === alert!.alert_id)?.sound_state).toBe(
+      "muted",
+    );
+    expect(after.alerts.find((item) => item.alert_id === "module_fault")?.sound_state).toBe(
+      "system_silent",
+    );
+  });
+});
 
 function baseLanSettings(): DeviceSettings {
   return {
@@ -210,6 +242,115 @@ async function withFetchMock<T>(
     }
   }
 }
+
+describe("alert mute errors", () => {
+  test("uses an AbortController fallback for alert request timeouts", async () => {
+    const originalTimeout = AbortSignal.timeout;
+    Object.defineProperty(AbortSignal, "timeout", {
+      configurable: true,
+      value: undefined,
+    });
+    let observedSignal: AbortSignal | undefined;
+    try {
+      await withFetchMock(
+        async (_input, init) => {
+          observedSignal = init?.signal ?? undefined;
+          return jsonResponse({ alerts: [] });
+        },
+        () => getDeviceAlerts("http://mains-aegis.local", { timeoutMs: 20 }),
+      );
+    } finally {
+      Object.defineProperty(AbortSignal, "timeout", {
+        configurable: true,
+        value: originalTimeout,
+      });
+    }
+    expect(observedSignal).toBeInstanceOf(AbortSignal);
+    expect(observedSignal?.aborted).toBe(false);
+  });
+
+  test("applies a timeout signal to direct LAN mute requests", async () => {
+    let observedSignal: AbortSignal | undefined;
+    await withFetchMock(
+      async (_input, init) => {
+        observedSignal = init?.signal ?? undefined;
+        return jsonResponse({ result: "muted" });
+      },
+      () => muteDeviceAlert("http://mains-aegis.local", "module_fault", 41),
+    );
+    expect(observedSignal).toBeInstanceOf(AbortSignal);
+    expect(observedSignal?.aborted).toBe(false);
+  });
+
+  test("preserves structured Web Serial error envelopes", () => {
+    const serialError = Object.assign(new Error("unsupported operation"), {
+      envelope: {
+        code: "unsupported_operation",
+        message: "unsupported operation",
+        retryable: false,
+        details: null,
+      },
+    });
+
+    expect(toErrorEnvelope(serialError)).toEqual(serialError.envelope);
+  });
+
+  test("maps old firmware direct LAN alert 404 to unsupported", async () => {
+    const error = await withFetchMock(
+      async () =>
+        jsonResponse(
+          { error: { code: "not_found", message: "not found" } },
+          { status: 404 },
+        ),
+      async () => {
+        try {
+          await getDeviceAlerts("http://old-mains-aegis.local");
+          throw new Error("expected getDeviceAlerts to reject");
+        } catch (caught) {
+          return caught;
+        }
+      },
+    );
+
+    expect(error).toBeInstanceOf(MainsAegisApiError);
+    expect((error as MainsAegisApiError).envelope).toMatchObject({
+      code: "unsupported",
+      retryable: false,
+      details: { result: "unsupported" },
+    });
+  });
+
+  test("preserves direct LAN stale results as structured API errors", async () => {
+    const error = await withFetchMock(
+      async () =>
+        jsonResponse(
+          {
+            ok: false,
+            alert_id: "module_fault",
+            instance_id: 41,
+            result: "stale",
+            current_instance_id: 42,
+          },
+          { status: 409 },
+        ),
+      async () => {
+        try {
+          await muteDeviceAlert("http://mains-aegis.local", "module_fault", 41);
+          throw new Error("expected muteDeviceAlert to reject");
+        } catch (caught) {
+          return caught;
+        }
+      },
+    );
+
+    expect(error).toBeInstanceOf(MainsAegisApiError);
+    expect((error as MainsAegisApiError).envelope).toMatchObject({
+      code: "stale",
+      retryable: false,
+      details: { result: "stale", current_instance_id: 42 },
+    });
+  });
+});
 
 describe("mock advanced power reset", () => {
   test("preserves 19V mock capabilities when resetting advanced power", async () => {

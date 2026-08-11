@@ -17,6 +17,48 @@ use u8g2_fonts::{
 
 pub const UI_W: u16 = 320;
 pub const UI_H: u16 = 172;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TouchRect {
+    pub x: u16,
+    pub y: u16,
+    pub w: u16,
+    pub h: u16,
+}
+
+impl TouchRect {
+    pub const fn new(x: u16, y: u16, w: u16, h: u16) -> Self {
+        Self { x, y, w, h }
+    }
+
+    pub const fn contains(self, x: u16, y: u16) -> bool {
+        x >= self.x
+            && x < self.x.saturating_add(self.w)
+            && y >= self.y
+            && y < self.y.saturating_add(self.h)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub const fn area(self) -> u32 {
+        self.w as u32 * self.h as u32
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub const fn overlaps(self, other: Self) -> bool {
+        self.x < other.x.saturating_add(other.w)
+            && other.x < self.x.saturating_add(self.w)
+            && self.y < other.y.saturating_add(other.h)
+            && other.y < self.y.saturating_add(self.h)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub const fn within_screen(self) -> bool {
+        self.w > 0
+            && self.h > 0
+            && self.x.saturating_add(self.w) <= UI_W
+            && self.y.saturating_add(self.h) <= UI_H
+    }
+}
 const VIN_MAINS_PRESENT_THRESHOLD_MV: u16 = 3_000;
 
 fn mains_present_from_vin(vin_vbus_mv: Option<u16>) -> Option<bool> {
@@ -373,6 +415,236 @@ pub enum DashboardRoute {
     Home,
     Detail(DashboardDetailPage),
     ManualCharge,
+}
+
+/// Preview-facing alert categories. Runtime alert state is intentionally not
+/// connected until the owner approves the rendered interaction set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlertPreviewKind {
+    MainsAbsentDc,
+    HighStress,
+    BatteryLowNoMains,
+    BatteryLowWithMains,
+    ShutdownProtection,
+    IoOverVoltage,
+    IoOverCurrent,
+    ModuleFault,
+    BatteryProtection,
+}
+
+impl AlertPreviewKind {
+    pub const ALL: [Self; 9] = [
+        Self::MainsAbsentDc,
+        Self::HighStress,
+        Self::BatteryLowNoMains,
+        Self::BatteryLowWithMains,
+        Self::ShutdownProtection,
+        Self::IoOverVoltage,
+        Self::IoOverCurrent,
+        Self::ModuleFault,
+        Self::BatteryProtection,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::MainsAbsentDc => "MAINS LOST",
+            Self::HighStress => "HIGH STRESS",
+            Self::BatteryLowNoMains | Self::BatteryLowWithMains => "BATTERY LOW",
+            Self::ShutdownProtection => "SHUTDOWN PROTECT",
+            Self::IoOverVoltage => "IO OVER VOLTAGE",
+            Self::IoOverCurrent => "IO OVER CURRENT",
+            Self::ModuleFault => "MODULE FAULT",
+            Self::BatteryProtection => "BATTERY PROTECT",
+        }
+    }
+
+    pub const fn summary(self) -> &'static str {
+        match self {
+            Self::MainsAbsentDc => "RUNNING ON BATTERY",
+            Self::HighStress => "CHECK THERMAL LOAD",
+            Self::BatteryLowNoMains => "NO MAINS - REDUCE LOAD",
+            Self::BatteryLowWithMains => "CHECK CHARGING PATH",
+            Self::ShutdownProtection => "OUTPUT PROTECTION ACTIVE",
+            Self::IoOverVoltage => "CHECK OUTPUT LOAD",
+            Self::IoOverCurrent => "REDUCE OUTPUT LOAD",
+            Self::ModuleFault => "CHECK DEVICE DIAGNOSTICS",
+            Self::BatteryProtection => "CHECK BATTERY STATUS",
+        }
+    }
+
+    pub const fn default_severity(self) -> AlertPreviewSeverity {
+        match self {
+            Self::MainsAbsentDc
+            | Self::HighStress
+            | Self::BatteryLowNoMains
+            | Self::BatteryLowWithMains => AlertPreviewSeverity::Warning,
+            Self::ShutdownProtection
+            | Self::IoOverVoltage
+            | Self::IoOverCurrent
+            | Self::ModuleFault
+            | Self::BatteryProtection => AlertPreviewSeverity::Critical,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlertPreviewSeverity {
+    Warning,
+    Critical,
+}
+
+impl AlertPreviewSeverity {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Warning => "WARNING",
+            Self::Critical => "CRITICAL",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlertPreviewSoundState {
+    Audible,
+    Muted,
+    SystemSilent,
+    PolicySilent,
+}
+
+impl AlertPreviewSoundState {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Audible => "AUDIBLE",
+            Self::Muted => "MUTED",
+            Self::SystemSilent => "SYSTEM SILENT",
+            Self::PolicySilent => "POLICY SILENT",
+        }
+    }
+
+    const fn can_mute(self) -> bool {
+        matches!(self, Self::Audible)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AlertPreviewItem {
+    pub kind: AlertPreviewKind,
+    pub instance_id: u32,
+    pub severity: AlertPreviewSeverity,
+    pub sound: AlertPreviewSoundState,
+    pub cleared: bool,
+}
+
+pub fn select_alert_preview_indicator(items: &[AlertPreviewItem]) -> Option<AlertPreviewItem> {
+    let mut indicator = items
+        .iter()
+        .copied()
+        .max_by_key(|item| matches!(item.severity, AlertPreviewSeverity::Critical) as u8)?;
+    if items
+        .iter()
+        .any(|item| item.sound == AlertPreviewSoundState::Audible)
+    {
+        indicator.sound = AlertPreviewSoundState::Audible;
+    }
+    Some(indicator)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlertPreviewTouchTarget {
+    Back,
+    Row(usize),
+    Mute(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlertDetailTouchTarget {
+    Back,
+    Mute,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardHomeTouchTarget {
+    Alerts,
+    Dashboard(DashboardTouchTarget),
+}
+
+pub const fn dashboard_alert_hit_test(x: u16, y: u16) -> bool {
+    DASHBOARD_HOME_ALERT_TOUCH.contains(x, y)
+}
+
+pub fn dashboard_home_hit_test(
+    alerts_available: bool,
+    x: u16,
+    y: u16,
+) -> Option<DashboardHomeTouchTarget> {
+    if alerts_available && dashboard_alert_hit_test(x, y) {
+        Some(DashboardHomeTouchTarget::Alerts)
+    } else {
+        dashboard_hit_test(DashboardRoute::Home, x, y).map(DashboardHomeTouchTarget::Dashboard)
+    }
+}
+
+pub const fn alert_list_hit_test(x: u16, y: u16, top: usize) -> Option<AlertPreviewTouchTarget> {
+    if ALERT_LIST_TOP_BACK_TOUCH.contains(x, y) {
+        return Some(AlertPreviewTouchTarget::Back);
+    }
+    let mut slot = 0;
+    while slot < ALERT_LIST_ROW_TOUCH.len() {
+        if ALERT_LIST_MUTE_TOUCH[slot].contains(x, y) {
+            return Some(AlertPreviewTouchTarget::Mute(top + slot));
+        }
+        if ALERT_LIST_ROW_TOUCH[slot].contains(x, y) {
+            return Some(AlertPreviewTouchTarget::Row(top + slot));
+        }
+        slot += 1;
+    }
+    None
+}
+
+pub const fn alert_detail_hit_test(x: u16, y: u16) -> Option<AlertDetailTouchTarget> {
+    if ALERT_DETAIL_TOP_BACK_TOUCH.contains(x, y) {
+        Some(AlertDetailTouchTarget::Back)
+    } else if ALERT_DETAIL_MUTE_TOUCH.contains(x, y) {
+        Some(AlertDetailTouchTarget::Mute)
+    } else if ALERT_DETAIL_ACTION_TOUCH.contains(x, y) {
+        Some(AlertDetailTouchTarget::Mute)
+    } else {
+        None
+    }
+}
+
+impl AlertPreviewItem {
+    pub const fn active(
+        kind: AlertPreviewKind,
+        severity: AlertPreviewSeverity,
+        sound: AlertPreviewSoundState,
+    ) -> Self {
+        Self::active_with_instance_id(kind, 1, severity, sound)
+    }
+
+    pub const fn active_with_instance_id(
+        kind: AlertPreviewKind,
+        instance_id: u32,
+        severity: AlertPreviewSeverity,
+        sound: AlertPreviewSoundState,
+    ) -> Self {
+        Self {
+            kind,
+            instance_id,
+            severity,
+            sound,
+            cleared: false,
+        }
+    }
+
+    pub const fn cleared(kind: AlertPreviewKind) -> Self {
+        Self {
+            kind,
+            instance_id: 0,
+            severity: kind.default_severity(),
+            sound: AlertPreviewSoundState::Muted,
+            cleared: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1270,10 +1542,45 @@ const DASHBOARD_HOME_WIFI_ICON_X: u16 = 128;
 const DASHBOARD_HOME_WIFI_ICON_Y: u16 = 2;
 const DASHBOARD_HOME_WIFI_ICON_W: u16 = 18;
 const DASHBOARD_HOME_WIFI_ICON_H: u16 = 14;
-const DASHBOARD_HOME_WIFI_TOUCH_X: u16 = 118;
+const DASHBOARD_HOME_WIFI_TOUCH_X: u16 = 112;
 const DASHBOARD_HOME_WIFI_TOUCH_Y: u16 = 0;
-const DASHBOARD_HOME_WIFI_TOUCH_W: u16 = 32;
-const DASHBOARD_HOME_WIFI_TOUCH_H: u16 = 22;
+const DASHBOARD_HOME_WIFI_TOUCH_W: u16 = 38;
+const DASHBOARD_HOME_WIFI_TOUCH_H: u16 = 36;
+const DASHBOARD_HOME_ALERT_ICON_X: u16 = 150;
+const DASHBOARD_HOME_ALERT_ICON_Y: u16 = 2;
+const DASHBOARD_HOME_ALERT_ICON_SIZE: u16 = 16;
+const DASHBOARD_HOME_ALERT_TOUCH_X: u16 = 150;
+const DASHBOARD_HOME_ALERT_TOUCH_Y: u16 = 0;
+const DASHBOARD_HOME_ALERT_TOUCH_W: u16 = 38;
+const DASHBOARD_HOME_ALERT_TOUCH_H: u16 = 36;
+
+pub const DASHBOARD_HOME_WIFI_TOUCH: TouchRect = TouchRect::new(
+    DASHBOARD_HOME_WIFI_TOUCH_X,
+    DASHBOARD_HOME_WIFI_TOUCH_Y,
+    DASHBOARD_HOME_WIFI_TOUCH_W,
+    DASHBOARD_HOME_WIFI_TOUCH_H,
+);
+pub const DASHBOARD_HOME_ALERT_TOUCH: TouchRect = TouchRect::new(
+    DASHBOARD_HOME_ALERT_TOUCH_X,
+    DASHBOARD_HOME_ALERT_TOUCH_Y,
+    DASHBOARD_HOME_ALERT_TOUCH_W,
+    DASHBOARD_HOME_ALERT_TOUCH_H,
+);
+
+pub const ALERT_LIST_ROW_TOUCH: [TouchRect; 3] = [
+    TouchRect::new(0, 24, 272, 36),
+    TouchRect::new(0, 60, 272, 36),
+    TouchRect::new(0, 96, 272, 36),
+];
+pub const ALERT_LIST_MUTE_TOUCH: [TouchRect; 3] = [
+    TouchRect::new(272, 24, 48, 36),
+    TouchRect::new(272, 60, 48, 36),
+    TouchRect::new(272, 96, 48, 36),
+];
+pub const ALERT_LIST_TOP_BACK_TOUCH: TouchRect = TouchRect::new(0, 0, 96, 24);
+pub const ALERT_DETAIL_TOP_BACK_TOUCH: TouchRect = TouchRect::new(0, 0, 96, 32);
+pub const ALERT_DETAIL_MUTE_TOUCH: TouchRect = TouchRect::new(264, 72, 56, 40);
+pub const ALERT_DETAIL_ACTION_TOUCH: TouchRect = TouchRect::new(8, 112, 304, 28);
 
 const DASHBOARD_HOME_THERMAL_X: u16 = 6;
 const DASHBOARD_HOME_THERMAL_Y: u16 = 76;
@@ -1875,14 +2182,7 @@ pub const fn manual_charge_loopback_confirm_key_target(
 pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<DashboardTouchTarget> {
     match route {
         DashboardRoute::Home => {
-            if contains(
-                x,
-                y,
-                DASHBOARD_HOME_WIFI_TOUCH_X,
-                DASHBOARD_HOME_WIFI_TOUCH_Y,
-                DASHBOARD_HOME_WIFI_TOUCH_W,
-                DASHBOARD_HOME_WIFI_TOUCH_H,
-            ) {
+            if DASHBOARD_HOME_WIFI_TOUCH.contains(x, y) {
                 Some(DashboardTouchTarget::HomeWifi)
             } else if contains(
                 x,
@@ -3719,9 +4019,9 @@ pub fn render_dashboard_touch_regions_overlay<P: UiPainter>(
                 DASHBOARD_HOME_WIFI_TOUCH_Y,
                 DASHBOARD_HOME_WIFI_TOUCH_W,
                 DASHBOARD_HOME_WIFI_TOUCH_H,
-                "1",
+                "W",
                 palette.touch,
-                152,
+                113,
                 2,
             )?;
             draw_dashboard_touch_region_overlay(
@@ -9289,6 +9589,510 @@ fn draw_dashboard_home_wifi_icon<P: UiPainter>(
     )
 }
 
+/// Draw the approved-candidate dashboard marker without changing the runtime
+/// dashboard route or alert behavior. The runtime calls will be added only
+/// after the owner accepts this scene.
+pub fn draw_dashboard_alert_preview_indicator<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    severity: AlertPreviewSeverity,
+    sound: AlertPreviewSoundState,
+    frame_no: u32,
+) -> Result<(), P::Error> {
+    let palette = palette_for(variant);
+    let color = alert_preview_indicator_color(palette, severity, sound, frame_no);
+    draw_icon_blocks_scaled(
+        painter,
+        DASHBOARD_HOME_ALERT_ICON_X,
+        DASHBOARD_HOME_ALERT_ICON_Y,
+        LUCIDE_TRIANGLE_ALERT_22,
+        22,
+        DASHBOARD_HOME_ALERT_ICON_SIZE,
+        color,
+    )
+}
+
+pub fn draw_dashboard_alert_preview_mixed_indicator<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    frame_no: u32,
+) -> Result<(), P::Error> {
+    let alerts = [
+        AlertPreviewItem::active(
+            AlertPreviewKind::BatteryProtection,
+            AlertPreviewSeverity::Critical,
+            AlertPreviewSoundState::Muted,
+        ),
+        AlertPreviewItem::active(
+            AlertPreviewKind::MainsAbsentDc,
+            AlertPreviewSeverity::Warning,
+            AlertPreviewSoundState::Audible,
+        ),
+    ];
+    let Some(indicator) = select_alert_preview_indicator(&alerts) else {
+        return Ok(());
+    };
+    draw_dashboard_alert_preview_indicator(
+        painter,
+        variant,
+        indicator.severity,
+        indicator.sound,
+        frame_no,
+    )
+}
+
+/// Draw the Dashboard alert entry on top of the runtime touch-region overlay.
+pub fn draw_dashboard_alert_preview_touch_overlay<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+) -> Result<(), P::Error> {
+    let palette = palette_for(variant);
+    draw_dashboard_touch_region_overlay(
+        painter,
+        variant,
+        palette,
+        DASHBOARD_HOME_ALERT_TOUCH_X,
+        DASHBOARD_HOME_ALERT_TOUCH_Y,
+        DASHBOARD_HOME_ALERT_TOUCH_W,
+        DASHBOARD_HOME_ALERT_TOUCH_H,
+        "A",
+        palette.center,
+        151,
+        2,
+    )
+}
+
+/// Render the alert list interaction using the firmware scene, bitmap fonts,
+/// and RGB565 palette.
+pub fn render_alert_list_preview<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    alerts: &[AlertPreviewItem],
+    selected: usize,
+    top: usize,
+    touch_overlay: bool,
+) -> Result<(), P::Error> {
+    let palette = palette_for(variant);
+    fill(painter, 0, 0, UI_W, UI_H, palette.bg)?;
+    draw_background_grid(painter, palette)?;
+
+    let status = if alerts.is_empty() { "CLEAR" } else { "ACTIVE" };
+    let status_color = if alerts.is_empty() {
+        palette.accent
+    } else {
+        alert_preview_severity_color(palette, alerts[0].severity)
+    };
+    draw_top_bar_with_status(
+        painter,
+        variant,
+        palette,
+        UiFocus::Idle,
+        "ALERTS",
+        "",
+        "",
+        status_color,
+    )?;
+    draw_panel(painter, 8, 2, 80, 18, palette, false, palette.accent)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "BACK",
+        Point::new(48, 4),
+        HorizontalAlignment::Center,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        status,
+        Point::new(220, 5),
+        HorizontalAlignment::Right,
+        status_color,
+    )?;
+
+    if touch_overlay {
+        let back = ALERT_LIST_TOP_BACK_TOUCH;
+        draw_dashboard_touch_region_overlay(
+            painter,
+            variant,
+            palette,
+            back.x,
+            back.y,
+            back.w,
+            back.h,
+            "B",
+            palette.left,
+            back.x + 2,
+            back.y + 2,
+        )?;
+    }
+
+    if alerts.is_empty() {
+        draw_panel(painter, 8, 42, 304, 66, palette, false, palette.accent)?;
+        text(
+            painter,
+            variant,
+            FontRole::TextTitle,
+            "NO ACTIVE ALERTS",
+            Point::new((UI_W / 2) as i32, 57),
+            HorizontalAlignment::Center,
+            palette.text,
+        )?;
+        text(
+            painter,
+            variant,
+            FontRole::TextBody,
+            "ALL ALERTS CLEARED",
+            Point::new((UI_W / 2) as i32, 78),
+            HorizontalAlignment::Center,
+            palette.text_dim,
+        )?;
+        draw_alert_preview_footer(painter, variant, palette, "LEFT BACK")?;
+        return Ok(());
+    }
+
+    for slot in 0..3usize {
+        let index = top.saturating_add(slot);
+        let Some(alert) = alerts.get(index).copied() else {
+            break;
+        };
+        let y = 24 + (slot as u16) * 36;
+        let severity_color = alert_preview_severity_color(palette, alert.severity);
+        draw_panel(painter, 8, y, 304, 34, palette, false, severity_color)?;
+        if index == selected {
+            draw_outline(painter, 8, y, 304, 34, palette.center)?;
+        }
+        draw_bms_glyph_warning_triangle(painter, 13, y + 5, severity_color)?;
+        text(
+            painter,
+            variant,
+            FontRole::TextBody,
+            alert.kind.label(),
+            Point::new(42, (y + 3) as i32),
+            HorizontalAlignment::Left,
+            palette.text,
+        )?;
+        text(
+            painter,
+            variant,
+            FontRole::TextCompact,
+            alert.kind.summary(),
+            Point::new(42, (y + 18) as i32),
+            HorizontalAlignment::Left,
+            palette.text_dim,
+        )?;
+        draw_alert_preview_sound_icon(
+            painter,
+            278,
+            y + 3,
+            alert_preview_sound_color(palette, alert),
+            fade_color(palette.panel, palette.panel_alt),
+            !alert.sound.can_mute(),
+        )?;
+    }
+
+    let last_visible = top.saturating_add(3).min(alerts.len());
+    text(
+        painter,
+        variant,
+        FontRole::NumCompact,
+        format_args!("{}/{}", last_visible, alerts.len()),
+        Point::new(306, 133),
+        HorizontalAlignment::Right,
+        palette.text_dim,
+    )?;
+    draw_alert_preview_footer(
+        painter,
+        variant,
+        palette,
+        "UP/DN SELECT  RIGHT MUTE  CENTER DETAIL",
+    )?;
+
+    if touch_overlay {
+        for slot in 0..3usize {
+            let row = ALERT_LIST_ROW_TOUCH[slot];
+            let mute = ALERT_LIST_MUTE_TOUCH[slot];
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                row.x,
+                row.y,
+                row.w,
+                row.h,
+                match slot {
+                    0 => "1",
+                    1 => "2",
+                    _ => "3",
+                },
+                palette.touch,
+                row.x + 4,
+                row.y + 2,
+            )?;
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                mute.x,
+                mute.y,
+                mute.w,
+                mute.h,
+                "M",
+                palette.center,
+                mute.x + mute.w - 14,
+                mute.y + 2,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Render one alert instance in the design candidate. A cleared instance is
+/// retained on this screen to make the terminal state explicit to the user.
+pub fn render_alert_detail_preview<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    alert: AlertPreviewItem,
+    touch_overlay: bool,
+) -> Result<(), P::Error> {
+    let palette = palette_for(variant);
+    fill(painter, 0, 0, UI_W, UI_H, palette.bg)?;
+    draw_background_grid(painter, palette)?;
+
+    let status = if alert.cleared {
+        "CLEARED"
+    } else {
+        alert.severity.label()
+    };
+    let status_color = if alert.cleared {
+        palette.accent
+    } else {
+        alert_preview_severity_color(palette, alert.severity)
+    };
+    draw_dashboard_detail_top_bar(
+        painter,
+        variant,
+        palette,
+        "ALERT DETAIL",
+        status,
+        status_color,
+    )?;
+
+    draw_panel(painter, 8, 26, 304, 42, palette, false, status_color)?;
+    draw_bms_glyph_warning_triangle(painter, 16, 34, status_color)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextTitle,
+        alert.kind.label(),
+        Point::new(48, 30),
+        HorizontalAlignment::Left,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        alert.kind.summary(),
+        Point::new(48, 48),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+
+    let sound_label = if alert.cleared {
+        "OFF"
+    } else {
+        alert.sound.label()
+    };
+    let sound_color = if alert.cleared {
+        palette.text_dim
+    } else {
+        alert_preview_sound_color(palette, alert)
+    };
+    draw_panel(painter, 8, 74, 304, 30, palette, false, sound_color)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "SOUND",
+        Point::new(16, 80),
+        HorizontalAlignment::Left,
+        palette.text_dim,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        sound_label,
+        Point::new(258, 80),
+        HorizontalAlignment::Right,
+        sound_color,
+    )?;
+    draw_alert_preview_sound_icon(
+        painter,
+        274,
+        76,
+        sound_color,
+        fade_color(palette.panel, palette.panel_alt),
+        alert.cleared || !alert.sound.can_mute(),
+    )?;
+
+    let action = if alert.cleared {
+        "ALERT CLEARED"
+    } else {
+        "MUTE THIS ALERT"
+    };
+    let action_color = if alert.cleared {
+        palette.accent
+    } else {
+        palette.center
+    };
+    draw_panel(painter, 8, 112, 304, 28, palette, false, action_color)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        action,
+        Point::new((UI_W / 2) as i32, 118),
+        HorizontalAlignment::Center,
+        action_color,
+    )?;
+    draw_alert_preview_footer(
+        painter,
+        variant,
+        palette,
+        if alert.cleared {
+            "LEFT BACK"
+        } else {
+            "RIGHT MUTE  LEFT BACK"
+        },
+    )?;
+
+    if touch_overlay {
+        let top_back = ALERT_DETAIL_TOP_BACK_TOUCH;
+        draw_dashboard_touch_region_overlay(
+            painter,
+            variant,
+            palette,
+            top_back.x,
+            top_back.y,
+            top_back.w,
+            top_back.h,
+            "B",
+            palette.touch,
+            4,
+            3,
+        )?;
+        if !alert.cleared {
+            let mute = ALERT_DETAIL_MUTE_TOUCH;
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                mute.x,
+                mute.y,
+                mute.w,
+                mute.h,
+                "M",
+                palette.center,
+                mute.x + 4,
+                mute.y + 2,
+            )?;
+            let action = ALERT_DETAIL_ACTION_TOUCH;
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                action.x,
+                action.y,
+                action.w,
+                action.h,
+                "M",
+                palette.center,
+                action.x + 4,
+                action.y + 2,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn alert_preview_severity_color(_palette: Palette, severity: AlertPreviewSeverity) -> u16 {
+    match severity {
+        AlertPreviewSeverity::Warning => ATTENTION_COLOR,
+        AlertPreviewSeverity::Critical => ERROR_COLOR,
+    }
+}
+
+fn alert_preview_indicator_color(
+    palette: Palette,
+    severity: AlertPreviewSeverity,
+    sound: AlertPreviewSoundState,
+    frame_no: u32,
+) -> u16 {
+    if sound.can_mute() && (frame_no % 2 == 0) {
+        palette.text
+    } else {
+        alert_preview_severity_color(palette, severity)
+    }
+}
+
+fn alert_preview_sound_color(palette: Palette, alert: AlertPreviewItem) -> u16 {
+    if alert.cleared {
+        return palette.text_dim;
+    }
+    match alert.sound {
+        AlertPreviewSoundState::Audible => alert_preview_severity_color(palette, alert.severity),
+        AlertPreviewSoundState::Muted => palette.center,
+        AlertPreviewSoundState::SystemSilent | AlertPreviewSoundState::PolicySilent => {
+            palette.text_dim
+        }
+    }
+}
+
+fn draw_alert_preview_footer<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    palette: Palette,
+    hint: &'static str,
+) -> Result<(), P::Error> {
+    fill(painter, 0, 148, UI_W, 24, palette.panel)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        hint,
+        Point::new((UI_W / 2) as i32, 153),
+        HorizontalAlignment::Center,
+        palette.text_dim,
+    )
+}
+
+fn draw_alert_preview_sound_icon<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    fg: u16,
+    bg: u16,
+    muted: bool,
+) -> Result<(), P::Error> {
+    draw_icon_blocks(painter, x, y, MENU_ICON_VOLUME_UP_28, fg)?;
+    if muted {
+        for step in 0..18u16 {
+            let sx = x + 5 + step;
+            let sy = y + 23 - step;
+            fill(painter, sx, sy, 1, 1, bg)?;
+            fill(painter, sx + 1, sy, 1, 1, fg)?;
+            fill(painter, sx + 2, sy, 1, 1, bg)?;
+        }
+    }
+    Ok(())
+}
+
 fn draw_dashboard_wifi_icon_at<P: UiPainter>(
     painter: &mut P,
     x: u16,
@@ -11964,6 +12768,35 @@ fn draw_icon_blocks<P: UiPainter>(
     Ok(())
 }
 
+fn draw_icon_blocks_scaled<P: UiPainter>(
+    painter: &mut P,
+    x: u16,
+    y: u16,
+    blocks: &[(u8, u8, u8, u8)],
+    source_size: u16,
+    target_size: u16,
+    rgb565: u16,
+) -> Result<(), P::Error> {
+    for &(bx, by, bw, bh) in blocks {
+        if bw == 0 || bh == 0 {
+            continue;
+        }
+        let left = u16::from(bx) * target_size / source_size;
+        let top = u16::from(by) * target_size / source_size;
+        let right = (u16::from(bx + bw) * target_size).div_ceil(source_size);
+        let bottom = (u16::from(by + bh) * target_size).div_ceil(source_size);
+        fill(
+            painter,
+            x + left,
+            y + top,
+            right.saturating_sub(left).max(1),
+            bottom.saturating_sub(top).max(1),
+            rgb565,
+        )?;
+    }
+    Ok(())
+}
+
 fn icon_block_bounds(blocks: &[(u8, u8, u8, u8)]) -> Option<(u8, u8, u8, u8)> {
     let mut iter = blocks
         .iter()
@@ -14489,6 +15322,93 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_alert_preview_icon_matches_wifi_scale() {
+        assert!(DASHBOARD_HOME_ALERT_ICON_SIZE <= DASHBOARD_HOME_WIFI_ICON_H + 2);
+        assert_eq!(
+            DASHBOARD_HOME_ALERT_TOUCH_X,
+            DASHBOARD_HOME_WIFI_TOUCH_X + DASHBOARD_HOME_WIFI_TOUCH_W
+        );
+    }
+
+    #[test]
+    fn alert_preview_catalog_covers_the_nine_mutable_runtime_alerts() {
+        assert_eq!(AlertPreviewKind::ALL.len(), 9);
+        assert_eq!(
+            AlertPreviewKind::MainsAbsentDc.default_severity(),
+            AlertPreviewSeverity::Warning
+        );
+        assert_eq!(
+            AlertPreviewKind::BatteryLowWithMains.default_severity(),
+            AlertPreviewSeverity::Warning
+        );
+        assert_eq!(
+            AlertPreviewKind::BatteryProtection.default_severity(),
+            AlertPreviewSeverity::Critical
+        );
+    }
+
+    #[test]
+    fn alert_preview_indicator_uses_highest_severity_and_any_audible_state() {
+        let alerts = [
+            AlertPreviewItem::active(
+                AlertPreviewKind::BatteryProtection,
+                AlertPreviewSeverity::Critical,
+                AlertPreviewSoundState::Muted,
+            ),
+            AlertPreviewItem::active(
+                AlertPreviewKind::MainsAbsentDc,
+                AlertPreviewSeverity::Warning,
+                AlertPreviewSoundState::Audible,
+            ),
+        ];
+        let indicator = select_alert_preview_indicator(&alerts).expect("mixed alerts");
+        assert_eq!(indicator.severity, AlertPreviewSeverity::Critical);
+        assert_eq!(indicator.sound, AlertPreviewSoundState::Audible);
+    }
+
+    #[test]
+    fn alert_preview_indicator_flashes_only_for_audible_alerts() {
+        let palette = palette_for(UiVariant::InstrumentB);
+
+        assert_eq!(
+            alert_preview_indicator_color(
+                palette,
+                AlertPreviewSeverity::Warning,
+                AlertPreviewSoundState::Audible,
+                0,
+            ),
+            palette.text
+        );
+        assert_eq!(
+            alert_preview_indicator_color(
+                palette,
+                AlertPreviewSeverity::Warning,
+                AlertPreviewSoundState::Audible,
+                1,
+            ),
+            ATTENTION_COLOR
+        );
+        assert_eq!(
+            alert_preview_indicator_color(
+                palette,
+                AlertPreviewSeverity::Critical,
+                AlertPreviewSoundState::Muted,
+                0,
+            ),
+            ERROR_COLOR
+        );
+        assert_eq!(
+            alert_preview_indicator_color(
+                palette,
+                AlertPreviewSeverity::Warning,
+                AlertPreviewSoundState::PolicySilent,
+                1,
+            ),
+            ATTENTION_COLOR
+        );
+    }
+
+    #[test]
     fn live_dashboard_keeps_missing_metrics_as_na_inputs() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         snapshot.fusb302_vbus_present = Some(true);
@@ -15127,6 +16047,145 @@ mod tests {
             dashboard_hit_test(DashboardRoute::Home, 250, 140),
             Some(DashboardTouchTarget::HomeBatteryFlow)
         );
+    }
+
+    #[test]
+    fn dashboard_header_touch_contract_has_equal_usable_targets() {
+        assert_eq!(DASHBOARD_HOME_WIFI_TOUCH, TouchRect::new(112, 0, 38, 36));
+        assert_eq!(DASHBOARD_HOME_ALERT_TOUCH, TouchRect::new(150, 0, 38, 36));
+        assert_eq!(DASHBOARD_HOME_WIFI_TOUCH.area(), 1_368);
+        assert_eq!(DASHBOARD_HOME_ALERT_TOUCH.area(), 1_368);
+        assert!(DASHBOARD_HOME_WIFI_TOUCH.within_screen());
+        assert!(DASHBOARD_HOME_ALERT_TOUCH.within_screen());
+        assert!(!DASHBOARD_HOME_WIFI_TOUCH.overlaps(DASHBOARD_HOME_ALERT_TOUCH));
+
+        assert!(DASHBOARD_HOME_WIFI_TOUCH
+            .contains(DASHBOARD_HOME_WIFI_ICON_X, DASHBOARD_HOME_WIFI_ICON_Y));
+        assert!(DASHBOARD_HOME_WIFI_TOUCH.contains(
+            DASHBOARD_HOME_WIFI_ICON_X + DASHBOARD_HOME_WIFI_ICON_W - 1,
+            DASHBOARD_HOME_WIFI_ICON_Y + DASHBOARD_HOME_WIFI_ICON_H - 1
+        ));
+        assert!(DASHBOARD_HOME_ALERT_TOUCH
+            .contains(DASHBOARD_HOME_ALERT_ICON_X, DASHBOARD_HOME_ALERT_ICON_Y));
+        assert!(DASHBOARD_HOME_ALERT_TOUCH.contains(
+            DASHBOARD_HOME_ALERT_ICON_X + DASHBOARD_HOME_ALERT_ICON_SIZE - 1,
+            DASHBOARD_HOME_ALERT_ICON_Y + DASHBOARD_HOME_ALERT_ICON_SIZE - 1
+        ));
+    }
+
+    #[test]
+    fn dashboard_home_layering_prioritizes_alerts_then_wifi_over_output() {
+        assert_eq!(
+            dashboard_home_hit_test(true, 160, 30),
+            Some(DashboardHomeTouchTarget::Alerts)
+        );
+        assert_eq!(
+            dashboard_home_hit_test(false, 160, 30),
+            Some(DashboardHomeTouchTarget::Dashboard(
+                DashboardTouchTarget::HomeOutput
+            ))
+        );
+        assert_eq!(
+            dashboard_home_hit_test(true, 130, 30),
+            Some(DashboardHomeTouchTarget::Dashboard(
+                DashboardTouchTarget::HomeWifi
+            ))
+        );
+
+        for y in 0..UI_H {
+            for x in 0..UI_W {
+                let resolved = dashboard_home_hit_test(true, x, y);
+                if DASHBOARD_HOME_ALERT_TOUCH.contains(x, y) {
+                    assert_eq!(resolved, Some(DashboardHomeTouchTarget::Alerts));
+                } else if DASHBOARD_HOME_WIFI_TOUCH.contains(x, y) {
+                    assert_eq!(
+                        resolved,
+                        Some(DashboardHomeTouchTarget::Dashboard(
+                            DashboardTouchTarget::HomeWifi
+                        ))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn alert_list_touch_contract_covers_rows_mute_and_back_without_overlap() {
+        for slot in 0..3 {
+            let row = ALERT_LIST_ROW_TOUCH[slot];
+            let mute = ALERT_LIST_MUTE_TOUCH[slot];
+            assert!(row.within_screen());
+            assert!(mute.within_screen());
+            assert_eq!(row, TouchRect::new(0, 24 + slot as u16 * 36, 272, 36));
+            assert_eq!(mute, TouchRect::new(272, 24 + slot as u16 * 36, 48, 36));
+            assert!(!row.overlaps(mute));
+            assert_eq!(row.area(), 9_792);
+            assert_eq!(mute.area(), 1_728);
+            assert_eq!(
+                alert_list_hit_test(row.x + row.w - 1, row.y + row.h - 1, 4),
+                Some(AlertPreviewTouchTarget::Row(4 + slot))
+            );
+            assert_eq!(
+                alert_list_hit_test(mute.x, mute.y, 4),
+                Some(AlertPreviewTouchTarget::Mute(4 + slot))
+            );
+        }
+        assert_eq!(ALERT_LIST_TOP_BACK_TOUCH, TouchRect::new(0, 0, 96, 24));
+        assert!(ALERT_LIST_TOP_BACK_TOUCH.within_screen());
+        assert_eq!(ALERT_LIST_TOP_BACK_TOUCH.area(), 2_304);
+        assert_eq!(
+            alert_list_hit_test(0, 0, 0),
+            Some(AlertPreviewTouchTarget::Back)
+        );
+        assert_eq!(
+            alert_list_hit_test(95, 23, 0),
+            Some(AlertPreviewTouchTarget::Back)
+        );
+        assert_eq!(alert_list_hit_test(96, 23, 0), None);
+        assert_eq!(alert_list_hit_test(0, 140, 0), None);
+        assert_eq!(alert_list_hit_test(319, 171, 0), None);
+        assert_eq!(alert_list_hit_test(100, 132, 0), None);
+        assert_eq!(alert_list_hit_test(100, 139, 0), None);
+    }
+
+    #[test]
+    fn alert_detail_touch_contract_keeps_actions_disjoint() {
+        let regions = [
+            ALERT_DETAIL_TOP_BACK_TOUCH,
+            ALERT_DETAIL_MUTE_TOUCH,
+            ALERT_DETAIL_ACTION_TOUCH,
+        ];
+        for (index, region) in regions.iter().copied().enumerate() {
+            assert!(region.within_screen());
+            for other in regions.iter().copied().skip(index + 1) {
+                assert!(!region.overlaps(other));
+            }
+        }
+        assert_eq!(ALERT_DETAIL_TOP_BACK_TOUCH, TouchRect::new(0, 0, 96, 32));
+        assert_eq!(ALERT_DETAIL_MUTE_TOUCH, TouchRect::new(264, 72, 56, 40));
+        assert_eq!(ALERT_DETAIL_ACTION_TOUCH, TouchRect::new(8, 112, 304, 28));
+        assert_eq!(
+            alert_detail_hit_test(95, 31),
+            Some(AlertDetailTouchTarget::Back)
+        );
+        assert_eq!(
+            alert_detail_hit_test(264, 72),
+            Some(AlertDetailTouchTarget::Mute)
+        );
+        assert_eq!(
+            alert_detail_hit_test(319, 111),
+            Some(AlertDetailTouchTarget::Mute)
+        );
+        assert_eq!(
+            alert_detail_hit_test(8, 112),
+            Some(AlertDetailTouchTarget::Mute)
+        );
+        assert_eq!(
+            alert_detail_hit_test(311, 139),
+            Some(AlertDetailTouchTarget::Mute)
+        );
+        assert_eq!(alert_detail_hit_test(319, 140), None);
+        assert_eq!(alert_detail_hit_test(160, 100), None);
     }
 
     #[test]

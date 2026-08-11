@@ -25,6 +25,7 @@ use heapless::{String, Vec};
 use static_cell::StaticCell;
 
 use crate::{
+    active_alerts::{render_alerts_json, ActiveAlerts},
     mdns::{self, MdnsRuntimeConfig},
     mdns_wire::{derive_device_identity, DeviceIdentity},
     net_contract::{
@@ -47,8 +48,9 @@ use crate::{
     usb_cdc_protocol::{
         parse_http_advanced_power_request, parse_http_log_level_request,
         parse_http_manual_charge_control_request, parse_http_manual_charge_preview_request,
-        parse_http_manual_charge_request, parse_http_reset_request, parse_http_wifi_config_request,
-        LogLevel, ManualChargeControlCommand, ManualChargePrefsCommand, WifiConfigSecret,
+        parse_http_manual_charge_request, parse_http_mute_alert_request, parse_http_reset_request,
+        parse_http_wifi_config_request, LogLevel, ManualChargeControlCommand,
+        ManualChargePrefsCommand, MuteAlertCommand, WifiConfigSecret,
     },
 };
 
@@ -98,6 +100,8 @@ static PENDING_LAN_COMMAND: Mutex<RefCell<Option<LanManagementCommand>>> =
     Mutex::new(RefCell::new(None));
 static LAN_COMMAND_RESULT: Mutex<RefCell<Option<LanCommandResult>>> =
     Mutex::new(RefCell::new(None));
+static ACTIVE_ALERTS_JSON: Mutex<RefCell<String<HTTP_RESPONSE_BODY_CAP>>> =
+    Mutex::new(RefCell::new(String::new()));
 static WIFI_CONFIG_GENERATION: AtomicU32 = AtomicU32::new(0);
 static DIAG_CAPTURE_BUSY: AtomicBool = AtomicBool::new(false);
 static DIAG_CAPTURE_GENERATION: AtomicU32 = AtomicU32::new(0);
@@ -132,6 +136,7 @@ pub enum LanManagementCommand {
     SetAdvancedPower(AdvancedPowerSettingsSnapshot),
     ResetAdvancedPower,
     RecoverBmsDischargeAuthorization,
+    MuteAlert(MuteAlertCommand),
     Reset,
 }
 
@@ -139,6 +144,7 @@ pub enum LanManagementCommand {
 pub enum LanCommandResult {
     Ok,
     Json(String<HTTP_RESPONSE_BODY_CAP>),
+    AlertConflict(String<HTTP_RESPONSE_BODY_CAP>),
     AdvancedPowerValidation {
         code: &'static str,
         message: &'static str,
@@ -191,6 +197,20 @@ pub fn publish_charge_control_detail(snapshot: ChargeControlDetailSnapshot) {
     critical_section::with(|cs| {
         *CHARGE_CONTROL_DETAIL.borrow_ref_mut(cs) = snapshot;
     });
+}
+
+pub fn publish_active_alerts(alerts: &ActiveAlerts, system_silent: bool) {
+    critical_section::with(|cs| {
+        render_alerts_json(
+            &mut ACTIVE_ALERTS_JSON.borrow_ref_mut(cs),
+            alerts,
+            system_silent,
+        );
+    });
+}
+
+fn current_active_alerts_json() -> String<HTTP_RESPONSE_BODY_CAP> {
+    critical_section::with(|cs| ACTIVE_ALERTS_JSON.borrow_ref(cs).clone())
 }
 
 pub fn current_network_ui_summary() -> NetworkUiSummary {
@@ -908,6 +928,13 @@ async fn handle_http_connection(socket: &mut TcpSocket<'_>) -> Result<(), embass
             render_status_json(&mut body, current_status_snapshot());
             write_http_response(socket, "200 OK", body.as_str(), origin).await?;
         }
+        "/api/v1/alerts" => {
+            body = current_active_alerts_json();
+            if body.is_empty() {
+                let _ = body.push_str(r#"{"alerts":[]}"#);
+            }
+            write_http_response(socket, "200 OK", body.as_str(), origin).await?;
+        }
         "/api/v1/charge-control" => {
             render_charge_control_result_json(&mut body, current_charge_control_detail());
             write_http_response(socket, "200 OK", body.as_str(), origin).await?;
@@ -971,6 +998,35 @@ async fn handle_http_write(
     let mut await_command_result = false;
     let mut await_command_timeout = LAN_ADVANCED_POWER_APPLY_TIMEOUT;
     let queued = match (method, path) {
+        ("POST", path) if path.starts_with("/api/v1/alerts/") && path.ends_with("/mute") => {
+            let Some(alert_id) = parse_alert_mute_path(path) else {
+                write_error_body(&mut body, "invalid_alert", "invalid alert id", false, None);
+                write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+                return Ok(());
+            };
+            match parse_http_mute_alert_request(alert_id, request_body) {
+                Ok(command) => {
+                    await_command_result = true;
+                    queue_lan_command(LanManagementCommand::MuteAlert(command))
+                }
+                Err(err) => {
+                    write_error_body(&mut body, err.code(), err.message(), false, None);
+                    write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+                    return Ok(());
+                }
+            }
+        }
+        ("POST", path) if path.starts_with("/api/v1/alerts/") => {
+            write_error_body(
+                &mut body,
+                "invalid_alert",
+                "invalid alert mute path",
+                false,
+                None,
+            );
+            write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+            return Ok(());
+        }
         ("POST", "/api/v1/wifi-config") => match parse_http_wifi_config_request(request_body) {
             Ok(secret) => queue_lan_command(LanManagementCommand::SetWifi(secret)),
             Err(err) => {
@@ -1085,6 +1141,10 @@ async fn handle_http_write(
                         write_http_response(socket, "200 OK", json.as_str(), origin).await?;
                         return Ok(());
                     }
+                    LanCommandResult::AlertConflict(json) => {
+                        write_http_response(socket, "409 Conflict", json.as_str(), origin).await?;
+                        return Ok(());
+                    }
                     LanCommandResult::AdvancedPowerValidation { code, message } => {
                         write_error_body(&mut body, code, message, false, None);
                         write_http_response(socket, "400 Bad Request", body.as_str(), origin)
@@ -1143,6 +1203,16 @@ async fn handle_http_write(
     let _ = body.push_str(r#"{"accepted":true}"#);
     write_http_response(socket, "202 Accepted", body.as_str(), origin).await?;
     Ok(())
+}
+
+fn parse_alert_mute_path(path: &str) -> Option<&str> {
+    let alert_id = path
+        .strip_prefix("/api/v1/alerts/")?
+        .strip_suffix("/mute")?;
+    if alert_id.is_empty() || alert_id.contains('/') {
+        return None;
+    }
+    Some(alert_id)
 }
 
 async fn handle_status_sse(
@@ -1463,8 +1533,8 @@ pub(crate) const fn status_push_interval_millis_for_test() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        diag_package_mask, parse_diag_snapshot_query_packages, split_request_target,
-        REQUEST_TARGET_CAP,
+        diag_package_mask, parse_alert_mute_path, parse_diag_snapshot_query_packages,
+        split_request_target, REQUEST_TARGET_CAP,
     };
 
     #[test]
@@ -1511,6 +1581,24 @@ mod tests {
 
         let packages = parse_diag_snapshot_query_packages(Some("package=derived.power"));
         assert_eq!(diag_package_mask(packages.as_slice()), 0);
+    }
+
+    #[test]
+    fn alert_mute_path_rejects_missing_or_nested_alert_ids() {
+        assert_eq!(
+            parse_alert_mute_path("/api/v1/alerts/module_fault/mute"),
+            Some("module_fault")
+        );
+        assert_eq!(parse_alert_mute_path("/api/v1/alerts/mute"), None);
+        assert_eq!(parse_alert_mute_path("/api/v1/alerts//mute"), None);
+        assert_eq!(
+            parse_alert_mute_path("/api/v1/alerts/module/fault/mute"),
+            None
+        );
+        assert_eq!(
+            parse_alert_mute_path("/api/v1/alerts/module_fault/mute/"),
+            None
+        );
     }
 }
 

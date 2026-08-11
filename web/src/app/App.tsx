@@ -1,6 +1,7 @@
 import {
   Activity,
   AlertTriangle,
+  BellRing,
   BatteryFull,
   BatteryLow,
   BatteryMedium,
@@ -33,6 +34,8 @@ import {
   Trash2,
   Usb,
   Wifi,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import {
@@ -54,17 +57,23 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   bindDevdDevice,
   getDevdDeviceDiagSnapshot,
+  getDevdDeviceAlerts,
+  getDeviceAlerts,
   getIdentity,
   isHostedHttpServiceApp,
   isPublicStaticApp,
   listDevdDevices,
   normalizeBaseUrl,
+  muteDevdDeviceAlert,
+  muteDeviceAlert,
   releaseDevdTpsEnableInterlock,
   subscribeDevdDeviceEvents,
   toErrorEnvelope,
 } from "../api/client";
 import type {
   AdvancedPowerSettings,
+  ActiveAlert,
+  ActiveAlertsSnapshot,
   ChargeControlDetail,
   DeviceRecord,
   DeviceSettings,
@@ -127,6 +136,7 @@ type Route = {
     | "fleet"
     | "connect"
     | "overview"
+    | "alerts"
     | "power"
     | "battery"
     | "thermal"
@@ -238,6 +248,7 @@ type UpsHardwareCapability = {
 
 const deviceSections = [
   { id: "overview", label: "Overview", icon: Gauge },
+  { id: "alerts", label: "Alerts", icon: BellRing },
   { id: "power", label: "Power", icon: PlugZap },
   { id: "battery", label: "Battery", icon: BatteryCharging },
   { id: "thermal", label: "Thermal", icon: Thermometer },
@@ -325,6 +336,7 @@ export function App({
     () => fleetEntries.map((entry) => entry.record),
     [fleetEntries],
   );
+  const fleetAlerts = useFleetActiveAlerts(fleetRecords);
   const registrySelected = route.deviceId
     ? (registry.records.find(
         (record) => record.target.deviceId === route.deviceId,
@@ -335,6 +347,7 @@ export function App({
     registry.records,
     fleetEntries,
   );
+  const activeAlerts = useActiveAlertsSnapshot(selected);
   const [navOpen, setNavOpen] = useState(false);
   const hydratedTemporaryDeviceIds = useRef(new Set<string>());
 
@@ -455,7 +468,11 @@ export function App({
       <main
         className={`main-surface ${route.section === "connect" ? "connect-adapt-command" : ""}`}
       >
-        <TopBar records={fleetRecords} selected={selected} />
+        <TopBar
+          records={fleetRecords}
+          selected={selected}
+          activeAlertsByDevice={fleetAlerts.snapshots}
+        />
         {renderRoute(
           route,
           fleetEntries,
@@ -463,6 +480,7 @@ export function App({
           resolvedInitialDevdTarget || undefined,
           hostedHttpServiceApp,
           devdDiscovery,
+          activeAlerts,
         )}
       </main>
     </div>
@@ -476,6 +494,7 @@ function renderRoute(
   initialDevdTarget?: string,
   hostedHttpServiceApp?: boolean,
   devdDiscovery?: SharedDevdDiscovery,
+  activeAlerts?: ActiveAlertsViewState,
 ) {
   if (route.section === "connect") {
     return (
@@ -500,6 +519,8 @@ function renderRoute(
   if (!selected) return <MissingDevice />;
 
   switch (route.section) {
+    case "alerts":
+      return <AlertsPage record={selected} state={activeAlerts!} />;
     case "power":
       return <PowerPage record={selected} />;
     case "battery":
@@ -1136,24 +1157,37 @@ function ExternalNavLink({
 function TopBar({
   records,
   selected,
+  activeAlertsByDevice,
 }: {
   records: DeviceRecord[];
   selected: DeviceRecord | null;
+  activeAlertsByDevice: Record<string, ActiveAlertsSnapshot>;
 }) {
   const counts = useMemo(() => {
-    const severities = records.map(deviceSeverity);
+    const severities = records.map(
+      (record) =>
+        activeAlertSeverity(activeAlertsByDevice[record.target.deviceId] ?? null),
+    );
     return {
       total: records.length,
       online: records.filter((record) => record.connectionState === "online")
         .length,
       critical: severities.filter((severity) => severity === "critical").length,
       warning: severities.filter((severity) => severity === "warning").length,
-      offline: severities.filter((severity) => severity === "offline").length,
+      offline: records.filter((record) => deviceSeverity(record) === "offline").length,
     };
-  }, [records]);
+  }, [activeAlertsByDevice, records]);
 
   const title = selected ? selected.target.alias : "UPS Fleet";
   const eyebrow = selected ? selected.target.location : "Fleet";
+  const alertTargetDeviceId = (severity: "critical" | "warning") =>
+    records.find(
+      (record) =>
+        activeAlertSeverity(activeAlertsByDevice[record.target.deviceId] ?? null) ===
+        severity,
+    )?.target.deviceId ?? null;
+  const criticalTarget = alertTargetDeviceId("critical");
+  const warningTarget = alertTargetDeviceId("warning");
 
   return (
     <header className="topbar">
@@ -1168,11 +1202,21 @@ function TopBar({
           label="Critical"
           value={counts.critical}
           tone={counts.critical > 0 ? "critical" : "ok"}
+          onClick={
+            counts.critical > 0 && criticalTarget
+              ? () => navigate(deviceHref(criticalTarget, "alerts"))
+              : undefined
+          }
         />
         <Metric
           label="Warning"
           value={counts.warning}
           tone={counts.warning > 0 ? "warning" : "ok"}
+          onClick={
+            counts.warning > 0 && warningTarget
+              ? () => navigate(deviceHref(warningTarget, "alerts"))
+              : undefined
+          }
         />
         <Metric
           label="Offline"
@@ -1474,6 +1518,23 @@ function rememberedHttpBaseUrl(record: DeviceRecord): string | null {
       ? record.target.baseUrl
       : null)
   );
+}
+
+function rememberedHttpBaseUrls(record: DeviceRecord): string[] {
+  const candidates = [
+    record.target.rememberedChannels?.http?.baseUrl,
+    record.target.rememberedChannels?.http?.fallbackBaseUrl,
+    (record.target.transport ?? "http") === "http"
+      ? record.target.baseUrl
+      : null,
+  ];
+  const result: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const baseUrl = normalizeBaseUrl(candidate);
+    if (baseUrl && !result.includes(baseUrl)) result.push(baseUrl);
+  }
+  return result;
 }
 
 function rememberedDevdBaseUrl(record: DeviceRecord): string | null {
@@ -3546,6 +3607,550 @@ function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
       </div>
     </section>
   );
+}
+
+export const ACTIVE_ALERT_REFRESH_MS = 2_000;
+export const ACTIVE_ALERT_REQUEST_TIMEOUT_MS = 1_500;
+
+export function activeAlertSeverity(
+  snapshot: ActiveAlertsSnapshot | null,
+): "warning" | "critical" | null {
+  if (!snapshot || snapshot.alerts.length === 0) return null;
+  return snapshot.alerts.some((alert) => alert.severity === "critical")
+    ? "critical"
+    : "warning";
+}
+
+export function audibleAlertCount(snapshot: ActiveAlertsSnapshot | null): number {
+  return snapshot?.alerts.filter((alert) => alert.sound_state === "audible").length ?? 0;
+}
+
+type FleetActiveAlertEntry = {
+  record: DeviceRecord;
+  snapshot: ActiveAlertsSnapshot;
+  lastUpdated: string | null;
+  refreshError: string | null;
+};
+
+type FleetActiveAlertsState = {
+  snapshots: Record<string, ActiveAlertsSnapshot>;
+  active: FleetActiveAlertEntry[];
+};
+
+function useFleetActiveAlerts(records: DeviceRecord[]): FleetActiveAlertsState {
+  const { getSerialAlerts } = useDeviceRegistry();
+  const recordsRef = useRef(records);
+  recordsRef.current = records;
+  const [snapshots, setSnapshots] = useState<
+    Record<string, ActiveAlertsSnapshot>
+  >({});
+  const [lastUpdated, setLastUpdated] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const refreshGeneration = useRef(0);
+  const refreshInFlight = useRef<Promise<void> | null>(null);
+  const recordKey = records
+    .map((record) =>
+      [
+        record.target.deviceId,
+        record.connectionState,
+        record.target.transport,
+        record.target.baseUrl,
+        record.target.rememberedChannels?.devd?.baseUrl ?? "",
+        record.target.rememberedChannels?.http?.baseUrl ?? "",
+        record.target.rememberedChannels?.http?.fallbackBaseUrl ?? "",
+        record.serial?.source ?? "",
+      ].join(":"),
+    )
+    .sort()
+    .join("|");
+
+  const refresh = useCallback(() => {
+    if (refreshInFlight.current) return refreshInFlight.current;
+    const request = (async () => {
+      const generation = ++refreshGeneration.current;
+      const currentRecords = recordsRef.current;
+      const results = await Promise.all(
+        currentRecords.map(async (record) => {
+          const targets = alertControlTargets(record);
+          if (record.connectionState === "offline" || targets.length === 0)
+            return { record, snapshot: null, error: null };
+          try {
+            const snapshot = await readAlertsFromTargets(targets, getSerialAlerts);
+            return { record, snapshot, error: null };
+          } catch (cause) {
+            return {
+              record,
+              snapshot: null,
+              error: alertErrorMessage(cause),
+              clearSnapshot: alertErrorClearsSnapshot(cause),
+            };
+          }
+        }),
+      );
+      if (generation !== refreshGeneration.current) return;
+      const liveIds = new Set(currentRecords.map((record) => record.target.deviceId));
+      setSnapshots((current) => {
+        const next = Object.fromEntries(
+          Object.entries(current).filter(([deviceId]) => liveIds.has(deviceId)),
+        );
+        for (const result of results) {
+          const deviceId = result.record.target.deviceId;
+          if (result.snapshot) next[deviceId] = result.snapshot;
+          else if (!result.error || result.clearSnapshot) delete next[deviceId];
+        }
+        return next;
+      });
+      setLastUpdated((current) => {
+        const next = { ...current };
+        const now = new Date().toISOString();
+        for (const result of results) {
+          const deviceId = result.record.target.deviceId;
+          if (result.snapshot) next[deviceId] = now;
+          if (!liveIds.has(deviceId)) delete next[deviceId];
+        }
+        return next;
+      });
+      setErrors((current) => {
+        const next = { ...current };
+        for (const result of results) {
+          const deviceId = result.record.target.deviceId;
+          if (result.error) next[deviceId] = result.error;
+          else delete next[deviceId];
+        }
+        for (const deviceId of Object.keys(next)) {
+          if (!liveIds.has(deviceId)) delete next[deviceId];
+        }
+        return next;
+      });
+    })();
+    const trackedRequest = request.finally(() => {
+      if (refreshInFlight.current === trackedRequest) refreshInFlight.current = null;
+    });
+    refreshInFlight.current = trackedRequest;
+    return trackedRequest;
+  }, [getSerialAlerts]);
+
+  useEffect(() => {
+    refreshGeneration.current += 1;
+    refreshInFlight.current = null;
+    void refresh();
+    return () => {
+      // Drop results from the previous fleet/transport set before it can repopulate stale badges.
+      refreshGeneration.current += 1;
+      refreshInFlight.current = null;
+    };
+  }, [recordKey, refresh]);
+
+  useEffect(() => {
+    const interval = window.setInterval(
+      () => void refresh(),
+      ACTIVE_ALERT_REFRESH_MS,
+    );
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [refresh]);
+
+  const active = records.flatMap((record) => {
+    const snapshot = snapshots[record.target.deviceId];
+    if (!snapshot || snapshot.alerts.length === 0) return [];
+    return [
+      {
+        record,
+        snapshot,
+        lastUpdated: lastUpdated[record.target.deviceId] ?? null,
+        refreshError: errors[record.target.deviceId] ?? null,
+      },
+    ];
+  });
+  return { snapshots, active };
+}
+
+type ActiveAlertsViewState = {
+  snapshot: ActiveAlertsSnapshot | null;
+  loading: boolean;
+  error: string | null;
+  lastUpdated: string | null;
+  refresh: (options?: {
+    background?: boolean;
+    preserveError?: boolean;
+  }) => Promise<void>;
+};
+
+function useActiveAlertsSnapshot(
+  record: DeviceRecord | null,
+): ActiveAlertsViewState {
+  const { getSerialAlerts } = useDeviceRegistry();
+  const deviceId = record?.target.deviceId ?? null;
+  const connectionState = record?.connectionState ?? "offline";
+  const [snapshot, setSnapshot] = useState<ActiveAlertsSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const refreshGeneration = useRef(0);
+  const refreshInFlight = useRef<Promise<void> | null>(null);
+  const targets = useMemo(
+    () => (record ? alertControlTargets(record) : []),
+    [
+      deviceId,
+      record?.serial?.baseUrl,
+      record?.serial?.source,
+      record?.target.baseUrl,
+      record?.target.rememberedChannels?.devd?.baseUrl,
+      record?.target.rememberedChannels?.devd?.devdDeviceId,
+      record?.target.rememberedChannels?.http?.baseUrl,
+      record?.target.rememberedChannels?.http?.fallbackBaseUrl,
+      record?.target.transport,
+    ],
+  );
+
+  const refresh = useCallback(
+    (options?: { background?: boolean; preserveError?: boolean }) => {
+      if (refreshInFlight.current) return refreshInFlight.current;
+      const request = (async () => {
+        const generation = ++refreshGeneration.current;
+        if (!deviceId || connectionState === "offline") {
+          setSnapshot(null);
+          setLastUpdated(null);
+          setLoading(false);
+          setError(
+            deviceId
+              ? "Device offline. Reconnect to view or mute active alerts."
+              : null,
+          );
+          return;
+        }
+        if (targets.length === 0) {
+          setSnapshot(null);
+          setLastUpdated(null);
+          setLoading(false);
+          setError("This connected device does not expose the alerts contract yet.");
+          return;
+        }
+        if (!options?.background) setLoading(true);
+        try {
+          const nextSnapshot = await readAlertsFromTargets(targets, getSerialAlerts);
+          if (generation !== refreshGeneration.current) return;
+          setSnapshot(nextSnapshot);
+          setLastUpdated(new Date().toISOString());
+          if (!options?.preserveError) setError(null);
+        } catch (cause) {
+          if (generation !== refreshGeneration.current) return;
+          if (alertErrorClearsSnapshot(cause)) {
+            setSnapshot(null);
+            setLastUpdated(null);
+          }
+          setError(alertErrorMessage(cause));
+        } finally {
+          if (generation === refreshGeneration.current) setLoading(false);
+        }
+      })();
+      const trackedRequest = request.finally(() => {
+        if (refreshInFlight.current === trackedRequest) refreshInFlight.current = null;
+      });
+      refreshInFlight.current = trackedRequest;
+      return trackedRequest;
+    },
+    [connectionState, deviceId, getSerialAlerts, targets],
+  );
+
+  useEffect(() => {
+    setSnapshot(null);
+    setLastUpdated(null);
+    setError(null);
+    void refresh();
+    return () => {
+      // Invalidate an in-flight read before the selected device or transport changes.
+      refreshGeneration.current += 1;
+      refreshInFlight.current = null;
+    };
+  }, [deviceId, refresh]);
+
+  useEffect(() => {
+    if (!deviceId || connectionState === "offline" || targets.length === 0)
+      return undefined;
+    const interval = window.setInterval(
+      () => void refresh({ background: true }),
+      ACTIVE_ALERT_REFRESH_MS,
+    );
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible")
+        void refresh({ background: true });
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [connectionState, deviceId, refresh, targets]);
+
+  return { snapshot, loading, error, lastUpdated, refresh };
+}
+
+const alertCopy: Record<ActiveAlert["alert_id"], { title: string; summary: string }> = {
+  mains_absent_dc: { title: "Mains absent", summary: "DC input power is unavailable." },
+  high_stress: { title: "High stress", summary: "The system is operating under thermal stress." },
+  battery_low_no_mains: { title: "Battery low", summary: "Battery is low with no mains input." },
+  battery_low_with_mains: { title: "Battery low", summary: "Battery remains low while mains is present." },
+  shutdown_protection: { title: "Shutdown protection", summary: "A protection shutdown is active." },
+  io_over_voltage: { title: "Output over-voltage", summary: "An output voltage limit was exceeded." },
+  io_over_current: { title: "Output over-current", summary: "An output current limit was exceeded." },
+  module_fault: { title: "Module fault", summary: "A required hardware module reported a fault." },
+  battery_protection: { title: "Battery protection", summary: "The battery protection path is active." },
+};
+
+function AlertsPage({
+  record,
+  state,
+}: {
+  record: DeviceRecord;
+  state: ActiveAlertsViewState;
+}) {
+  const { muteSerialAlert } = useDeviceRegistry();
+  const { snapshot, loading, error, lastUpdated, refresh } = state;
+  const [muting, setMuting] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const targets = useMemo(() => alertControlTargets(record), [record]);
+
+  const mute = async (alert: ActiveAlert) => {
+    if (targets.length === 0 || error || alert.sound_state === "muted") return;
+    setMuting(alert.alert_id);
+    setActionError(null);
+    try {
+      await muteAlertFromTargets(
+        targets,
+        alert,
+        muteSerialAlert,
+      );
+      await refresh();
+    } catch (cause) {
+      setActionError(alertErrorMessage(cause));
+      await refresh({ preserveError: true });
+    } finally {
+      setMuting(null);
+    }
+  };
+
+  const alerts = snapshot?.alerts ?? [];
+  return (
+    <section className="page-flow alerts-page" data-evidence-target="device-alerts">
+      <DeviceStatusBand record={record} />
+      <section className="info-panel alerts-panel">
+        <div className="alerts-heading">
+          <div>
+            <span className="eyebrow">Active alerts</span>
+            <h2>{alerts.length === 0 ? "No active alerts" : `${alerts.length} active`}</h2>
+            <span className="alerts-live-status">
+              Auto-updates every 2 seconds
+              {lastUpdated ? ` · updated ${timeAgo(lastUpdated)}` : ""}
+            </span>
+          </div>
+          <button className="icon-button" type="button" onClick={() => void refresh()} title="Refresh alerts" aria-label="Refresh alerts">
+            <RefreshCw size={18} className={loading ? "spin-icon" : ""} />
+          </button>
+        </div>
+        {error || actionError ? <p className="form-message is-error" role="alert">{actionError ?? error}</p> : null}
+        {!loading && alerts.length === 0 && !error ? (
+          <div className="alerts-empty"><BellRing size={24} /><span>All monitored conditions are clear.</span></div>
+        ) : null}
+        <div className="alerts-list">
+          {alerts.map((alert) => {
+            const copy = alertCopy[alert.alert_id];
+            const busy = muting === alert.alert_id;
+            return (
+              <article className={`alert-row is-${alert.severity}`} key={`${alert.alert_id}:${alert.instance_id}`}>
+                <AlertTriangle size={20} aria-hidden="true" />
+                <div className="alert-row-copy">
+                  <div><strong>{copy.title}</strong><span className="alert-severity">{alert.severity}</span></div>
+                  <p>{alert.summary ?? copy.summary}</p>
+                </div>
+                <div className="alert-sound">
+                  <span>{alertSoundLabel(alert.sound_state)}</span>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    disabled={Boolean(error) || alert.sound_state === "muted" || busy}
+                    onClick={() => void mute(alert)}
+                    title={error ? "Refresh alerts before muting" : alert.sound_state === "audible" ? "Mute this alert" : alertSoundLabel(alert.sound_state)}
+                    aria-label={`Mute ${copy.title}`}
+                  >
+                    {busy ? <Loader2 className="spin-icon" size={18} /> : alert.sound_state === "audible" ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+type AlertControlTarget =
+  | { kind: "devd"; baseUrl: string; deviceId: string }
+  | { kind: "http"; baseUrls: string[] }
+  | { kind: "serial"; deviceId: string };
+
+function alertControlTargets(record: DeviceRecord): AlertControlTarget[] {
+  const targets: AlertControlTarget[] = [];
+  const seen = new Set<string>();
+  const add = (target: AlertControlTarget) => {
+    const key = target.kind === "http"
+      ? `${target.kind}:${target.baseUrls.join(",")}`
+      : `${target.kind}:${target.deviceId}:${"baseUrl" in target ? target.baseUrl : ""}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      targets.push(target);
+    }
+  };
+  const httpBaseUrls = rememberedHttpBaseUrls(record);
+  const active = activeRecordTransport(record);
+  const addTransport = (transport: DeviceChannelTransport) => {
+    if (transport === "serial") {
+      if (record.serial?.source === "web_serial") {
+        add({ kind: "serial", deviceId: record.target.deviceId });
+      } else if (record.target.mock && record.serial?.source === "mock") {
+        add({ kind: "http", baseUrls: [`mock:usb-alerts:${record.target.deviceId}`] });
+      }
+      return;
+    }
+    if (transport === "devd") {
+      const baseUrl = record.serial?.connected && record.serial.source === "devd"
+        ? record.serial.baseUrl
+        : record.target.transport === "devd"
+          ? record.target.baseUrl
+          : record.target.rememberedChannels?.devd?.baseUrl;
+      if (baseUrl) {
+        add({
+          kind: "devd",
+          baseUrl,
+          deviceId:
+            record.target.rememberedChannels?.devd?.devdDeviceId ??
+            record.target.deviceId,
+        });
+      }
+      return;
+    }
+    if (httpBaseUrls.length > 0) add({ kind: "http", baseUrls: httpBaseUrls });
+  };
+  if (active) addTransport(active);
+  for (const transport of ["devd", "http", "serial"] as DeviceChannelTransport[]) {
+    if (transport !== active) addTransport(transport);
+  }
+  return targets;
+}
+
+async function withAlertTargetFallback<T>(
+  targets: AlertControlTarget[],
+  operation: (target: AlertControlTarget) => Promise<T>,
+): Promise<T> {
+  let lastError: unknown = null;
+  for (const target of targets) {
+    try {
+      return await operation(target);
+    } catch (cause) {
+      lastError = cause;
+      if (!toErrorEnvelope(cause).retryable) throw cause;
+    }
+  }
+  throw lastError ?? new Error("No alerts transport is available");
+}
+
+async function withAlertHttpFallback<T>(
+  baseUrls: string[],
+  operation: (baseUrl: string) => Promise<T>,
+): Promise<T> {
+  let lastError: unknown = null;
+  for (const baseUrl of baseUrls) {
+    try {
+      return await operation(baseUrl);
+    } catch (cause) {
+      lastError = cause;
+      if (!toErrorEnvelope(cause).retryable) throw cause;
+    }
+  }
+  throw lastError ?? new Error("No HTTP alerts transport is available");
+}
+
+async function readAlertsFromTargets(
+  targets: AlertControlTarget[],
+  getSerialAlerts: (deviceId: string) => Promise<ActiveAlertsSnapshot>,
+): Promise<ActiveAlertsSnapshot> {
+  return withAlertTargetFallback(targets, (target) =>
+    target.kind === "devd"
+      ? getDevdDeviceAlerts(target.baseUrl, target.deviceId, {
+          timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
+        })
+      : target.kind === "serial"
+        ? getSerialAlerts(target.deviceId)
+        : withAlertHttpFallback(
+            target.baseUrls,
+            (baseUrl) =>
+              getDeviceAlerts(baseUrl, {
+                timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
+              }),
+          ),
+  );
+}
+
+async function muteAlertFromTargets(
+  targets: AlertControlTarget[],
+  alert: ActiveAlert,
+  muteSerialAlert: (
+    deviceId: string,
+    alertId: string,
+    instanceId: number,
+  ) => Promise<unknown>,
+): Promise<void> {
+  await withAlertTargetFallback(targets, (target) =>
+    target.kind === "devd"
+      ? muteDevdDeviceAlert(
+          target.baseUrl,
+          target.deviceId,
+          alert.alert_id,
+          alert.instance_id,
+        )
+      : target.kind === "serial"
+        ? muteSerialAlert(target.deviceId, alert.alert_id, alert.instance_id)
+        : withAlertHttpFallback(
+            target.baseUrls,
+            (baseUrl) => muteDeviceAlert(baseUrl, alert.alert_id, alert.instance_id),
+          ),
+  );
+}
+
+function alertErrorClearsSnapshot(cause: unknown): boolean {
+  const code = toErrorEnvelope(cause).code;
+  return code === "unsupported" || code === "unsupported_operation";
+}
+
+function alertSoundLabel(sound: ActiveAlert["sound_state"]): string {
+  if (sound === "audible") return "Sounding";
+  if (sound === "muted") return "Muted";
+  if (sound === "system_silent") return "System silent";
+  return "Policy silent";
+}
+
+function alertErrorMessage(cause: unknown): string {
+  const envelope = toErrorEnvelope(cause);
+  if (
+    envelope.code === "unsupported_operation" ||
+    envelope.code === "unsupported"
+  ) {
+    return "Alerts are unavailable on this firmware. Upgrade the device to enable per-alert muting.";
+  }
+  if (envelope.code.includes("stale")) {
+    return "The alert changed before it could be muted. The list has been refreshed.";
+  }
+  if (envelope.code.includes("inactive")) {
+    return "The alert cleared before it could be muted. The list has been refreshed.";
+  }
+  return `${envelope.code}: ${envelope.message}`;
 }
 
 function PowerPage({ record }: { record: DeviceRecord }) {
@@ -5801,11 +6406,26 @@ function Metric({
   label,
   value,
   tone = "neutral",
+  onClick,
 }: {
   label: string;
   value: number;
   tone?: "neutral" | "critical" | "warning" | "offline" | "ok";
+  onClick?: () => void;
 }) {
+  if (onClick) {
+    return (
+      <button
+        className={`top-metric is-actionable tone-${tone}`}
+        type="button"
+        onClick={onClick}
+        aria-label={`Open ${value} ${label.toLowerCase()} alerts`}
+      >
+        <span>{label}</span>
+        <strong>{value}</strong>
+      </button>
+    );
+  }
   return (
     <div className={`top-metric tone-${tone}`}>
       <span>{label}</span>

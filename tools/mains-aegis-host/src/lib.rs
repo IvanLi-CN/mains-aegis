@@ -277,6 +277,7 @@ struct DevdState {
     device_host_power: HashMap<String, DeviceHostPowerRuntime>,
     scan_trace: VecDeque<SerialTraceEntry>,
     persisted_device_trace: HashMap<String, VecDeque<SerialTraceEntry>>,
+    mock_muted_alerts: HashMap<String, u32>,
 }
 
 #[derive(Debug, Default)]
@@ -875,6 +876,11 @@ struct AdvancedPowerRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct MuteAlertRequest {
+    instance_id: u32,
+}
+
+#[derive(Debug, Deserialize)]
 struct SettingsTargetQuery {
     device_id: Option<String>,
     lease_id: Option<String>,
@@ -1002,6 +1008,11 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
         .route("/api/v1/devices/{id}/binding", delete(unbind_device))
         .route("/api/v1/devices/{id}/identity", get(device_identity))
         .route("/api/v1/devices/{id}/status", get(device_status))
+        .route("/api/v1/devices/{id}/alerts", get(device_alerts))
+        .route(
+            "/api/v1/devices/{id}/alerts/{alert_id}/mute",
+            post(device_mute_alert),
+        )
         .route(
             "/api/v1/devices/{id}/charge-control",
             get(device_charge_control),
@@ -1862,6 +1873,32 @@ async fn dispatch_ipc_request(
             let query = serde_json::from_value(params).unwrap_or_default();
             json_result(device_status(Query(query), State(state.clone()), Path(id)).await)
         }
+        "device.alerts.list" => {
+            let id = require_param(&params, "device_id")?;
+            match device_alerts(State(state.clone()), Path(id)).await {
+                Ok(Json(result)) => Ok(result),
+                Err(error) => alert_ipc_error_result(error),
+            }
+        }
+        "device.alerts.mute" => {
+            let id = require_param(&params, "device_id")?;
+            let alert_id = require_param(&params, "alert_id")?;
+            let instance_id = params
+                .get("instance_id")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| anyhow::anyhow!("instance_id is required"))?;
+            match device_mute_alert(
+                State(state.clone()),
+                Path((id, alert_id)),
+                Json(MuteAlertRequest { instance_id }),
+            )
+            .await
+            {
+                Ok(Json(result)) => Ok(result),
+                Err(error) => alert_ipc_error_result(error),
+            }
+        }
         "device.diag_snapshot" => {
             let id = require_param(&params, "device_id")?;
             let params: DeviceDiagSnapshotParams =
@@ -2053,6 +2090,17 @@ async fn dispatch_ipc_request(
             json_result(reset_advanced_power(State(state.clone()), Query(query)).await)
         }
         _ => anyhow::bail!("unsupported IPC method: {method}"),
+    }
+}
+
+fn alert_ipc_error_result(error: HttpError) -> anyhow::Result<Value> {
+    if matches!(error.1, StatusCode::CONFLICT | StatusCode::NOT_IMPLEMENTED) {
+        Ok(error
+            .0
+            .details
+            .unwrap_or_else(|| json!({"ok": false, "result": error.0.code})))
+    } else {
+        Err(error.into())
     }
 }
 
@@ -2840,6 +2888,13 @@ fn parse_lan_http_json_response(
     if !(200..300).contains(&status) {
         let status_code = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
         let trimmed_body = body.trim();
+        if status == StatusCode::NOT_FOUND.as_u16()
+            && (path == "/api/v1/alerts" || path.starts_with("/api/v1/alerts/"))
+        {
+            return Err(HttpError::unsupported(
+                "alerts are unavailable on this firmware",
+            ));
+        }
         if !trimmed_body.is_empty() {
             if let Ok(value) = serde_json::from_str::<Value>(trimmed_body) {
                 if let Some(error) = value.get("error") {
@@ -2863,6 +2918,19 @@ fn parse_lan_http_json_response(
                         },
                         status_code,
                     ));
+                }
+                if status == StatusCode::CONFLICT.as_u16() {
+                    let alert_result = value
+                        .get("result")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                    if let Some(result @ ("stale" | "inactive")) = alert_result.as_deref() {
+                        return Err(HttpError::conflict_with_details(
+                            result,
+                            format!("alert mute returned {result}"),
+                            value,
+                        ));
+                    }
                 }
                 return Err(HttpError(
                     ApiError {
@@ -4219,6 +4287,152 @@ async fn device_status(
         &transport,
         Some(freshness_budget_ms),
     )))
+}
+
+async fn device_alerts(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    ensure_bound_device_record(&state, &id)?;
+    let (transport, lan_address) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (device.transport.clone(), device.lan_address.clone())
+    };
+    let alerts = match transport {
+        DeviceTransport::Mock => {
+            let muted = state
+                .inner
+                .lock()
+                .expect("state lock")
+                .mock_muted_alerts
+                .get(&format!("{id}:mains_absent_dc"))
+                .copied()
+                == Some(1);
+            json!({
+                "alerts": [{
+                    "alert_id": "mains_absent_dc",
+                    "instance_id": 1,
+                    "severity": "warning",
+                    "sound_state": if muted { "muted" } else { "audible" },
+                    "summary": "RUNNING ON BATTERY"
+                }]
+            })
+        }
+        DeviceTransport::Lan => {
+            let address = lan_address.ok_or_else(|| {
+                HttpError::retryable("lan_address_missing", "LAN device has no address")
+            })?;
+            lan_http_json(&address, "GET", "/api/v1/alerts", None).await?
+        }
+        DeviceTransport::NativeSerial => {
+            send_device_cdc_request(&state, &id, "get_alerts", "devd-alerts")
+                .await
+                .map_err(normalize_alert_transport_error)?
+        }
+    };
+    Ok(Json(alerts))
+}
+
+async fn device_mute_alert(
+    State(state): State<AppState>,
+    Path((id, alert_id)): Path<(String, String)>,
+    Json(input): Json<MuteAlertRequest>,
+) -> Result<Json<Value>, HttpError> {
+    ensure_bound_device_record(&state, &id)?;
+    let (transport, lan_address) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (device.transport.clone(), device.lan_address.clone())
+    };
+    let result = match transport {
+        DeviceTransport::Mock => {
+            if alert_id != "mains_absent_dc" {
+                return Err(HttpError::conflict_with_details(
+                    "inactive",
+                    "alert is not active",
+                    json!({
+                        "ok": false,
+                        "alert_id": alert_id,
+                        "instance_id": input.instance_id,
+                        "result": "inactive"
+                    }),
+                ));
+            }
+            if input.instance_id != 1 {
+                return Err(HttpError::conflict_with_details(
+                    "stale",
+                    "alert instance is stale",
+                    json!({
+                        "ok": false,
+                        "alert_id": alert_id,
+                        "instance_id": input.instance_id,
+                        "current_instance_id": 1,
+                        "result": "stale"
+                    }),
+                ));
+            }
+            let previous = state
+                .inner
+                .lock()
+                .expect("state lock")
+                .mock_muted_alerts
+                .insert(format!("{id}:{alert_id}"), input.instance_id);
+            json!({
+                "ok": true,
+                "alert_id": alert_id,
+                "instance_id": input.instance_id,
+                "severity": "warning",
+                "sound_state": "muted",
+                "summary": "RUNNING ON BATTERY",
+                "result": if previous == Some(input.instance_id) { "already_muted" } else { "muted" }
+            })
+        }
+        DeviceTransport::Lan => {
+            let address = lan_address.ok_or_else(|| {
+                HttpError::retryable("lan_address_missing", "LAN device has no address")
+            })?;
+            let path = format!("/api/v1/alerts/{alert_id}/mute");
+            lan_http_json(
+                &address,
+                "POST",
+                &path,
+                Some(&json!({"instance_id": input.instance_id})),
+            )
+            .await?
+        }
+        DeviceTransport::NativeSerial => send_device_cdc_request_frame(
+            &state,
+            &id,
+            json!({
+                "type": "request",
+                "op": "mute_alert",
+                "alert_id": alert_id,
+                "instance_id": input.instance_id,
+            }),
+            "devd-alert-mute",
+        )
+        .await
+        .map_err(normalize_alert_transport_error)?,
+    };
+    let alert_result = result
+        .get("result")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if let Some(code @ ("stale" | "inactive")) = alert_result.as_deref() {
+        return Err(HttpError::conflict_with_details(
+            code,
+            format!("alert mute returned {code}"),
+            result,
+        ));
+    }
+    Ok(Json(result))
 }
 
 async fn device_diag_snapshot(
@@ -9253,6 +9467,13 @@ fn error_from_cdc_response(response: &Value) -> HttpError {
         .and_then(Value::as_bool)
         .unwrap_or(true);
     let details = error.and_then(|error| error.get("details")).cloned();
+    if matches!(code, "stale" | "inactive") {
+        return HttpError::conflict_with_details(
+            code,
+            message,
+            details.unwrap_or_else(|| json!({ "ok": false, "result": code })),
+        );
+    }
     if retryable {
         if let Some(details) = details {
             HttpError::retryable_with_details(code, message, details)
@@ -9261,6 +9482,14 @@ fn error_from_cdc_response(response: &Value) -> HttpError {
         }
     } else {
         HttpError::non_retryable_with_details(code, message, details)
+    }
+}
+
+fn normalize_alert_transport_error(error: HttpError) -> HttpError {
+    if error.0.code == "unsupported_operation" {
+        HttpError::unsupported(error.0.message)
+    } else {
+        error
     }
 }
 
@@ -11852,6 +12081,30 @@ impl HttpError {
             StatusCode::NOT_FOUND,
         )
     }
+
+    fn unsupported(message: impl Into<String>) -> Self {
+        Self(
+            ApiError {
+                code: "unsupported".to_string(),
+                message: message.into(),
+                retryable: false,
+                details: Some(json!({ "ok": false, "result": "unsupported" })),
+            },
+            StatusCode::NOT_IMPLEMENTED,
+        )
+    }
+
+    fn conflict_with_details(code: &str, message: impl Into<String>, details: Value) -> Self {
+        Self(
+            ApiError {
+                code: code.to_string(),
+                message: message.into(),
+                retryable: false,
+                details: Some(details),
+            },
+            StatusCode::CONFLICT,
+        )
+    }
 }
 
 impl IntoResponse for HttpError {
@@ -11866,6 +12119,59 @@ mod tests {
 
     fn derived_power_payload(diag: &Value) -> &Value {
         &diag["packages"]["derived.power"]["payload"]
+    }
+
+    #[test]
+    fn cdc_stale_alert_error_preserves_conflict_details() {
+        let error = error_from_cdc_response(&json!({
+            "type": "error",
+            "error": {
+                "code": "stale",
+                "message": "the alert instance is stale",
+                "retryable": false,
+                "details": {
+                    "ok": false,
+                    "alert_id": "module_fault",
+                    "instance_id": 41,
+                    "result": "stale",
+                    "current_instance_id": 42
+                }
+            }
+        }));
+
+        assert_eq!(error.0.code, "stale");
+        assert_eq!(error.1, StatusCode::CONFLICT);
+        assert_eq!(error.0.details.as_ref().unwrap()["result"], "stale");
+        assert_eq!(error.0.details.as_ref().unwrap()["current_instance_id"], 42);
+    }
+
+    #[test]
+    fn cdc_old_firmware_alert_error_maps_to_unsupported_only_in_alert_context() {
+        let generic = error_from_cdc_response(&json!({
+            "type": "error",
+            "error": {
+                "code": "unsupported_operation",
+                "message": "unsupported operation",
+                "retryable": false,
+                "details": null
+            }
+        }));
+
+        assert_eq!(generic.0.code, "unsupported_operation");
+        assert_eq!(generic.1, StatusCode::BAD_REQUEST);
+
+        let alert = normalize_alert_transport_error(generic);
+        assert_eq!(alert.0.code, "unsupported");
+        assert_eq!(alert.1, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(alert.0.details.as_ref().unwrap()["result"], "unsupported");
+    }
+
+    #[test]
+    fn alert_ipc_preserves_machine_readable_unsupported_result() {
+        let result =
+            alert_ipc_error_result(HttpError::unsupported("unsupported operation")).unwrap();
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["result"], "unsupported");
     }
 
     #[test]
@@ -12161,6 +12467,65 @@ mod tests {
 
         assert_eq!(response.0["token_required"], true);
         assert_eq!(response.0["app"]["mode"], "http_service");
+    }
+
+    #[tokio::test]
+    async fn mock_alert_mute_is_instance_bound_and_survives_authoritative_reread() {
+        let state = create_app_state(false);
+        seed_mock_device(&state);
+
+        let before = device_alerts(State(state.clone()), Path("mock-devkit".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(before.0["alerts"][0]["sound_state"], "audible");
+
+        let _ = device_mute_alert(
+            State(state.clone()),
+            Path(("mock-devkit".to_string(), "mains_absent_dc".to_string())),
+            Json(MuteAlertRequest { instance_id: 1 }),
+        )
+        .await
+        .unwrap();
+        let after = device_alerts(State(state.clone()), Path("mock-devkit".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(after.0["alerts"][0]["sound_state"], "muted");
+
+        let duplicate = device_mute_alert(
+            State(state.clone()),
+            Path(("mock-devkit".to_string(), "mains_absent_dc".to_string())),
+            Json(MuteAlertRequest { instance_id: 1 }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(duplicate.0["result"], "already_muted");
+
+        let stale = device_mute_alert(
+            State(state),
+            Path(("mock-devkit".to_string(), "mains_absent_dc".to_string())),
+            Json(MuteAlertRequest { instance_id: 2 }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(stale.0.code, "stale");
+        assert_eq!(stale.1, StatusCode::CONFLICT);
+        assert_eq!(stale.0.details.as_ref().unwrap()["result"], "stale");
+
+        let ipc_state = create_app_state(false);
+        seed_mock_device(&ipc_state);
+        let ipc_result = dispatch_ipc_request(
+            &ipc_state,
+            "device.alerts.mute",
+            json!({
+                "device_id": "mock-devkit",
+                "alert_id": "mains_absent_dc",
+                "instance_id": 2
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ipc_result["ok"], false);
+        assert_eq!(ipc_result["result"], "stale");
     }
 
     #[cfg(unix)]
@@ -13961,6 +14326,35 @@ mod tests {
 
         assert_eq!(error.0.code, "not_found");
         assert_eq!(error.1, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn maps_old_firmware_lan_alert_404_to_unsupported() {
+        let response = b"HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n\r\n{\"error\":{\"code\":\"not_found\"}}";
+
+        let error = parse_lan_http_json_response(response, "GET", "/api/v1/alerts", "192.168.4.25")
+            .unwrap_err();
+
+        assert_eq!(error.0.code, "unsupported");
+        assert_eq!(error.1, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(error.0.details.as_ref().unwrap()["result"], "unsupported");
+    }
+
+    #[test]
+    fn preserves_lan_alert_conflict_result() {
+        let response = b"HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\n\r\n{\"ok\":false,\"alert_id\":\"module_fault\",\"instance_id\":7,\"result\":\"stale\",\"current_instance_id\":8}";
+
+        let error = parse_lan_http_json_response(
+            response,
+            "POST",
+            "/api/v1/alerts/module_fault/mute",
+            "192.168.4.25",
+        )
+        .unwrap_err();
+
+        assert_eq!(error.0.code, "stale");
+        assert_eq!(error.1, StatusCode::CONFLICT);
+        assert_eq!(error.0.details.as_ref().unwrap()["current_instance_id"], 8);
     }
 
     #[test]

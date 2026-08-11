@@ -1,18 +1,21 @@
 use core::convert::Infallible;
 
 use crate::front_panel_logic::{
-    cst816d_vertical_gesture_direction, dashboard_allowed, dashboard_enter_requires_variant_switch,
+    any_alert_button_edge, cst816d_vertical_gesture_direction, dashboard_allowed,
+    dashboard_enter_requires_variant_switch, dashboard_header_entry_target,
     dashboard_page_for_vertical_menu_gesture, dashboard_uses_frame_animation,
-    VerticalGestureDirection, DASHBOARD_VARIANT, SELF_CHECK_VARIANT,
+    map_cst816d_touch_to_landscape_swapped, VerticalGestureDirection, DASHBOARD_VARIANT,
+    SELF_CHECK_VARIANT,
 };
 use crate::front_panel_scene::{
-    self, AudioTestUiState, BeeperPrefs, BeeperSettingTarget, BeeperSettingsTouchTarget,
-    BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardHomeFocus, DashboardMenuStyle,
-    DashboardMenuTouchTarget, DashboardPrimaryPage, DashboardRoute, DashboardShellState,
-    DashboardTouchTarget, ManualChargeLoopbackConfirmTarget, ManualChargeUiAction, MenuItem,
-    SelfCheckCommState, SelfCheckHardwareTarget, SelfCheckOverlay, SelfCheckTouchTarget,
-    SelfCheckUiSnapshot, TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant,
-    UpsMode,
+    self, AlertDetailTouchTarget, AlertPreviewItem, AlertPreviewKind, AlertPreviewSeverity,
+    AlertPreviewSoundState, AudioTestUiState, BeeperPrefs, BeeperSettingTarget,
+    BeeperSettingsTouchTarget, BmsActivationState, BmsRecoveryUiAction, BmsResultKind,
+    DashboardHomeFocus, DashboardHomeTouchTarget, DashboardMenuStyle, DashboardMenuTouchTarget,
+    DashboardPrimaryPage, DashboardRoute, DashboardShellState, DashboardTouchTarget,
+    ManualChargeLoopbackConfirmTarget, ManualChargeUiAction, MenuItem, SelfCheckCommState,
+    SelfCheckHardwareTarget, SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot,
+    TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant, UpsMode,
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
@@ -27,6 +30,9 @@ use esp_hal::spi::{
 use esp_hal::time::{Duration, Instant, Rate};
 use esp_hal::Blocking;
 use gc9307_async::{Config as GcConfig, Orientation, Timer as GcTimer, GC9307C};
+use mains_aegis_firmware::active_alerts::{
+    ActiveAlerts, AlertId, AlertSeverity, AlertSoundState, ALERT_COUNT,
+};
 use mains_aegis_firmware::display_pipeline::{
     DirtyRows, DisplayBufferError, DisplayBuffers, DMA_STAGING_BYTES, FRAME_HEIGHT, FRAME_WIDTH,
 };
@@ -116,6 +122,17 @@ pub enum UiAction {
         prefs: BeeperPrefs,
     },
     ClearBmsActivationResult,
+    MuteAlert {
+        alert_id: AlertId,
+        instance_id: u32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AlertScreen {
+    Closed,
+    List,
+    Detail(AlertPreviewKind),
 }
 
 pub const fn ui_action_triggers_interaction_feedback(action: &UiAction) -> bool {
@@ -407,6 +424,11 @@ where
     dashboard_menu_offset_y: i16,
     dashboard_menu_animation: Option<DashboardMenuAnimation>,
     dashboard_status_dirty: bool,
+    alert_screen: AlertScreen,
+    alert_items: [AlertPreviewItem; ALERT_COUNT],
+    alert_count: usize,
+    alert_selected: usize,
+    alert_detail: Option<AlertPreviewItem>,
     next_dashboard_status_redraw_deadline: Instant,
     next_dashboard_ambient_frame_deadline: Instant,
     beeper_prefs: BeeperPrefs,
@@ -513,6 +535,11 @@ where
             dashboard_menu_offset_y: 0,
             dashboard_menu_animation: None,
             dashboard_status_dirty: false,
+            alert_screen: AlertScreen::Closed,
+            alert_items: [AlertPreviewItem::cleared(AlertPreviewKind::MainsAbsentDc); ALERT_COUNT],
+            alert_count: 0,
+            alert_selected: 0,
+            alert_detail: None,
             next_dashboard_status_redraw_deadline: Instant::now(),
             next_dashboard_ambient_frame_deadline: Instant::now(),
             beeper_prefs: BeeperPrefs::defaults(),
@@ -1165,6 +1192,46 @@ where
         }
     }
 
+    pub fn update_active_alerts(&mut self, alerts: &ActiveAlerts, system_silent: bool) {
+        let previous_items = self.alert_items;
+        let previous_count = self.alert_count;
+        self.alert_count = 0;
+        alerts.for_each_active(system_silent, |alert| {
+            if self.alert_count < ALERT_COUNT {
+                self.alert_items[self.alert_count] = alert_preview_item(alert);
+                self.alert_count += 1;
+            }
+        });
+        self.alert_selected = self.alert_selected.min(self.alert_count.saturating_sub(1));
+        if let AlertScreen::Detail(kind) = self.alert_screen {
+            let current = self.alert_items[..self.alert_count]
+                .iter()
+                .copied()
+                .find(|item| item.kind == kind);
+            self.alert_detail = match (self.alert_detail, current) {
+                // Continue updating the open detail while it refers to the same instance.
+                (Some(previous), Some(item)) if previous.instance_id == item.instance_id => {
+                    Some(item)
+                }
+                // A recurrence is a new instance. Keep the detail bound to the original event
+                // and show its CLEARED state until the user leaves the detail screen.
+                (Some(mut previous), Some(_) | None) => {
+                    previous.cleared = true;
+                    Some(previous)
+                }
+                (None, Some(item)) => Some(item),
+                (None, None) => None,
+            };
+        }
+        if previous_count != self.alert_count || previous_items != self.alert_items {
+            self.needs_redraw = true;
+        }
+    }
+
+    fn alert_indicator(&self) -> Option<AlertPreviewItem> {
+        front_panel_scene::select_alert_preview_indicator(&self.alert_items[..self.alert_count])
+    }
+
     fn set_dashboard_page(&mut self, page: DashboardPrimaryPage) {
         if self.dashboard_page == page {
             return;
@@ -1486,10 +1553,18 @@ where
                         &self.self_check_snapshot,
                     )
                     && now >= self.next_dashboard_ambient_frame_deadline;
+                let audible_alert_frame_due = self.ui_variant == DASHBOARD_VARIANT
+                    && self.dashboard_page == DashboardPrimaryPage::DashboardHome
+                    && self.dashboard_route == DashboardRoute::Home
+                    && self
+                        .alert_indicator()
+                        .is_some_and(|alert| alert.sound == AlertPreviewSoundState::Audible)
+                    && now >= self.next_dashboard_ambient_frame_deadline;
                 let should_render = self.needs_redraw
                     || menu_animation_active
                     || dashboard_status_redraw_due
                     || dashboard_ambient_frame_due
+                    || audible_alert_frame_due
                     || (self.ui_variant == SELF_CHECK_VARIANT && inputs_changed);
                 if should_render {
                     if let Err(e) = self.render_with_log(snapshot, UiLifecycleEvent::RuntimeTick) {
@@ -1503,7 +1578,7 @@ where
                             self.next_dashboard_status_redraw_deadline =
                                 now + DASHBOARD_STATUS_REDRAW_INTERVAL;
                         }
-                        if dashboard_ambient_frame_due {
+                        if dashboard_ambient_frame_due || audible_alert_frame_due {
                             self.next_dashboard_ambient_frame_deadline =
                                 now + DASHBOARD_AMBIENT_ANIMATION_FRAME_INTERVAL;
                         }
@@ -2004,6 +2079,9 @@ where
     }
 
     fn map_touch_to_ui(x_raw: u16, y_raw: u16) -> Option<(u16, u16)> {
+        if matches!(PANEL_ORIENTATION, Orientation::LandscapeSwapped) {
+            return map_cst816d_touch_to_landscape_swapped(x_raw, y_raw);
+        }
         let ui_w = front_panel_scene::UI_W;
         let ui_h = front_panel_scene::UI_H;
 
@@ -2205,6 +2283,16 @@ where
         let right_edge = snapshot.right && !prev.right;
         let center_edge = snapshot.center && !prev.center;
 
+        if self.alert_screen != AlertScreen::Closed {
+            return self.process_alert_button_action(
+                up_edge,
+                down_edge,
+                left_edge,
+                right_edge,
+                center_edge,
+            );
+        }
+
         if up_edge || down_edge || left_edge || right_edge || center_edge {
             defmt::info!(
                 "ui: dashboard key page={} route={} left={} right={} up={} down={} center={}",
@@ -2394,7 +2482,119 @@ where
         None
     }
 
+    fn process_alert_button_action(
+        &mut self,
+        up: bool,
+        down: bool,
+        left: bool,
+        right: bool,
+        center: bool,
+    ) -> Option<UiAction> {
+        if !any_alert_button_edge(up, down, left, right, center) {
+            return None;
+        }
+        match self.alert_screen {
+            AlertScreen::Closed => None,
+            AlertScreen::List => {
+                if left {
+                    self.alert_screen = AlertScreen::Closed;
+                } else if up {
+                    self.alert_selected = self.alert_selected.saturating_sub(1);
+                } else if down && self.alert_selected + 1 < self.alert_count {
+                    self.alert_selected += 1;
+                } else if center {
+                    if let Some(item) = self.alert_items.get(self.alert_selected).copied() {
+                        self.alert_screen = AlertScreen::Detail(item.kind);
+                        self.alert_detail = Some(item);
+                    }
+                } else if right {
+                    return self.alert_mute_action(self.alert_selected);
+                }
+                self.note_interaction_feedback();
+                self.needs_redraw = true;
+                None
+            }
+            AlertScreen::Detail(_) => {
+                if left {
+                    self.alert_screen = AlertScreen::List;
+                    self.note_interaction_feedback();
+                    self.needs_redraw = true;
+                } else if right {
+                    if let Some(item) = self.alert_detail {
+                        return (!item.cleared).then_some(UiAction::MuteAlert {
+                            alert_id: alert_id_for_preview(item.kind),
+                            instance_id: item.instance_id,
+                        });
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    fn process_alert_touch_action(&mut self, x: u16, y: u16) -> Option<UiAction> {
+        match self.alert_screen {
+            AlertScreen::Closed => None,
+            AlertScreen::List => {
+                let top = alert_list_top(self.alert_selected, self.alert_count);
+                match front_panel_scene::alert_list_hit_test(x, y, top) {
+                    Some(front_panel_scene::AlertPreviewTouchTarget::Back) => {
+                        self.alert_screen = AlertScreen::Closed;
+                    }
+                    Some(front_panel_scene::AlertPreviewTouchTarget::Row(index))
+                        if index < self.alert_count =>
+                    {
+                        self.alert_selected = index;
+                        let item = self.alert_items[index];
+                        self.alert_screen = AlertScreen::Detail(item.kind);
+                        self.alert_detail = Some(item);
+                    }
+                    Some(front_panel_scene::AlertPreviewTouchTarget::Mute(index))
+                        if index < self.alert_count =>
+                    {
+                        self.alert_selected = index;
+                        return self.alert_mute_action(index);
+                    }
+                    _ => return None,
+                }
+                self.note_interaction_feedback();
+                self.needs_redraw = true;
+                None
+            }
+            AlertScreen::Detail(_) => {
+                match front_panel_scene::alert_detail_hit_test(x, y) {
+                    Some(AlertDetailTouchTarget::Back) => {
+                        self.alert_screen = AlertScreen::List;
+                        self.note_interaction_feedback();
+                        self.needs_redraw = true;
+                    }
+                    Some(AlertDetailTouchTarget::Mute) => {
+                        if let Some(item) = self.alert_detail {
+                            return (!item.cleared).then_some(UiAction::MuteAlert {
+                                alert_id: alert_id_for_preview(item.kind),
+                                instance_id: item.instance_id,
+                            });
+                        }
+                    }
+                    None => {}
+                }
+                None
+            }
+        }
+    }
+
+    fn alert_mute_action(&self, index: usize) -> Option<UiAction> {
+        let item = self.alert_items.get(index)?;
+        (!item.cleared).then_some(UiAction::MuteAlert {
+            alert_id: alert_id_for_preview(item.kind),
+            instance_id: item.instance_id,
+        })
+    }
+
     fn process_dashboard_gesture_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
+        if self.alert_screen != AlertScreen::Closed {
+            return None;
+        }
         if self.self_check_overlay == SelfCheckOverlay::ManualChargeLoopbackConfirm {
             return None;
         }
@@ -2481,7 +2681,7 @@ where
             return self.process_beeper_settings_touch_action(x, y, touch_edge);
         }
 
-        if !snapshot.touch || prev.touch {
+        if !snapshot.touch {
             return None;
         }
 
@@ -2489,8 +2689,36 @@ where
             Some(point) => point,
             None => return None,
         };
+        let touch_edge = !prev.touch;
+        let touch_moved = prev.touch && prev.touch_point != snapshot.touch_point;
+        if !touch_edge && !touch_moved {
+            return None;
+        }
+
+        let header_entry = dashboard_header_entry_target(true, prev.touch_point, (x, y));
+
+        if self.alert_screen != AlertScreen::Closed {
+            return touch_edge
+                .then(|| self.process_alert_touch_action(x, y))
+                .flatten();
+        }
+
+        if self.dashboard_page == DashboardPrimaryPage::DashboardHome
+            && self.dashboard_route == DashboardRoute::Home
+            && self.alert_count > 0
+            && header_entry == Some(DashboardHomeTouchTarget::Alerts)
+        {
+            self.alert_screen = AlertScreen::List;
+            self.alert_selected = 0;
+            self.note_interaction_feedback();
+            self.needs_redraw = true;
+            return None;
+        }
 
         if self.self_check_overlay == SelfCheckOverlay::ManualChargeLoopbackConfirm {
+            if !touch_edge {
+                return None;
+            }
             return match front_panel_scene::manual_charge_loopback_confirm_hit_test(x, y) {
                 Some(ManualChargeLoopbackConfirmTarget::Cancel) => {
                     self.self_check_overlay = SelfCheckOverlay::None;
@@ -2515,10 +2743,25 @@ where
         }
 
         if self.dashboard_page == DashboardPrimaryPage::Menu {
-            return self.process_dashboard_menu_touch_action(x, y);
+            return touch_edge
+                .then(|| self.process_dashboard_menu_touch_action(x, y))
+                .flatten();
         }
         if self.dashboard_page != DashboardPrimaryPage::DashboardHome {
             return None;
+        }
+
+        if touch_moved {
+            if self.dashboard_route != DashboardRoute::Home {
+                return None;
+            }
+            let entered_wifi = header_entry
+                == Some(DashboardHomeTouchTarget::Dashboard(
+                    DashboardTouchTarget::HomeWifi,
+                ));
+            if !entered_wifi {
+                return None;
+            }
         }
 
         esp_println::println!(
@@ -2814,8 +3057,34 @@ where
         let dashboard_route = self.dashboard_route;
         let self_check_snapshot = self.self_check_snapshot;
         let self_check_overlay = self.self_check_overlay;
+        let alert_screen = self.alert_screen;
+        let alert_items = self.alert_items;
+        let alert_count = self.alert_count;
+        let alert_selected = self.alert_selected;
+        let alert_detail = self.alert_detail;
+        let alert_indicator = self.alert_indicator();
+        let frame_no = self.frame_no;
         self.render_scene(|painter| {
-            if variant == DASHBOARD_VARIANT
+            if variant == DASHBOARD_VARIANT && alert_screen == AlertScreen::List {
+                front_panel_scene::render_alert_list_preview(
+                    painter,
+                    variant,
+                    &alert_items[..alert_count],
+                    alert_selected,
+                    alert_list_top(alert_selected, alert_count),
+                    false,
+                )
+            } else if variant == DASHBOARD_VARIANT && matches!(alert_screen, AlertScreen::Detail(_))
+            {
+                front_panel_scene::render_alert_detail_preview(
+                    painter,
+                    variant,
+                    alert_detail.unwrap_or_else(|| {
+                        AlertPreviewItem::cleared(AlertPreviewKind::MainsAbsentDc)
+                    }),
+                    false,
+                )
+            } else if variant == DASHBOARD_VARIANT
                 && self_check_overlay == SelfCheckOverlay::ManualChargeLoopbackConfirm
             {
                 front_panel_scene::render_frame_with_dashboard_route_overlay(
@@ -2833,7 +3102,21 @@ where
                     variant,
                     dashboard_shell,
                     Some(&self_check_snapshot),
-                )
+                )?;
+                if dashboard_shell.page == DashboardPrimaryPage::DashboardHome
+                    && dashboard_shell.dashboard_route == DashboardRoute::Home
+                {
+                    if let Some(alert) = alert_indicator {
+                        front_panel_scene::draw_dashboard_alert_preview_indicator(
+                            painter,
+                            variant,
+                            alert.severity,
+                            alert.sound,
+                            frame_no,
+                        )?;
+                    }
+                }
+                Ok(())
             } else {
                 front_panel_scene::render_frame_with_dashboard_route_overlay(
                     painter,
@@ -2846,6 +3129,55 @@ where
             }
         })
     }
+}
+
+fn alert_preview_item(alert: mains_aegis_firmware::active_alerts::ActiveAlert) -> AlertPreviewItem {
+    AlertPreviewItem::active_with_instance_id(
+        preview_kind_for_alert(alert.alert_id),
+        alert.instance_id,
+        match alert.severity {
+            AlertSeverity::Warning => AlertPreviewSeverity::Warning,
+            AlertSeverity::Critical => AlertPreviewSeverity::Critical,
+        },
+        match alert.sound {
+            AlertSoundState::Audible => AlertPreviewSoundState::Audible,
+            AlertSoundState::Muted => AlertPreviewSoundState::Muted,
+            AlertSoundState::SystemSilent => AlertPreviewSoundState::SystemSilent,
+            AlertSoundState::PolicySilent => AlertPreviewSoundState::PolicySilent,
+        },
+    )
+}
+
+const fn preview_kind_for_alert(id: AlertId) -> AlertPreviewKind {
+    match id {
+        AlertId::MainsAbsentDc => AlertPreviewKind::MainsAbsentDc,
+        AlertId::HighStress => AlertPreviewKind::HighStress,
+        AlertId::BatteryLowNoMains => AlertPreviewKind::BatteryLowNoMains,
+        AlertId::BatteryLowWithMains => AlertPreviewKind::BatteryLowWithMains,
+        AlertId::ShutdownProtection => AlertPreviewKind::ShutdownProtection,
+        AlertId::IoOverVoltage => AlertPreviewKind::IoOverVoltage,
+        AlertId::IoOverCurrent => AlertPreviewKind::IoOverCurrent,
+        AlertId::ModuleFault => AlertPreviewKind::ModuleFault,
+        AlertId::BatteryProtection => AlertPreviewKind::BatteryProtection,
+    }
+}
+
+const fn alert_id_for_preview(kind: AlertPreviewKind) -> AlertId {
+    match kind {
+        AlertPreviewKind::MainsAbsentDc => AlertId::MainsAbsentDc,
+        AlertPreviewKind::HighStress => AlertId::HighStress,
+        AlertPreviewKind::BatteryLowNoMains => AlertId::BatteryLowNoMains,
+        AlertPreviewKind::BatteryLowWithMains => AlertId::BatteryLowWithMains,
+        AlertPreviewKind::ShutdownProtection => AlertId::ShutdownProtection,
+        AlertPreviewKind::IoOverVoltage => AlertId::IoOverVoltage,
+        AlertPreviewKind::IoOverCurrent => AlertId::IoOverCurrent,
+        AlertPreviewKind::ModuleFault => AlertId::ModuleFault,
+        AlertPreviewKind::BatteryProtection => AlertId::BatteryProtection,
+    }
+}
+
+fn alert_list_top(selected: usize, count: usize) -> usize {
+    selected.saturating_sub(1).min(count.saturating_sub(3))
 }
 
 fn variant_name(variant: UiVariant) -> &'static str {

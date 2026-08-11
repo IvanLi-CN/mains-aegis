@@ -21,6 +21,10 @@
 - host-tools 新增 `/api/v1/devices/{id}/companion-lan` 与对应 IPC/CLI `device <id> companion-lan bind|clear`，把“自动发现”和“持久绑定”分成两步；devd 持久保存 mDNS + 最近成功 `IP:Port`，但默认仍保持 USB-first owner 语义。
 - host-tools 新增 devd HTTP `POST /api/v1/devices/{id}/recovery/bms-discharge-authorization`、IPC `device.recovery.bms_discharge_authorization` 与 CLI `device <id> recovery bms-discharge-authorization`。native serial 设备只有显式绑定 companion LAN 时才优先尝试设备 LAN HTTP，失败后回退 USB CDC；无 companion LAN 时只走绑定 USB CDC，不把缓存的 `identity/status.network.ipv4` 当作恢复写目标；LAN 设备直接走设备本体 HTTP；mock 设备返回结构化 rejected。devd 会等待固件非 `pending` 终态并刷新 status/diag cache。
 - host-tools 新增 USB-only `device.tps_en.release` IPC、`POST /api/v1/devices/{id}/tps-en/release` 与 `mains-aegis device <id> tps-en release --confirm release-tps-en`。HTTP 要求有效 Web USB lease；错误确认和 LAN target 均被拒绝。Web Device Info 只显示互锁诊断并提供一个确认后的 MCU release 动作。
+- host-tools 新增 `device.alerts.list|mute` IPC、Alerts HTTP bridge 与 `mains-aegis device <id> alerts list|mute`。CLI 始终输出机器可读 JSON；预读时告警已解除返回 `inactive`，并发实例变化返回固件权威 `stale`。
+- 旧固件的 CDC `unsupported_operation` 与 Alerts 路由 LAN `404` 仅在 Alerts 调用点由 host-tools 归一化为 `unsupported`/HTTP `501`；Alerts IPC 保留机器可读 result，CLI list/mute、devd HTTP 与 Web 获得同一升级判定。
+- Alerts list/mute IPC 对 conflict/unsupported 使用同一机器可读结果通道，避免 CLI 在部分实现或并发变化场景退化为纯文本错误。
+- 固件已活动的市电缺失告警在 VIN 遥测暂时 unknown 时保持同一实例和消音状态，只在明确恢复市电后解除；CLI、devd 与 Web 因而不会把短暂遥测缺口误报为告警解除或新实例。
 - Repo skill routing defaults Codex work inside this repository to `$mains-aegis-devd-flow` for development, validation, diagnostics, field investigation, and hardware read/session-read checks. `$mains-aegis-user-operations` remains the explicit end-user/released host-tools route.
 
 ## 验证

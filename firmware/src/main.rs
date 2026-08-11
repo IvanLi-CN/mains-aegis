@@ -51,6 +51,9 @@ use esp_hal::Blocking;
 use esp_println as _;
 #[cfg(feature = "web_serial")]
 use heapless::String as HeaplessString;
+use mains_aegis_firmware::active_alerts::{
+    mains_absent_active, ActiveAlerts, AlertId, AlertSignals,
+};
 use mains_aegis_firmware::audio::{AudioCue, AudioManager, AudioRoute, PLAYBACK_SAMPLE_RATE_HZ};
 use mains_aegis_firmware::usb_pd::UsbPdSinkManager;
 #[cfg(feature = "web_serial")]
@@ -1091,6 +1094,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     let (_, _, tx_buffer, tx_descriptors) =
         esp_hal::dma_circular_buffers!(0, AUDIO_DMA_BUFFER_BYTES);
     let mut audio_manager = AudioManager::new();
+    let mut active_alerts = ActiveAlerts::new();
     let mut audio_disabled_reason: Option<&'static str> = None;
     let mut i2s_tx = match I2s::new(
         i2s0,
@@ -1235,14 +1239,45 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
 
     macro_rules! service_runtime_audio {
         ($power:ident) => {{
+            let now = Instant::now();
+            let audio_edges = $power.take_audio_edges();
+            let audio_signals = $power.audio_signals();
+            let system_silent = $power.beeper_prefs_snapshot().system_volume.step() == 0;
+            let mute_audio_flush = audio_manager.take_immediate_dma_flush_request();
+            sync_active_alerts(
+                &mut active_alerts,
+                audio_signals,
+                audio_edges,
+                system_silent,
+            );
             if audio_enabled {
-                let now = Instant::now();
-                let audio_edges = $power.take_audio_edges();
                 let flush_runtime_audio = audio_edges.battery_low_changed.is_some()
                     || audio_edges.module_fault_changed.is_some()
                     || audio_edges.battery_protection_changed.is_some();
-                sync_runtime_audio(&mut audio_manager, now, $power.audio_signals(), audio_edges);
+                sync_runtime_audio(
+                    &mut audio_manager,
+                    &active_alerts,
+                    now,
+                    audio_edges,
+                    system_silent,
+                );
                 audio_manager.tick(now);
+                if mute_audio_flush {
+                    match reprime_runtime_audio_dma!(
+                        "audio: alert mute dma flush push failed; disabling runtime audio",
+                        "audio: alert mute dma flush available failed err={=?}; disabling runtime audio",
+                        "audio: alert mute dma flush restart failed err={=?}; disabling runtime audio"
+                    ) {
+                        RuntimeAudioReprimeResult::Ready { .. } => {
+                            audio_recovery.clear();
+                        }
+                        RuntimeAudioReprimeResult::Late => {}
+                        RuntimeAudioReprimeResult::Fatal => {
+                            disable_runtime_audio!("alert_mute_dma_flush_failed");
+                        }
+                    }
+                    continue;
+                }
                 if flush_runtime_audio {
                     audio_manager.arm_transition_bridge();
                     match reprime_runtime_audio_dma!(
@@ -1738,15 +1773,29 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
     }
     power.set_applied_fan_state(applied_fan_state);
 
+    let boot_audio_edges = power.take_audio_edges();
+    let boot_audio_signals = power.audio_signals();
+    let boot_system_silent = power.beeper_prefs_snapshot().system_volume.step() == 0;
+    sync_active_alerts(
+        &mut active_alerts,
+        boot_audio_signals,
+        boot_audio_edges,
+        boot_system_silent,
+    );
     if audio_enabled {
         sync_runtime_audio(
             &mut audio_manager,
+            &active_alerts,
             Instant::now(),
-            power.audio_signals(),
-            power.take_audio_edges(),
+            boot_audio_edges,
+            boot_system_silent,
         );
         audio_manager.tick(Instant::now());
     }
+    front_panel.update_active_alerts(
+        &active_alerts,
+        power.beeper_prefs_snapshot().system_volume.step() == 0,
+    );
     front_panel.set_attention_hold(front_panel_attention_hold(
         power.audio_signals(),
         !front_panel_scene::self_check_can_enter_dashboard(&initial_snapshot),
@@ -1825,6 +1874,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     &mut web_serial_lines,
                     &web_serial_identity,
                     &mut power,
+                    &mut audio_manager,
+                    &mut active_alerts,
                     web_serial_snapshot,
                     &mut web_serial_log_state,
                     &mut last_web_serial_service_at,
@@ -1882,6 +1933,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                             &mut web_serial_lines,
                             &web_serial_identity,
                             &mut power,
+                            &mut audio_manager,
+                            &mut active_alerts,
                             web_serial_snapshot,
                             &mut web_serial_log_state,
                             &mut last_web_serial_service_at,
@@ -1911,6 +1964,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     &mut web_serial_lines,
                     &web_serial_identity,
                     &mut power,
+                    &mut audio_manager,
+                    &mut active_alerts,
                     web_serial_snapshot,
                     &mut web_serial_log_state,
                     &mut last_web_serial_service_at,
@@ -2146,6 +2201,40 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                 );
                             }
                         }
+                        mains_aegis_firmware::net::LanManagementCommand::MuteAlert(command) => {
+                            let result = active_alerts.mute(command.alert_id, command.instance_id);
+                            if matches!(
+                                result,
+                                mains_aegis_firmware::active_alerts::MuteResult::Muted
+                                    | mains_aegis_firmware::active_alerts::MuteResult::AlreadyMuted
+                            ) {
+                                audio_manager.stop_cue_immediate(command.alert_id.audio_cue());
+                            }
+                            let mut body = heapless::String::<
+                                { mains_aegis_firmware::net::HTTP_RESPONSE_BODY_CAP },
+                            >::new();
+                            mains_aegis_firmware::active_alerts::render_mute_result_json(
+                                &mut body,
+                                command.alert_id,
+                                command.instance_id,
+                                result,
+                            );
+                            mains_aegis_firmware::net::publish_active_alerts(
+                                &active_alerts,
+                                power.beeper_prefs_snapshot().system_volume.step() == 0,
+                            );
+                            let response = match result {
+                                mains_aegis_firmware::active_alerts::MuteResult::Muted
+                                | mains_aegis_firmware::active_alerts::MuteResult::AlreadyMuted => {
+                                    mains_aegis_firmware::net::LanCommandResult::Json(body)
+                                }
+                                mains_aegis_firmware::active_alerts::MuteResult::Stale { .. }
+                                | mains_aegis_firmware::active_alerts::MuteResult::Inactive => {
+                                    mains_aegis_firmware::net::LanCommandResult::AlertConflict(body)
+                                }
+                            };
+                            mains_aegis_firmware::net::set_lan_command_result(response);
+                        }
                         mains_aegis_firmware::net::LanManagementCommand::Reset => {
                             defmt::warn!("net: LAN reset requested");
                             Timer::after(embassy_time::Duration::from_millis(100)).await;
@@ -2178,6 +2267,8 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                 &mut web_serial_lines,
                 &web_serial_identity,
                 &mut power,
+                &mut audio_manager,
+                &mut active_alerts,
                 ui_snapshot,
                 &mut web_serial_log_state,
                 &mut last_web_serial_service_at,
@@ -2185,6 +2276,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             );
             front_panel.update_self_check_snapshot(ui_snapshot);
             front_panel.update_bms_activation_state(power.bms_activation_state());
+            front_panel.update_active_alerts(
+                &active_alerts,
+                power.beeper_prefs_snapshot().system_volume.step() == 0,
+            );
             let self_check_blocked = front_panel.is_showing_self_check()
                 && !front_panel_scene::self_check_can_enter_dashboard(&ui_snapshot);
             front_panel.set_attention_hold(front_panel_attention_hold(
@@ -2204,6 +2299,27 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     }
                     front_panel::UiAction::BeeperPrefsChanged { prefs } => {
                         power.set_beeper_prefs(prefs);
+                    }
+                    front_panel::UiAction::MuteAlert {
+                        alert_id,
+                        instance_id,
+                    } => {
+                        if matches!(
+                            active_alerts.mute(alert_id, instance_id),
+                            mains_aegis_firmware::active_alerts::MuteResult::Muted
+                                | mains_aegis_firmware::active_alerts::MuteResult::AlreadyMuted
+                        ) {
+                            audio_manager.stop_cue_immediate(alert_id.audio_cue());
+                            front_panel.update_active_alerts(
+                                &active_alerts,
+                                power.beeper_prefs_snapshot().system_volume.step() == 0,
+                            );
+                            #[cfg(feature = "net_http")]
+                            mains_aegis_firmware::net::publish_active_alerts(
+                                &active_alerts,
+                                power.beeper_prefs_snapshot().system_volume.step() == 0,
+                            );
+                        }
                     }
                     front_panel::UiAction::BeeperPreview { prefs, target } => {
                         power.set_beeper_prefs(prefs);
@@ -2337,6 +2453,8 @@ fn service_web_serial_if_due<'d, I2C>(
     lines: &mut UsbCdcLineBuffer<1024>,
     identity: &DeviceIdentity,
     power: &mut output::PowerManager<'d, I2C>,
+    audio_manager: &mut AudioManager,
+    active_alerts: &mut ActiveAlerts,
     ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
     log_state: &mut UsbCdcLogState,
     last_service_at: &mut Option<Instant>,
@@ -2353,7 +2471,16 @@ fn service_web_serial_if_due<'d, I2C>(
         return;
     }
     *last_service_at = Some(now);
-    service_web_serial(serial, lines, identity, power, ui_snapshot, log_state);
+    service_web_serial(
+        serial,
+        lines,
+        identity,
+        power,
+        audio_manager,
+        active_alerts,
+        ui_snapshot,
+        log_state,
+    );
 }
 
 #[cfg(feature = "web_serial")]
@@ -2362,6 +2489,8 @@ fn service_web_serial<'d, I2C>(
     lines: &mut UsbCdcLineBuffer<1024>,
     identity: &DeviceIdentity,
     power: &mut output::PowerManager<'d, I2C>,
+    audio_manager: &mut AudioManager,
+    active_alerts: &mut ActiveAlerts,
     ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
     log_state: &mut UsbCdcLogState,
 ) where
@@ -2385,6 +2514,8 @@ fn service_web_serial<'d, I2C>(
                     serial,
                     identity,
                     power,
+                    audio_manager,
+                    active_alerts,
                     ui_snapshot,
                     line.as_str(),
                     log_state,
@@ -2405,6 +2536,8 @@ fn handle_web_serial_frame<'d, I2C>(
     serial: &mut UsbSerialJtag<'static, Blocking>,
     identity: &DeviceIdentity,
     power: &mut output::PowerManager<'d, I2C>,
+    audio_manager: &mut AudioManager,
+    active_alerts: &mut ActiveAlerts,
     ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
     line: &str,
     log_state: &mut UsbCdcLogState,
@@ -2470,6 +2603,67 @@ fn handle_web_serial_frame<'d, I2C>(
                     write_web_serial_line(serial, frame.as_str());
                     log_state.emit_status_logs(serial, status);
                 }
+            }
+            UsbCdcRequest::GetAlerts => {
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                mains_aegis_firmware::active_alerts::render_alerts_json(
+                    &mut body,
+                    active_alerts,
+                    power.beeper_prefs_snapshot().system_volume.step() == 0,
+                );
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
+            }
+            UsbCdcRequest::MuteAlert(command) => {
+                let result = active_alerts.mute(command.alert_id, command.instance_id);
+                if matches!(
+                    result,
+                    mains_aegis_firmware::active_alerts::MuteResult::Muted
+                        | mains_aegis_firmware::active_alerts::MuteResult::AlreadyMuted
+                ) {
+                    audio_manager.stop_cue_immediate(command.alert_id.audio_cue());
+                }
+                #[cfg(feature = "net_http")]
+                mains_aegis_firmware::net::publish_active_alerts(
+                    active_alerts,
+                    power.beeper_prefs_snapshot().system_volume.step() == 0,
+                );
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                mains_aegis_firmware::active_alerts::render_mute_result_json(
+                    &mut body,
+                    command.alert_id,
+                    command.instance_id,
+                    result,
+                );
+                match result {
+                    mains_aegis_firmware::active_alerts::MuteResult::Muted
+                    | mains_aegis_firmware::active_alerts::MuteResult::AlreadyMuted => {
+                        render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                    }
+                    mains_aegis_firmware::active_alerts::MuteResult::Stale { .. } => {
+                        render_error_json_with_details(
+                            &mut frame,
+                            Some(request_id.as_str()),
+                            "stale",
+                            "the alert instance is stale",
+                            false,
+                            Some(body.as_str()),
+                        );
+                    }
+                    mains_aegis_firmware::active_alerts::MuteResult::Inactive => {
+                        render_error_json_with_details(
+                            &mut frame,
+                            Some(request_id.as_str()),
+                            "inactive",
+                            "the alert is no longer active",
+                            false,
+                            Some(body.as_str()),
+                        );
+                    }
+                }
+                write_web_serial_line(serial, frame.as_str());
             }
             UsbCdcRequest::GetSettings => {
                 let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
@@ -3219,11 +3413,51 @@ fn push_opt_bool<const N: usize>(out: &mut heapless::String<N>, value: Option<bo
     }
 }
 
-fn sync_runtime_audio(
-    audio_manager: &mut AudioManager,
-    now: Instant,
+fn sync_active_alerts(
+    active_alerts: &mut ActiveAlerts,
     signals: output::AudioSignalSnapshot,
     edges: output::AudioSignalEvents,
+    system_silent: bool,
+) {
+    let mains_absent_is_active = mains_absent_active(
+        active_alerts.get(AlertId::MainsAbsentDc, false).is_some(),
+        signals.mains_present,
+    );
+
+    let mut alert_signals = AlertSignals::default();
+    alert_signals.set(AlertId::MainsAbsentDc, mains_absent_is_active);
+    alert_signals.set_policy_silent(
+        AlertId::MainsAbsentDc,
+        mains_absent_is_active
+            && (active_alerts.is_policy_silent(AlertId::MainsAbsentDc)
+                || (active_alerts.get(AlertId::MainsAbsentDc, false).is_none()
+                    && edges.mains_present_changed != Some(false))),
+    );
+    alert_signals.set(AlertId::HighStress, signals.thermal_stress);
+    alert_signals.set(
+        AlertId::BatteryLowNoMains,
+        signals.battery_low == output::AudioBatteryLowState::NoMains,
+    );
+    alert_signals.set(
+        AlertId::BatteryLowWithMains,
+        signals.battery_low == output::AudioBatteryLowState::WithMains,
+    );
+    alert_signals.set(AlertId::ShutdownProtection, signals.shutdown_protection);
+    alert_signals.set(AlertId::IoOverVoltage, signals.io_over_voltage);
+    alert_signals.set(AlertId::IoOverCurrent, signals.io_over_current);
+    alert_signals.set(AlertId::ModuleFault, signals.module_fault);
+    alert_signals.set(AlertId::BatteryProtection, signals.battery_protection);
+    active_alerts.update(alert_signals);
+    #[cfg(feature = "net_http")]
+    mains_aegis_firmware::net::publish_active_alerts(active_alerts, system_silent);
+}
+
+fn sync_runtime_audio(
+    audio_manager: &mut AudioManager,
+    active_alerts: &ActiveAlerts,
+    now: Instant,
+    edges: output::AudioSignalEvents,
+    system_silent: bool,
 ) {
     if edges.mains_present_changed == Some(true) {
         audio_manager.trigger(AudioCue::MainsPresentDc);
@@ -3240,36 +3474,13 @@ fn sync_runtime_audio(
     ) {
         audio_manager.trigger(AudioCue::ChargeCompleted);
     }
-    let mains_absent_active = match signals.mains_present {
-        Some(false) => {
-            edges.mains_present_changed == Some(false)
-                || audio_manager.is_cue_active(AudioCue::MainsAbsentDc)
-        }
-        None => audio_manager.is_cue_active(AudioCue::MainsAbsentDc),
-        Some(true) => false,
-    };
-
-    audio_manager.set_cue_active(AudioCue::MainsAbsentDc, mains_absent_active, now);
-    audio_manager.set_cue_active(AudioCue::HighStress, signals.thermal_stress, now);
-    audio_manager.set_cue_active(
-        AudioCue::BatteryLowNoMains,
-        signals.battery_low == output::AudioBatteryLowState::NoMains,
-        now,
-    );
-    audio_manager.set_cue_active(
-        AudioCue::BatteryLowWithMains,
-        signals.battery_low == output::AudioBatteryLowState::WithMains,
-        now,
-    );
-    audio_manager.set_cue_active(
-        AudioCue::ShutdownProtection,
-        signals.shutdown_protection,
-        now,
-    );
-    audio_manager.set_cue_active(AudioCue::IoOverVoltage, signals.io_over_voltage, now);
-    audio_manager.set_cue_active(AudioCue::IoOverCurrent, signals.io_over_current, now);
-    audio_manager.set_cue_active(AudioCue::ModuleFault, signals.module_fault, now);
-    audio_manager.set_cue_active(AudioCue::BatteryProtection, signals.battery_protection, now);
+    for id in AlertId::ALL {
+        audio_manager.set_cue_active(
+            id.audio_cue(),
+            active_alerts.cue_should_play(id, system_silent),
+            now,
+        );
+    }
 }
 
 fn front_panel_attention_hold(

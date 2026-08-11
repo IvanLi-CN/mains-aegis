@@ -5,6 +5,7 @@ import sys
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "firmware" / "src"
 ALLOWED = {
+    "active_alerts.rs",
     "audio.rs",
     "bq25792.rs",
     "bq40z50.rs",

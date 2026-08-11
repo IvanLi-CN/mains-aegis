@@ -51,4 +51,5 @@ pub mod net_logic;
 pub mod net_types;
 pub mod usb_cdc_protocol;
 
+pub mod active_alerts;
 pub mod audio;

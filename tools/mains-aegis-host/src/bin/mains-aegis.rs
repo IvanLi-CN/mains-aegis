@@ -139,6 +139,10 @@ enum DeviceCommand {
     Connection,
     Identity,
     Status(DeviceReadArgs),
+    Alerts {
+        #[command(subcommand)]
+        command: AlertsCommand,
+    },
     DiagSnapshot(DiagSnapshotArgs),
     Recovery {
         #[command(subcommand)]
@@ -173,6 +177,12 @@ enum DeviceCommand {
         #[command(subcommand)]
         command: MonitorCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum AlertsCommand {
+    List,
+    Mute { alert_id: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -428,6 +438,49 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
+        Command::Device {
+            device_id,
+            command:
+                DeviceCommand::Alerts {
+                    command: AlertsCommand::Mute { alert_id },
+                },
+        } => {
+            let snapshot = devd_ipc_call(
+                &devd,
+                "device.alerts.list",
+                json!({ "device_id": &device_id }),
+            )
+            .await?;
+            if alert_list_terminal_result(&snapshot).is_some() {
+                println!("{}", serde_json::to_string_pretty(&snapshot)?);
+                return Ok(());
+            }
+            let instance_id = snapshot
+                .get("alerts")
+                .and_then(Value::as_array)
+                .and_then(|alerts| {
+                    alerts.iter().find(|alert| {
+                        alert.get("alert_id").and_then(Value::as_str) == Some(alert_id.as_str())
+                    })
+                })
+                .and_then(|alert| alert.get("instance_id"))
+                .and_then(Value::as_u64);
+            let result = if let Some(instance_id) = instance_id {
+                devd_ipc_call(
+                    &devd,
+                    "device.alerts.mute",
+                    json!({
+                        "device_id": device_id,
+                        "alert_id": alert_id,
+                        "instance_id": instance_id,
+                    }),
+                )
+                .await?
+            } else {
+                inactive_alert_result(&alert_id)
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
         command => {
             let interactive_bind = match &command {
                 Command::Device {
@@ -455,6 +508,21 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn inactive_alert_result(alert_id: &str) -> Value {
+    json!({
+        "ok": false,
+        "alert_id": alert_id,
+        "result": "inactive",
+    })
+}
+
+fn alert_list_terminal_result(snapshot: &Value) -> Option<&str> {
+    snapshot
+        .get("result")
+        .and_then(Value::as_str)
+        .filter(|result| *result == "unsupported")
 }
 
 async fn run_daemon_command(endpoint: &str, command: DaemonCommand) -> anyhow::Result<()> {
@@ -823,6 +891,10 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
             "device.status",
             device_read_ipc_params(&device_id, &args, args.include_meta, false, None),
         ),
+        DeviceCommand::Alerts { command } => match command {
+            AlertsCommand::List => ("device.alerts.list", json!({ "device_id": device_id })),
+            AlertsCommand::Mute { .. } => unreachable!("mute performs an instance-bound read"),
+        },
         DeviceCommand::DiagSnapshot(args) => (
             "device.diag_snapshot",
             device_read_ipc_params(
@@ -969,9 +1041,10 @@ async fn maybe_confirm_companion_lan(
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_new_matching_entries, device_read_ipc_params, device_to_ipc,
-        looks_like_ipc_connect_error, seed_seen_ids, trace_entry_matches_kind, Cli, Command,
-        DaemonCommand, DeviceCommand, DeviceReadArgs, RecoveryCommand, TpsEnCommand,
+        alert_list_terminal_result, collect_new_matching_entries, device_read_ipc_params,
+        device_to_ipc, inactive_alert_result, looks_like_ipc_connect_error, seed_seen_ids,
+        trace_entry_matches_kind, AlertsCommand, Cli, Command, DaemonCommand, DeviceCommand,
+        DeviceReadArgs, RecoveryCommand, TpsEnCommand,
     };
     use clap::Parser as _;
     use serde_json::json;
@@ -1041,6 +1114,59 @@ mod tests {
         let (method, params) = device_to_ipc(device_id, command);
         assert_eq!(method, "device.recovery.bms_discharge_authorization");
         assert_eq!(params, json!({"device_id": "serial-04f3bb3f5367"}));
+    }
+
+    #[test]
+    fn cli_parses_alert_list_and_mute_commands() {
+        let list =
+            Cli::try_parse_from(["mains-aegis", "device", "bench-ups", "alerts", "list"]).unwrap();
+        assert!(matches!(
+            list.command,
+            Command::Device {
+                command: DeviceCommand::Alerts {
+                    command: AlertsCommand::List
+                },
+                ..
+            }
+        ));
+
+        let mute = Cli::try_parse_from([
+            "mains-aegis",
+            "device",
+            "bench-ups",
+            "alerts",
+            "mute",
+            "module_fault",
+        ])
+        .unwrap();
+        assert!(matches!(
+            mute.command,
+            Command::Device {
+                command: DeviceCommand::Alerts {
+                    command: AlertsCommand::Mute { alert_id }
+                },
+                ..
+            } if alert_id == "module_fault"
+        ));
+    }
+
+    #[test]
+    fn cli_renders_inactive_alert_mute_as_machine_readable_json() {
+        assert_eq!(
+            inactive_alert_result("module_fault"),
+            json!({
+                "ok": false,
+                "alert_id": "module_fault",
+                "result": "inactive",
+            })
+        );
+    }
+
+    #[test]
+    fn cli_preserves_machine_readable_unsupported_alert_result() {
+        let result = json!({ "ok": false, "result": "unsupported" });
+        assert_eq!(alert_list_terminal_result(&result), Some("unsupported"));
+        assert_eq!(alert_list_terminal_result(&json!({ "alerts": [] })), None);
     }
 
     #[test]

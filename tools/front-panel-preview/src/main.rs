@@ -20,7 +20,8 @@ pub mod net_types;
 mod front_panel_scene;
 
 use front_panel_scene::{
-    demo_mode_from_focus, AudioTestUiState, BeeperPrefs, BeeperSettingTarget, BeeperVolumeLevel,
+    demo_mode_from_focus, AlertPreviewItem, AlertPreviewKind, AlertPreviewSeverity,
+    AlertPreviewSoundState, AudioTestUiState, BeeperPrefs, BeeperSettingTarget, BeeperVolumeLevel,
     BmsRecoveryUiAction, BmsResultKind, DashboardChargerProtocol, DashboardDetailPage,
     DashboardDetailSnapshot, DashboardHomeFocus, DashboardInputSource, DashboardMenuStyle,
     DashboardPrimaryPage, DashboardRoute, DashboardShellState, DisplayDiagnosticMeta,
@@ -1224,6 +1225,9 @@ fn bq40_snapshot_for_scenario(
         }
         ScenarioArg::Default
         | ScenarioArg::DisplayDiag
+        | ScenarioArg::DashboardAlert
+        | ScenarioArg::AlertList
+        | ScenarioArg::AlertDetail
         | ScenarioArg::DashboardRuntimeStandby
         | ScenarioArg::DashboardRuntimeStandbyTouchZones
         | ScenarioArg::DashboardRuntimeStandbyWifiDisabled
@@ -1308,6 +1312,9 @@ fn run() -> Result<(), String> {
     }
 
     let effective_mode = match args.scenario {
+        ScenarioArg::DashboardAlert | ScenarioArg::AlertList | ScenarioArg::AlertDetail => {
+            ModeArg::Standby
+        }
         ScenarioArg::DashboardRuntimeStandby => ModeArg::Standby,
         ScenarioArg::DashboardRuntimeStandbyTouchZones => ModeArg::Standby,
         ScenarioArg::DashboardRuntimeStandbyWifiDisabled => ModeArg::Standby,
@@ -1373,7 +1380,7 @@ fn run() -> Result<(), String> {
         .join(format!("variant-{}", args.variant.as_tag()))
         .join(format!("mode-{}", effective_mode.as_tag()))
         .join(format!("focus-{}", args.focus.as_tag()))
-        .join(format!("scenario-{}", args.scenario.as_tag()));
+        .join(format!("scenario-{}", args.output_tag()));
     fs::create_dir_all(&frame_dir).map_err(|e| format!("create output dir failed: {e}"))?;
 
     let mut framebuffer = FrameBuffer::new(UI_W as usize, UI_H as usize);
@@ -1413,6 +1420,80 @@ fn run() -> Result<(), String> {
             };
             front_panel_scene::render_display_diagnostic(&mut framebuffer, &meta)
                 .map_err(|_| "render failed unexpectedly".to_string())?;
+        }
+        ScenarioArg::DashboardAlert => {
+            let snapshot = dashboard_runtime_snapshot_for_wifi(WifiPreviewState::Connected);
+            let dashboard_model = UiModel {
+                mode: UpsMode::Standby,
+                focus: UiFocus::Idle,
+                touch_irq: false,
+                frame_no: args.frame_no,
+            };
+            front_panel_scene::render_frame_with_dashboard_route_overlay(
+                &mut framebuffer,
+                &dashboard_model,
+                UiVariant::InstrumentB,
+                DashboardRoute::Home,
+                Some(&snapshot),
+                SelfCheckOverlay::None,
+            )
+            .map_err(|_| "render failed unexpectedly".to_string())?;
+            let indicator_result = if args.alert_mixed {
+                front_panel_scene::draw_dashboard_alert_preview_mixed_indicator(
+                    &mut framebuffer,
+                    UiVariant::InstrumentB,
+                    args.frame_no,
+                )
+            } else {
+                front_panel_scene::draw_dashboard_alert_preview_indicator(
+                    &mut framebuffer,
+                    UiVariant::InstrumentB,
+                    args.alert_severity,
+                    args.alert_sound,
+                    args.frame_no,
+                )
+            };
+            indicator_result
+                .map_err(|_| "alert indicator render failed unexpectedly".to_string())?;
+            if args.alert_touch_overlay {
+                front_panel_scene::render_dashboard_touch_regions_overlay(
+                    &mut framebuffer,
+                    UiVariant::InstrumentB,
+                    DashboardRoute::Home,
+                )
+                .map_err(|_| "dashboard touch overlay render failed unexpectedly".to_string())?;
+                front_panel_scene::draw_dashboard_alert_preview_touch_overlay(
+                    &mut framebuffer,
+                    UiVariant::InstrumentB,
+                )
+                .map_err(|_| "alert touch overlay render failed unexpectedly".to_string())?;
+            }
+        }
+        ScenarioArg::AlertList => {
+            let alerts = alert_preview_items(args.alert_list, &args);
+            front_panel_scene::render_alert_list_preview(
+                &mut framebuffer,
+                UiVariant::InstrumentB,
+                &alerts,
+                args.alert_selected,
+                args.alert_top,
+                args.alert_touch_overlay,
+            )
+            .map_err(|_| "alert list render failed unexpectedly".to_string())?;
+        }
+        ScenarioArg::AlertDetail => {
+            let alert = if args.alert_cleared {
+                AlertPreviewItem::cleared(args.alert_kind)
+            } else {
+                AlertPreviewItem::active(args.alert_kind, args.alert_severity, args.alert_sound)
+            };
+            front_panel_scene::render_alert_detail_preview(
+                &mut framebuffer,
+                UiVariant::InstrumentB,
+                alert,
+                args.alert_touch_overlay,
+            )
+            .map_err(|_| "alert detail render failed unexpectedly".to_string())?;
         }
         ScenarioArg::WifiIconGallery => {
             front_panel_scene::render_wifi_icon_gallery(&mut framebuffer, UiVariant::InstrumentB)
@@ -2131,6 +2212,9 @@ enum ScenarioArg {
     Default,
     FirmwareSafeMode,
     DisplayDiag,
+    DashboardAlert,
+    AlertList,
+    AlertDetail,
     DashboardRuntimeStandby,
     DashboardRuntimeStandbyTouchZones,
     DashboardRuntimeStandbyWifiDisabled,
@@ -2221,6 +2305,9 @@ impl ScenarioArg {
             "default" => Ok(Self::Default),
             "firmware-safe-mode" => Ok(Self::FirmwareSafeMode),
             "display-diag" => Ok(Self::DisplayDiag),
+            "dashboard-alert" => Ok(Self::DashboardAlert),
+            "alert-list" => Ok(Self::AlertList),
+            "alert-detail" => Ok(Self::AlertDetail),
             "dashboard-runtime-standby" => Ok(Self::DashboardRuntimeStandby),
             "dashboard-runtime-standby-touch-zones" => Ok(Self::DashboardRuntimeStandbyTouchZones),
             "dashboard-runtime-standby-wifi-disabled" => {
@@ -2350,6 +2437,9 @@ impl ScenarioArg {
             ScenarioArg::Default => "default",
             ScenarioArg::FirmwareSafeMode => "firmware-safe-mode",
             ScenarioArg::DisplayDiag => "display-diag",
+            ScenarioArg::DashboardAlert => "dashboard-alert",
+            ScenarioArg::AlertList => "alert-list",
+            ScenarioArg::AlertDetail => "alert-detail",
             ScenarioArg::DashboardRuntimeStandby => "dashboard-runtime-standby",
             ScenarioArg::DashboardRuntimeStandbyTouchZones => {
                 "dashboard-runtime-standby-touch-zones"
@@ -2476,6 +2566,106 @@ impl ScenarioArg {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum AlertListArg {
+    Empty,
+    Single,
+    Mixed,
+    Overflow,
+}
+
+impl AlertListArg {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw.to_ascii_lowercase().as_str() {
+            "empty" => Ok(Self::Empty),
+            "single" => Ok(Self::Single),
+            "mixed" => Ok(Self::Mixed),
+            "overflow" => Ok(Self::Overflow),
+            _ => Err(format!(
+                "unsupported --alert-list value: {raw} (expected empty|single|mixed|overflow)"
+            )),
+        }
+    }
+
+    fn as_tag(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Single => "single",
+            Self::Mixed => "mixed",
+            Self::Overflow => "overflow",
+        }
+    }
+}
+
+fn parse_alert_kind(raw: &str) -> Result<AlertPreviewKind, String> {
+    match raw.to_ascii_lowercase().as_str() {
+        "mains-absent-dc" => Ok(AlertPreviewKind::MainsAbsentDc),
+        "high-stress" => Ok(AlertPreviewKind::HighStress),
+        "battery-low-no-mains" => Ok(AlertPreviewKind::BatteryLowNoMains),
+        "battery-low-with-mains" => Ok(AlertPreviewKind::BatteryLowWithMains),
+        "shutdown-protection" => Ok(AlertPreviewKind::ShutdownProtection),
+        "io-over-voltage" => Ok(AlertPreviewKind::IoOverVoltage),
+        "io-over-current" => Ok(AlertPreviewKind::IoOverCurrent),
+        "module-fault" => Ok(AlertPreviewKind::ModuleFault),
+        "battery-protection" => Ok(AlertPreviewKind::BatteryProtection),
+        _ => Err(format!(
+            "unsupported --alert-kind value: {raw} (expected mains-absent-dc|high-stress|battery-low-no-mains|battery-low-with-mains|shutdown-protection|io-over-voltage|io-over-current|module-fault|battery-protection)"
+        )),
+    }
+}
+
+fn alert_kind_tag(kind: AlertPreviewKind) -> &'static str {
+    match kind {
+        AlertPreviewKind::MainsAbsentDc => "mains-absent-dc",
+        AlertPreviewKind::HighStress => "high-stress",
+        AlertPreviewKind::BatteryLowNoMains => "battery-low-no-mains",
+        AlertPreviewKind::BatteryLowWithMains => "battery-low-with-mains",
+        AlertPreviewKind::ShutdownProtection => "shutdown-protection",
+        AlertPreviewKind::IoOverVoltage => "io-over-voltage",
+        AlertPreviewKind::IoOverCurrent => "io-over-current",
+        AlertPreviewKind::ModuleFault => "module-fault",
+        AlertPreviewKind::BatteryProtection => "battery-protection",
+    }
+}
+
+fn parse_alert_severity(raw: &str) -> Result<AlertPreviewSeverity, String> {
+    match raw.to_ascii_lowercase().as_str() {
+        "warning" => Ok(AlertPreviewSeverity::Warning),
+        "critical" => Ok(AlertPreviewSeverity::Critical),
+        _ => Err(format!(
+            "unsupported --alert-severity value: {raw} (expected warning|critical)"
+        )),
+    }
+}
+
+fn alert_severity_tag(severity: AlertPreviewSeverity) -> &'static str {
+    match severity {
+        AlertPreviewSeverity::Warning => "warning",
+        AlertPreviewSeverity::Critical => "critical",
+    }
+}
+
+fn parse_alert_sound(raw: &str) -> Result<AlertPreviewSoundState, String> {
+    match raw.to_ascii_lowercase().as_str() {
+        "audible" => Ok(AlertPreviewSoundState::Audible),
+        "muted" => Ok(AlertPreviewSoundState::Muted),
+        "system-silent" => Ok(AlertPreviewSoundState::SystemSilent),
+        "policy-silent" => Ok(AlertPreviewSoundState::PolicySilent),
+        _ => Err(format!(
+            "unsupported --alert-sound value: {raw} (expected audible|muted|system-silent|policy-silent)"
+        )),
+    }
+}
+
+fn alert_sound_tag(sound: AlertPreviewSoundState) -> &'static str {
+    match sound {
+        AlertPreviewSoundState::Audible => "audible",
+        AlertPreviewSoundState::Muted => "muted",
+        AlertPreviewSoundState::SystemSilent => "system-silent",
+        AlertPreviewSoundState::PolicySilent => "policy-silent",
+    }
+}
+
 #[derive(Debug)]
 struct Args {
     variant: VariantArg,
@@ -2484,6 +2674,15 @@ struct Args {
     scenario: ScenarioArg,
     out_dir: PathBuf,
     frame_no: u32,
+    alert_kind: AlertPreviewKind,
+    alert_severity: AlertPreviewSeverity,
+    alert_sound: AlertPreviewSoundState,
+    alert_list: AlertListArg,
+    alert_selected: usize,
+    alert_top: usize,
+    alert_cleared: bool,
+    alert_touch_overlay: bool,
+    alert_mixed: bool,
 }
 
 impl Args {
@@ -2497,6 +2696,15 @@ impl Args {
         let mut scenario: Option<ScenarioArg> = None;
         let mut out_dir: Option<PathBuf> = None;
         let mut frame_no: u32 = 0;
+        let mut alert_kind = AlertPreviewKind::MainsAbsentDc;
+        let mut alert_severity: Option<AlertPreviewSeverity> = None;
+        let mut alert_sound = AlertPreviewSoundState::Audible;
+        let mut alert_list = AlertListArg::Mixed;
+        let mut alert_selected: usize = 0;
+        let mut alert_top: usize = 0;
+        let mut alert_cleared = false;
+        let mut alert_touch_overlay = false;
+        let mut alert_mixed = false;
 
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -2526,6 +2734,37 @@ impl Args {
                         .parse::<u32>()
                         .map_err(|_| format!("invalid --frame-no value: {value}"))?;
                 }
+                "--alert-kind" => {
+                    let value = iter.next().ok_or("missing value for --alert-kind")?;
+                    alert_kind = parse_alert_kind(&value)?;
+                }
+                "--alert-severity" => {
+                    let value = iter.next().ok_or("missing value for --alert-severity")?;
+                    alert_severity = Some(parse_alert_severity(&value)?);
+                }
+                "--alert-sound" => {
+                    let value = iter.next().ok_or("missing value for --alert-sound")?;
+                    alert_sound = parse_alert_sound(&value)?;
+                }
+                "--alert-list" => {
+                    let value = iter.next().ok_or("missing value for --alert-list")?;
+                    alert_list = AlertListArg::parse(&value)?;
+                }
+                "--alert-selected" => {
+                    let value = iter.next().ok_or("missing value for --alert-selected")?;
+                    alert_selected = value
+                        .parse::<usize>()
+                        .map_err(|_| format!("invalid --alert-selected value: {value}"))?;
+                }
+                "--alert-top" => {
+                    let value = iter.next().ok_or("missing value for --alert-top")?;
+                    alert_top = value
+                        .parse::<usize>()
+                        .map_err(|_| format!("invalid --alert-top value: {value}"))?;
+                }
+                "--alert-cleared" => alert_cleared = true,
+                "--alert-touch-zones" => alert_touch_overlay = true,
+                "--alert-mixed" => alert_mixed = true,
                 "--help" | "-h" => {
                     return Err(help_text());
                 }
@@ -2540,6 +2779,7 @@ impl Args {
         let out_dir = out_dir.ok_or_else(|| format!("missing --out-dir\n\n{}", help_text()))?;
         let mode = mode.unwrap_or_else(|| ModeArg::from_focus(focus));
         let scenario = scenario.unwrap_or(ScenarioArg::Default);
+        let alert_severity = alert_severity.unwrap_or_else(|| alert_kind.default_severity());
 
         Ok(Self {
             variant,
@@ -2548,7 +2788,113 @@ impl Args {
             scenario,
             out_dir,
             frame_no,
+            alert_kind,
+            alert_severity,
+            alert_sound,
+            alert_list,
+            alert_selected,
+            alert_top,
+            alert_cleared,
+            alert_touch_overlay,
+            alert_mixed,
         })
+    }
+
+    fn output_tag(&self) -> String {
+        match self.scenario {
+            ScenarioArg::DashboardAlert => format!(
+                "dashboard-alert-{}-{}-phase-{}-frame-{}{}{}",
+                alert_severity_tag(self.alert_severity),
+                alert_sound_tag(self.alert_sound),
+                if self.frame_no % 2 == 0 {
+                    "white"
+                } else {
+                    "severity"
+                },
+                self.frame_no,
+                if self.alert_touch_overlay {
+                    "-touch-zones"
+                } else {
+                    ""
+                },
+                if self.alert_mixed { "-mixed" } else { "" },
+            ),
+            ScenarioArg::AlertList => format!(
+                "alert-list-{}-{}-{}-selected-{}-top-{}{}",
+                self.alert_list.as_tag(),
+                alert_kind_tag(self.alert_kind),
+                alert_sound_tag(self.alert_sound),
+                self.alert_selected,
+                self.alert_top,
+                if self.alert_touch_overlay {
+                    "-touch-zones"
+                } else {
+                    ""
+                },
+            ),
+            ScenarioArg::AlertDetail => format!(
+                "alert-detail-{}-{}{}{}{}",
+                alert_kind_tag(self.alert_kind),
+                if self.alert_cleared {
+                    "cleared"
+                } else {
+                    "active"
+                },
+                if self.alert_cleared { "" } else { "-" },
+                if self.alert_cleared {
+                    ""
+                } else {
+                    alert_sound_tag(self.alert_sound)
+                },
+                if self.alert_touch_overlay {
+                    "-touch-zones"
+                } else {
+                    ""
+                },
+            ),
+            _ => self.scenario.as_tag().to_string(),
+        }
+    }
+}
+
+fn alert_preview_items(state: AlertListArg, args: &Args) -> Vec<AlertPreviewItem> {
+    match state {
+        AlertListArg::Empty => Vec::new(),
+        AlertListArg::Single => vec![AlertPreviewItem::active(
+            args.alert_kind,
+            args.alert_severity,
+            args.alert_sound,
+        )],
+        AlertListArg::Mixed => vec![
+            AlertPreviewItem::active(
+                AlertPreviewKind::MainsAbsentDc,
+                AlertPreviewSeverity::Warning,
+                AlertPreviewSoundState::Audible,
+            ),
+            AlertPreviewItem::active(
+                AlertPreviewKind::BatteryLowNoMains,
+                AlertPreviewSeverity::Warning,
+                AlertPreviewSoundState::Muted,
+            ),
+            AlertPreviewItem::active(
+                AlertPreviewKind::IoOverCurrent,
+                AlertPreviewSeverity::Critical,
+                AlertPreviewSoundState::SystemSilent,
+            ),
+        ],
+        AlertListArg::Overflow => AlertPreviewKind::ALL
+            .iter()
+            .enumerate()
+            .map(|(index, kind)| {
+                let sound = match index % 4 {
+                    0 => AlertPreviewSoundState::Audible,
+                    1 => AlertPreviewSoundState::Muted,
+                    2 => AlertPreviewSoundState::SystemSilent,
+                    _ => AlertPreviewSoundState::PolicySilent,
+                };
+                AlertPreviewItem::active(*kind, kind.default_severity(), sound)
+            })
+            .collect(),
     }
 }
 
@@ -2556,6 +2902,12 @@ fn help_text() -> String {
     [
         "Usage:",
         "  front-panel-preview --variant {A|B|C|D} --focus {idle|up|down|left|right|center|touch} [--mode {off|standby|supplement|backup}] [--scenario <scenario>] --out-dir <ABS_PATH> [--frame-no <n>]",
+        "",
+        "Alert preview scenarios:",
+        "  dashboard-alert --alert-severity {warning|critical} --alert-sound {audible|muted|system-silent|policy-silent}",
+        "  dashboard-alert --alert-mixed (critical muted + warning audible aggregate)",
+        "  alert-list --alert-list {empty|single|mixed|overflow} [--alert-selected <n>] [--alert-top <n>] [--alert-touch-zones]",
+        "  alert-detail --alert-kind <alert-id> [--alert-sound <state>] [--alert-cleared] [--alert-touch-zones]",
         "",
         "Common charger scenarios:",
         "  dashboard-detail-charger-wait",

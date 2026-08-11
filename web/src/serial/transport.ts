@@ -1,5 +1,6 @@
 import type {
   AdvancedPowerSettings,
+  ActiveAlertsSnapshot,
   ChargeControlDetail,
   DefmtDecodeResult,
   DeviceSettings,
@@ -214,6 +215,17 @@ export class WebSerialTransport {
   async requestChargeControl(): Promise<ChargeControlDetail> {
     const result = await this.request("get_charge_control");
     return result as ChargeControlDetail;
+  }
+
+  async requestAlerts(): Promise<ActiveAlertsSnapshot> {
+    return (await this.request("get_alerts")) as ActiveAlertsSnapshot;
+  }
+
+  async muteAlert(alertId: string, instanceId: number): Promise<unknown> {
+    return this.request("mute_alert", {
+      alert_id: alertId,
+      instance_id: instanceId,
+    });
   }
 
   async setLogLevel(level: string): Promise<unknown> {
