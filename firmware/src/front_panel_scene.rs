@@ -534,6 +534,20 @@ pub struct AlertPreviewItem {
     pub cleared: bool,
 }
 
+pub fn select_alert_preview_indicator(items: &[AlertPreviewItem]) -> Option<AlertPreviewItem> {
+    let mut indicator = items
+        .iter()
+        .copied()
+        .max_by_key(|item| matches!(item.severity, AlertPreviewSeverity::Critical) as u8)?;
+    if items
+        .iter()
+        .any(|item| item.sound == AlertPreviewSoundState::Audible)
+    {
+        indicator.sound = AlertPreviewSoundState::Audible;
+    }
+    Some(indicator)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlertPreviewTouchTarget {
     Back,
@@ -9598,6 +9612,35 @@ pub fn draw_dashboard_alert_preview_indicator<P: UiPainter>(
     )
 }
 
+pub fn draw_dashboard_alert_preview_mixed_indicator<P: UiPainter>(
+    painter: &mut P,
+    variant: UiVariant,
+    frame_no: u32,
+) -> Result<(), P::Error> {
+    let alerts = [
+        AlertPreviewItem::active(
+            AlertPreviewKind::BatteryProtection,
+            AlertPreviewSeverity::Critical,
+            AlertPreviewSoundState::Muted,
+        ),
+        AlertPreviewItem::active(
+            AlertPreviewKind::MainsAbsentDc,
+            AlertPreviewSeverity::Warning,
+            AlertPreviewSoundState::Audible,
+        ),
+    ];
+    let Some(indicator) = select_alert_preview_indicator(&alerts) else {
+        return Ok(());
+    };
+    draw_dashboard_alert_preview_indicator(
+        painter,
+        variant,
+        indicator.severity,
+        indicator.sound,
+        frame_no,
+    )
+}
+
 /// Draw the Dashboard alert entry on top of the runtime touch-region overlay.
 pub fn draw_dashboard_alert_preview_touch_overlay<P: UiPainter>(
     painter: &mut P,
@@ -9899,17 +9942,13 @@ pub fn render_alert_detail_preview<P: UiPainter>(
 
     let action = if alert.cleared {
         "ALERT CLEARED"
-    } else if alert.sound.can_mute() {
-        "MUTE THIS ALERT"
     } else {
-        alert.sound.label()
+        "MUTE THIS ALERT"
     };
     let action_color = if alert.cleared {
         palette.accent
-    } else if alert.sound.can_mute() {
-        palette.center
     } else {
-        palette.text_dim
+        palette.center
     };
     draw_panel(painter, 8, 112, 304, 28, palette, false, action_color)?;
     text(
@@ -9927,10 +9966,8 @@ pub fn render_alert_detail_preview<P: UiPainter>(
         palette,
         if alert.cleared {
             "LEFT BACK"
-        } else if alert.sound.can_mute() {
-            "RIGHT MUTE  LEFT BACK"
         } else {
-            "LEFT BACK"
+            "RIGHT MUTE  LEFT BACK"
         },
     )?;
 
@@ -9949,7 +9986,7 @@ pub fn render_alert_detail_preview<P: UiPainter>(
             4,
             3,
         )?;
-        if !alert.cleared && alert.sound.can_mute() {
+        if !alert.cleared {
             let mute = ALERT_DETAIL_MUTE_TOUCH;
             draw_dashboard_touch_region_overlay(
                 painter,
@@ -15311,6 +15348,25 @@ mod tests {
     }
 
     #[test]
+    fn alert_preview_indicator_uses_highest_severity_and_any_audible_state() {
+        let alerts = [
+            AlertPreviewItem::active(
+                AlertPreviewKind::BatteryProtection,
+                AlertPreviewSeverity::Critical,
+                AlertPreviewSoundState::Muted,
+            ),
+            AlertPreviewItem::active(
+                AlertPreviewKind::MainsAbsentDc,
+                AlertPreviewSeverity::Warning,
+                AlertPreviewSoundState::Audible,
+            ),
+        ];
+        let indicator = select_alert_preview_indicator(&alerts).expect("mixed alerts");
+        assert_eq!(indicator.severity, AlertPreviewSeverity::Critical);
+        assert_eq!(indicator.sound, AlertPreviewSoundState::Audible);
+    }
+
+    #[test]
     fn alert_preview_indicator_flashes_only_for_audible_alerts() {
         let palette = palette_for(UiVariant::InstrumentB);
 
@@ -16094,7 +16150,11 @@ mod tests {
 
     #[test]
     fn alert_detail_touch_contract_keeps_actions_disjoint() {
-        let regions = [ALERT_DETAIL_TOP_BACK_TOUCH, ALERT_DETAIL_MUTE_TOUCH];
+        let regions = [
+            ALERT_DETAIL_TOP_BACK_TOUCH,
+            ALERT_DETAIL_MUTE_TOUCH,
+            ALERT_DETAIL_ACTION_TOUCH,
+        ];
         for (index, region) in regions.iter().copied().enumerate() {
             assert!(region.within_screen());
             for other in regions.iter().copied().skip(index + 1) {
@@ -16103,6 +16163,7 @@ mod tests {
         }
         assert_eq!(ALERT_DETAIL_TOP_BACK_TOUCH, TouchRect::new(0, 0, 96, 32));
         assert_eq!(ALERT_DETAIL_MUTE_TOUCH, TouchRect::new(264, 72, 56, 40));
+        assert_eq!(ALERT_DETAIL_ACTION_TOUCH, TouchRect::new(8, 112, 304, 28));
         assert_eq!(
             alert_detail_hit_test(95, 31),
             Some(AlertDetailTouchTarget::Back)
@@ -16115,9 +16176,16 @@ mod tests {
             alert_detail_hit_test(319, 111),
             Some(AlertDetailTouchTarget::Mute)
         );
+        assert_eq!(
+            alert_detail_hit_test(8, 112),
+            Some(AlertDetailTouchTarget::Mute)
+        );
+        assert_eq!(
+            alert_detail_hit_test(311, 139),
+            Some(AlertDetailTouchTarget::Mute)
+        );
         assert_eq!(alert_detail_hit_test(319, 140), None);
         assert_eq!(alert_detail_hit_test(160, 100), None);
-        assert_eq!(alert_detail_hit_test(319, 139), None);
     }
 
     #[test]

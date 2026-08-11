@@ -18,6 +18,7 @@
 - `firmware/src/main.rs`、`firmware/src/audio.rs`
   - 每轮从现有运行期信号更新实例集合，再按有效声音状态启停单个 cue。
   - CDC、LAN 与前面板消音均立即停止目标 cue，并发布同一份权威快照；请求携带当前 `instance_id`，不会误消音复发实例。
+  - malformed Alerts mute 路径在解析阶段返回结构化 `400`，不会因缺失或嵌套 `alert_id` 触发路径切片异常。
   - 市电缺失告警活动期间，VIN 遥测 unknown 保持当前实例与消音状态；只有明确恢复市电才解除。
   - 告警实例更新独立于 I2S/DMA 可用性；音频初始化失败时仍继续发布和显示活动告警。
   - 前面板、USB CDC 和 LAN 命令均修改同一份 `ActiveAlerts`。
@@ -38,6 +39,7 @@
   - 所有在线设备的告警合同每 2 秒自动回读，页面重新可见时立即回读；fleet 级快照直接驱动所有路由已有的 TopBar `Critical` / `Warning` 指标，非零指标进入相关设备 Alerts，不新增大型 Alert 或正常态提示；当前设备快照同时驱动 Alerts 列表。
   - Web Serial 保留 CDC error envelope；刷新使用代次保护，mute 冲突后的权威回读不清除 stale/inactive 提示。
   - 告警控制优先使用当前已确认的活动传输，再按可重试错误回退到 devd、LAN 主地址、LAN fallback 地址或 Web Serial；非重试错误不会伪装成另一种传输状态。
+  - `system_silent` 与 `policy_silent` 告警仍可写入当前实例的用户消音状态；内置 mock USB 记录使用 mock Alerts transport 验证同一流程。
 
 - `firmware/src/front_panel_scene.rs`
   - 提供同源 Dashboard 指示器、`ALERTS` 列表、详情 `CLEARED` 终态与热区。
@@ -48,6 +50,7 @@
   - 将获批 scene 接入触摸和 `UP/DOWN/CENTER/RIGHT/LEFT` 导航。
   - Dashboard 可听告警在无输入时仍按获批双相帧持续刷新；列表滚动窗口与详情/底部整行消音均绑定当前实例。
   - 详情缓存当前实例；解除后保留不可操作的 `CLEARED` 终态。
+  - 告警屏幕拦截 Dashboard 垂直手势，避免列表/详情滑动改变隐藏页面；最高严重度与任一可听实例的聚合规则由 scene helper 和 host 测试共同锁定。
 - `tools/front-panel-preview/src/main.rs`
   - 提供 `dashboard-alert`、`alert-list`、`alert-detail` 场景和参数化矩阵入口。
   - 每次导出保持 `320x172` PNG 与 `110080` 字节 RGB565 framebuffer。
@@ -57,7 +60,7 @@
 ## 验证记录
 
 - `cargo test --manifest-path tools/front-panel-preview/Cargo.toml`
-  - 112 passed。
+  - 117 passed。
 - `cargo fmt --manifest-path tools/front-panel-preview/Cargo.toml --check`
   - 通过。
 - `just firmware-host-test`
@@ -73,4 +76,4 @@
 - `just check`
   - 通过。
 - 前面板矩阵
-  - 46 个场景；每个 `framebuffer.bin` 均为 `110080` 字节，并生成 7 张 review sheet。
+  - 46 个场景；每个 `framebuffer.bin` 均为 `110080` 字节、PNG 为 `320x172`，manifest 记录 renderer 参数、源 revision 与 SHA-256，并生成 7 张 review sheet。

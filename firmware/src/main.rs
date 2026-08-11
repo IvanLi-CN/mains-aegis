@@ -2291,6 +2291,11 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                 &active_alerts,
                                 power.beeper_prefs_snapshot().system_volume.step() == 0,
                             );
+                            #[cfg(feature = "net_http")]
+                            mains_aegis_firmware::net::publish_active_alerts(
+                                &active_alerts,
+                                power.beeper_prefs_snapshot().system_volume.step() == 0,
+                            );
                         }
                     }
                     front_panel::UiAction::BeeperPreview { prefs, target } => {

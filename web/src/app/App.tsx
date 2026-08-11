@@ -1166,9 +1166,7 @@ function TopBar({
   const counts = useMemo(() => {
     const severities = records.map(
       (record) =>
-        activeAlertSeverity(
-          activeAlertsByDevice[record.target.deviceId] ?? null,
-        ) ?? deviceSeverity(record),
+        activeAlertSeverity(activeAlertsByDevice[record.target.deviceId] ?? null),
     );
     return {
       total: records.length,
@@ -1176,7 +1174,7 @@ function TopBar({
         .length,
       critical: severities.filter((severity) => severity === "critical").length,
       warning: severities.filter((severity) => severity === "warning").length,
-      offline: severities.filter((severity) => severity === "offline").length,
+      offline: records.filter((record) => deviceSeverity(record) === "offline").length,
     };
   }, [activeAlertsByDevice, records]);
 
@@ -1185,9 +1183,8 @@ function TopBar({
   const alertTargetDeviceId = (severity: "critical" | "warning") =>
     records.find(
       (record) =>
-        (activeAlertSeverity(
-          activeAlertsByDevice[record.target.deviceId] ?? null,
-        ) ?? deviceSeverity(record)) === severity,
+        activeAlertSeverity(activeAlertsByDevice[record.target.deviceId] ?? null) ===
+        severity,
     )?.target.deviceId ?? null;
   const criticalTarget = alertTargetDeviceId("critical");
   const warningTarget = alertTargetDeviceId("warning");
@@ -3888,7 +3885,7 @@ function AlertsPage({
   const targets = useMemo(() => alertControlTargets(record), [record]);
 
   const mute = async (alert: ActiveAlert) => {
-    if (targets.length === 0 || error || alert.sound_state !== "audible") return;
+    if (targets.length === 0 || error || alert.sound_state === "muted") return;
     setMuting(alert.alert_id);
     setActionError(null);
     try {
@@ -3944,7 +3941,7 @@ function AlertsPage({
                   <button
                     type="button"
                     className="icon-button"
-                    disabled={Boolean(error) || alert.sound_state !== "audible" || busy}
+                    disabled={Boolean(error) || alert.sound_state === "muted" || busy}
                     onClick={() => void mute(alert)}
                     title={error ? "Refresh alerts before muting" : alert.sound_state === "audible" ? "Mute this alert" : alertSoundLabel(alert.sound_state)}
                     aria-label={`Mute ${copy.title}`}
@@ -3984,6 +3981,8 @@ function alertControlTargets(record: DeviceRecord): AlertControlTarget[] {
     if (transport === "serial") {
       if (record.serial?.source === "web_serial") {
         add({ kind: "serial", deviceId: record.target.deviceId });
+      } else if (record.target.mock && record.serial?.source === "mock") {
+        add({ kind: "http", baseUrls: [`mock:usb-alerts:${record.target.deviceId}`] });
       }
       return;
     }

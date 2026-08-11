@@ -1221,17 +1221,7 @@ where
     }
 
     fn alert_indicator(&self) -> Option<AlertPreviewItem> {
-        let mut indicator = self.alert_items[..self.alert_count]
-            .iter()
-            .copied()
-            .max_by_key(|item| matches!(item.severity, AlertPreviewSeverity::Critical) as u8)?;
-        if self.alert_items[..self.alert_count]
-            .iter()
-            .any(|item| item.sound == AlertPreviewSoundState::Audible)
-        {
-            indicator.sound = AlertPreviewSoundState::Audible;
-        }
-        Some(indicator)
+        front_panel_scene::select_alert_preview_indicator(&self.alert_items[..self.alert_count])
     }
 
     fn set_dashboard_page(&mut self, page: DashboardPrimaryPage) {
@@ -2523,11 +2513,10 @@ where
                     self.needs_redraw = true;
                 } else if right {
                     if let Some(item) = self.alert_detail {
-                        return (!item.cleared && item.sound == AlertPreviewSoundState::Audible)
-                            .then_some(UiAction::MuteAlert {
-                                alert_id: alert_id_for_preview(item.kind),
-                                instance_id: item.instance_id,
-                            });
+                        return (!item.cleared).then_some(UiAction::MuteAlert {
+                            alert_id: alert_id_for_preview(item.kind),
+                            instance_id: item.instance_id,
+                        });
                     }
                 }
                 None
@@ -2573,12 +2562,10 @@ where
                     }
                     Some(AlertDetailTouchTarget::Mute) => {
                         if let Some(item) = self.alert_detail {
-                            return (!item.cleared
-                                && item.sound == AlertPreviewSoundState::Audible)
-                                .then_some(UiAction::MuteAlert {
-                                    alert_id: alert_id_for_preview(item.kind),
-                                    instance_id: item.instance_id,
-                                });
+                            return (!item.cleared).then_some(UiAction::MuteAlert {
+                                alert_id: alert_id_for_preview(item.kind),
+                                instance_id: item.instance_id,
+                            });
                         }
                     }
                     None => {}
@@ -2590,13 +2577,16 @@ where
 
     fn alert_mute_action(&self, index: usize) -> Option<UiAction> {
         let item = self.alert_items.get(index)?;
-        (item.sound == AlertPreviewSoundState::Audible).then_some(UiAction::MuteAlert {
+        (!item.cleared).then_some(UiAction::MuteAlert {
             alert_id: alert_id_for_preview(item.kind),
             instance_id: item.instance_id,
         })
     }
 
     fn process_dashboard_gesture_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
+        if self.alert_screen != AlertScreen::Closed {
+            return None;
+        }
         if self.self_check_overlay == SelfCheckOverlay::ManualChargeLoopbackConfirm {
             return None;
         }

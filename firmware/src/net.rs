@@ -999,7 +999,11 @@ async fn handle_http_write(
     let mut await_command_timeout = LAN_ADVANCED_POWER_APPLY_TIMEOUT;
     let queued = match (method, path) {
         ("POST", path) if path.starts_with("/api/v1/alerts/") && path.ends_with("/mute") => {
-            let alert_id = &path[15..path.len() - 5];
+            let Some(alert_id) = parse_alert_mute_path(path) else {
+                write_error_body(&mut body, "invalid_alert", "invalid alert id", false, None);
+                write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+                return Ok(());
+            };
             match parse_http_mute_alert_request(alert_id, request_body) {
                 Ok(command) => {
                     await_command_result = true;
@@ -1188,6 +1192,16 @@ async fn handle_http_write(
     let _ = body.push_str(r#"{"accepted":true}"#);
     write_http_response(socket, "202 Accepted", body.as_str(), origin).await?;
     Ok(())
+}
+
+fn parse_alert_mute_path(path: &str) -> Option<&str> {
+    let alert_id = path
+        .strip_prefix("/api/v1/alerts/")?
+        .strip_suffix("/mute")?;
+    if alert_id.is_empty() || alert_id.contains('/') {
+        return None;
+    }
+    Some(alert_id)
 }
 
 async fn handle_status_sse(
@@ -1508,8 +1522,8 @@ pub(crate) const fn status_push_interval_millis_for_test() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        diag_package_mask, parse_diag_snapshot_query_packages, split_request_target,
-        REQUEST_TARGET_CAP,
+        diag_package_mask, parse_alert_mute_path, parse_diag_snapshot_query_packages,
+        split_request_target, REQUEST_TARGET_CAP,
     };
 
     #[test]
@@ -1556,6 +1570,20 @@ mod tests {
 
         let packages = parse_diag_snapshot_query_packages(Some("package=derived.power"));
         assert_eq!(diag_package_mask(packages.as_slice()), 0);
+    }
+
+    #[test]
+    fn alert_mute_path_rejects_missing_or_nested_alert_ids() {
+        assert_eq!(
+            parse_alert_mute_path("/api/v1/alerts/module_fault/mute"),
+            Some("module_fault")
+        );
+        assert_eq!(parse_alert_mute_path("/api/v1/alerts/mute"), None);
+        assert_eq!(parse_alert_mute_path("/api/v1/alerts//mute"), None);
+        assert_eq!(
+            parse_alert_mute_path("/api/v1/alerts/module/fault/mute"),
+            None
+        );
     }
 }
 

@@ -1438,14 +1438,23 @@ fn run() -> Result<(), String> {
                 SelfCheckOverlay::None,
             )
             .map_err(|_| "render failed unexpectedly".to_string())?;
-            front_panel_scene::draw_dashboard_alert_preview_indicator(
-                &mut framebuffer,
-                UiVariant::InstrumentB,
-                args.alert_severity,
-                args.alert_sound,
-                args.frame_no,
-            )
-            .map_err(|_| "alert indicator render failed unexpectedly".to_string())?;
+            let indicator_result = if args.alert_mixed {
+                front_panel_scene::draw_dashboard_alert_preview_mixed_indicator(
+                    &mut framebuffer,
+                    UiVariant::InstrumentB,
+                    args.frame_no,
+                )
+            } else {
+                front_panel_scene::draw_dashboard_alert_preview_indicator(
+                    &mut framebuffer,
+                    UiVariant::InstrumentB,
+                    args.alert_severity,
+                    args.alert_sound,
+                    args.frame_no,
+                )
+            };
+            indicator_result
+                .map_err(|_| "alert indicator render failed unexpectedly".to_string())?;
             if args.alert_touch_overlay {
                 front_panel_scene::render_dashboard_touch_regions_overlay(
                     &mut framebuffer,
@@ -2673,6 +2682,7 @@ struct Args {
     alert_top: usize,
     alert_cleared: bool,
     alert_touch_overlay: bool,
+    alert_mixed: bool,
 }
 
 impl Args {
@@ -2694,6 +2704,7 @@ impl Args {
         let mut alert_top: usize = 0;
         let mut alert_cleared = false;
         let mut alert_touch_overlay = false;
+        let mut alert_mixed = false;
 
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -2753,6 +2764,7 @@ impl Args {
                 }
                 "--alert-cleared" => alert_cleared = true,
                 "--alert-touch-zones" => alert_touch_overlay = true,
+                "--alert-mixed" => alert_mixed = true,
                 "--help" | "-h" => {
                     return Err(help_text());
                 }
@@ -2784,13 +2796,14 @@ impl Args {
             alert_top,
             alert_cleared,
             alert_touch_overlay,
+            alert_mixed,
         })
     }
 
     fn output_tag(&self) -> String {
         match self.scenario {
             ScenarioArg::DashboardAlert => format!(
-                "dashboard-alert-{}-{}-phase-{}-frame-{}{}",
+                "dashboard-alert-{}-{}-phase-{}-frame-{}{}{}",
                 alert_severity_tag(self.alert_severity),
                 alert_sound_tag(self.alert_sound),
                 if self.frame_no % 2 == 0 {
@@ -2804,6 +2817,7 @@ impl Args {
                 } else {
                     ""
                 },
+                if self.alert_mixed { "-mixed" } else { "" },
             ),
             ScenarioArg::AlertList => format!(
                 "alert-list-{}-{}-{}-selected-{}-top-{}{}",
@@ -2891,6 +2905,7 @@ fn help_text() -> String {
         "",
         "Alert preview scenarios:",
         "  dashboard-alert --alert-severity {warning|critical} --alert-sound {audible|muted|system-silent|policy-silent}",
+        "  dashboard-alert --alert-mixed (critical muted + warning audible aggregate)",
         "  alert-list --alert-list {empty|single|mixed|overflow} [--alert-selected <n>] [--alert-top <n>] [--alert-touch-zones]",
         "  alert-detail --alert-kind <alert-id> [--alert-sound <state>] [--alert-cleared] [--alert-touch-zones]",
         "",

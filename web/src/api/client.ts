@@ -1431,7 +1431,7 @@ function muteMockAlert(baseUrl: string, path: string, body: unknown): unknown {
     throw new MainsAegisApiError({
       code: "stale_alert_instance",
       message: "The alert instance changed before it could be muted.",
-      retryable: true,
+      retryable: false,
       details: null,
     });
   }

@@ -74,7 +74,7 @@
 
 - 列表项显示三角、告警摘要、严重度与声音图标。可听告警显示声音图标；被抑制的项显示带斜杠声音图标并用状态文本区分 `MUTED`、`SYSTEM SILENT`、`POLICY SILENT`。
 - 触摸行主体进入详情；触摸右侧声音图标只消音当前项。列表支持空态、单项、多项及首/中/末溢出位置。
-- 物理按键：`UP/DOWN` 选择、`CENTER` 进入详情、`RIGHT` 消音当前可听项、`LEFT` 返回。
+- 物理按键：`UP/DOWN` 选择、`CENTER` 进入详情、`RIGHT` 消音当前未清除实例（包括全局/策略静默项）、`LEFT` 返回。
 - 详情页显示摘要、`SOUND` 状态与单个 `MUTE THIS ALERT` 动作。解除后的详情显示 `CLEARED` 且不提供动作。
 - 热区坐标、边界、层级优先级和越界策略以 [`firmware/ui/touch-targets.md`](../../../firmware/ui/touch-targets.md) 为准；同一组 `TouchRect` 常量同时驱动 runtime hit-test、preview overlay 与 host 单元测试。
 

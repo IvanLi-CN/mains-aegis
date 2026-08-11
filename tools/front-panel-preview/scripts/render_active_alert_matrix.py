@@ -8,6 +8,7 @@ sheets from the PNGs it produces. It never rasterizes a firmware screen itself.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 from dataclasses import dataclass
@@ -94,7 +95,7 @@ def matrix() -> list[Entry]:
         Entry(
             "dashboard",
             "Mixed / highest critical audible",
-            ("--scenario", "dashboard-alert", "--alert-severity", "critical", "--alert-sound", "audible", "--frame-no", "3"),
+            ("--scenario", "dashboard-alert", "--alert-mixed", "--frame-no", "3"),
         ),
         Entry(
             "hotspots",
@@ -226,10 +227,29 @@ def main() -> None:
     for group, images in grouped.items():
         make_sheet(f"Active Alert Muting / {group}", images, review_dir / f"{group}.png")
 
-    manifest = [
-        {"group": entry.group, "title": entry.title, "preview": str(path.relative_to(output))}
-        for entry, path in rendered
-    ]
+    source_revision = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    manifest = []
+    for entry, path in rendered:
+        framebuffer = path.with_name("framebuffer.bin")
+        with Image.open(path) as image:
+            png_dimensions = list(image.size)
+        manifest.append(
+            {
+                "group": entry.group,
+                "title": entry.title,
+                "renderer": "firmware_preview",
+                "source_revision": source_revision,
+                "args": list(entry.args),
+                "preview": str(path.relative_to(output)),
+                "preview_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "framebuffer": str(framebuffer.relative_to(output)),
+                "framebuffer_sha256": hashlib.sha256(framebuffer.read_bytes()).hexdigest(),
+                "framebuffer_bytes": framebuffer.stat().st_size,
+                "png_dimensions": png_dimensions,
+            }
+        )
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
