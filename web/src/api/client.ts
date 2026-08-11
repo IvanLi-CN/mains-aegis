@@ -109,6 +109,8 @@ type RequestOptions = {
   timeoutMs?: number;
 };
 
+const ACTIVE_ALERT_REQUEST_TIMEOUT_MS = 1_500;
+
 async function requestJson<T>(
   baseUrl: string,
   path: string,
@@ -1381,6 +1383,7 @@ export const muteDeviceAlert = (
     `/api/v1/alerts/${encodeURIComponent(alertId)}/mute`,
     "POST",
     { instance_id: instanceId },
+    { timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS },
   );
 
 export const getDevdDeviceAlerts = (
@@ -1405,7 +1408,7 @@ export const muteDevdDeviceAlert = (
     `/api/v1/devices/${encodeURIComponent(deviceId)}/alerts/${encodeURIComponent(alertId)}/mute`,
     "POST",
     { instance_id: instanceId },
-    { bridgeAuth: true },
+    { bridgeAuth: true, timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS },
   );
 
 function mockAlerts(baseUrl: string): ActiveAlertsSnapshot {

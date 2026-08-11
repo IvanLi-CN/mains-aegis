@@ -269,6 +269,19 @@ describe("alert mute errors", () => {
     expect(observedSignal?.aborted).toBe(false);
   });
 
+  test("applies a timeout signal to direct LAN mute requests", async () => {
+    let observedSignal: AbortSignal | undefined;
+    await withFetchMock(
+      async (_input, init) => {
+        observedSignal = init?.signal ?? undefined;
+        return jsonResponse({ result: "muted" });
+      },
+      () => muteDeviceAlert("http://mains-aegis.local", "module_fault", 41),
+    );
+    expect(observedSignal).toBeInstanceOf(AbortSignal);
+    expect(observedSignal?.aborted).toBe(false);
+  });
+
   test("preserves structured Web Serial error envelopes", () => {
     const serialError = Object.assign(new Error("unsupported operation"), {
       envelope: {
