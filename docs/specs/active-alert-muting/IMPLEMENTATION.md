@@ -64,7 +64,7 @@
 - `cargo fmt --manifest-path tools/front-panel-preview/Cargo.toml --check`
   - 通过。
 - `just firmware-host-test`
-  - 515 passed。
+  - 516 passed。
 - `just firmware-check`
   - 通过。
 - `just host-test`
