@@ -130,6 +130,8 @@ describe("active alert presentation", () => {
     const source = readFileSync(join(import.meta.dir, "App.tsx"), "utf8");
     expect(source).toContain("const trackedRequest = request.finally(() => {");
     expect(source).not.toContain("refreshInFlight.current === request");
+    expect(source).toContain("refreshGeneration.current += 1;");
+    expect(source).toContain("refreshInFlight.current = null;");
   });
 });
 

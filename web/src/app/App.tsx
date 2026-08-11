@@ -3855,6 +3855,11 @@ function useActiveAlertsSnapshot(
     setLastUpdated(null);
     setError(null);
     void refresh();
+    return () => {
+      // Invalidate an in-flight read before the selected device or transport changes.
+      refreshGeneration.current += 1;
+      refreshInFlight.current = null;
+    };
   }, [deviceId, refresh]);
 
   useEffect(() => {
