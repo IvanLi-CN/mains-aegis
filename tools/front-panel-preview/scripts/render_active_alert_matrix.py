@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -188,6 +189,7 @@ def make_sheet(title: str, images: list[tuple[str, Path]], destination: Path) ->
 
 def render_entry(entry: Entry, output: Path) -> Path:
     before = set(output.rglob("preview.png"))
+    started_at_ns = time.time_ns()
     command = [
         str(BINARY),
         "--variant",
@@ -203,7 +205,17 @@ def render_entry(entry: Entry, output: Path) -> Path:
     subprocess.run(command, cwd=ROOT, check=True)
     created = set(output.rglob("preview.png")) - before
     if len(created) != 1:
-        raise RuntimeError(f"expected one preview for {entry.title}, found {len(created)}")
+        updated = {
+            path
+            for path in output.rglob("preview.png")
+            if path.stat().st_mtime_ns >= started_at_ns
+        }
+        if len(updated) == 1:
+            return updated.pop()
+        raise RuntimeError(
+            f"expected one new or updated preview for {entry.title}, "
+            f"found {len(created)} new and {len(updated)} updated"
+        )
     return created.pop()
 
 

@@ -1016,6 +1016,17 @@ async fn handle_http_write(
                 }
             }
         }
+        ("POST", path) if path.starts_with("/api/v1/alerts/") => {
+            write_error_body(
+                &mut body,
+                "invalid_alert",
+                "invalid alert mute path",
+                false,
+                None,
+            );
+            write_http_response(socket, "400 Bad Request", body.as_str(), origin).await?;
+            return Ok(());
+        }
         ("POST", "/api/v1/wifi-config") => match parse_http_wifi_config_request(request_body) {
             Ok(secret) => queue_lan_command(LanManagementCommand::SetWifi(secret)),
             Err(err) => {
@@ -1582,6 +1593,10 @@ mod tests {
         assert_eq!(parse_alert_mute_path("/api/v1/alerts//mute"), None);
         assert_eq!(
             parse_alert_mute_path("/api/v1/alerts/module/fault/mute"),
+            None
+        );
+        assert_eq!(
+            parse_alert_mute_path("/api/v1/alerts/module_fault/mute/"),
             None
         );
     }

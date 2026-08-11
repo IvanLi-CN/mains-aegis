@@ -214,6 +214,7 @@ pub struct AudioManager {
     last_output_sample: i16,
     bridge_from_sample: i16,
     bridge_samples_remaining: u16,
+    immediate_dma_flush_requested: bool,
     action_gain_q8: u16,
     system_gain_q8: u16,
 }
@@ -231,6 +232,7 @@ impl AudioManager {
             last_output_sample: 0,
             bridge_from_sample: 0,
             bridge_samples_remaining: 0,
+            immediate_dma_flush_requested: false,
             action_gain_q8: gain_q8_for_step(DEFAULT_VOLUME_STEP),
             system_gain_q8: gain_q8_for_step(DEFAULT_VOLUME_STEP),
         }
@@ -335,6 +337,28 @@ impl AudioManager {
         self.remove_queued_cue(cue);
     }
 
+    /// Stop an active cue and ask the runtime transport to replace buffered samples with silence.
+    ///
+    /// Clearing the manager alone does not affect the already-written circular DMA buffer, so
+    /// the main loop consumes this request and re-primes the transport immediately.
+    pub fn stop_cue_immediate(&mut self, cue: AudioCue) -> bool {
+        let was_current = self.current.map(|current| current.request.cue) == Some(cue);
+        self.stop_cue(cue);
+        if was_current {
+            self.last_output_sample = 0;
+            self.bridge_from_sample = 0;
+            self.bridge_samples_remaining = 0;
+            self.immediate_dma_flush_requested = true;
+        }
+        was_current
+    }
+
+    pub fn take_immediate_dma_flush_request(&mut self) -> bool {
+        let requested = self.immediate_dma_flush_requested;
+        self.immediate_dma_flush_requested = false;
+        requested
+    }
+
     pub fn tick(&mut self, now: Instant) {
         self.tick_loops(now);
         if self.current.is_none() {
@@ -351,6 +375,7 @@ impl AudioManager {
         self.last_output_sample = 0;
         self.bridge_from_sample = 0;
         self.bridge_samples_remaining = 0;
+        self.immediate_dma_flush_requested = false;
     }
 
     pub fn arm_transition_bridge(&mut self) {
@@ -853,6 +878,23 @@ mod tests {
         assert_eq!(status.current, Some(AudioCue::UsbCInsert));
         assert_eq!(status.queued, 0);
         assert_eq!(status.dropped, 0);
+    }
+
+    #[test]
+    fn immediate_stop_requests_dma_flush_and_outputs_silence() {
+        let mut manager = AudioManager::new();
+        manager.trigger(AudioCue::HighStress);
+        let mut active_buf = [0u8; 4096];
+        manager.fill(&mut active_buf);
+        assert!(manager.status().playing);
+        assert!(manager.stop_cue_immediate(AudioCue::HighStress));
+        assert!(manager.take_immediate_dma_flush_request());
+
+        let mut silent_buf = [0xA5u8; 4096];
+        manager.fill(&mut silent_buf);
+        assert!(silent_buf.iter().all(|sample| *sample == 0));
+        assert!(!manager.status().playing);
+        assert!(!manager.take_immediate_dma_flush_request());
     }
 }
 

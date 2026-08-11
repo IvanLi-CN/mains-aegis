@@ -3610,6 +3610,7 @@ function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
 }
 
 export const ACTIVE_ALERT_REFRESH_MS = 2_000;
+export const ACTIVE_ALERT_REQUEST_TIMEOUT_MS = 1_500;
 
 export function activeAlertSeverity(
   snapshot: ActiveAlertsSnapshot | null,
@@ -3646,6 +3647,7 @@ function useFleetActiveAlerts(records: DeviceRecord[]): FleetActiveAlertsState {
   const [lastUpdated, setLastUpdated] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const refreshGeneration = useRef(0);
+  const refreshInFlight = useRef<Promise<void> | null>(null);
   const recordKey = records
     .map((record) =>
       [
@@ -3662,62 +3664,69 @@ function useFleetActiveAlerts(records: DeviceRecord[]): FleetActiveAlertsState {
     .sort()
     .join("|");
 
-  const refresh = useCallback(async () => {
-    const generation = ++refreshGeneration.current;
-    const currentRecords = recordsRef.current;
-    const results = await Promise.all(
-      currentRecords.map(async (record) => {
-        const targets = alertControlTargets(record);
-        if (record.connectionState === "offline" || targets.length === 0)
-          return { record, snapshot: null, error: null };
-        try {
-          const snapshot = await readAlertsFromTargets(targets, getSerialAlerts);
-          return { record, snapshot, error: null };
-        } catch (cause) {
-          return {
-            record,
-            snapshot: null,
-            error: alertErrorMessage(cause),
-            clearSnapshot: alertErrorClearsSnapshot(cause),
-          };
-        }
-      }),
-    );
-    if (generation !== refreshGeneration.current) return;
-    const liveIds = new Set(currentRecords.map((record) => record.target.deviceId));
-    setSnapshots((current) => {
-      const next = Object.fromEntries(
-        Object.entries(current).filter(([deviceId]) => liveIds.has(deviceId)),
+  const refresh = useCallback(() => {
+    if (refreshInFlight.current) return refreshInFlight.current;
+    const request = (async () => {
+      const generation = ++refreshGeneration.current;
+      const currentRecords = recordsRef.current;
+      const results = await Promise.all(
+        currentRecords.map(async (record) => {
+          const targets = alertControlTargets(record);
+          if (record.connectionState === "offline" || targets.length === 0)
+            return { record, snapshot: null, error: null };
+          try {
+            const snapshot = await readAlertsFromTargets(targets, getSerialAlerts);
+            return { record, snapshot, error: null };
+          } catch (cause) {
+            return {
+              record,
+              snapshot: null,
+              error: alertErrorMessage(cause),
+              clearSnapshot: alertErrorClearsSnapshot(cause),
+            };
+          }
+        }),
       );
-      for (const result of results) {
-        const deviceId = result.record.target.deviceId;
-        if (result.snapshot) next[deviceId] = result.snapshot;
-        else if (!result.error || result.clearSnapshot) delete next[deviceId];
-      }
-      return next;
+      if (generation !== refreshGeneration.current) return;
+      const liveIds = new Set(currentRecords.map((record) => record.target.deviceId));
+      setSnapshots((current) => {
+        const next = Object.fromEntries(
+          Object.entries(current).filter(([deviceId]) => liveIds.has(deviceId)),
+        );
+        for (const result of results) {
+          const deviceId = result.record.target.deviceId;
+          if (result.snapshot) next[deviceId] = result.snapshot;
+          else if (!result.error || result.clearSnapshot) delete next[deviceId];
+        }
+        return next;
+      });
+      setLastUpdated((current) => {
+        const next = { ...current };
+        const now = new Date().toISOString();
+        for (const result of results) {
+          const deviceId = result.record.target.deviceId;
+          if (result.snapshot) next[deviceId] = now;
+          if (!liveIds.has(deviceId)) delete next[deviceId];
+        }
+        return next;
+      });
+      setErrors((current) => {
+        const next = { ...current };
+        for (const result of results) {
+          const deviceId = result.record.target.deviceId;
+          if (result.error) next[deviceId] = result.error;
+          else delete next[deviceId];
+        }
+        for (const deviceId of Object.keys(next)) {
+          if (!liveIds.has(deviceId)) delete next[deviceId];
+        }
+        return next;
+      });
+    })();
+    refreshInFlight.current = request.finally(() => {
+      if (refreshInFlight.current === request) refreshInFlight.current = null;
     });
-    setLastUpdated((current) => {
-      const next = { ...current };
-      const now = new Date().toISOString();
-      for (const result of results) {
-        const deviceId = result.record.target.deviceId;
-        if (result.snapshot) next[deviceId] = now;
-        if (!liveIds.has(deviceId)) delete next[deviceId];
-      }
-      return next;
-    });
-    setErrors((current) => {
-      const next = { ...current };
-      for (const result of results) {
-        const deviceId = result.record.target.deviceId;
-        if (result.error) next[deviceId] = result.error;
-        else delete next[deviceId];
-      }
-      for (const deviceId of Object.keys(next)) {
-        if (!liveIds.has(deviceId)) delete next[deviceId];
-      }
-      return next;
-    });
+    return refreshInFlight.current;
   }, [getSerialAlerts]);
 
   useEffect(() => void refresh(), [recordKey, refresh]);
@@ -3774,6 +3783,7 @@ function useActiveAlertsSnapshot(
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const refreshGeneration = useRef(0);
+  const refreshInFlight = useRef<Promise<void> | null>(null);
   const targets = useMemo(
     () => (record ? alertControlTargets(record) : []),
     [
@@ -3790,43 +3800,50 @@ function useActiveAlertsSnapshot(
   );
 
   const refresh = useCallback(
-    async (options?: { background?: boolean; preserveError?: boolean }) => {
-      const generation = ++refreshGeneration.current;
-      if (!deviceId || connectionState === "offline") {
-        setSnapshot(null);
-        setLastUpdated(null);
-        setLoading(false);
-        setError(
-          deviceId
-            ? "Device offline. Reconnect to view or mute active alerts."
-            : null,
-        );
-        return;
-      }
-      if (targets.length === 0) {
-        setSnapshot(null);
-        setLastUpdated(null);
-        setLoading(false);
-        setError("This connected device does not expose the alerts contract yet.");
-        return;
-      }
-      if (!options?.background) setLoading(true);
-      try {
-        const nextSnapshot = await readAlertsFromTargets(targets, getSerialAlerts);
-        if (generation !== refreshGeneration.current) return;
-        setSnapshot(nextSnapshot);
-        setLastUpdated(new Date().toISOString());
-        if (!options?.preserveError) setError(null);
-      } catch (cause) {
-        if (generation !== refreshGeneration.current) return;
-        if (alertErrorClearsSnapshot(cause)) {
+    (options?: { background?: boolean; preserveError?: boolean }) => {
+      if (refreshInFlight.current) return refreshInFlight.current;
+      const request = (async () => {
+        const generation = ++refreshGeneration.current;
+        if (!deviceId || connectionState === "offline") {
           setSnapshot(null);
           setLastUpdated(null);
+          setLoading(false);
+          setError(
+            deviceId
+              ? "Device offline. Reconnect to view or mute active alerts."
+              : null,
+          );
+          return;
         }
-        setError(alertErrorMessage(cause));
-      } finally {
-        if (generation === refreshGeneration.current) setLoading(false);
-      }
+        if (targets.length === 0) {
+          setSnapshot(null);
+          setLastUpdated(null);
+          setLoading(false);
+          setError("This connected device does not expose the alerts contract yet.");
+          return;
+        }
+        if (!options?.background) setLoading(true);
+        try {
+          const nextSnapshot = await readAlertsFromTargets(targets, getSerialAlerts);
+          if (generation !== refreshGeneration.current) return;
+          setSnapshot(nextSnapshot);
+          setLastUpdated(new Date().toISOString());
+          if (!options?.preserveError) setError(null);
+        } catch (cause) {
+          if (generation !== refreshGeneration.current) return;
+          if (alertErrorClearsSnapshot(cause)) {
+            setSnapshot(null);
+            setLastUpdated(null);
+          }
+          setError(alertErrorMessage(cause));
+        } finally {
+          if (generation === refreshGeneration.current) setLoading(false);
+        }
+      })();
+      refreshInFlight.current = request.finally(() => {
+        if (refreshInFlight.current === request) refreshInFlight.current = null;
+      });
+      return refreshInFlight.current;
     },
     [connectionState, deviceId, getSerialAlerts, targets],
   );
@@ -4050,10 +4067,18 @@ async function readAlertsFromTargets(
 ): Promise<ActiveAlertsSnapshot> {
   return withAlertTargetFallback(targets, (target) =>
     target.kind === "devd"
-      ? getDevdDeviceAlerts(target.baseUrl, target.deviceId)
+      ? getDevdDeviceAlerts(target.baseUrl, target.deviceId, {
+          timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
+        })
       : target.kind === "serial"
         ? getSerialAlerts(target.deviceId)
-        : withAlertHttpFallback(target.baseUrls, getDeviceAlerts),
+        : withAlertHttpFallback(
+            target.baseUrls,
+            (baseUrl) =>
+              getDeviceAlerts(baseUrl, {
+                timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
+              }),
+          ),
   );
 }
 

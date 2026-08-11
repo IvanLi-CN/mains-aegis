@@ -1243,6 +1243,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
             let audio_edges = $power.take_audio_edges();
             let audio_signals = $power.audio_signals();
             let system_silent = $power.beeper_prefs_snapshot().system_volume.step() == 0;
+            let mute_audio_flush = audio_manager.take_immediate_dma_flush_request();
             sync_active_alerts(
                 &mut active_alerts,
                 audio_signals,
@@ -1261,6 +1262,22 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     system_silent,
                 );
                 audio_manager.tick(now);
+                if mute_audio_flush {
+                    match reprime_runtime_audio_dma!(
+                        "audio: alert mute dma flush push failed; disabling runtime audio",
+                        "audio: alert mute dma flush available failed err={=?}; disabling runtime audio",
+                        "audio: alert mute dma flush restart failed err={=?}; disabling runtime audio"
+                    ) {
+                        RuntimeAudioReprimeResult::Ready { .. } => {
+                            audio_recovery.clear();
+                        }
+                        RuntimeAudioReprimeResult::Late => {}
+                        RuntimeAudioReprimeResult::Fatal => {
+                            disable_runtime_audio!("alert_mute_dma_flush_failed");
+                        }
+                    }
+                    continue;
+                }
                 if flush_runtime_audio {
                     audio_manager.arm_transition_bridge();
                     match reprime_runtime_audio_dma!(
@@ -2186,8 +2203,12 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                         }
                         mains_aegis_firmware::net::LanManagementCommand::MuteAlert(command) => {
                             let result = active_alerts.mute(command.alert_id, command.instance_id);
-                            if result == mains_aegis_firmware::active_alerts::MuteResult::Muted {
-                                audio_manager.stop_cue(command.alert_id.audio_cue());
+                            if matches!(
+                                result,
+                                mains_aegis_firmware::active_alerts::MuteResult::Muted
+                                    | mains_aegis_firmware::active_alerts::MuteResult::AlreadyMuted
+                            ) {
+                                audio_manager.stop_cue_immediate(command.alert_id.audio_cue());
                             }
                             let mut body = heapless::String::<
                                 { mains_aegis_firmware::net::HTTP_RESPONSE_BODY_CAP },
@@ -2283,10 +2304,12 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                         alert_id,
                         instance_id,
                     } => {
-                        if active_alerts.mute(alert_id, instance_id)
-                            == mains_aegis_firmware::active_alerts::MuteResult::Muted
-                        {
-                            audio_manager.stop_cue(alert_id.audio_cue());
+                        if matches!(
+                            active_alerts.mute(alert_id, instance_id),
+                            mains_aegis_firmware::active_alerts::MuteResult::Muted
+                                | mains_aegis_firmware::active_alerts::MuteResult::AlreadyMuted
+                        ) {
+                            audio_manager.stop_cue_immediate(alert_id.audio_cue());
                             front_panel.update_active_alerts(
                                 &active_alerts,
                                 power.beeper_prefs_snapshot().system_volume.step() == 0,
@@ -2599,7 +2622,7 @@ fn handle_web_serial_frame<'d, I2C>(
                     mains_aegis_firmware::active_alerts::MuteResult::Muted
                         | mains_aegis_firmware::active_alerts::MuteResult::AlreadyMuted
                 ) {
-                    audio_manager.stop_cue(command.alert_id.audio_cue());
+                    audio_manager.stop_cue_immediate(command.alert_id.audio_cue());
                 }
                 #[cfg(feature = "net_http")]
                 mains_aegis_firmware::net::publish_active_alerts(

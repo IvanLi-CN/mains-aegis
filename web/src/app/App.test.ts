@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { DeviceRecord } from "../api/types";
 import {
   ACTIVE_ALERT_REFRESH_MS,
+  ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
   activeAlertSeverity,
   audibleAlertCount,
   deviceSettingsAvailable,
@@ -67,6 +68,7 @@ function makeRecord(overrides: Partial<DeviceRecord>): DeviceRecord {
 describe("active alert presentation", () => {
   test("uses a short deterministic refresh cadence", () => {
     expect(ACTIVE_ALERT_REFRESH_MS).toBe(2_000);
+    expect(ACTIVE_ALERT_REQUEST_TIMEOUT_MS).toBe(1_500);
   });
 
   test("keeps the highest active severity authoritative", () => {

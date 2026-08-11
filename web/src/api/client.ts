@@ -1363,8 +1363,10 @@ export const setDeviceManualChargePrefs = (
     prefs,
 );
 
-export const getDeviceAlerts = (baseUrl: string) =>
-  requestJson<ActiveAlertsSnapshot>(baseUrl, "/api/v1/alerts");
+export const getDeviceAlerts = (
+  baseUrl: string,
+  options?: RequestOptions,
+) => requestJson<ActiveAlertsSnapshot>(baseUrl, "/api/v1/alerts", options);
 
 export const muteDeviceAlert = (
   baseUrl: string,
@@ -1378,11 +1380,15 @@ export const muteDeviceAlert = (
     { instance_id: instanceId },
   );
 
-export const getDevdDeviceAlerts = (baseUrl: string, deviceId: string) =>
+export const getDevdDeviceAlerts = (
+  baseUrl: string,
+  deviceId: string,
+  options?: RequestOptions,
+) =>
   requestJson<ActiveAlertsSnapshot>(
     baseUrl,
     `/api/v1/devices/${encodeURIComponent(deviceId)}/alerts`,
-    { bridgeAuth: true },
+    { bridgeAuth: true, ...options },
   );
 
 export const muteDevdDeviceAlert = (
