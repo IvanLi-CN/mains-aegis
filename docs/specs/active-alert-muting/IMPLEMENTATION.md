@@ -55,7 +55,7 @@
   - 提供 `dashboard-alert`、`alert-list`、`alert-detail` 场景和参数化矩阵入口。
   - 每次导出保持 `320x172` PNG 与 `110080` 字节 RGB565 framebuffer。
 - `web/public/firmware`
-  - 内置固件目录从 `b3794a6c-clean-03775a4b5daa4b47` clean release artifact 刷新，保留精确 artifact identity，确保浏览器选择的镜像与已验证的固件实现一致。
+  - 内置固件目录从 `258eb996-clean-b48d7000fbe16ae9` clean release artifact 刷新，保留精确 artifact identity，确保浏览器选择的镜像与已验证的固件实现一致。
 
 ## 验证记录
 
@@ -78,4 +78,4 @@
 - 前面板矩阵
   - 46 个场景；每个 `framebuffer.bin` 均为 `110080` 字节、PNG 为 `320x172`，manifest 记录 renderer 参数、源 revision 与 SHA-256，并生成 7 张 review sheet。
 - release artifact
-  - Web 与 `firmware/artifacts` catalog 均指向 `b3794a6c` clean build；ELF 与 Web Serial image 的 SHA-256 记录在对应 manifest 和 `SHA256SUMS`。
+  - Web 与 `firmware/artifacts` catalog 均指向 `258eb996` clean build；ELF 与 Web Serial image 的 SHA-256 记录在对应 manifest 和 `SHA256SUMS`。

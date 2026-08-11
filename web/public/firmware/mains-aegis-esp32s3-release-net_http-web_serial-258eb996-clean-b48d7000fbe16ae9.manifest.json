@@ -21,14 +21,14 @@
   "files": [
     {
       "kind": "elf",
-      "path": "mains-aegis-firmware-12v",
+      "path": "mains-aegis-esp32s3-release-net_http-web_serial-258eb996-clean-b48d7000fbe16ae9/mains-aegis-firmware-12v",
       "sha256": "b15c6d530823e13029661e413c9ed2446e8d1a26d32c491026cf3a1866b9187a",
       "size": 5327588
     },
     {
       "flash_address": 65536,
       "kind": "image",
-      "path": "mains-aegis-firmware-12v.bin",
+      "path": "mains-aegis-esp32s3-release-net_http-web_serial-258eb996-clean-b48d7000fbe16ae9/mains-aegis-firmware-12v.bin",
       "sha256": "f0c661c0e7f24749ff4d9b981e05963ed49e89b5ab6d79c60f5900a77323b86f",
       "size": 3129312
     }
