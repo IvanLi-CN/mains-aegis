@@ -1185,9 +1185,9 @@ function TopBar({
   const alertTargetDeviceId = (severity: "critical" | "warning") =>
     records.find(
       (record) =>
-        activeAlertSeverity(
+        (activeAlertSeverity(
           activeAlertsByDevice[record.target.deviceId] ?? null,
-        ) === severity,
+        ) ?? deviceSeverity(record)) === severity,
     )?.target.deviceId ?? null;
   const criticalTarget = alertTargetDeviceId("critical");
   const warningTarget = alertTargetDeviceId("warning");
@@ -1521,6 +1521,23 @@ function rememberedHttpBaseUrl(record: DeviceRecord): string | null {
       ? record.target.baseUrl
       : null)
   );
+}
+
+function rememberedHttpBaseUrls(record: DeviceRecord): string[] {
+  const candidates = [
+    record.target.rememberedChannels?.http?.baseUrl,
+    record.target.rememberedChannels?.http?.fallbackBaseUrl,
+    (record.target.transport ?? "http") === "http"
+      ? record.target.baseUrl
+      : null,
+  ];
+  const result: string[] = [];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const baseUrl = normalizeBaseUrl(candidate);
+    if (baseUrl && !result.includes(baseUrl)) result.push(baseUrl);
+  }
+  return result;
 }
 
 function rememberedDevdBaseUrl(record: DeviceRecord): string | null {
@@ -3641,6 +3658,7 @@ function useFleetActiveAlerts(records: DeviceRecord[]): FleetActiveAlertsState {
         record.target.baseUrl,
         record.target.rememberedChannels?.devd?.baseUrl ?? "",
         record.target.rememberedChannels?.http?.baseUrl ?? "",
+        record.target.rememberedChannels?.http?.fallbackBaseUrl ?? "",
         record.serial?.source ?? "",
       ].join(":"),
     )
@@ -3652,19 +3670,19 @@ function useFleetActiveAlerts(records: DeviceRecord[]): FleetActiveAlertsState {
     const currentRecords = recordsRef.current;
     const results = await Promise.all(
       currentRecords.map(async (record) => {
-        const target = alertControlTarget(record);
-        if (record.connectionState === "offline" || !target)
+        const targets = alertControlTargets(record);
+        if (record.connectionState === "offline" || targets.length === 0)
           return { record, snapshot: null, error: null };
         try {
-          const snapshot =
-            target.kind === "devd"
-              ? await getDevdDeviceAlerts(target.baseUrl, target.deviceId)
-              : target.kind === "serial"
-                ? await getSerialAlerts(target.deviceId)
-                : await getDeviceAlerts(target.baseUrl);
+          const snapshot = await readAlertsFromTargets(targets, getSerialAlerts);
           return { record, snapshot, error: null };
         } catch (cause) {
-          return { record, snapshot: null, error: alertErrorMessage(cause) };
+          return {
+            record,
+            snapshot: null,
+            error: alertErrorMessage(cause),
+            clearSnapshot: alertErrorClearsSnapshot(cause),
+          };
         }
       }),
     );
@@ -3677,7 +3695,7 @@ function useFleetActiveAlerts(records: DeviceRecord[]): FleetActiveAlertsState {
       for (const result of results) {
         const deviceId = result.record.target.deviceId;
         if (result.snapshot) next[deviceId] = result.snapshot;
-        else if (!result.error) delete next[deviceId];
+        else if (!result.error || result.clearSnapshot) delete next[deviceId];
       }
       return next;
     });
@@ -3759,8 +3777,8 @@ function useActiveAlertsSnapshot(
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const refreshGeneration = useRef(0);
-  const target = useMemo(
-    () => (record ? alertControlTarget(record) : null),
+  const targets = useMemo(
+    () => (record ? alertControlTargets(record) : []),
     [
       deviceId,
       record?.serial?.baseUrl,
@@ -3769,6 +3787,7 @@ function useActiveAlertsSnapshot(
       record?.target.rememberedChannels?.devd?.baseUrl,
       record?.target.rememberedChannels?.devd?.devdDeviceId,
       record?.target.rememberedChannels?.http?.baseUrl,
+      record?.target.rememberedChannels?.http?.fallbackBaseUrl,
       record?.target.transport,
     ],
   );
@@ -3787,7 +3806,7 @@ function useActiveAlertsSnapshot(
         );
         return;
       }
-      if (!target) {
+      if (targets.length === 0) {
         setSnapshot(null);
         setLastUpdated(null);
         setLoading(false);
@@ -3796,24 +3815,23 @@ function useActiveAlertsSnapshot(
       }
       if (!options?.background) setLoading(true);
       try {
-        const nextSnapshot =
-          target.kind === "devd"
-            ? await getDevdDeviceAlerts(target.baseUrl, target.deviceId)
-            : target.kind === "serial"
-              ? await getSerialAlerts(target.deviceId)
-              : await getDeviceAlerts(target.baseUrl);
+        const nextSnapshot = await readAlertsFromTargets(targets, getSerialAlerts);
         if (generation !== refreshGeneration.current) return;
         setSnapshot(nextSnapshot);
         setLastUpdated(new Date().toISOString());
         if (!options?.preserveError) setError(null);
       } catch (cause) {
         if (generation !== refreshGeneration.current) return;
+        if (alertErrorClearsSnapshot(cause)) {
+          setSnapshot(null);
+          setLastUpdated(null);
+        }
         setError(alertErrorMessage(cause));
       } finally {
         if (generation === refreshGeneration.current) setLoading(false);
       }
     },
-    [connectionState, deviceId, getSerialAlerts, target],
+    [connectionState, deviceId, getSerialAlerts, targets],
   );
 
   useEffect(() => {
@@ -3824,7 +3842,7 @@ function useActiveAlertsSnapshot(
   }, [deviceId, refresh]);
 
   useEffect(() => {
-    if (!deviceId || connectionState === "offline" || !target)
+    if (!deviceId || connectionState === "offline" || targets.length === 0)
       return undefined;
     const interval = window.setInterval(
       () => void refresh({ background: true }),
@@ -3839,7 +3857,7 @@ function useActiveAlertsSnapshot(
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [connectionState, deviceId, refresh, target]);
+  }, [connectionState, deviceId, refresh, targets]);
 
   return { snapshot, loading, error, lastUpdated, refresh };
 }
@@ -3867,29 +3885,18 @@ function AlertsPage({
   const { snapshot, loading, error, lastUpdated, refresh } = state;
   const [muting, setMuting] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const target = useMemo(() => alertControlTarget(record), [record]);
+  const targets = useMemo(() => alertControlTargets(record), [record]);
 
   const mute = async (alert: ActiveAlert) => {
-    if (!target || error || alert.sound_state !== "audible") return;
+    if (targets.length === 0 || error || alert.sound_state !== "audible") return;
     setMuting(alert.alert_id);
     setActionError(null);
     try {
-      if (target.kind === "devd") {
-        await muteDevdDeviceAlert(
-          target.baseUrl,
-          target.deviceId,
-          alert.alert_id,
-          alert.instance_id,
-        );
-      } else if (target.kind === "serial") {
-        await muteSerialAlert(
-          target.deviceId,
-          alert.alert_id,
-          alert.instance_id,
-        );
-      } else {
-        await muteDeviceAlert(target.baseUrl, alert.alert_id, alert.instance_id);
-      }
+      await muteAlertFromTargets(
+        targets,
+        alert,
+        muteSerialAlert,
+      );
       await refresh();
     } catch (cause) {
       setActionError(alertErrorMessage(cause));
@@ -3954,27 +3961,132 @@ function AlertsPage({
   );
 }
 
-function alertControlTarget(record: DeviceRecord):
+type AlertControlTarget =
   | { kind: "devd"; baseUrl: string; deviceId: string }
-  | { kind: "http"; baseUrl: string }
-  | { kind: "serial"; deviceId: string }
-  | null {
-  const devdBaseUrl = record.target.rememberedChannels?.devd?.baseUrl ??
-    (record.target.transport === "devd" ? record.target.baseUrl : undefined) ??
-    (record.serial?.source === "devd" ? record.serial.baseUrl : undefined);
-  if (devdBaseUrl !== undefined) {
-    return {
-      kind: "devd",
-      baseUrl: devdBaseUrl,
-      deviceId: record.target.rememberedChannels?.devd?.devdDeviceId ?? record.target.deviceId,
-    };
+  | { kind: "http"; baseUrls: string[] }
+  | { kind: "serial"; deviceId: string };
+
+function alertControlTargets(record: DeviceRecord): AlertControlTarget[] {
+  const targets: AlertControlTarget[] = [];
+  const seen = new Set<string>();
+  const add = (target: AlertControlTarget) => {
+    const key = target.kind === "http"
+      ? `${target.kind}:${target.baseUrls.join(",")}`
+      : `${target.kind}:${target.deviceId}:${"baseUrl" in target ? target.baseUrl : ""}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      targets.push(target);
+    }
+  };
+  const httpBaseUrls = rememberedHttpBaseUrls(record);
+  const active = activeRecordTransport(record);
+  const addTransport = (transport: DeviceChannelTransport) => {
+    if (transport === "serial") {
+      if (record.serial?.source === "web_serial") {
+        add({ kind: "serial", deviceId: record.target.deviceId });
+      }
+      return;
+    }
+    if (transport === "devd") {
+      const baseUrl = record.serial?.connected && record.serial.source === "devd"
+        ? record.serial.baseUrl
+        : record.target.transport === "devd"
+          ? record.target.baseUrl
+          : record.target.rememberedChannels?.devd?.baseUrl;
+      if (baseUrl) {
+        add({
+          kind: "devd",
+          baseUrl,
+          deviceId:
+            record.target.rememberedChannels?.devd?.devdDeviceId ??
+            record.target.deviceId,
+        });
+      }
+      return;
+    }
+    if (httpBaseUrls.length > 0) add({ kind: "http", baseUrls: httpBaseUrls });
+  };
+  if (active) addTransport(active);
+  for (const transport of ["devd", "http", "serial"] as DeviceChannelTransport[]) {
+    if (transport !== active) addTransport(transport);
   }
-  if (record.target.transport === "serial" && record.serial?.source === "web_serial") {
-    return { kind: "serial", deviceId: record.target.deviceId };
+  return targets;
+}
+
+async function withAlertTargetFallback<T>(
+  targets: AlertControlTarget[],
+  operation: (target: AlertControlTarget) => Promise<T>,
+): Promise<T> {
+  let lastError: unknown = null;
+  for (const target of targets) {
+    try {
+      return await operation(target);
+    } catch (cause) {
+      lastError = cause;
+      if (!toErrorEnvelope(cause).retryable) throw cause;
+    }
   }
-  const httpBaseUrl = record.target.rememberedChannels?.http?.baseUrl ??
-    ((record.target.transport ?? "http") === "http" ? record.target.baseUrl : undefined);
-  return httpBaseUrl === undefined ? null : { kind: "http", baseUrl: httpBaseUrl };
+  throw lastError ?? new Error("No alerts transport is available");
+}
+
+async function withAlertHttpFallback<T>(
+  baseUrls: string[],
+  operation: (baseUrl: string) => Promise<T>,
+): Promise<T> {
+  let lastError: unknown = null;
+  for (const baseUrl of baseUrls) {
+    try {
+      return await operation(baseUrl);
+    } catch (cause) {
+      lastError = cause;
+      if (!toErrorEnvelope(cause).retryable) throw cause;
+    }
+  }
+  throw lastError ?? new Error("No HTTP alerts transport is available");
+}
+
+async function readAlertsFromTargets(
+  targets: AlertControlTarget[],
+  getSerialAlerts: (deviceId: string) => Promise<ActiveAlertsSnapshot>,
+): Promise<ActiveAlertsSnapshot> {
+  return withAlertTargetFallback(targets, (target) =>
+    target.kind === "devd"
+      ? getDevdDeviceAlerts(target.baseUrl, target.deviceId)
+      : target.kind === "serial"
+        ? getSerialAlerts(target.deviceId)
+        : withAlertHttpFallback(target.baseUrls, getDeviceAlerts),
+  );
+}
+
+async function muteAlertFromTargets(
+  targets: AlertControlTarget[],
+  alert: ActiveAlert,
+  muteSerialAlert: (
+    deviceId: string,
+    alertId: string,
+    instanceId: number,
+  ) => Promise<unknown>,
+): Promise<void> {
+  await withAlertTargetFallback(targets, (target) =>
+    target.kind === "devd"
+      ? muteDevdDeviceAlert(
+          target.baseUrl,
+          target.deviceId,
+          alert.alert_id,
+          alert.instance_id,
+        )
+      : target.kind === "serial"
+        ? muteSerialAlert(target.deviceId, alert.alert_id, alert.instance_id)
+        : withAlertHttpFallback(
+            target.baseUrls,
+            (baseUrl) => muteDeviceAlert(baseUrl, alert.alert_id, alert.instance_id),
+          ),
+  );
+}
+
+function alertErrorClearsSnapshot(cause: unknown): boolean {
+  const code = toErrorEnvelope(cause).code;
+  return code === "unsupported" || code === "unsupported_operation";
 }
 
 function alertSoundLabel(sound: ActiveAlert["sound_state"]): string {
@@ -3987,7 +4099,6 @@ function alertSoundLabel(sound: ActiveAlert["sound_state"]): string {
 function alertErrorMessage(cause: unknown): string {
   const envelope = toErrorEnvelope(cause);
   if (
-    envelope.code === "not_found" ||
     envelope.code === "unsupported_operation" ||
     envelope.code === "unsupported"
   ) {

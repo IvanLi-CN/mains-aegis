@@ -122,7 +122,10 @@ pub enum UiAction {
         prefs: BeeperPrefs,
     },
     ClearBmsActivationResult,
-    MuteAlert(AlertId),
+    MuteAlert {
+        alert_id: AlertId,
+        instance_id: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1552,10 +1555,18 @@ where
                         &self.self_check_snapshot,
                     )
                     && now >= self.next_dashboard_ambient_frame_deadline;
+                let audible_alert_frame_due = self.ui_variant == DASHBOARD_VARIANT
+                    && self.dashboard_page == DashboardPrimaryPage::DashboardHome
+                    && self.dashboard_route == DashboardRoute::Home
+                    && self
+                        .alert_indicator()
+                        .is_some_and(|alert| alert.sound == AlertPreviewSoundState::Audible)
+                    && now >= self.next_dashboard_ambient_frame_deadline;
                 let should_render = self.needs_redraw
                     || menu_animation_active
                     || dashboard_status_redraw_due
                     || dashboard_ambient_frame_due
+                    || audible_alert_frame_due
                     || (self.ui_variant == SELF_CHECK_VARIANT && inputs_changed);
                 if should_render {
                     if let Err(e) = self.render_with_log(snapshot, UiLifecycleEvent::RuntimeTick) {
@@ -1569,7 +1580,7 @@ where
                             self.next_dashboard_status_redraw_deadline =
                                 now + DASHBOARD_STATUS_REDRAW_INTERVAL;
                         }
-                        if dashboard_ambient_frame_due {
+                        if dashboard_ambient_frame_due || audible_alert_frame_due {
                             self.next_dashboard_ambient_frame_deadline =
                                 now + DASHBOARD_AMBIENT_ANIMATION_FRAME_INTERVAL;
                         }
@@ -2513,7 +2524,10 @@ where
                 } else if right {
                     if let Some(item) = self.alert_detail {
                         return (!item.cleared && item.sound == AlertPreviewSoundState::Audible)
-                            .then_some(UiAction::MuteAlert(alert_id_for_preview(item.kind)));
+                            .then_some(UiAction::MuteAlert {
+                                alert_id: alert_id_for_preview(item.kind),
+                                instance_id: item.instance_id,
+                            });
                     }
                 }
                 None
@@ -2561,7 +2575,10 @@ where
                         if let Some(item) = self.alert_detail {
                             return (!item.cleared
                                 && item.sound == AlertPreviewSoundState::Audible)
-                                .then_some(UiAction::MuteAlert(alert_id_for_preview(item.kind)));
+                                .then_some(UiAction::MuteAlert {
+                                    alert_id: alert_id_for_preview(item.kind),
+                                    instance_id: item.instance_id,
+                                });
                         }
                     }
                     None => {}
@@ -2573,8 +2590,10 @@ where
 
     fn alert_mute_action(&self, index: usize) -> Option<UiAction> {
         let item = self.alert_items.get(index)?;
-        (item.sound == AlertPreviewSoundState::Audible)
-            .then_some(UiAction::MuteAlert(alert_id_for_preview(item.kind)))
+        (item.sound == AlertPreviewSoundState::Audible).then_some(UiAction::MuteAlert {
+            alert_id: alert_id_for_preview(item.kind),
+            instance_id: item.instance_id,
+        })
     }
 
     fn process_dashboard_gesture_action(&mut self, snapshot: InputSnapshot) -> Option<UiAction> {
@@ -3115,8 +3134,9 @@ where
 }
 
 fn alert_preview_item(alert: mains_aegis_firmware::active_alerts::ActiveAlert) -> AlertPreviewItem {
-    AlertPreviewItem::active(
+    AlertPreviewItem::active_with_instance_id(
         preview_kind_for_alert(alert.alert_id),
+        alert.instance_id,
         match alert.severity {
             AlertSeverity::Warning => AlertPreviewSeverity::Warning,
             AlertSeverity::Critical => AlertPreviewSeverity::Critical,
@@ -3159,7 +3179,7 @@ const fn alert_id_for_preview(kind: AlertPreviewKind) -> AlertId {
 }
 
 fn alert_list_top(selected: usize, count: usize) -> usize {
-    selected.saturating_sub(2).min(count.saturating_sub(3))
+    selected.saturating_sub(1).min(count.saturating_sub(3))
 }
 
 fn variant_name(variant: UiVariant) -> &'static str {

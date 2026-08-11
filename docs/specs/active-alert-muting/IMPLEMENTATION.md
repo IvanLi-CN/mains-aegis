@@ -17,6 +17,7 @@
   - 统一输出 `severity` 与 `sound_state`，并映射到既有 `AudioCue`。
 - `firmware/src/main.rs`、`firmware/src/audio.rs`
   - 每轮从现有运行期信号更新实例集合，再按有效声音状态启停单个 cue。
+  - CDC、LAN 与前面板消音均立即停止目标 cue，并发布同一份权威快照；请求携带当前 `instance_id`，不会误消音复发实例。
   - 市电缺失告警活动期间，VIN 遥测 unknown 保持当前实例与消音状态；只有明确恢复市电才解除。
   - 告警实例更新独立于 I2S/DMA 可用性；音频初始化失败时仍继续发布和显示活动告警。
   - 前面板、USB CDC 和 LAN 命令均修改同一份 `ActiveAlerts`。
@@ -36,6 +37,7 @@
   - offline 或 unsupported 时清空旧告警快照；瞬时刷新失败时保留最后确认的活动告警作为持续风险提示，但禁用基于过期实例的消音按钮，直到权威回读恢复。
   - 所有在线设备的告警合同每 2 秒自动回读，页面重新可见时立即回读；fleet 级快照直接驱动所有路由已有的 TopBar `Critical` / `Warning` 指标，非零指标进入相关设备 Alerts，不新增大型 Alert 或正常态提示；当前设备快照同时驱动 Alerts 列表。
   - Web Serial 保留 CDC error envelope；刷新使用代次保护，mute 冲突后的权威回读不清除 stale/inactive 提示。
+  - 告警控制优先使用当前已确认的活动传输，再按可重试错误回退到 devd、LAN 主地址、LAN fallback 地址或 Web Serial；非重试错误不会伪装成另一种传输状态。
 
 - `firmware/src/front_panel_scene.rs`
   - 提供同源 Dashboard 指示器、`ALERTS` 列表、详情 `CLEARED` 终态与热区。
@@ -44,6 +46,7 @@
   - 固化 CST816D `LandscapeSwapped` 坐标边界与顶部 WiFi/Alerts 的按下或滑入触发策略；显示区外坐标拒绝，同一热区内移动不重复触发。
 - `firmware/src/front_panel.rs`
   - 将获批 scene 接入触摸和 `UP/DOWN/CENTER/RIGHT/LEFT` 导航。
+  - Dashboard 可听告警在无输入时仍按获批双相帧持续刷新；列表滚动窗口与详情/底部整行消音均绑定当前实例。
   - 详情缓存当前实例；解除后保留不可操作的 `CLEARED` 终态。
 - `tools/front-panel-preview/src/main.rs`
   - 提供 `dashboard-alert`、`alert-list`、`alert-detail` 场景和参数化矩阵入口。
@@ -58,13 +61,13 @@
 - `cargo fmt --manifest-path tools/front-panel-preview/Cargo.toml --check`
   - 通过。
 - `just firmware-host-test`
-  - 514 passed。
+  - 515 passed。
 - `just firmware-check`
   - 通过。
 - `just host-test`
   - 124 library tests 与 56 CLI tests passed。
 - `bun test web/src`
-  - 98 passed。
+  - 102 passed。
 - `just web-check`、`just web-build`
   - 通过。
 - `just check`

@@ -528,6 +528,7 @@ impl AlertPreviewSoundState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AlertPreviewItem {
     pub kind: AlertPreviewKind,
+    pub instance_id: u32,
     pub severity: AlertPreviewSeverity,
     pub sound: AlertPreviewSoundState,
     pub cleared: bool,
@@ -590,6 +591,8 @@ pub const fn alert_detail_hit_test(x: u16, y: u16) -> Option<AlertDetailTouchTar
         Some(AlertDetailTouchTarget::Back)
     } else if ALERT_DETAIL_MUTE_TOUCH.contains(x, y) {
         Some(AlertDetailTouchTarget::Mute)
+    } else if ALERT_DETAIL_ACTION_TOUCH.contains(x, y) {
+        Some(AlertDetailTouchTarget::Mute)
     } else {
         None
     }
@@ -601,8 +604,18 @@ impl AlertPreviewItem {
         severity: AlertPreviewSeverity,
         sound: AlertPreviewSoundState,
     ) -> Self {
+        Self::active_with_instance_id(kind, 1, severity, sound)
+    }
+
+    pub const fn active_with_instance_id(
+        kind: AlertPreviewKind,
+        instance_id: u32,
+        severity: AlertPreviewSeverity,
+        sound: AlertPreviewSoundState,
+    ) -> Self {
         Self {
             kind,
+            instance_id,
             severity,
             sound,
             cleared: false,
@@ -612,6 +625,7 @@ impl AlertPreviewItem {
     pub const fn cleared(kind: AlertPreviewKind) -> Self {
         Self {
             kind,
+            instance_id: 0,
             severity: kind.default_severity(),
             sound: AlertPreviewSoundState::Muted,
             cleared: true,
@@ -1552,6 +1566,7 @@ pub const ALERT_LIST_MUTE_TOUCH: [TouchRect; 3] = [
 pub const ALERT_LIST_TOP_BACK_TOUCH: TouchRect = TouchRect::new(0, 0, 96, 24);
 pub const ALERT_DETAIL_TOP_BACK_TOUCH: TouchRect = TouchRect::new(0, 0, 96, 32);
 pub const ALERT_DETAIL_MUTE_TOUCH: TouchRect = TouchRect::new(264, 72, 56, 40);
+pub const ALERT_DETAIL_ACTION_TOUCH: TouchRect = TouchRect::new(8, 112, 304, 28);
 
 const DASHBOARD_HOME_THERMAL_X: u16 = 6;
 const DASHBOARD_HOME_THERMAL_Y: u16 = 76;
@@ -9948,6 +9963,20 @@ pub fn render_alert_detail_preview<P: UiPainter>(
                 palette.center,
                 mute.x + 4,
                 mute.y + 2,
+            )?;
+            let action = ALERT_DETAIL_ACTION_TOUCH;
+            draw_dashboard_touch_region_overlay(
+                painter,
+                variant,
+                palette,
+                action.x,
+                action.y,
+                action.w,
+                action.h,
+                "M",
+                palette.center,
+                action.x + 4,
+                action.y + 2,
             )?;
         }
     }

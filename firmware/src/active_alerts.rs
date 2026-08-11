@@ -406,6 +406,32 @@ mod tests {
     }
 
     #[test]
+    fn every_runtime_alert_supports_a_complete_instance_lifecycle() {
+        for id in AlertId::ALL {
+            let mut alerts = ActiveAlerts::new();
+            let mut signals = AlertSignals::default();
+            signals.set(id, true);
+            alerts.update(signals);
+            let first = alerts.get(id, false).expect("active alert instance");
+            assert_eq!(first.instance_id, 1);
+            assert_eq!(first.sound, AlertSoundState::Audible);
+            assert_eq!(alerts.mute(id, first.instance_id), MuteResult::Muted);
+            assert!(!alerts.cue_should_play(id, false));
+
+            signals.set(id, false);
+            alerts.update(signals);
+            assert!(alerts.get(id, false).is_none());
+
+            signals.set(id, true);
+            alerts.update(signals);
+            let second = alerts.get(id, false).expect("reactivated alert instance");
+            assert_ne!(first.instance_id, second.instance_id);
+            assert_eq!(second.sound, AlertSoundState::Audible);
+            assert!(alerts.cue_should_play(id, false));
+        }
+    }
+
+    #[test]
     fn clearing_one_alert_does_not_change_another() {
         let mut alerts = ActiveAlerts::new();
         let mut signals = AlertSignals::default();

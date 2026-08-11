@@ -1857,6 +1857,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     &mut web_serial_lines,
                     &web_serial_identity,
                     &mut power,
+                    &mut audio_manager,
                     &mut active_alerts,
                     web_serial_snapshot,
                     &mut web_serial_log_state,
@@ -1915,6 +1916,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                             &mut web_serial_lines,
                             &web_serial_identity,
                             &mut power,
+                            &mut audio_manager,
                             &mut active_alerts,
                             web_serial_snapshot,
                             &mut web_serial_log_state,
@@ -1945,6 +1947,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     &mut web_serial_lines,
                     &web_serial_identity,
                     &mut power,
+                    &mut audio_manager,
                     &mut active_alerts,
                     web_serial_snapshot,
                     &mut web_serial_log_state,
@@ -2243,6 +2246,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                 &mut web_serial_lines,
                 &web_serial_identity,
                 &mut power,
+                &mut audio_manager,
                 &mut active_alerts,
                 ui_snapshot,
                 &mut web_serial_log_state,
@@ -2275,17 +2279,18 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                     front_panel::UiAction::BeeperPrefsChanged { prefs } => {
                         power.set_beeper_prefs(prefs);
                     }
-                    front_panel::UiAction::MuteAlert(alert_id) => {
-                        if let Some(alert) = active_alerts.get(alert_id, false) {
-                            if active_alerts.mute(alert_id, alert.instance_id)
-                                == mains_aegis_firmware::active_alerts::MuteResult::Muted
-                            {
-                                audio_manager.stop_cue(alert_id.audio_cue());
-                                front_panel.update_active_alerts(
-                                    &active_alerts,
-                                    power.beeper_prefs_snapshot().system_volume.step() == 0,
-                                );
-                            }
+                    front_panel::UiAction::MuteAlert {
+                        alert_id,
+                        instance_id,
+                    } => {
+                        if active_alerts.mute(alert_id, instance_id)
+                            == mains_aegis_firmware::active_alerts::MuteResult::Muted
+                        {
+                            audio_manager.stop_cue(alert_id.audio_cue());
+                            front_panel.update_active_alerts(
+                                &active_alerts,
+                                power.beeper_prefs_snapshot().system_volume.step() == 0,
+                            );
                         }
                     }
                     front_panel::UiAction::BeeperPreview { prefs, target } => {
@@ -2420,6 +2425,7 @@ fn service_web_serial_if_due<'d, I2C>(
     lines: &mut UsbCdcLineBuffer<1024>,
     identity: &DeviceIdentity,
     power: &mut output::PowerManager<'d, I2C>,
+    audio_manager: &mut AudioManager,
     active_alerts: &mut ActiveAlerts,
     ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
     log_state: &mut UsbCdcLogState,
@@ -2442,6 +2448,7 @@ fn service_web_serial_if_due<'d, I2C>(
         lines,
         identity,
         power,
+        audio_manager,
         active_alerts,
         ui_snapshot,
         log_state,
@@ -2454,6 +2461,7 @@ fn service_web_serial<'d, I2C>(
     lines: &mut UsbCdcLineBuffer<1024>,
     identity: &DeviceIdentity,
     power: &mut output::PowerManager<'d, I2C>,
+    audio_manager: &mut AudioManager,
     active_alerts: &mut ActiveAlerts,
     ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
     log_state: &mut UsbCdcLogState,
@@ -2478,6 +2486,7 @@ fn service_web_serial<'d, I2C>(
                     serial,
                     identity,
                     power,
+                    audio_manager,
                     active_alerts,
                     ui_snapshot,
                     line.as_str(),
@@ -2499,6 +2508,7 @@ fn handle_web_serial_frame<'d, I2C>(
     serial: &mut UsbSerialJtag<'static, Blocking>,
     identity: &DeviceIdentity,
     power: &mut output::PowerManager<'d, I2C>,
+    audio_manager: &mut AudioManager,
     active_alerts: &mut ActiveAlerts,
     ui_snapshot: front_panel_scene::SelfCheckUiSnapshot,
     line: &str,
@@ -2579,6 +2589,18 @@ fn handle_web_serial_frame<'d, I2C>(
             }
             UsbCdcRequest::MuteAlert(command) => {
                 let result = active_alerts.mute(command.alert_id, command.instance_id);
+                if matches!(
+                    result,
+                    mains_aegis_firmware::active_alerts::MuteResult::Muted
+                        | mains_aegis_firmware::active_alerts::MuteResult::AlreadyMuted
+                ) {
+                    audio_manager.stop_cue(command.alert_id.audio_cue());
+                }
+                #[cfg(feature = "net_http")]
+                mains_aegis_firmware::net::publish_active_alerts(
+                    active_alerts,
+                    power.beeper_prefs_snapshot().system_volume.step() == 0,
+                );
                 let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
                 let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
                 mains_aegis_firmware::active_alerts::render_mute_result_json(
