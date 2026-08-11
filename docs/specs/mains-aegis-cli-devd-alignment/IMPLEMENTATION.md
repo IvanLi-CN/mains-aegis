@@ -24,6 +24,7 @@
 - host-tools 新增 `device.alerts.list|mute` IPC、Alerts HTTP bridge 与 `mains-aegis device <id> alerts list|mute`。CLI 始终输出机器可读 JSON；预读时告警已解除返回 `inactive`，并发实例变化返回固件权威 `stale`。
 - 旧固件的 CDC `unsupported_operation` 与 Alerts 路由 LAN `404` 仅在 Alerts 调用点由 host-tools 归一化为 `unsupported`/HTTP `501`；Alerts IPC 保留机器可读 result，CLI list/mute、devd HTTP 与 Web 获得同一升级判定。
 - Alerts list/mute IPC 对 conflict/unsupported 使用同一机器可读结果通道，避免 CLI 在部分实现或并发变化场景退化为纯文本错误。
+- 固件已活动的市电缺失告警在 VIN 遥测暂时 unknown 时保持同一实例和消音状态，只在明确恢复市电后解除；CLI、devd 与 Web 因而不会把短暂遥测缺口误报为告警解除或新实例。
 - Repo skill routing defaults Codex work inside this repository to `$mains-aegis-devd-flow` for development, validation, diagnostics, field investigation, and hardware read/session-read checks. `$mains-aegis-user-operations` remains the explicit end-user/released host-tools route.
 
 ## 验证

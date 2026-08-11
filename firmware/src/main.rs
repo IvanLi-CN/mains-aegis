@@ -51,7 +51,9 @@ use esp_hal::Blocking;
 use esp_println as _;
 #[cfg(feature = "web_serial")]
 use heapless::String as HeaplessString;
-use mains_aegis_firmware::active_alerts::{ActiveAlerts, AlertId, AlertSignals};
+use mains_aegis_firmware::active_alerts::{
+    mains_absent_active, ActiveAlerts, AlertId, AlertSignals,
+};
 use mains_aegis_firmware::audio::{AudioCue, AudioManager, AudioRoute, PLAYBACK_SAMPLE_RATE_HZ};
 use mains_aegis_firmware::usb_pd::UsbPdSinkManager;
 #[cfg(feature = "web_serial")]
@@ -3367,13 +3369,16 @@ fn sync_active_alerts(
     edges: output::AudioSignalEvents,
     system_silent: bool,
 ) {
-    let mains_absent_active = signals.mains_present == Some(false);
+    let mains_absent_is_active = mains_absent_active(
+        active_alerts.get(AlertId::MainsAbsentDc, false).is_some(),
+        signals.mains_present,
+    );
 
     let mut alert_signals = AlertSignals::default();
-    alert_signals.set(AlertId::MainsAbsentDc, mains_absent_active);
+    alert_signals.set(AlertId::MainsAbsentDc, mains_absent_is_active);
     alert_signals.set_policy_silent(
         AlertId::MainsAbsentDc,
-        mains_absent_active
+        mains_absent_is_active
             && (active_alerts.is_policy_silent(AlertId::MainsAbsentDc)
                 || (active_alerts.get(AlertId::MainsAbsentDc, false).is_none()
                     && edges.mains_present_changed != Some(false))),

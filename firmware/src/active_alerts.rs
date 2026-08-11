@@ -3,6 +3,14 @@ use core::fmt::Write;
 
 pub const ALERT_COUNT: usize = 9;
 
+pub const fn mains_absent_active(previously_active: bool, mains_present: Option<bool>) -> bool {
+    match mains_present {
+        Some(false) => true,
+        Some(true) => false,
+        None => previously_active,
+    }
+}
+
 #[derive(defmt::Format, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlertId {
     MainsAbsentDc,
@@ -359,6 +367,14 @@ mod tests {
             assert_eq!(AlertId::parse(id.as_str()), Some(id));
         }
         assert_eq!(AlertId::parse("io_over_power"), None);
+    }
+
+    #[test]
+    fn mains_absent_alert_holds_its_instance_while_telemetry_is_unknown() {
+        assert!(mains_absent_active(false, Some(false)));
+        assert!(mains_absent_active(true, None));
+        assert!(!mains_absent_active(false, None));
+        assert!(!mains_absent_active(true, Some(true)));
     }
 
     #[test]

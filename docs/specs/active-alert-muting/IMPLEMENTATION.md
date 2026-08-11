@@ -17,6 +17,7 @@
   - 统一输出 `severity` 与 `sound_state`，并映射到既有 `AudioCue`。
 - `firmware/src/main.rs`、`firmware/src/audio.rs`
   - 每轮从现有运行期信号更新实例集合，再按有效声音状态启停单个 cue。
+  - 市电缺失告警活动期间，VIN 遥测 unknown 保持当前实例与消音状态；只有明确恢复市电才解除。
   - 告警实例更新独立于 I2S/DMA 可用性；音频初始化失败时仍继续发布和显示活动告警。
   - 前面板、USB CDC 和 LAN 命令均修改同一份 `ActiveAlerts`。
 - `firmware/src/usb_cdc_protocol.rs`、`firmware/src/net.rs`
