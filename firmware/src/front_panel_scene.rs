@@ -17,6 +17,48 @@ use u8g2_fonts::{
 
 pub const UI_W: u16 = 320;
 pub const UI_H: u16 = 172;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TouchRect {
+    pub x: u16,
+    pub y: u16,
+    pub w: u16,
+    pub h: u16,
+}
+
+impl TouchRect {
+    pub const fn new(x: u16, y: u16, w: u16, h: u16) -> Self {
+        Self { x, y, w, h }
+    }
+
+    pub const fn contains(self, x: u16, y: u16) -> bool {
+        x >= self.x
+            && x < self.x.saturating_add(self.w)
+            && y >= self.y
+            && y < self.y.saturating_add(self.h)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub const fn area(self) -> u32 {
+        self.w as u32 * self.h as u32
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub const fn overlaps(self, other: Self) -> bool {
+        self.x < other.x.saturating_add(other.w)
+            && other.x < self.x.saturating_add(self.w)
+            && self.y < other.y.saturating_add(other.h)
+            && other.y < self.y.saturating_add(self.h)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub const fn within_screen(self) -> bool {
+        self.w > 0
+            && self.h > 0
+            && self.x.saturating_add(self.w) <= UI_W
+            && self.y.saturating_add(self.h) <= UI_H
+    }
+}
 const VIN_MAINS_PRESENT_THRESHOLD_MV: u16 = 3_000;
 
 fn mains_present_from_vin(vin_vbus_mv: Option<u16>) -> Option<bool> {
@@ -498,25 +540,58 @@ pub enum AlertPreviewTouchTarget {
     Mute(usize),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlertDetailTouchTarget {
+    Back,
+    Mute,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DashboardHomeTouchTarget {
+    Alerts,
+    Dashboard(DashboardTouchTarget),
+}
+
 pub const fn dashboard_alert_hit_test(x: u16, y: u16) -> bool {
-    x >= DASHBOARD_HOME_ALERT_TOUCH_X
-        && x < DASHBOARD_HOME_ALERT_TOUCH_X + DASHBOARD_HOME_ALERT_TOUCH_W
-        && y < DASHBOARD_HOME_ALERT_TOUCH_Y + DASHBOARD_HOME_ALERT_TOUCH_H
+    DASHBOARD_HOME_ALERT_TOUCH.contains(x, y)
+}
+
+pub fn dashboard_home_hit_test(
+    alerts_available: bool,
+    x: u16,
+    y: u16,
+) -> Option<DashboardHomeTouchTarget> {
+    if alerts_available && dashboard_alert_hit_test(x, y) {
+        Some(DashboardHomeTouchTarget::Alerts)
+    } else {
+        dashboard_hit_test(DashboardRoute::Home, x, y).map(DashboardHomeTouchTarget::Dashboard)
+    }
 }
 
 pub const fn alert_list_hit_test(x: u16, y: u16, top: usize) -> Option<AlertPreviewTouchTarget> {
-    if y >= 142 {
+    if ALERT_LIST_TOP_BACK_TOUCH.contains(x, y) {
         return Some(AlertPreviewTouchTarget::Back);
     }
-    if y < 24 || y >= 132 {
-        return None;
+    let mut slot = 0;
+    while slot < ALERT_LIST_ROW_TOUCH.len() {
+        if ALERT_LIST_MUTE_TOUCH[slot].contains(x, y) {
+            return Some(AlertPreviewTouchTarget::Mute(top + slot));
+        }
+        if ALERT_LIST_ROW_TOUCH[slot].contains(x, y) {
+            return Some(AlertPreviewTouchTarget::Row(top + slot));
+        }
+        slot += 1;
     }
-    let slot = (y - 24) / 36;
-    let index = top + slot as usize;
-    if x >= 272 {
-        Some(AlertPreviewTouchTarget::Mute(index))
+    None
+}
+
+pub const fn alert_detail_hit_test(x: u16, y: u16) -> Option<AlertDetailTouchTarget> {
+    if ALERT_DETAIL_TOP_BACK_TOUCH.contains(x, y) {
+        Some(AlertDetailTouchTarget::Back)
+    } else if ALERT_DETAIL_MUTE_TOUCH.contains(x, y) {
+        Some(AlertDetailTouchTarget::Mute)
     } else {
-        Some(AlertPreviewTouchTarget::Row(index))
+        None
     }
 }
 
@@ -1439,17 +1514,44 @@ const DASHBOARD_HOME_WIFI_ICON_X: u16 = 128;
 const DASHBOARD_HOME_WIFI_ICON_Y: u16 = 2;
 const DASHBOARD_HOME_WIFI_ICON_W: u16 = 18;
 const DASHBOARD_HOME_WIFI_ICON_H: u16 = 14;
-const DASHBOARD_HOME_WIFI_TOUCH_X: u16 = 118;
+const DASHBOARD_HOME_WIFI_TOUCH_X: u16 = 112;
 const DASHBOARD_HOME_WIFI_TOUCH_Y: u16 = 0;
-const DASHBOARD_HOME_WIFI_TOUCH_W: u16 = 32;
-const DASHBOARD_HOME_WIFI_TOUCH_H: u16 = 22;
+const DASHBOARD_HOME_WIFI_TOUCH_W: u16 = 38;
+const DASHBOARD_HOME_WIFI_TOUCH_H: u16 = 36;
 const DASHBOARD_HOME_ALERT_ICON_X: u16 = 150;
 const DASHBOARD_HOME_ALERT_ICON_Y: u16 = 2;
 const DASHBOARD_HOME_ALERT_ICON_SIZE: u16 = 16;
 const DASHBOARD_HOME_ALERT_TOUCH_X: u16 = 150;
 const DASHBOARD_HOME_ALERT_TOUCH_Y: u16 = 0;
-const DASHBOARD_HOME_ALERT_TOUCH_W: u16 = 26;
-const DASHBOARD_HOME_ALERT_TOUCH_H: u16 = 22;
+const DASHBOARD_HOME_ALERT_TOUCH_W: u16 = 38;
+const DASHBOARD_HOME_ALERT_TOUCH_H: u16 = 36;
+
+pub const DASHBOARD_HOME_WIFI_TOUCH: TouchRect = TouchRect::new(
+    DASHBOARD_HOME_WIFI_TOUCH_X,
+    DASHBOARD_HOME_WIFI_TOUCH_Y,
+    DASHBOARD_HOME_WIFI_TOUCH_W,
+    DASHBOARD_HOME_WIFI_TOUCH_H,
+);
+pub const DASHBOARD_HOME_ALERT_TOUCH: TouchRect = TouchRect::new(
+    DASHBOARD_HOME_ALERT_TOUCH_X,
+    DASHBOARD_HOME_ALERT_TOUCH_Y,
+    DASHBOARD_HOME_ALERT_TOUCH_W,
+    DASHBOARD_HOME_ALERT_TOUCH_H,
+);
+
+pub const ALERT_LIST_ROW_TOUCH: [TouchRect; 3] = [
+    TouchRect::new(0, 24, 272, 36),
+    TouchRect::new(0, 60, 272, 36),
+    TouchRect::new(0, 96, 272, 36),
+];
+pub const ALERT_LIST_MUTE_TOUCH: [TouchRect; 3] = [
+    TouchRect::new(272, 24, 48, 36),
+    TouchRect::new(272, 60, 48, 36),
+    TouchRect::new(272, 96, 48, 36),
+];
+pub const ALERT_LIST_TOP_BACK_TOUCH: TouchRect = TouchRect::new(0, 0, 96, 24);
+pub const ALERT_DETAIL_TOP_BACK_TOUCH: TouchRect = TouchRect::new(0, 0, 96, 32);
+pub const ALERT_DETAIL_MUTE_TOUCH: TouchRect = TouchRect::new(264, 72, 56, 40);
 
 const DASHBOARD_HOME_THERMAL_X: u16 = 6;
 const DASHBOARD_HOME_THERMAL_Y: u16 = 76;
@@ -2051,14 +2153,7 @@ pub const fn manual_charge_loopback_confirm_key_target(
 pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<DashboardTouchTarget> {
     match route {
         DashboardRoute::Home => {
-            if contains(
-                x,
-                y,
-                DASHBOARD_HOME_WIFI_TOUCH_X,
-                DASHBOARD_HOME_WIFI_TOUCH_Y,
-                DASHBOARD_HOME_WIFI_TOUCH_W,
-                DASHBOARD_HOME_WIFI_TOUCH_H,
-            ) {
+            if DASHBOARD_HOME_WIFI_TOUCH.contains(x, y) {
                 Some(DashboardTouchTarget::HomeWifi)
             } else if contains(
                 x,
@@ -3895,9 +3990,9 @@ pub fn render_dashboard_touch_regions_overlay<P: UiPainter>(
                 DASHBOARD_HOME_WIFI_TOUCH_Y,
                 DASHBOARD_HOME_WIFI_TOUCH_W,
                 DASHBOARD_HOME_WIFI_TOUCH_H,
-                "1",
+                "W",
                 palette.touch,
-                152,
+                113,
                 2,
             )?;
             draw_dashboard_touch_region_overlay(
@@ -9488,8 +9583,7 @@ pub fn draw_dashboard_alert_preview_indicator<P: UiPainter>(
     )
 }
 
-/// Draw the proposed Dashboard alert entry on top of the existing runtime
-/// touch-region overlay. This remains preview-only until owner approval.
+/// Draw the Dashboard alert entry on top of the runtime touch-region overlay.
 pub fn draw_dashboard_alert_preview_touch_overlay<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
@@ -9505,13 +9599,13 @@ pub fn draw_dashboard_alert_preview_touch_overlay<P: UiPainter>(
         DASHBOARD_HOME_ALERT_TOUCH_H,
         "A",
         palette.center,
-        166,
+        151,
         2,
     )
 }
 
-/// Render the alert list interaction candidate using the firmware scene,
-/// bitmap fonts, and RGB565 palette. It is preview-only until approval.
+/// Render the alert list interaction using the firmware scene, bitmap fonts,
+/// and RGB565 palette.
 pub fn render_alert_list_preview<P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
@@ -9537,9 +9631,45 @@ pub fn render_alert_list_preview<P: UiPainter>(
         UiFocus::Idle,
         "ALERTS",
         "",
-        status,
+        "",
         status_color,
     )?;
+    draw_panel(painter, 8, 2, 80, 18, palette, false, palette.accent)?;
+    text(
+        painter,
+        variant,
+        FontRole::TextBody,
+        "BACK",
+        Point::new(48, 4),
+        HorizontalAlignment::Center,
+        palette.text,
+    )?;
+    text(
+        painter,
+        variant,
+        FontRole::TextCompact,
+        status,
+        Point::new(220, 5),
+        HorizontalAlignment::Right,
+        status_color,
+    )?;
+
+    if touch_overlay {
+        let back = ALERT_LIST_TOP_BACK_TOUCH;
+        draw_dashboard_touch_region_overlay(
+            painter,
+            variant,
+            palette,
+            back.x,
+            back.y,
+            back.w,
+            back.h,
+            "B",
+            palette.left,
+            back.x + 2,
+            back.y + 2,
+        )?;
+    }
 
     if alerts.is_empty() {
         draw_panel(painter, 8, 42, 304, 66, palette, false, palette.accent)?;
@@ -9623,37 +9753,38 @@ pub fn render_alert_list_preview<P: UiPainter>(
     )?;
 
     if touch_overlay {
-        for slot in 0..3u16 {
-            let y = 24 + slot * 36;
+        for slot in 0..3usize {
+            let row = ALERT_LIST_ROW_TOUCH[slot];
+            let mute = ALERT_LIST_MUTE_TOUCH[slot];
             draw_dashboard_touch_region_overlay(
                 painter,
                 variant,
                 palette,
-                8,
-                y,
-                264,
-                34,
+                row.x,
+                row.y,
+                row.w,
+                row.h,
                 match slot {
                     0 => "1",
                     1 => "2",
                     _ => "3",
                 },
                 palette.touch,
-                12,
-                y + 2,
+                row.x + 4,
+                row.y + 2,
             )?;
             draw_dashboard_touch_region_overlay(
                 painter,
                 variant,
                 palette,
-                272,
-                y,
-                40,
-                34,
+                mute.x,
+                mute.y,
+                mute.w,
+                mute.h,
                 "M",
                 palette.center,
-                298,
-                y + 2,
+                mute.x + mute.w - 14,
+                mute.y + 2,
             )?;
         }
     }
@@ -9789,45 +9920,34 @@ pub fn render_alert_detail_preview<P: UiPainter>(
     )?;
 
     if touch_overlay {
+        let top_back = ALERT_DETAIL_TOP_BACK_TOUCH;
         draw_dashboard_touch_region_overlay(
             painter,
             variant,
             palette,
-            0,
-            0,
-            96,
-            24,
-            "1",
+            top_back.x,
+            top_back.y,
+            top_back.w,
+            top_back.h,
+            "B",
             palette.touch,
             4,
             3,
         )?;
-        draw_dashboard_touch_region_overlay(
-            painter,
-            variant,
-            palette,
-            8,
-            26,
-            256,
-            114,
-            "2",
-            palette.touch,
-            12,
-            28,
-        )?;
         if !alert.cleared && alert.sound.can_mute() {
+            let mute = ALERT_DETAIL_MUTE_TOUCH;
             draw_dashboard_touch_region_overlay(
                 painter,
                 variant,
                 palette,
-                264,
-                74,
-                48,
-                30,
+                mute.x,
+                mute.y,
+                mute.w,
+                mute.h,
                 "M",
                 palette.center,
-                296,
-                76,
+                mute.x + 4,
+                mute.y + 2,
             )?;
         }
     }
@@ -15136,15 +15256,11 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_alert_preview_icon_is_two_pixels_larger_than_wifi() {
-        assert_eq!(DASHBOARD_HOME_ALERT_ICON_SIZE, 16);
-        assert_eq!(
-            DASHBOARD_HOME_ALERT_ICON_SIZE,
-            DASHBOARD_HOME_WIFI_ICON_H + 2
-        );
+    fn dashboard_alert_preview_icon_matches_wifi_scale() {
+        assert!(DASHBOARD_HOME_ALERT_ICON_SIZE <= DASHBOARD_HOME_WIFI_ICON_H + 2);
         assert_eq!(
             DASHBOARD_HOME_ALERT_TOUCH_X,
-            DASHBOARD_HOME_WIFI_TOUCH_X + 32
+            DASHBOARD_HOME_WIFI_TOUCH_X + DASHBOARD_HOME_WIFI_TOUCH_W
         );
     }
 
@@ -15846,6 +15962,133 @@ mod tests {
             dashboard_hit_test(DashboardRoute::Home, 250, 140),
             Some(DashboardTouchTarget::HomeBatteryFlow)
         );
+    }
+
+    #[test]
+    fn dashboard_header_touch_contract_has_equal_usable_targets() {
+        assert_eq!(DASHBOARD_HOME_WIFI_TOUCH, TouchRect::new(112, 0, 38, 36));
+        assert_eq!(DASHBOARD_HOME_ALERT_TOUCH, TouchRect::new(150, 0, 38, 36));
+        assert_eq!(DASHBOARD_HOME_WIFI_TOUCH.area(), 1_368);
+        assert_eq!(DASHBOARD_HOME_ALERT_TOUCH.area(), 1_368);
+        assert!(DASHBOARD_HOME_WIFI_TOUCH.within_screen());
+        assert!(DASHBOARD_HOME_ALERT_TOUCH.within_screen());
+        assert!(!DASHBOARD_HOME_WIFI_TOUCH.overlaps(DASHBOARD_HOME_ALERT_TOUCH));
+
+        assert!(DASHBOARD_HOME_WIFI_TOUCH
+            .contains(DASHBOARD_HOME_WIFI_ICON_X, DASHBOARD_HOME_WIFI_ICON_Y));
+        assert!(DASHBOARD_HOME_WIFI_TOUCH.contains(
+            DASHBOARD_HOME_WIFI_ICON_X + DASHBOARD_HOME_WIFI_ICON_W - 1,
+            DASHBOARD_HOME_WIFI_ICON_Y + DASHBOARD_HOME_WIFI_ICON_H - 1
+        ));
+        assert!(DASHBOARD_HOME_ALERT_TOUCH
+            .contains(DASHBOARD_HOME_ALERT_ICON_X, DASHBOARD_HOME_ALERT_ICON_Y));
+        assert!(DASHBOARD_HOME_ALERT_TOUCH.contains(
+            DASHBOARD_HOME_ALERT_ICON_X + DASHBOARD_HOME_ALERT_ICON_SIZE - 1,
+            DASHBOARD_HOME_ALERT_ICON_Y + DASHBOARD_HOME_ALERT_ICON_SIZE - 1
+        ));
+    }
+
+    #[test]
+    fn dashboard_home_layering_prioritizes_alerts_then_wifi_over_output() {
+        assert_eq!(
+            dashboard_home_hit_test(true, 160, 30),
+            Some(DashboardHomeTouchTarget::Alerts)
+        );
+        assert_eq!(
+            dashboard_home_hit_test(false, 160, 30),
+            Some(DashboardHomeTouchTarget::Dashboard(
+                DashboardTouchTarget::HomeOutput
+            ))
+        );
+        assert_eq!(
+            dashboard_home_hit_test(true, 130, 30),
+            Some(DashboardHomeTouchTarget::Dashboard(
+                DashboardTouchTarget::HomeWifi
+            ))
+        );
+
+        for y in 0..UI_H {
+            for x in 0..UI_W {
+                let resolved = dashboard_home_hit_test(true, x, y);
+                if DASHBOARD_HOME_ALERT_TOUCH.contains(x, y) {
+                    assert_eq!(resolved, Some(DashboardHomeTouchTarget::Alerts));
+                } else if DASHBOARD_HOME_WIFI_TOUCH.contains(x, y) {
+                    assert_eq!(
+                        resolved,
+                        Some(DashboardHomeTouchTarget::Dashboard(
+                            DashboardTouchTarget::HomeWifi
+                        ))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn alert_list_touch_contract_covers_rows_mute_and_back_without_overlap() {
+        for slot in 0..3 {
+            let row = ALERT_LIST_ROW_TOUCH[slot];
+            let mute = ALERT_LIST_MUTE_TOUCH[slot];
+            assert!(row.within_screen());
+            assert!(mute.within_screen());
+            assert_eq!(row, TouchRect::new(0, 24 + slot as u16 * 36, 272, 36));
+            assert_eq!(mute, TouchRect::new(272, 24 + slot as u16 * 36, 48, 36));
+            assert!(!row.overlaps(mute));
+            assert_eq!(row.area(), 9_792);
+            assert_eq!(mute.area(), 1_728);
+            assert_eq!(
+                alert_list_hit_test(row.x + row.w - 1, row.y + row.h - 1, 4),
+                Some(AlertPreviewTouchTarget::Row(4 + slot))
+            );
+            assert_eq!(
+                alert_list_hit_test(mute.x, mute.y, 4),
+                Some(AlertPreviewTouchTarget::Mute(4 + slot))
+            );
+        }
+        assert_eq!(ALERT_LIST_TOP_BACK_TOUCH, TouchRect::new(0, 0, 96, 24));
+        assert!(ALERT_LIST_TOP_BACK_TOUCH.within_screen());
+        assert_eq!(ALERT_LIST_TOP_BACK_TOUCH.area(), 2_304);
+        assert_eq!(
+            alert_list_hit_test(0, 0, 0),
+            Some(AlertPreviewTouchTarget::Back)
+        );
+        assert_eq!(
+            alert_list_hit_test(95, 23, 0),
+            Some(AlertPreviewTouchTarget::Back)
+        );
+        assert_eq!(alert_list_hit_test(96, 23, 0), None);
+        assert_eq!(alert_list_hit_test(0, 140, 0), None);
+        assert_eq!(alert_list_hit_test(319, 171, 0), None);
+        assert_eq!(alert_list_hit_test(100, 132, 0), None);
+        assert_eq!(alert_list_hit_test(100, 139, 0), None);
+    }
+
+    #[test]
+    fn alert_detail_touch_contract_keeps_actions_disjoint() {
+        let regions = [ALERT_DETAIL_TOP_BACK_TOUCH, ALERT_DETAIL_MUTE_TOUCH];
+        for (index, region) in regions.iter().copied().enumerate() {
+            assert!(region.within_screen());
+            for other in regions.iter().copied().skip(index + 1) {
+                assert!(!region.overlaps(other));
+            }
+        }
+        assert_eq!(ALERT_DETAIL_TOP_BACK_TOUCH, TouchRect::new(0, 0, 96, 32));
+        assert_eq!(ALERT_DETAIL_MUTE_TOUCH, TouchRect::new(264, 72, 56, 40));
+        assert_eq!(
+            alert_detail_hit_test(95, 31),
+            Some(AlertDetailTouchTarget::Back)
+        );
+        assert_eq!(
+            alert_detail_hit_test(264, 72),
+            Some(AlertDetailTouchTarget::Mute)
+        );
+        assert_eq!(
+            alert_detail_hit_test(319, 111),
+            Some(AlertDetailTouchTarget::Mute)
+        );
+        assert_eq!(alert_detail_hit_test(319, 140), None);
+        assert_eq!(alert_detail_hit_test(160, 100), None);
+        assert_eq!(alert_detail_hit_test(319, 139), None);
     }
 
     #[test]

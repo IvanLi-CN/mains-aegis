@@ -11,6 +11,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeviceRecord } from "../api/types";
 import {
+  ACTIVE_ALERT_REFRESH_MS,
+  activeAlertSeverity,
+  audibleAlertCount,
   deviceSettingsAvailable,
   normalizeBasePath,
   resolveManualHttpRememberedChannel,
@@ -60,6 +63,67 @@ function makeRecord(overrides: Partial<DeviceRecord>): DeviceRecord {
     ...overrides,
   };
 }
+
+describe("active alert presentation", () => {
+  test("uses a short deterministic refresh cadence", () => {
+    expect(ACTIVE_ALERT_REFRESH_MS).toBe(2_000);
+  });
+
+  test("keeps the highest active severity authoritative", () => {
+    expect(activeAlertSeverity(null)).toBeNull();
+    expect(activeAlertSeverity({ alerts: [] })).toBeNull();
+    expect(
+      activeAlertSeverity({
+        alerts: [
+          {
+            alert_id: "mains_absent_dc",
+            instance_id: 1,
+            severity: "warning",
+            sound_state: "audible",
+          },
+          {
+            alert_id: "shutdown_protection",
+            instance_id: 2,
+            severity: "critical",
+            sound_state: "muted",
+          },
+        ],
+      }),
+    ).toBe("critical");
+  });
+
+  test("reports audible alerts independently from active severity", () => {
+    expect(
+      audibleAlertCount({
+        alerts: [
+          {
+            alert_id: "mains_absent_dc",
+            instance_id: 1,
+            severity: "warning",
+            sound_state: "audible",
+          },
+          {
+            alert_id: "high_stress",
+            instance_id: 2,
+            severity: "warning",
+            sound_state: "system_silent",
+          },
+        ],
+      }),
+    ).toBe(1);
+  });
+
+  test("keeps global alerts inside the existing topbar metrics", () => {
+    const source = readFileSync(join(import.meta.dir, "App.tsx"), "utf8");
+    expect(source).not.toContain("PersistentFleetAlertStatus");
+    expect(source).not.toContain("persistent-alert-banner");
+    expect(source).toContain("activeAlertsByDevice={fleetAlerts.snapshots}");
+    expect(source).toContain('const criticalTarget = alertTargetDeviceId("critical")');
+    expect(source).toContain('const warningTarget = alertTargetDeviceId("warning")');
+    expect(source).toContain("top-metric is-actionable");
+    expect(source).toContain("currentRecords.map(async (record) =>");
+  });
+});
 
 function withMockWindow<T>(
   value: typeof globalThis.window,

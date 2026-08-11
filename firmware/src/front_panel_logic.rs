@@ -52,6 +52,56 @@ pub const fn dashboard_page_for_vertical_menu_gesture(
     }
 }
 
+pub const fn map_cst816d_touch_to_landscape_swapped(x_raw: u16, y_raw: u16) -> Option<(u16, u16)> {
+    let ui_w = front_panel_scene::UI_W;
+    let ui_h = front_panel_scene::UI_H;
+
+    if x_raw < ui_h && y_raw < ui_w {
+        return Some((ui_w - 1 - y_raw, x_raw));
+    }
+
+    // Retain the legacy landscape ordering for older touch-controller setup.
+    if x_raw < ui_w && y_raw < ui_h {
+        return Some((x_raw, y_raw));
+    }
+    None
+}
+
+pub fn dashboard_header_entry_target(
+    alerts_available: bool,
+    previous: Option<(u16, u16)>,
+    current: (u16, u16),
+) -> Option<front_panel_scene::DashboardHomeTouchTarget> {
+    use front_panel_scene::{DashboardHomeTouchTarget, DashboardTouchTarget};
+
+    let target =
+        front_panel_scene::dashboard_home_hit_test(alerts_available, current.0, current.1)?;
+    if !matches!(
+        target,
+        DashboardHomeTouchTarget::Alerts
+            | DashboardHomeTouchTarget::Dashboard(DashboardTouchTarget::HomeWifi)
+    ) {
+        return None;
+    }
+    if previous.is_some_and(|(x, y)| {
+        front_panel_scene::dashboard_home_hit_test(alerts_available, x, y) == Some(target)
+    }) {
+        None
+    } else {
+        Some(target)
+    }
+}
+
+pub const fn any_alert_button_edge(
+    up: bool,
+    down: bool,
+    left: bool,
+    right: bool,
+    center: bool,
+) -> bool {
+    up || down || left || right || center
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +264,65 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn landscape_swapped_touch_mapping_has_explicit_raw_boundaries() {
+        assert_eq!(map_cst816d_touch_to_landscape_swapped(0, 0), Some((319, 0)));
+        assert_eq!(
+            map_cst816d_touch_to_landscape_swapped(171, 319),
+            Some((0, 171))
+        );
+
+        // Legacy landscape ordering remains accepted, but is bounded to 320x172.
+        assert_eq!(
+            map_cst816d_touch_to_landscape_swapped(319, 171),
+            Some((319, 171))
+        );
+        assert_eq!(map_cst816d_touch_to_landscape_swapped(320, 171), None);
+        assert_eq!(map_cst816d_touch_to_landscape_swapped(319, 172), None);
+        assert_eq!(
+            map_cst816d_touch_to_landscape_swapped(u16::MAX, u16::MAX),
+            None
+        );
+    }
+
+    #[test]
+    fn dashboard_header_targets_trigger_on_press_or_entry_only() {
+        use front_panel_scene::{DashboardHomeTouchTarget, DashboardTouchTarget};
+
+        let wifi = DashboardHomeTouchTarget::Dashboard(DashboardTouchTarget::HomeWifi);
+        assert_eq!(
+            dashboard_header_entry_target(true, None, (112, 0)),
+            Some(wifi)
+        );
+        assert_eq!(
+            dashboard_header_entry_target(true, Some((100, 30)), (149, 35)),
+            Some(wifi)
+        );
+        assert_eq!(
+            dashboard_header_entry_target(true, Some((112, 0)), (149, 35)),
+            None
+        );
+        assert_eq!(
+            dashboard_header_entry_target(true, Some((149, 35)), (150, 35)),
+            Some(DashboardHomeTouchTarget::Alerts)
+        );
+        assert_eq!(
+            dashboard_header_entry_target(false, Some((149, 35)), (150, 35)),
+            None
+        );
+        assert_eq!(
+            dashboard_header_entry_target(true, Some((100, 30)), (100, 60)),
+            None
+        );
+    }
+
+    #[test]
+    fn alert_buttons_do_not_repeat_feedback_without_a_new_edge() {
+        assert!(!any_alert_button_edge(false, false, false, false, false));
+        assert!(any_alert_button_edge(true, false, false, false, false));
+        assert!(any_alert_button_edge(false, false, false, true, false));
+        assert!(any_alert_button_edge(false, false, false, false, true));
     }
 }

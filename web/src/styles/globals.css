@@ -274,6 +274,23 @@ a {
   padding: 8px 10px;
 }
 
+.top-metric.is-actionable {
+  width: auto;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.top-metric.is-actionable:hover {
+  border-color: var(--color-primary);
+}
+
+.top-metric.is-actionable:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
 .top-metric span,
 .metric-label {
   display: block;
@@ -893,6 +910,13 @@ a {
   margin: 2px 0 0;
   font-size: 20px;
   letter-spacing: 0;
+}
+
+.alerts-live-status {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-muted);
+  font-size: 12px;
 }
 
 .alerts-list {

@@ -33,11 +33,15 @@
   - 设备导航新增 `Alerts` 页，支持 direct HTTP、devd/Web lease 与 Web Serial。
   - 每行独立消音、写入中锁定、完成后权威回读，并呈现 unsupported、stale 与传输错误。
   - direct LAN 的旧固件 Alerts `404` 在客户端限定归一化为 `unsupported`，升级提示与 devd/Web Serial 一致。
-  - offline、unsupported 或刷新失败时清空旧告警快照，不保留基于过期数据的消音按钮。
+  - offline 或 unsupported 时清空旧告警快照；瞬时刷新失败时保留最后确认的活动告警作为持续风险提示，但禁用基于过期实例的消音按钮，直到权威回读恢复。
+  - 所有在线设备的告警合同每 2 秒自动回读，页面重新可见时立即回读；fleet 级快照直接驱动所有路由已有的 TopBar `Critical` / `Warning` 指标，非零指标进入相关设备 Alerts，不新增大型 Alert 或正常态提示；当前设备快照同时驱动 Alerts 列表。
   - Web Serial 保留 CDC error envelope；刷新使用代次保护，mute 冲突后的权威回读不清除 stale/inactive 提示。
 
 - `firmware/src/front_panel_scene.rs`
   - 提供同源 Dashboard 指示器、`ALERTS` 列表、详情 `CLEARED` 终态与热区。
+  - Dashboard、列表与详情热区由公开 `TouchRect` 常量定义；运行时和 preview overlay 复用相同 hit-test，host 测试锁定面积、边界、互斥和层级优先级。
+- `firmware/src/front_panel_logic.rs`
+  - 固化 CST816D `LandscapeSwapped` 坐标边界与顶部 WiFi/Alerts 的按下或滑入触发策略；显示区外坐标拒绝，同一热区内移动不重复触发。
 - `firmware/src/front_panel.rs`
   - 将获批 scene 接入触摸和 `UP/DOWN/CENTER/RIGHT/LEFT` 导航。
   - 详情缓存当前实例；解除后保留不可操作的 `CLEARED` 终态。

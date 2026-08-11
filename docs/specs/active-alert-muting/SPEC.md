@@ -65,7 +65,7 @@
 
 ### Dashboard
 
-- WiFi 图标右侧显示约 `16px` 的告警三角，较 WiFi glyph 增加约 2px 以保证告警可见性。
+- WiFi 图标右侧显示告警三角；两者使用同为 `38x36` 的可触摸入口，视觉 glyph 尺寸差不超过 2px。
 - 存在至少一个 `audible` 告警时，三角按最高严重度在白色与严重度色之间双相交替；`warning` 使用黄色，`critical` 使用红色。
 - 仅存在 `muted`、`system_silent` 或 `policy_silent` 告警时，三角以最高严重度色静态显示。
 - 没有活动告警时不显示三角；点击三角进入 `ALERTS` 列表。
@@ -76,18 +76,20 @@
 - 触摸行主体进入详情；触摸右侧声音图标只消音当前项。列表支持空态、单项、多项及首/中/末溢出位置。
 - 物理按键：`UP/DOWN` 选择、`CENTER` 进入详情、`RIGHT` 消音当前可听项、`LEFT` 返回。
 - 详情页显示摘要、`SOUND` 状态与单个 `MUTE THIS ALERT` 动作。解除后的详情显示 `CLEARED` 且不提供动作。
+- 热区坐标、边界、层级优先级和越界策略以 [`firmware/ui/touch-targets.md`](../../../firmware/ui/touch-targets.md) 为准；同一组 `TouchRect` 常量同时驱动 runtime hit-test、preview overlay 与 host 单元测试。
 
 ### 评审门禁与矩阵
 
 - 预览必须由 `firmware/src/front_panel_scene.rs` 同源渲染，并为每个场景输出 `320x172` PNG 与 `110080` 字节 little-endian RGB565 framebuffer。
 - 评审矩阵包含：首页无告警、warning/critical 双相、`muted`、`system_silent`、`policy_silent`、mixed 及 Dashboard 告警入口热区；列表空/单/mixed/溢出首中末及逐行详情/消音热区；9 类详情的 active、muted、cleared，以及详情触摸区。
-- 主人明确批准 Chat 中展示的不可变快照前，任何运行时、协议、CLI 和 Web 消音实现均不得开始。
+- 前面板渲染快照已获主人批准；后续热区变更仍必须先更新同源 preview 和自动化几何门禁。
 
 ## 验收标准
 
 - 9 个告警类型均通过 `inactive -> active -> muted -> cleared -> reactivated` 测试，且复发的 `instance_id` 不同。
 - stale 或 inactive 消音请求不影响新实例；一个实例消音不移除或停止任何其它活动告警。
 - CDC、LAN、devd、CLI 和 Web 对同一设备返回一致的告警状态；旧固件、offline 和 transport error 有显式结果。
+- Web 自动回读所有在线设备的权威告警；Fleet、Add device 和全部单设备页面复用永久存在的 TopBar `Critical` / `Warning` 指标作为全局告警位置，不得插入大型 Alert、额外正常态文案或改变页面高度。非零指标可进入相关设备 Alerts；瞬时刷新失败不得隐藏最后确认的活动告警，也不得允许基于过期实例执行消音。
 - 前面板按本 spec 的矩阵导出真实 framebuffer/PNG，获批准后才连接运行时输入、触摸与按键路由。
 
 ## Visual Evidence
@@ -111,3 +113,7 @@ Web Alerts 桌面端。
 PR: include
 Web Alerts 移动端（`393x852`）。
 ![Web Alerts mobile](./assets/web-alerts-mobile.png)
+
+PR: include
+普通 Overview 页面仍在既有 TopBar `Critical` / `Warning` 指标中持续展示全局告警；未新增大型 Alert 或额外状态区域。
+![Web global alert status](./assets/web-global-alert-status-desktop.png)

@@ -1,19 +1,21 @@
 use core::convert::Infallible;
 
 use crate::front_panel_logic::{
-    cst816d_vertical_gesture_direction, dashboard_allowed, dashboard_enter_requires_variant_switch,
+    any_alert_button_edge, cst816d_vertical_gesture_direction, dashboard_allowed,
+    dashboard_enter_requires_variant_switch, dashboard_header_entry_target,
     dashboard_page_for_vertical_menu_gesture, dashboard_uses_frame_animation,
-    VerticalGestureDirection, DASHBOARD_VARIANT, SELF_CHECK_VARIANT,
+    map_cst816d_touch_to_landscape_swapped, VerticalGestureDirection, DASHBOARD_VARIANT,
+    SELF_CHECK_VARIANT,
 };
 use crate::front_panel_scene::{
-    self, AlertPreviewItem, AlertPreviewKind, AlertPreviewSeverity, AlertPreviewSoundState,
-    AudioTestUiState, BeeperPrefs, BeeperSettingTarget, BeeperSettingsTouchTarget,
-    BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardHomeFocus, DashboardMenuStyle,
-    DashboardMenuTouchTarget, DashboardPrimaryPage, DashboardRoute, DashboardShellState,
-    DashboardTouchTarget, ManualChargeLoopbackConfirmTarget, ManualChargeUiAction, MenuItem,
-    SelfCheckCommState, SelfCheckHardwareTarget, SelfCheckOverlay, SelfCheckTouchTarget,
-    SelfCheckUiSnapshot, TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant,
-    UpsMode,
+    self, AlertDetailTouchTarget, AlertPreviewItem, AlertPreviewKind, AlertPreviewSeverity,
+    AlertPreviewSoundState, AudioTestUiState, BeeperPrefs, BeeperSettingTarget,
+    BeeperSettingsTouchTarget, BmsActivationState, BmsRecoveryUiAction, BmsResultKind,
+    DashboardHomeFocus, DashboardHomeTouchTarget, DashboardMenuStyle, DashboardMenuTouchTarget,
+    DashboardPrimaryPage, DashboardRoute, DashboardShellState, DashboardTouchTarget,
+    ManualChargeLoopbackConfirmTarget, ManualChargeUiAction, MenuItem, SelfCheckCommState,
+    SelfCheckHardwareTarget, SelfCheckOverlay, SelfCheckTouchTarget, SelfCheckUiSnapshot,
+    TestFunctionUi, TpsTestUiSnapshot, UiFocus, UiModel, UiPainter, UiVariant, UpsMode,
 };
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::{Operation, SpiBus, SpiDevice};
@@ -2068,6 +2070,9 @@ where
     }
 
     fn map_touch_to_ui(x_raw: u16, y_raw: u16) -> Option<(u16, u16)> {
+        if matches!(PANEL_ORIENTATION, Orientation::LandscapeSwapped) {
+            return map_cst816d_touch_to_landscape_swapped(x_raw, y_raw);
+        }
         let ui_w = front_panel_scene::UI_W;
         let ui_h = front_panel_scene::UI_H;
 
@@ -2476,6 +2481,9 @@ where
         right: bool,
         center: bool,
     ) -> Option<UiAction> {
+        if !any_alert_button_edge(up, down, left, right, center) {
+            return None;
+        }
         match self.alert_screen {
             AlertScreen::Closed => None,
             AlertScreen::List => {
@@ -2543,17 +2551,20 @@ where
                 None
             }
             AlertScreen::Detail(_) => {
-                if y >= 142 || (x < 72 && y < 24) {
-                    self.alert_screen = AlertScreen::List;
-                    self.note_interaction_feedback();
-                    self.needs_redraw = true;
-                    return None;
-                }
-                if y >= 74 && y < 140 && x >= 250 {
-                    if let Some(item) = self.alert_detail {
-                        return (!item.cleared && item.sound == AlertPreviewSoundState::Audible)
-                            .then_some(UiAction::MuteAlert(alert_id_for_preview(item.kind)));
+                match front_panel_scene::alert_detail_hit_test(x, y) {
+                    Some(AlertDetailTouchTarget::Back) => {
+                        self.alert_screen = AlertScreen::List;
+                        self.note_interaction_feedback();
+                        self.needs_redraw = true;
                     }
+                    Some(AlertDetailTouchTarget::Mute) => {
+                        if let Some(item) = self.alert_detail {
+                            return (!item.cleared
+                                && item.sound == AlertPreviewSoundState::Audible)
+                                .then_some(UiAction::MuteAlert(alert_id_for_preview(item.kind)));
+                        }
+                    }
+                    None => {}
                 }
                 None
             }
@@ -2653,7 +2664,7 @@ where
             return self.process_beeper_settings_touch_action(x, y, touch_edge);
         }
 
-        if !snapshot.touch || prev.touch {
+        if !snapshot.touch {
             return None;
         }
 
@@ -2661,15 +2672,24 @@ where
             Some(point) => point,
             None => return None,
         };
+        let touch_edge = !prev.touch;
+        let touch_moved = prev.touch && prev.touch_point != snapshot.touch_point;
+        if !touch_edge && !touch_moved {
+            return None;
+        }
+
+        let header_entry = dashboard_header_entry_target(true, prev.touch_point, (x, y));
 
         if self.alert_screen != AlertScreen::Closed {
-            return self.process_alert_touch_action(x, y);
+            return touch_edge
+                .then(|| self.process_alert_touch_action(x, y))
+                .flatten();
         }
 
         if self.dashboard_page == DashboardPrimaryPage::DashboardHome
             && self.dashboard_route == DashboardRoute::Home
             && self.alert_count > 0
-            && front_panel_scene::dashboard_alert_hit_test(x, y)
+            && header_entry == Some(DashboardHomeTouchTarget::Alerts)
         {
             self.alert_screen = AlertScreen::List;
             self.alert_selected = 0;
@@ -2679,6 +2699,9 @@ where
         }
 
         if self.self_check_overlay == SelfCheckOverlay::ManualChargeLoopbackConfirm {
+            if !touch_edge {
+                return None;
+            }
             return match front_panel_scene::manual_charge_loopback_confirm_hit_test(x, y) {
                 Some(ManualChargeLoopbackConfirmTarget::Cancel) => {
                     self.self_check_overlay = SelfCheckOverlay::None;
@@ -2703,10 +2726,25 @@ where
         }
 
         if self.dashboard_page == DashboardPrimaryPage::Menu {
-            return self.process_dashboard_menu_touch_action(x, y);
+            return touch_edge
+                .then(|| self.process_dashboard_menu_touch_action(x, y))
+                .flatten();
         }
         if self.dashboard_page != DashboardPrimaryPage::DashboardHome {
             return None;
+        }
+
+        if touch_moved {
+            if self.dashboard_route != DashboardRoute::Home {
+                return None;
+            }
+            let entered_wifi = header_entry
+                == Some(DashboardHomeTouchTarget::Dashboard(
+                    DashboardTouchTarget::HomeWifi,
+                ));
+            if !entered_wifi {
+                return None;
+            }
         }
 
         esp_println::println!(
