@@ -70,7 +70,7 @@
 - `just host-test`
   - 124 library tests 与 56 CLI tests passed。
 - `bun test web/src`
-  - 104 passed。
+  - 105 passed。
 - `just web-check`、`just web-build`
   - 通过。
 - `just check`
