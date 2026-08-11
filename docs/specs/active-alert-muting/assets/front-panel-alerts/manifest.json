@@ -2,231 +2,1056 @@
   {
     "group": "dashboard",
     "title": "No active alert",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-runtime-standby/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "dashboard-runtime-standby"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-runtime-standby/preview.png",
+    "preview_sha256": "62e7588727c348b422dc2043ce7abe24271f37bab42d4d83c4a30e5486e34014",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-dashboard-runtime-standby/framebuffer.bin",
+    "framebuffer_sha256": "795bf8e42a95fa34bda9414150c23827a30db5e8f5114218f2984ec521d228d0",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "dashboard",
     "title": "Warning audible / white phase",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-white-frame-0/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "dashboard-alert",
+      "--alert-severity",
+      "warning",
+      "--alert-sound",
+      "audible",
+      "--frame-no",
+      "0"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-white-frame-0/preview.png",
+    "preview_sha256": "b896dfc4219b250afc45c95c5954f952985e072c57afb5174c1e20f3e791cd84",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-white-frame-0/framebuffer.bin",
+    "framebuffer_sha256": "730a56732e0b24b3165cc26a74669bb900c6f1ac1633b0f587193fbefa6b9ca8",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "dashboard",
     "title": "Warning audible / severity phase",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-severity-frame-1/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "dashboard-alert",
+      "--alert-severity",
+      "warning",
+      "--alert-sound",
+      "audible",
+      "--frame-no",
+      "1"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-severity-frame-1/preview.png",
+    "preview_sha256": "a242633ca6b6e24bac697ea802acd359cbdaf610cf9ac7d5a76771efdb5246f3",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-severity-frame-1/framebuffer.bin",
+    "framebuffer_sha256": "8acb3977ef6e3fe3f37a3360542a21c1caef1ab6fc25e67aac6c4e27661f4531",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "dashboard",
     "title": "Critical audible / white phase",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-audible-phase-white-frame-0/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "dashboard-alert",
+      "--alert-severity",
+      "critical",
+      "--alert-sound",
+      "audible",
+      "--frame-no",
+      "0"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-audible-phase-white-frame-0/preview.png",
+    "preview_sha256": "b896dfc4219b250afc45c95c5954f952985e072c57afb5174c1e20f3e791cd84",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-audible-phase-white-frame-0/framebuffer.bin",
+    "framebuffer_sha256": "730a56732e0b24b3165cc26a74669bb900c6f1ac1633b0f587193fbefa6b9ca8",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "dashboard",
     "title": "Critical audible / severity phase",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-audible-phase-severity-frame-1/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "dashboard-alert",
+      "--alert-severity",
+      "critical",
+      "--alert-sound",
+      "audible",
+      "--frame-no",
+      "1"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-audible-phase-severity-frame-1/preview.png",
+    "preview_sha256": "f60a088a3e2eb4ff07fa0270c4d4631f1b4dc144203b7a59b82f011fc9e30bf1",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-audible-phase-severity-frame-1/framebuffer.bin",
+    "framebuffer_sha256": "61bf7c4d390ae7f034be75483f92296768faef842a267ed852e6357650b40490",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "dashboard",
     "title": "Muted / static",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-muted-phase-white-frame-0/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "dashboard-alert",
+      "--alert-severity",
+      "warning",
+      "--alert-sound",
+      "muted"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-muted-phase-white-frame-0/preview.png",
+    "preview_sha256": "a242633ca6b6e24bac697ea802acd359cbdaf610cf9ac7d5a76771efdb5246f3",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-muted-phase-white-frame-0/framebuffer.bin",
+    "framebuffer_sha256": "8acb3977ef6e3fe3f37a3360542a21c1caef1ab6fc25e67aac6c4e27661f4531",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "dashboard",
     "title": "System silent / static",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-system-silent-phase-white-frame-0/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "dashboard-alert",
+      "--alert-severity",
+      "critical",
+      "--alert-sound",
+      "system-silent"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-system-silent-phase-white-frame-0/preview.png",
+    "preview_sha256": "f60a088a3e2eb4ff07fa0270c4d4631f1b4dc144203b7a59b82f011fc9e30bf1",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-system-silent-phase-white-frame-0/framebuffer.bin",
+    "framebuffer_sha256": "61bf7c4d390ae7f034be75483f92296768faef842a267ed852e6357650b40490",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "dashboard",
     "title": "Policy silent / static",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-policy-silent-phase-white-frame-0/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "dashboard-alert",
+      "--alert-severity",
+      "warning",
+      "--alert-sound",
+      "policy-silent"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-policy-silent-phase-white-frame-0/preview.png",
+    "preview_sha256": "a242633ca6b6e24bac697ea802acd359cbdaf610cf9ac7d5a76771efdb5246f3",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-policy-silent-phase-white-frame-0/framebuffer.bin",
+    "framebuffer_sha256": "8acb3977ef6e3fe3f37a3360542a21c1caef1ab6fc25e67aac6c4e27661f4531",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "dashboard",
     "title": "Mixed / highest critical audible",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-critical-audible-phase-severity-frame-3/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "dashboard-alert",
+      "--alert-mixed",
+      "--frame-no",
+      "3"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-severity-frame-3-mixed/preview.png",
+    "preview_sha256": "f60a088a3e2eb4ff07fa0270c4d4631f1b4dc144203b7a59b82f011fc9e30bf1",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-severity-frame-3-mixed/framebuffer.bin",
+    "framebuffer_sha256": "61bf7c4d390ae7f034be75483f92296768faef842a267ed852e6357650b40490",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "hotspots",
     "title": "Dashboard touch zones / A = Alerts",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-white-frame-0-touch-zones/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "dashboard-alert",
+      "--alert-severity",
+      "warning",
+      "--alert-sound",
+      "audible",
+      "--alert-touch-zones"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-white-frame-0-touch-zones/preview.png",
+    "preview_sha256": "0bf4bf5bda4203c794e3fad219664be16cff9c00ea88634cc8c4b892cd3a23e2",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-dashboard-alert-warning-audible-phase-white-frame-0-touch-zones/framebuffer.bin",
+    "framebuffer_sha256": "d6cba3902cb7a8e9b937ebe6c59fd6695cebc9ca36ea837fe4a4a0eb66f14f99",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "list",
     "title": "Empty",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-empty-mains-absent-dc-audible-selected-0-top-0/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-list",
+      "--alert-list",
+      "empty"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-empty-mains-absent-dc-audible-selected-0-top-0/preview.png",
+    "preview_sha256": "b1cf642df3a8014eda11f0cafad3153a720a64b67fcc9d17f5a952b454fd0048",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-list-empty-mains-absent-dc-audible-selected-0-top-0/framebuffer.bin",
+    "framebuffer_sha256": "c27ca78a57fccbfd39a39e9538cd092c1b7c442e307bc9ff0fd7c137c1087de3",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "list",
     "title": "Single / audible",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-single-mains-absent-dc-audible-selected-0-top-0/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-list",
+      "--alert-list",
+      "single",
+      "--alert-sound",
+      "audible"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-single-mains-absent-dc-audible-selected-0-top-0/preview.png",
+    "preview_sha256": "292165ac93dfe898e91dd8dace81fc40feb9c55c2c699e57164cdf6068dad818",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-list-single-mains-absent-dc-audible-selected-0-top-0/framebuffer.bin",
+    "framebuffer_sha256": "369897a57da3db1fbac163329365522a4fa1d6a06dade62d86bf7557498e41a2",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "list",
     "title": "Single / muted",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-single-mains-absent-dc-muted-selected-0-top-0/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-list",
+      "--alert-list",
+      "single",
+      "--alert-sound",
+      "muted"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-single-mains-absent-dc-muted-selected-0-top-0/preview.png",
+    "preview_sha256": "4442d6082c1bdade9bdbf13f6bae77129dcb6e5245be49d9db8ebb4f833263fd",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-list-single-mains-absent-dc-muted-selected-0-top-0/framebuffer.bin",
+    "framebuffer_sha256": "fdbb0ff57acf874623d44d25c2409d6c300151a6ce05791b30940239f2c893fb",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "list",
     "title": "Mixed / selection",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-mixed-mains-absent-dc-audible-selected-1-top-0/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-list",
+      "--alert-list",
+      "mixed",
+      "--alert-selected",
+      "1"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-mixed-mains-absent-dc-audible-selected-1-top-0/preview.png",
+    "preview_sha256": "3b7a16e77d1e0ba0ee079295c79ed7d583bc4449e34dde3b11dd7bae3c7a247d",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-list-mixed-mains-absent-dc-audible-selected-1-top-0/framebuffer.bin",
+    "framebuffer_sha256": "3b087f4cf66fb3948bbf6358785cabfe8e788464012a7c72664d00be470a9ada",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "list",
     "title": "Overflow / top",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-0-top-0/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-list",
+      "--alert-list",
+      "overflow",
+      "--alert-selected",
+      "0",
+      "--alert-top",
+      "0"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-0-top-0/preview.png",
+    "preview_sha256": "4de7a38cd8afae1516237157d8a1f4ef1d68436c87fc9f70cbb958d7f8ef797d",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-0-top-0/framebuffer.bin",
+    "framebuffer_sha256": "7bc1bd66fcb84f54a94e7a0ffed7f8369eb6fe964b296a5522d296056d594713",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "list",
     "title": "Overflow / middle",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-4-top-3/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-list",
+      "--alert-list",
+      "overflow",
+      "--alert-selected",
+      "4",
+      "--alert-top",
+      "3"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-4-top-3/preview.png",
+    "preview_sha256": "a9bd4cc7fbd2e6eebcb409f841573941d1dd6a9560865e49b7952a9f26a28c51",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-4-top-3/framebuffer.bin",
+    "framebuffer_sha256": "7f29fd532f035d50c28751b75a01a6997444bfad0468213e7ffe5040a29c50c0",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "list",
     "title": "Overflow / end",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-8-top-6/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-list",
+      "--alert-list",
+      "overflow",
+      "--alert-selected",
+      "8",
+      "--alert-top",
+      "6"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-8-top-6/preview.png",
+    "preview_sha256": "26a6ae1fadf7e909fe7a07a0fdba3956c528b20d2cfb2264cc417b8eaabffc40",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-8-top-6/framebuffer.bin",
+    "framebuffer_sha256": "c96c7206709f761bda2c4e2a1933b7bc2739d1c02344e27c2d0e7513f9ccd9a1",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "hotspots",
     "title": "Alert list / rows = Detail, M = Mute",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-0-top-0-touch-zones/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-list",
+      "--alert-list",
+      "overflow",
+      "--alert-touch-zones"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-0-top-0-touch-zones/preview.png",
+    "preview_sha256": "dc39c031138ca9602a6310a098e4d90e81862eefba5f868032219b587debe9cc",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-list-overflow-mains-absent-dc-audible-selected-0-top-0-touch-zones/framebuffer.bin",
+    "framebuffer_sha256": "f35a218b83d1d04ce3da3a1a75ee22022b66f2831386feb9119c94fdfca7b490",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "detail-touch",
     "title": "Detail touch zones",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-active-audible-touch-zones/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "mains-absent-dc",
+      "--alert-touch-zones"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-active-audible-touch-zones/preview.png",
+    "preview_sha256": "147969e6991a92198ce1b180b066891be1b1eb7a2a2128a10015d119fc59b3c1",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-active-audible-touch-zones/framebuffer.bin",
+    "framebuffer_sha256": "194197d80bd7c258a542d882c7cb378b178bc6b18f08f081c48747464f9b5dce",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-active",
     "title": "mains-absent-dc / active",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-active-audible/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "mains-absent-dc",
+      "--alert-sound",
+      "audible"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-active-audible/preview.png",
+    "preview_sha256": "cce07924b877995e1ad71a9cc66d23628c3c9aa940223c43ca597d73794ca59c",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-active-audible/framebuffer.bin",
+    "framebuffer_sha256": "ffb7dc78943ba948d071b14c1f9082dd730010dad0fa1da1d5182a3e93f52655",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-active",
     "title": "high-stress / active",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-high-stress-active-audible/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "high-stress",
+      "--alert-sound",
+      "audible"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-high-stress-active-audible/preview.png",
+    "preview_sha256": "1cd4fadd5c9e470a99de18a8d004cf885de3f2b5bbc588050e86dd32c733c6bb",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-high-stress-active-audible/framebuffer.bin",
+    "framebuffer_sha256": "45fd8899b1fd9f2c43f6113813d2e2ca708fead3b9517cf22277a58f4f32aad3",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-active",
     "title": "battery-low-no-mains / active",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-no-mains-active-audible/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "battery-low-no-mains",
+      "--alert-sound",
+      "audible"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-no-mains-active-audible/preview.png",
+    "preview_sha256": "a6039f6a71c8dd0fa0a1bb866748b4797358f913cfd735abc6bb7e0f7608e01b",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-no-mains-active-audible/framebuffer.bin",
+    "framebuffer_sha256": "3ce3e87982dc614be4dab40c3eead1d7ba2b1186689b4f5021617f126b97a534",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-active",
     "title": "battery-low-with-mains / active",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-with-mains-active-audible/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "battery-low-with-mains",
+      "--alert-sound",
+      "audible"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-with-mains-active-audible/preview.png",
+    "preview_sha256": "c2fa0615140d10283abc3cdfe2b77bac4efd0e4c273205052eace546018099f8",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-with-mains-active-audible/framebuffer.bin",
+    "framebuffer_sha256": "dd0b16b6188cf15139b44a4afa0957a983209c21292e4202138dc6bf37b0fb30",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-active",
     "title": "shutdown-protection / active",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-shutdown-protection-active-audible/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "shutdown-protection",
+      "--alert-sound",
+      "audible"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-shutdown-protection-active-audible/preview.png",
+    "preview_sha256": "49abf508c7308b9d3143550ec2b1526f1be8681e71e4db35f5f69b33086ae065",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-shutdown-protection-active-audible/framebuffer.bin",
+    "framebuffer_sha256": "375b4176a882fdbab208c3e07f9263f67b30b54b83b63fa57cb6ac71030fc6ba",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-active",
     "title": "io-over-voltage / active",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-voltage-active-audible/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "io-over-voltage",
+      "--alert-sound",
+      "audible"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-voltage-active-audible/preview.png",
+    "preview_sha256": "c4a65d028db6f4dc8d4dc05f0e5abb13cbf9060d88a646871fe3fd81cd77ab1b",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-voltage-active-audible/framebuffer.bin",
+    "framebuffer_sha256": "c13ff1c49e545bee857d5a3db3128d74b2f166306032ba84a844f80ca96b9743",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-active",
     "title": "io-over-current / active",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-current-active-audible/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "io-over-current",
+      "--alert-sound",
+      "audible"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-current-active-audible/preview.png",
+    "preview_sha256": "4b25e49539692a10a93ff00ca1438a2ed452a0414713745be932ef86e210fe9f",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-current-active-audible/framebuffer.bin",
+    "framebuffer_sha256": "39d7dac22669304daa1f739894ecb5fb5e885e0031ce2fa362783a153f2e09c9",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-active",
     "title": "module-fault / active",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-module-fault-active-audible/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "module-fault",
+      "--alert-sound",
+      "audible"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-module-fault-active-audible/preview.png",
+    "preview_sha256": "c2336f02979deb7132ae983517425e3fd198c9aa37e5a84710a9a3e259e75be8",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-module-fault-active-audible/framebuffer.bin",
+    "framebuffer_sha256": "597b61e1bf75688014cd066df27eb2ea91dcac5e410498ca83d895b3ca6177f8",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-active",
     "title": "battery-protection / active",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-protection-active-audible/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "battery-protection",
+      "--alert-sound",
+      "audible"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-protection-active-audible/preview.png",
+    "preview_sha256": "d14e4d1f61f2f4eb3a28c45833cce4f77a811ce5316a0ce2ddb66b8a1e323318",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-protection-active-audible/framebuffer.bin",
+    "framebuffer_sha256": "0e153a5c252b23675437090b1c9a3c69b24ae13c6ad41693034aaa8dcd41bff3",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-muted",
     "title": "mains-absent-dc / muted",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-active-muted/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "mains-absent-dc",
+      "--alert-sound",
+      "muted"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-active-muted/preview.png",
+    "preview_sha256": "0a67efbf1f2a190ba6244c41cdd61c5e1fc27068c835b4f28de0f6bcf5f223ff",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-active-muted/framebuffer.bin",
+    "framebuffer_sha256": "49c65efbc6a0703798b766f80545efb29d06d153cea1d8da3a0fb411a501c46b",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-muted",
     "title": "high-stress / muted",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-high-stress-active-muted/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "high-stress",
+      "--alert-sound",
+      "muted"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-high-stress-active-muted/preview.png",
+    "preview_sha256": "0538f068f1bf688a4b9b557ed70bd833988622ab0ea05b3b456d3b996f5942b8",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-high-stress-active-muted/framebuffer.bin",
+    "framebuffer_sha256": "2b53cfc8ecebec3e820de2c285f3b72c2892d9e877b111482777069687afc085",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-muted",
     "title": "battery-low-no-mains / muted",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-no-mains-active-muted/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "battery-low-no-mains",
+      "--alert-sound",
+      "muted"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-no-mains-active-muted/preview.png",
+    "preview_sha256": "58a689a768fc9ec14e0ecf40933d74b24b1756b86296c4a14738718c012ca24e",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-no-mains-active-muted/framebuffer.bin",
+    "framebuffer_sha256": "8495687f2ca8143950784a0188094087f8ca7e7eb8478db506701712026a5317",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-muted",
     "title": "battery-low-with-mains / muted",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-with-mains-active-muted/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "battery-low-with-mains",
+      "--alert-sound",
+      "muted"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-with-mains-active-muted/preview.png",
+    "preview_sha256": "a36f230d733cec7e148489a98e89e51a9a060d4a0206c20a56756609070b0a46",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-with-mains-active-muted/framebuffer.bin",
+    "framebuffer_sha256": "2b8ee070007d5260169e3ef21198ebeef5cc7a243458ca359cc52dca191e1f88",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-muted",
     "title": "shutdown-protection / muted",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-shutdown-protection-active-muted/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "shutdown-protection",
+      "--alert-sound",
+      "muted"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-shutdown-protection-active-muted/preview.png",
+    "preview_sha256": "80957a6b00a151e1ca22ceb491756bc4c93dfa28c96f73bfc5fbb16124192773",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-shutdown-protection-active-muted/framebuffer.bin",
+    "framebuffer_sha256": "3229e29d7a0ccd12663e4001cacdde19bbbe84889726d09c0e6f53661ec91b4f",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-muted",
     "title": "io-over-voltage / muted",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-voltage-active-muted/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "io-over-voltage",
+      "--alert-sound",
+      "muted"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-voltage-active-muted/preview.png",
+    "preview_sha256": "cee3ca3960390a4f4e5a3fc82bbeb71f97d6abb092ae255bf821cb67a24af3b6",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-voltage-active-muted/framebuffer.bin",
+    "framebuffer_sha256": "de4b90165ac474f336ee724a429bc23a7691913d74ee14b1a8132a897ff72c38",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-muted",
     "title": "io-over-current / muted",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-current-active-muted/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "io-over-current",
+      "--alert-sound",
+      "muted"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-current-active-muted/preview.png",
+    "preview_sha256": "fcc13ec42bab6dcb6dab4ab536df2aaa66e2b22c2325a67bdca1b6e967d93a8b",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-current-active-muted/framebuffer.bin",
+    "framebuffer_sha256": "442377b4e6b56ab9206cdf28f1e8fec12b31eeb618ba5b5a8bd456b08dbe661d",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-muted",
     "title": "module-fault / muted",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-module-fault-active-muted/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "module-fault",
+      "--alert-sound",
+      "muted"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-module-fault-active-muted/preview.png",
+    "preview_sha256": "b195c51d2c7ff2e806711307a150ca6b0fa60690581a5904458947cf23389575",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-module-fault-active-muted/framebuffer.bin",
+    "framebuffer_sha256": "2201ab9cfce18a54aa0215fc8cfc888bf4a7d2ee5b2482a1ceb2375a66514eba",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-muted",
     "title": "battery-protection / muted",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-protection-active-muted/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "battery-protection",
+      "--alert-sound",
+      "muted"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-protection-active-muted/preview.png",
+    "preview_sha256": "4fbdf7c122a69828175faa59d51c6ba77106463bb110bfc90f090efc89800198",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-protection-active-muted/framebuffer.bin",
+    "framebuffer_sha256": "16de12e67ad177708e476c36e641d8f2c62724640b53e7c0e3c1df3da146de74",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-cleared",
     "title": "mains-absent-dc / cleared",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-cleared/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "mains-absent-dc",
+      "--alert-cleared"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-cleared/preview.png",
+    "preview_sha256": "8d980a2f000eb0cf0089eabcb4d3715bb1e5612882d13442cc614e57148cae0a",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-mains-absent-dc-cleared/framebuffer.bin",
+    "framebuffer_sha256": "bc8734f619ab7b07c1ddea8624111417402c7df1a9534f0d5428a08406c14d64",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-cleared",
     "title": "high-stress / cleared",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-high-stress-cleared/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "high-stress",
+      "--alert-cleared"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-high-stress-cleared/preview.png",
+    "preview_sha256": "d30b94f751cafaa807a4244a5e69d8a52786a44ccd7cb369bbe5375d44963c6d",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-high-stress-cleared/framebuffer.bin",
+    "framebuffer_sha256": "3836743d86c50087a1931fb8bc5b76f85c4d9fdf6022082d1ad53b91d914ee7e",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-cleared",
     "title": "battery-low-no-mains / cleared",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-no-mains-cleared/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "battery-low-no-mains",
+      "--alert-cleared"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-no-mains-cleared/preview.png",
+    "preview_sha256": "95c7c4b26a30f7a39389658e6f4d03ca4d7493edf254c836828534c5e62f6a5e",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-no-mains-cleared/framebuffer.bin",
+    "framebuffer_sha256": "cde596dd0c0c413337f3e5f85f2b8ef1cf513fbd40b57a90a503773559d55159",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-cleared",
     "title": "battery-low-with-mains / cleared",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-with-mains-cleared/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "battery-low-with-mains",
+      "--alert-cleared"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-with-mains-cleared/preview.png",
+    "preview_sha256": "c7e2ca4bb7947e372cefe215c263293d43e76eea1ac1282fc259c37963924ba2",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-low-with-mains-cleared/framebuffer.bin",
+    "framebuffer_sha256": "4cd75d4e1cbff71da7d2b18071b3bc9e6740ad8f6c198d0ac18e361c2cd8ed1f",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-cleared",
     "title": "shutdown-protection / cleared",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-shutdown-protection-cleared/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "shutdown-protection",
+      "--alert-cleared"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-shutdown-protection-cleared/preview.png",
+    "preview_sha256": "8d5f8fc1a5cd6cbffd811ddd31408d7df03570a139400e01fe7b575aa787ed91",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-shutdown-protection-cleared/framebuffer.bin",
+    "framebuffer_sha256": "66fcd19ee40593b72f335d15a898b9f65658ba381e991372813fed968ee34037",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-cleared",
     "title": "io-over-voltage / cleared",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-voltage-cleared/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "io-over-voltage",
+      "--alert-cleared"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-voltage-cleared/preview.png",
+    "preview_sha256": "a9b2504fc051b7e95e33420269e513e29d04ff85963be4df90b834621aa913cd",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-voltage-cleared/framebuffer.bin",
+    "framebuffer_sha256": "ecd2d65ce817203d42cb79452803606a77b81979a0e59c0a0eef445758104db6",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-cleared",
     "title": "io-over-current / cleared",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-current-cleared/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "io-over-current",
+      "--alert-cleared"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-current-cleared/preview.png",
+    "preview_sha256": "a8fc80ece8d60a19d7ba5bd0adcd13f8dfd4159e9574cad244e509082edb494e",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-io-over-current-cleared/framebuffer.bin",
+    "framebuffer_sha256": "ffe9ffce6665b020dbf06df4758820a24d3a3156c2d159e2ef7657eddd855ce4",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-cleared",
     "title": "module-fault / cleared",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-module-fault-cleared/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "module-fault",
+      "--alert-cleared"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-module-fault-cleared/preview.png",
+    "preview_sha256": "9f825368bcb2b050ed6f5333002bf567997cc65c4efb1806113ddbec37e0b2c9",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-module-fault-cleared/framebuffer.bin",
+    "framebuffer_sha256": "b8357a3896ed345aa34e4902e1af947d699ba8ce6049922d34c14aa23f4ebc9b",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   },
   {
     "group": "details-cleared",
     "title": "battery-protection / cleared",
-    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-protection-cleared/preview.png"
+    "renderer": "firmware_preview",
+    "source_revision": "ec8f4ee5f91522e15a7d4b327a2dd75a28e0a087",
+    "args": [
+      "--scenario",
+      "alert-detail",
+      "--alert-kind",
+      "battery-protection",
+      "--alert-cleared"
+    ],
+    "preview": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-protection-cleared/preview.png",
+    "preview_sha256": "9f1aa09f00ce9aad8c3645427e260fe8ccfe0b5553fa4035c73875f06ec77003",
+    "framebuffer": "variant-B/mode-standby/focus-idle/scenario-alert-detail-battery-protection-cleared/framebuffer.bin",
+    "framebuffer_sha256": "cb1a0628e62ed120eb16efb42a240185162c0c16dbadef883589768e1aa771c7",
+    "framebuffer_bytes": 110080,
+    "png_dimensions": [
+      320,
+      172
+    ]
   }
 ]
