@@ -48,6 +48,8 @@
 - `tools/front-panel-preview/src/main.rs`
   - 提供 `dashboard-alert`、`alert-list`、`alert-detail` 场景和参数化矩阵入口。
   - 每次导出保持 `320x172` PNG 与 `110080` 字节 RGB565 framebuffer。
+- `web/public/firmware`
+  - 内置固件目录从包含本主题实现的 clean release artifact 刷新，保留精确 artifact identity，确保浏览器选择的镜像与已验证的固件实现一致。
 
 ## 验证记录
 
@@ -56,13 +58,13 @@
 - `cargo fmt --manifest-path tools/front-panel-preview/Cargo.toml --check`
   - 通过。
 - `just firmware-host-test`
-  - 506 passed。
+  - 514 passed。
 - `just firmware-check`
   - 通过。
 - `just host-test`
-  - 120 library tests 与 54 CLI tests passed。
+  - 124 library tests 与 56 CLI tests passed。
 - `bun test web/src`
-  - 95 passed。
+  - 98 passed。
 - `just web-check`、`just web-build`
   - 通过。
 - `just check`
