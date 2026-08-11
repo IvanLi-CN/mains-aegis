@@ -1204,16 +1204,24 @@ where
         });
         self.alert_selected = self.alert_selected.min(self.alert_count.saturating_sub(1));
         if let AlertScreen::Detail(kind) = self.alert_screen {
-            self.alert_detail = self.alert_items[..self.alert_count]
+            let current = self.alert_items[..self.alert_count]
                 .iter()
                 .copied()
-                .find(|item| item.kind == kind)
-                .or_else(|| {
-                    self.alert_detail.map(|mut item| {
-                        item.cleared = true;
-                        item
-                    })
-                });
+                .find(|item| item.kind == kind);
+            self.alert_detail = match (self.alert_detail, current) {
+                // Continue updating the open detail while it refers to the same instance.
+                (Some(previous), Some(item)) if previous.instance_id == item.instance_id => {
+                    Some(item)
+                }
+                // A recurrence is a new instance. Keep the detail bound to the original event
+                // and show its CLEARED state until the user leaves the detail screen.
+                (Some(mut previous), Some(_) | None) => {
+                    previous.cleared = true;
+                    Some(previous)
+                }
+                (None, Some(item)) => Some(item),
+                (None, None) => None,
+            };
         }
         if previous_count != self.alert_count || previous_items != self.alert_items {
             self.needs_redraw = true;

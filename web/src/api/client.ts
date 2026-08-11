@@ -204,7 +204,10 @@ function requestSignal(timeoutMs?: number): AbortSignal | undefined {
   if (typeof AbortSignal.timeout === "function") {
     return AbortSignal.timeout(timeoutMs);
   }
-  return undefined;
+  if (typeof AbortController === "undefined") return undefined;
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeoutMs);
+  return controller.signal;
 }
 
 function bridgeAuthHeaders(baseUrl: string): Record<string, string> {

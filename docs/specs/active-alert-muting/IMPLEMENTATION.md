@@ -64,13 +64,13 @@
 - `cargo fmt --manifest-path tools/front-panel-preview/Cargo.toml --check`
   - 通过。
 - `just firmware-host-test`
-  - 517 passed。
+  - 518 passed。
 - `just firmware-check`
   - 通过。
 - `just host-test`
   - 124 library tests 与 56 CLI tests passed。
 - `bun test web/src`
-  - 102 passed。
+  - 104 passed。
 - `just web-check`、`just web-build`
   - 通过。
 - `just check`

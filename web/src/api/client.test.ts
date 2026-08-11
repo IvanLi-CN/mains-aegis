@@ -244,6 +244,31 @@ async function withFetchMock<T>(
 }
 
 describe("alert mute errors", () => {
+  test("uses an AbortController fallback for alert request timeouts", async () => {
+    const originalTimeout = AbortSignal.timeout;
+    Object.defineProperty(AbortSignal, "timeout", {
+      configurable: true,
+      value: undefined,
+    });
+    let observedSignal: AbortSignal | undefined;
+    try {
+      await withFetchMock(
+        async (_input, init) => {
+          observedSignal = init?.signal ?? undefined;
+          return jsonResponse({ alerts: [] });
+        },
+        () => getDeviceAlerts("http://mains-aegis.local", { timeoutMs: 20 }),
+      );
+    } finally {
+      Object.defineProperty(AbortSignal, "timeout", {
+        configurable: true,
+        value: originalTimeout,
+      });
+    }
+    expect(observedSignal).toBeInstanceOf(AbortSignal);
+    expect(observedSignal?.aborted).toBe(false);
+  });
+
   test("preserves structured Web Serial error envelopes", () => {
     const serialError = Object.assign(new Error("unsupported operation"), {
       envelope: {

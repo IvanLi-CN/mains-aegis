@@ -231,6 +231,17 @@ def main() -> None:
     for entry in matrix():
         rendered.append((entry, render_entry(entry, output)))
 
+    # The renderer owns this output tree. Remove preview/framebuffer pairs left by
+    # older matrices so the checked-in manifest remains a complete inventory.
+    rendered_paths = {path.resolve() for _, path in rendered}
+    for preview in output.rglob("preview.png"):
+        if preview.resolve() in rendered_paths:
+            continue
+        preview.unlink()
+        framebuffer = preview.with_name("framebuffer.bin")
+        if framebuffer.exists():
+            framebuffer.unlink()
+
     grouped: dict[str, list[tuple[str, Path]]] = {}
     for entry, path in rendered:
         grouped.setdefault(entry.group, []).append((entry.title, path))

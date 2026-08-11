@@ -342,15 +342,18 @@ impl AudioManager {
     /// Clearing the manager alone does not affect the already-written circular DMA buffer, so
     /// the main loop consumes this request and re-primes the transport immediately.
     pub fn stop_cue_immediate(&mut self, cue: AudioCue) -> bool {
-        let was_current = self.current.map(|current| current.request.cue) == Some(cue);
+        // Interval alerts can finish their current PCM block while their loop remains active;
+        // their samples may still be present in the transport's circular DMA buffer even when
+        // `current` has already advanced. Request a flush for any active or queued target cue.
+        let needs_flush = self.loops[cue.index()].active || self.has_queued_or_current(cue);
         self.stop_cue(cue);
-        if was_current {
+        if needs_flush {
             self.last_output_sample = 0;
             self.bridge_from_sample = 0;
             self.bridge_samples_remaining = 0;
             self.immediate_dma_flush_requested = true;
         }
-        was_current
+        needs_flush
     }
 
     pub fn take_immediate_dma_flush_request(&mut self) -> bool {
@@ -895,6 +898,17 @@ mod tests {
         assert!(silent_buf.iter().all(|sample| *sample == 0));
         assert!(!manager.status().playing);
         assert!(!manager.take_immediate_dma_flush_request());
+    }
+
+    #[test]
+    fn immediate_stop_flushes_an_interval_loop_without_current_playback() {
+        let mut manager = AudioManager::new();
+        manager.set_cue_active(AudioCue::HighStress, true, Instant::now());
+        manager.current = None;
+
+        assert!(manager.stop_cue_immediate(AudioCue::HighStress));
+        assert!(manager.take_immediate_dma_flush_request());
+        assert!(!manager.is_cue_active(AudioCue::HighStress));
     }
 }
 

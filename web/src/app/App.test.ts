@@ -125,6 +125,12 @@ describe("active alert presentation", () => {
     expect(source).toContain("top-metric is-actionable");
     expect(source).toContain("currentRecords.map(async (record) =>");
   });
+
+  test("clears single-flight refreshes using the tracked promise", () => {
+    const source = readFileSync(join(import.meta.dir, "App.tsx"), "utf8");
+    expect(source).toContain("const trackedRequest = request.finally(() => {");
+    expect(source).not.toContain("refreshInFlight.current === request");
+  });
 });
 
 function withMockWindow<T>(

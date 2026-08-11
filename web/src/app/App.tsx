@@ -3723,10 +3723,11 @@ function useFleetActiveAlerts(records: DeviceRecord[]): FleetActiveAlertsState {
         return next;
       });
     })();
-    refreshInFlight.current = request.finally(() => {
-      if (refreshInFlight.current === request) refreshInFlight.current = null;
+    const trackedRequest = request.finally(() => {
+      if (refreshInFlight.current === trackedRequest) refreshInFlight.current = null;
     });
-    return refreshInFlight.current;
+    refreshInFlight.current = trackedRequest;
+    return trackedRequest;
   }, [getSerialAlerts]);
 
   useEffect(() => void refresh(), [recordKey, refresh]);
@@ -3840,10 +3841,11 @@ function useActiveAlertsSnapshot(
           if (generation === refreshGeneration.current) setLoading(false);
         }
       })();
-      refreshInFlight.current = request.finally(() => {
-        if (refreshInFlight.current === request) refreshInFlight.current = null;
+      const trackedRequest = request.finally(() => {
+        if (refreshInFlight.current === trackedRequest) refreshInFlight.current = null;
       });
-      return refreshInFlight.current;
+      refreshInFlight.current = trackedRequest;
+      return trackedRequest;
     },
     [connectionState, deviceId, getSerialAlerts, targets],
   );
