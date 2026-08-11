@@ -3730,7 +3730,16 @@ function useFleetActiveAlerts(records: DeviceRecord[]): FleetActiveAlertsState {
     return trackedRequest;
   }, [getSerialAlerts]);
 
-  useEffect(() => void refresh(), [recordKey, refresh]);
+  useEffect(() => {
+    refreshGeneration.current += 1;
+    refreshInFlight.current = null;
+    void refresh();
+    return () => {
+      // Drop results from the previous fleet/transport set before it can repopulate stale badges.
+      refreshGeneration.current += 1;
+      refreshInFlight.current = null;
+    };
+  }, [recordKey, refresh]);
 
   useEffect(() => {
     const interval = window.setInterval(

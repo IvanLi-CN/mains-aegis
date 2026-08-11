@@ -132,6 +132,7 @@ describe("active alert presentation", () => {
     expect(source).not.toContain("refreshInFlight.current === request");
     expect(source).toContain("refreshGeneration.current += 1;");
     expect(source).toContain("refreshInFlight.current = null;");
+    expect(source).toContain("[recordKey, refresh]");
   });
 });
 
