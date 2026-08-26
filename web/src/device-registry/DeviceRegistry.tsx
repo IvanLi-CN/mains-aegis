@@ -423,6 +423,7 @@ export function DeviceRegistryProvider({
       );
       const target = existing?.target;
       if (!target) return;
+      invalidateDeviceReads(deviceId);
       if (target.mock) {
         setRecords((current) =>
           current.map((record) =>
@@ -616,7 +617,7 @@ export function DeviceRegistryProvider({
         );
       }
     },
-    [records, resolveBridgeAuthState, setRecordError],
+    [invalidateDeviceReads, records, resolveBridgeAuthState, setRecordError],
   );
 
   useEffect(() => {
@@ -905,13 +906,14 @@ export function DeviceRegistryProvider({
           "online",
           result.identity.capabilities.sse ? "idle" : "polling",
         );
+        invalidateDeviceReads(result.identity.device_id);
         setRecords((current) => upsertRecord(current, record));
         return { ok: true, record };
       } catch (error) {
         return { ok: false, error: toErrorEnvelope(error) };
       }
     },
-    [],
+    [invalidateDeviceReads],
   );
 
   const addDevdDevice = useCallback(
@@ -1036,6 +1038,7 @@ export function DeviceRegistryProvider({
         const record = recordFromDevdProbe(target, result, session, lease);
         startDevdLeaseHeartbeat(record);
         pendingLeaseId = null;
+        invalidateDeviceReads(result.identity.device_id);
         setRecords((current) => upsertRecord(current, record));
         return { ok: true, record };
       } catch (error) {
@@ -1046,7 +1049,7 @@ export function DeviceRegistryProvider({
         return { ok: false, error: toErrorEnvelope(error) };
       }
     },
-    [],
+    [invalidateDeviceReads],
   );
 
   const confirmDevdCompanionLan = useCallback(
@@ -1153,6 +1156,7 @@ export function DeviceRegistryProvider({
 
   const dismissDevdCompanionLan = useCallback(
     async (deviceId: string, devdBaseUrl: string): Promise<AddDeviceResult> => {
+      invalidateDeviceReads(deviceId);
       try {
         const updated = await clearDevdCompanionLan(deviceId, devdBaseUrl);
         const logicalDeviceId =
@@ -1179,7 +1183,7 @@ export function DeviceRegistryProvider({
         return { ok: false, error: toErrorEnvelope(error) };
       }
     },
-    [records],
+    [invalidateDeviceReads, records],
   );
 
   const connectUsbSerialDevice = useCallback(
@@ -1367,6 +1371,7 @@ export function DeviceRegistryProvider({
           ],
           pendingTrace,
         );
+        invalidateDeviceReads(identity.device_id);
         setRecords((current) => upsertRecord(current, record));
         return { ok: true, record };
       } catch (error) {
@@ -1374,7 +1379,7 @@ export function DeviceRegistryProvider({
         return { ok: false, error: errorFromSerialFailure(error) };
       }
     },
-    [setRecordError],
+    [invalidateDeviceReads, setRecordError],
   );
 
   const attachMockUsbSerialDevice = useCallback((): AddDeviceResult => {
