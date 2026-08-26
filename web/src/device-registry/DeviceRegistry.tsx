@@ -446,7 +446,7 @@ export function DeviceRegistryProvider({
               ))
               ? {
                   ...record,
-                  connectionState: error?.retryable ? "offline" : "online",
+                  connectionState: record.connectionState,
                   streamState: "error",
                   error,
                   errorSource: "read",
@@ -457,9 +457,7 @@ export function DeviceRegistryProvider({
                       readRequest?.transport === "devd")
                       ? {
                           ...record.serial,
-                          connected: error?.retryable
-                            ? false
-                            : record.serial.connected,
+                          connected: record.serial.connected,
                         }
                       : record.serial,
                   lastUpdated: new Date().toISOString(),
@@ -5485,7 +5483,13 @@ export function recoverReadRecord(
     lastUpdated: new Date().toISOString(),
     serial:
       record.serial && (transport === "serial" || transport === "devd")
-        ? { ...record.serial, connected: true }
+        ? {
+            ...record.serial,
+            connected:
+              transport === "serial" || Boolean(record.serial.leaseId)
+                ? true
+                : record.serial.connected,
+          }
         : record.serial,
   };
 }

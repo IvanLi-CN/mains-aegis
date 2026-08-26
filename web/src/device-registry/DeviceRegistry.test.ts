@@ -139,6 +139,47 @@ describe("recoverReadRecord", () => {
     expect(recovered.connectionState).toBe("online");
     expect(recovered.streamState).toBe("polling");
     expect(recovered.error).toBeNull();
+    expect(recovered.serial?.connected).toBe(false);
+  });
+
+  test("restores devd ownership when a live web lease remains attached", () => {
+    const record: DeviceRecord = {
+      target: {
+        deviceId: "mains-aegis-a1b2c3",
+        baseUrl: "http://127.0.0.1:8765",
+        alias: "Bench A",
+        location: "Lab",
+        addedAt: "2026-06-07T00:00:00.000Z",
+        transport: "devd",
+        preferredTransport: "devd",
+      },
+      identity: null,
+      network: null,
+      settings: null,
+      status: null,
+      connectionState: "error",
+      streamState: "error",
+      error: {
+        code: "http_503",
+        message: "charge control unavailable",
+        retryable: true,
+        details: null,
+      },
+      errorSource: "read",
+      lastUpdated: "2026-06-07T00:00:00.000Z",
+      serial: {
+        connected: false,
+        source: "devd",
+        baseUrl: "http://127.0.0.1:8765",
+        leaseId: "lease-1",
+        protocol: "mains-aegis.cdc.v1",
+        logs: [],
+        trace: [],
+      },
+    };
+
+    const recovered = recoverReadRecord(record, "devd");
+
     expect(recovered.serial?.connected).toBe(true);
   });
 
