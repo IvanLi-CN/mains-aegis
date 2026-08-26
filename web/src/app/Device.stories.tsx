@@ -53,7 +53,9 @@ export const BatteryDetail: Story = {
   render: () => renderApp("/devices/mains-aegis-a1b2c3/battery"),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("Live")).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("heading", { name: "Battery" }),
+    ).toBeInTheDocument();
     await expect(await canvas.findByText("Cell voltages")).toBeInTheDocument();
     await expect(await canvas.findByText("Delta 13 mV")).toBeInTheDocument();
     await expect(await canvas.findByText("BAL MULTI")).toBeInTheDocument();

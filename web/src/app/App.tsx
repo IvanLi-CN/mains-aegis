@@ -476,7 +476,23 @@ export function App({
           </button>
           <div className="mobile-nav-title">
             <strong>Mains Aegis</strong>
-            <span title={mobileNavContext}>{mobileNavContext}</span>
+            {pagePresentation.scope === "device" && selected ? (
+              <span className="mobile-nav-context" title={mobileNavContext}>
+                <span className="mobile-nav-device">
+                  {selected.target.alias}
+                </span>
+                <span className="mobile-nav-divider" aria-hidden="true">
+                  /
+                </span>
+                <span className="mobile-nav-route">
+                  {connectionSummary(selected)} / {pagePresentation.title}
+                </span>
+              </span>
+            ) : (
+              <span className="mobile-nav-context" title={mobileNavContext}>
+                {mobileNavContext}
+              </span>
+            )}
           </div>
         </div>
         <button

@@ -5028,12 +5028,31 @@ a {
     line-height: 1.1;
   }
 
-  .mobile-nav-title span {
+  .mobile-nav-context {
+    display: flex;
+    align-items: center;
     min-width: 0;
     overflow: hidden;
     color: var(--color-muted);
     font-size: 12px;
     text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-nav-device {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-nav-divider {
+    flex: 0 0 auto;
+    margin-inline: 4px;
+  }
+
+  .mobile-nav-route {
+    flex: 0 0 auto;
     white-space: nowrap;
   }
 
