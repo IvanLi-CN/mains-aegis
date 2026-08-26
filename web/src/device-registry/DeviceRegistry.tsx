@@ -816,10 +816,14 @@ export function DeviceRegistryProvider({
               throw new Error(
                 `HTTP endpoint resolved to unexpected device ${result.identity.device_id}`,
               );
-            return {
-              nextTarget: promoteRememberedHttpEndpoint(nextTarget, httpBaseUrl),
-              result,
-            };
+          return {
+            nextTarget: promoteRememberedHttpEndpoint(nextTarget, httpBaseUrl),
+            result,
+          };
+          },
+          {
+            beforeOperation: () =>
+              currentDeviceOperation(deviceId, operation),
           },
         );
         if (
@@ -1083,6 +1087,16 @@ export function DeviceRegistryProvider({
           onError: () => {
             if (streams.current.get(record.target.deviceId) !== subscription)
               return;
+            const currentRecord = recordsRef.current.find(
+              (candidate) => candidate.target.deviceId === record.target.deviceId,
+            );
+            if (
+              !currentRecord ||
+              rememberedHttpBaseUrl(currentRecord) !== httpBaseUrl ||
+              resolvePreferredTransport(currentRecord, serialSessions.current) !==
+                "http"
+            )
+              return;
             const operationToken = deviceOperationGenerations.current.get(
               record.target.deviceId,
             );
@@ -1106,6 +1120,15 @@ export function DeviceRegistryProvider({
             );
             void withRememberedHttpFallback(record, (baseUrl) =>
               getStatus(baseUrl, undefined, bridgeAuth),
+              {
+                beforeOperation: () =>
+                  currentDeviceRead(readRequest) &&
+                  (operationToken === undefined ||
+                    currentDeviceOperation(
+                      record.target.deviceId,
+                      operationToken,
+                    )),
+              },
             )
               .then(({ value: status, baseUrl }) => {
                 if (
@@ -2417,15 +2440,14 @@ export function DeviceRegistryProvider({
         discoveryByDeviceId.set(logicalDeviceId, current);
       }
       if (discoveryByDeviceId.size === 0) return;
-      for (const record of records) {
+      for (const record of recordsRef.current) {
         const incoming = discoveryByDeviceId.get(record.target.deviceId);
         if (!incoming) continue;
         const currentHttp = record.target.rememberedChannels?.http;
         const nextHttp = incoming.http;
         if (
           nextHttp &&
-          (currentHttp?.baseUrl !== nextHttp.baseUrl ||
-            currentHttp?.fallbackBaseUrl !== nextHttp.fallbackBaseUrl)
+          currentHttp?.baseUrl !== nextHttp.baseUrl
         ) {
           invalidateDeviceReads(record.target.deviceId);
         }
@@ -2447,7 +2469,7 @@ export function DeviceRegistryProvider({
         }),
       );
     },
-    [invalidateDeviceReads, records],
+    [invalidateDeviceReads],
   );
 
   const connectKnownDeviceChannel = useCallback(
@@ -2638,7 +2660,10 @@ export function DeviceRegistryProvider({
               const settings = await getSettings(httpBaseUrl);
               return { status, settings };
             },
-            { allowFallback: false },
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
+            },
           );
           const message = wifiConnectedMessage(input.ssid, status.network);
           onProgress?.({
@@ -2851,7 +2876,10 @@ export function DeviceRegistryProvider({
               const settings = await getSettings(httpBaseUrl);
               return { status, settings };
             },
-            { allowFallback: false },
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
+            },
           );
           const message = wifiDisabledMessage(status.network);
           onProgress?.({ phase: "disabled", message, network: status.network });
@@ -2998,7 +3026,10 @@ export function DeviceRegistryProvider({
               await setDeviceLogLevel(httpBaseUrl, level);
               return getSettings(httpBaseUrl);
             },
-            { allowFallback: false },
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
+            },
           );
           if (!currentDeviceOperation(deviceId, operationToken))
             return staleDeviceOperationResult();
@@ -3134,7 +3165,10 @@ export function DeviceRegistryProvider({
               await setDeviceManualChargePrefs(httpBaseUrl, prefs);
               return getSettings(httpBaseUrl);
             },
-            { allowFallback: false },
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
+            },
           );
           if (!currentDeviceOperation(deviceId, operationToken))
             return staleDeviceOperationResult();
@@ -3446,7 +3480,10 @@ export function DeviceRegistryProvider({
           const { value: detail } = await withRememberedHttpFallback(
             record,
             (httpBaseUrl) => setDeviceManualChargeControl(httpBaseUrl, input),
-            { allowFallback: false },
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
+            },
           );
           if (!currentDeviceOperation(deviceId, operationToken))
             return staleDeviceOperationResult();
@@ -3635,7 +3672,10 @@ export function DeviceRegistryProvider({
               await setDeviceAdvancedPower(httpBaseUrl, advancedPower);
               return getSettings(httpBaseUrl);
             },
-            { allowFallback: false },
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
+            },
           );
           if (!currentDeviceOperation(deviceId, operationToken))
             return staleDeviceOperationResult();
@@ -3785,7 +3825,10 @@ export function DeviceRegistryProvider({
               await resetDeviceAdvancedPower(httpBaseUrl);
               return getSettings(httpBaseUrl);
             },
-            { allowFallback: false },
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
+            },
           );
           if (!currentDeviceOperation(deviceId, operationToken))
             return staleDeviceOperationResult();
@@ -4262,6 +4305,14 @@ export function DeviceRegistryProvider({
             ),
             result,
           };
+        },
+        {
+          beforeOperation: () =>
+            !operationContext ||
+            currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            ),
         },
       );
       if (
@@ -5254,7 +5305,10 @@ function promoteRememberedHttpEndpoint(
 async function withRememberedHttpFallback<T>(
   record: DeviceRecord,
   operation: (baseUrl: string) => Promise<T>,
-  options: { allowFallback?: boolean } = {},
+  options: {
+    allowFallback?: boolean;
+    beforeOperation?: () => boolean;
+  } = {},
 ): Promise<{ value: T; baseUrl: string }> {
   const rememberedBaseUrls = rememberedHttpBaseUrls(record);
   const baseUrls =
@@ -5265,6 +5319,8 @@ async function withRememberedHttpFallback<T>(
   const expectedDeviceId = record.identity?.device_id ?? record.target.deviceId;
   for (const baseUrl of baseUrls) {
     try {
+      if (options.beforeOperation && !options.beforeOperation())
+        throw new Error("HTTP operation was superseded before identity validation");
       const identity = await getIdentity(
         baseUrl,
         undefined,
@@ -5274,6 +5330,8 @@ async function withRememberedHttpFallback<T>(
         throw new Error(
           `HTTP endpoint resolved to unexpected device ${identity.device_id}`,
         );
+      if (options.beforeOperation && !options.beforeOperation())
+        throw new Error("HTTP operation was superseded after identity validation");
       return { value: await operation(baseUrl), baseUrl };
     } catch (error) {
       lastError = error;
