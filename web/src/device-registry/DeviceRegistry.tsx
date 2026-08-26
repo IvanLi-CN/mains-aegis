@@ -807,7 +807,14 @@ export function DeviceRegistryProvider({
               undefined,
               bridgeAuth ? { bridgeAuth: true } : undefined,
             );
-            return { nextTarget, result };
+            if (result.identity.device_id !== deviceId)
+              throw new Error(
+                `HTTP endpoint resolved to unexpected device ${result.identity.device_id}`,
+              );
+            return {
+              nextTarget: promoteRememberedHttpEndpoint(nextTarget, httpBaseUrl),
+              result,
+            };
           },
         );
         if (
@@ -847,19 +854,12 @@ export function DeviceRegistryProvider({
           deviceReadGenerations.current.get(deviceId) !== readGeneration
         )
           return;
-        const currentRecord = records.find(
-          (record) => record.target.deviceId === deviceId,
-        );
-        if (
-          httpReadBaseUrl !== null &&
-          currentRecord &&
-          !rememberedHttpBaseUrls(currentRecord).includes(httpReadBaseUrl)
-        )
-          return;
         const envelope = toErrorEnvelope(error);
         setRecords((current) =>
           current.map((record) =>
-            record.target.deviceId === deviceId
+            record.target.deviceId === deviceId &&
+            (httpReadBaseUrl === null ||
+              rememberedHttpBaseUrls(record).includes(httpReadBaseUrl))
               ? {
                   ...record,
                   target: {
@@ -1003,6 +1003,15 @@ export function DeviceRegistryProvider({
         serialSessions.current,
       );
       const httpBaseUrl = rememberedHttpBaseUrl(record);
+      const existingStream = streams.current.get(record.target.deviceId);
+      if (
+        existingStream &&
+        streamBaseUrls.current.get(record.target.deviceId) !== httpBaseUrl
+      ) {
+        existingStream.close();
+        streams.current.delete(record.target.deviceId);
+        streamBaseUrls.current.delete(record.target.deviceId);
+      }
       if (
         selectedTransport === "serial" ||
         selectedTransport === "devd" ||
@@ -1884,6 +1893,10 @@ export function DeviceRegistryProvider({
         }
         const logicalDeviceId =
           updated.binding?.logical_device_id ?? result.identity.device_id;
+        if (logicalDeviceId !== result.identity.device_id)
+          throw new Error(
+            `LAN companion resolved to unexpected device ${result.identity.device_id}`,
+          );
         const logicalOperationToken =
           logicalDeviceId === deviceId
             ? operationToken
@@ -2598,6 +2611,7 @@ export function DeviceRegistryProvider({
               const settings = await getSettings(httpBaseUrl);
               return { status, settings };
             },
+            { allowFallback: false },
           );
           const message = wifiConnectedMessage(input.ssid, status.network);
           onProgress?.({
@@ -2808,6 +2822,7 @@ export function DeviceRegistryProvider({
               const settings = await getSettings(httpBaseUrl);
               return { status, settings };
             },
+            { allowFallback: false },
           );
           const message = wifiDisabledMessage(status.network);
           onProgress?.({ phase: "disabled", message, network: status.network });
@@ -2954,6 +2969,7 @@ export function DeviceRegistryProvider({
               await setDeviceLogLevel(httpBaseUrl, level);
               return getSettings(httpBaseUrl);
             },
+            { allowFallback: false },
           );
           if (!currentDeviceOperation(deviceId, operationToken))
             return staleDeviceOperationResult();
@@ -3089,6 +3105,7 @@ export function DeviceRegistryProvider({
               await setDeviceManualChargePrefs(httpBaseUrl, prefs);
               return getSettings(httpBaseUrl);
             },
+            { allowFallback: false },
           );
           if (!currentDeviceOperation(deviceId, operationToken))
             return staleDeviceOperationResult();
@@ -3398,6 +3415,7 @@ export function DeviceRegistryProvider({
           const detail = await withRememberedHttpFallback(
             record,
             (httpBaseUrl) => setDeviceManualChargeControl(httpBaseUrl, input),
+            { allowFallback: false },
           );
           if (!currentDeviceOperation(deviceId, operationToken))
             return staleDeviceOperationResult();
@@ -3586,6 +3604,7 @@ export function DeviceRegistryProvider({
               await setDeviceAdvancedPower(httpBaseUrl, advancedPower);
               return getSettings(httpBaseUrl);
             },
+            { allowFallback: false },
           );
           if (!currentDeviceOperation(deviceId, operationToken))
             return staleDeviceOperationResult();
@@ -3735,6 +3754,7 @@ export function DeviceRegistryProvider({
               await resetDeviceAdvancedPower(httpBaseUrl);
               return getSettings(httpBaseUrl);
             },
+            { allowFallback: false },
           );
           if (!currentDeviceOperation(deviceId, operationToken))
             return staleDeviceOperationResult();
@@ -4198,10 +4218,15 @@ export function DeviceRegistryProvider({
             undefined,
             bridgeAuth ? { bridgeAuth: true } : undefined,
           );
+          if (result.identity.device_id !== record.target.deviceId)
+            throw new Error(
+              `HTTP runtime restoration resolved to unexpected device ${result.identity.device_id}`,
+            );
           return {
-            nextTarget: bridgeAuth
-              ? { ...nextTarget, bridgeAuth: true }
-              : nextTarget,
+            nextTarget: promoteRememberedHttpEndpoint(
+              bridgeAuth ? { ...nextTarget, bridgeAuth: true } : nextTarget,
+              baseUrl,
+            ),
             result,
           };
         },
@@ -5173,11 +5198,36 @@ export function rememberedHttpBaseUrls(record: DeviceRecord): string[] {
   return normalized;
 }
 
+function promoteRememberedHttpEndpoint(
+  target: DeviceTarget,
+  baseUrl: string,
+): DeviceTarget {
+  const http = target.rememberedChannels?.http;
+  if (!http || http.baseUrl === baseUrl) return target;
+  return {
+    ...target,
+    baseUrl,
+    rememberedChannels: {
+      ...target.rememberedChannels,
+      http: {
+        ...http,
+        baseUrl,
+        fallbackBaseUrl: http.baseUrl,
+      },
+    },
+  };
+}
+
 async function withRememberedHttpFallback<T>(
   record: DeviceRecord,
   operation: (baseUrl: string) => Promise<T>,
+  options: { allowFallback?: boolean } = {},
 ): Promise<T> {
-  const baseUrls = rememberedHttpBaseUrls(record);
+  const rememberedBaseUrls = rememberedHttpBaseUrls(record);
+  const baseUrls =
+    options.allowFallback === false
+      ? rememberedBaseUrls.slice(0, 1)
+      : rememberedBaseUrls;
   let lastError: unknown = null;
   for (const baseUrl of baseUrls) {
     try {

@@ -2590,23 +2590,28 @@ export function ConnectPage({
   ) {
     setSavedDeviceSwitchTarget({ deviceId: record.target.deviceId, transport });
     setSavedDeviceMessage(null);
-    const result = await connectKnownDeviceChannel(
-      record.target.deviceId,
-      transport,
-    );
-    setSavedDeviceSwitchTarget(null);
-    if (result.ok) {
-      setSavedDeviceMessage(
-        successFeedback(
-          `Switched ${result.record.target.alias} to ${channelBadgeLabel(transport)}`,
-        ),
+    try {
+      const result = await connectKnownDeviceChannel(
+        record.target.deviceId,
+        transport,
       );
-      navigate(deviceDefaultHref(result.record));
-      if (transport === "devd" || transport === "http")
-        void refreshDevdDiscovery();
-      return;
+      if (result.ok) {
+        setSavedDeviceMessage(
+          successFeedback(
+            `Switched ${result.record.target.alias} to ${channelBadgeLabel(transport)}`,
+          ),
+        );
+        navigate(deviceDefaultHref(result.record));
+        if (transport === "devd" || transport === "http")
+          void refreshDevdDiscovery();
+        return;
+      }
+      setSavedDeviceMessage(errorFeedback(result.error));
+    } catch (error) {
+      setSavedDeviceMessage(errorFeedback(toErrorEnvelope(error)));
+    } finally {
+      setSavedDeviceSwitchTarget(null);
     }
-    setSavedDeviceMessage(errorFeedback(result.error));
   }
 
   function onMockUsbConnect() {
