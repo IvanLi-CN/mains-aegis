@@ -466,19 +466,53 @@ describe("resolveSelectedRecord", () => {
       },
     };
     const fleetRecord = buildFleetEntries(
-      [],
+      [registryFailure],
       [lanDevice("mains-aegis-a1b2c3")],
       "same-origin",
     )[0]?.record;
 
-    expect(fleetRecord?.connectionState).toBe("online");
+    expect(fleetRecord?.connectionState).toBe("offline");
+    expect(fleetRecord?.error).toBe(registryFailure.error);
     expect(
       resolveSelectedRecord(
         "mains-aegis-a1b2c3",
         [registryFailure],
         [{ key: "mains-aegis-a1b2c3", record: fleetRecord!, saved: false }],
       ),
-    ).toBe(registryFailure);
+    ).toBe(fleetRecord);
+  });
+
+  test("keeps an online temporary action failure attached to the current discovery record", () => {
+    const registryActionFailure: DeviceRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      target: {
+        ...savedRecord("mains-aegis-a1b2c3").target,
+        temporary: true,
+      },
+      connectionState: "online",
+      streamState: "polling",
+      error: {
+        code: "command_failed",
+        message: "Power command rejected",
+        retryable: false,
+        details: null,
+      },
+    };
+    const fleetRecord = buildFleetEntries(
+      [registryActionFailure],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    )[0]?.record;
+
+    expect(fleetRecord?.connectionState).toBe("online");
+    expect(fleetRecord?.error).toBe(registryActionFailure.error);
+    expect(
+      resolveSelectedRecord(
+        "mains-aegis-a1b2c3",
+        [registryActionFailure],
+        [{ key: "mains-aegis-a1b2c3", record: fleetRecord!, saved: false }],
+      ),
+    ).toBe(fleetRecord);
   });
 });
 

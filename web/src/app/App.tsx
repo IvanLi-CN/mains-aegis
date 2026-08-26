@@ -1095,6 +1095,16 @@ function deviceDefaultHref(record: DeviceRecord) {
   );
 }
 
+function hasTransportFailure(record: DeviceRecord | null | undefined): boolean {
+  return Boolean(
+    record &&
+      (record.connectionState === "error" ||
+        record.streamState === "error" ||
+        (record.connectionState === "offline" && record.error !== null) ||
+        record.serial?.connected === false),
+  );
+}
+
 export function resolveSelectedRecord(
   deviceId: string | null,
   records: DeviceRecord[],
@@ -1113,13 +1123,7 @@ export function resolveSelectedRecord(
       ? null
       : registryRecord;
   }
-  const registryHasTransportFailure =
-    registryRecord.connectionState === "error" ||
-    registryRecord.streamState === "error" ||
-    registryRecord.error !== null ||
-    registryRecord.serial?.connected === false;
-  if (registryRecord.target.temporary && !registryHasTransportFailure)
-    return fleetRecord;
+  if (registryRecord.target.temporary) return fleetRecord;
   if (
     registryRecord.target.temporary &&
     !registryRecord.status &&
@@ -1845,7 +1849,11 @@ export function buildFleetEntries(
   for (const discovered of buildDiscoveredLogicalDevices(devdDevices, records)) {
     if (!discovered.deviceId) continue;
     const current = entries.get(discovered.deviceId);
-    const mergedRecord = buildFleetEntryRecord(discovered, current?.record, devdBaseUrl);
+    const mergedRecord = buildFleetEntryRecord(
+      discovered,
+      current?.record ?? discovered.existingRecord,
+      devdBaseUrl,
+    );
     if (!mergedRecord) continue;
     entries.set(discovered.deviceId, {
       key: discovered.deviceId,
@@ -1860,7 +1868,7 @@ export function buildFleetEntries(
 
 function buildFleetEntryRecord(
   discovered: DiscoveredLogicalDevice,
-  existingRecord: DeviceRecord | undefined,
+  existingRecord: DeviceRecord | null | undefined,
   devdBaseUrl: string,
 ): DeviceRecord | null {
   const deviceId = discovered.deviceId;
@@ -1937,6 +1945,7 @@ function buildFleetEntryRecord(
     httpDevice?.connection === "busy" || devdDevice?.connection === "busy";
   const errored =
     httpDevice?.connection === "error" || devdDevice?.connection === "error";
+  const preserveTransportFailure = hasTransportFailure(existingRecord);
   return {
     target,
     identity,
@@ -1947,14 +1956,18 @@ function buildFleetEntryRecord(
       devdDevice?.status ??
       existingRecord?.status ??
       null,
-    connectionState: connected
-      ? "online"
-      : connecting
-        ? "connecting"
-        : errored
-          ? "error"
-          : (existingRecord?.connectionState ?? "offline"),
-    streamState: existingRecord?.streamState ?? "idle",
+    connectionState: preserveTransportFailure
+      ? existingRecord!.connectionState
+      : connected
+        ? "online"
+        : connecting
+          ? "connecting"
+          : errored
+            ? "error"
+            : (existingRecord?.connectionState ?? "offline"),
+    streamState: preserveTransportFailure
+      ? existingRecord!.streamState
+      : (existingRecord?.streamState ?? "idle"),
     error: existingRecord?.error ?? null,
     lastUpdated: new Date().toISOString(),
     serial:
