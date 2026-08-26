@@ -483,3 +483,47 @@ PR: none
   evidence_note: 验证非触摸屏 fine pointer / hover 环境下，Settings 页中间 `Device settings` 的三个 compact 单选器保持桌面密度；实测单选器高度为 `38px`、内部按钮高度为 `32px`，同时右侧 Advanced Power 列不再把中间列拉伸成大号控件。
 
 ![Settings pointer-fine compact selectors evidence](./assets/settings-pointer-fine-compact-selectors.png)
+
+- source_type: ui_demo
+  demo_entry_or_title: `/?demo=true`
+  requested_viewport: `393x852`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: mobile Fleet page context ownership
+  evidence_note: 验证 Fleet 页面保留 Fleet Summary 与 KPI，移动导航只显示 Fleet 路由上下文。
+
+![Fleet page context mobile evidence](./assets/fleet-page-context-mobile.png)
+
+- source_type: ui_demo
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/overview?demo=true`
+  requested_viewport: `393x852`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: mobile Device Overview page context ownership
+  evidence_note: 验证 Overview 标题后保留完整 Device Overview，移动导航显示设备别名、连接态与当前页。
+
+![Device Overview page context mobile evidence](./assets/device-overview-context-mobile.png)
+
+- source_type: ui_demo
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/battery?demo=true`
+  requested_viewport: `393x852`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: mobile secondary device page context ownership
+  evidence_note: 验证 Battery 直接从页面标题进入能力内容，不渲染 Fleet Summary 或完整 Device Overview。
+
+![Battery page context mobile evidence](./assets/device-battery-context-mobile.png)
+
+- source_type: ui_demo
+  demo_entry_or_title: `/devices/mains-aegis-a1b2c3/firmware?demo=true`
+  requested_viewport: `393x852`
+  viewport_strategy: `devtools-emulate`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: mobile Firmware page context ownership
+  evidence_note: 验证 Firmware 直接从页面标题进入版本能力内容，不渲染 Fleet Summary 或完整 Device Overview。
+
+![Firmware page context mobile evidence](./assets/device-firmware-context-mobile.png)

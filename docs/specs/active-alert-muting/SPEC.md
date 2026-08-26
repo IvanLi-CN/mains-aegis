@@ -107,11 +107,11 @@ Dashboard 与告警列表热区。
 ![Front-panel alert hotspots](./assets/front-panel-alerts/review-sheets/hotspots.png)
 
 PR: include
-Web Alerts 桌面端。
+Web Alerts 桌面端（当前设备页面不重复 Fleet Summary 或完整 Device Overview）。
 ![Web Alerts desktop](./assets/web-alerts-desktop.png)
 
 PR: include
-Web Alerts 移动端（`393x852`）。
+Web Alerts 移动端（`393x852`，当前设备上下文包含连接态与当前页）。
 ![Web Alerts mobile](./assets/web-alerts-mobile.png)
 
 PR: include
