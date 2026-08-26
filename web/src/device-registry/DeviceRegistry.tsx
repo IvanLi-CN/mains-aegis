@@ -812,14 +812,11 @@ export function DeviceRegistryProvider({
               undefined,
               bridgeAuth ? { bridgeAuth: true } : undefined,
             );
-            if (result.identity.device_id !== deviceId)
-              throw new Error(
-                `HTTP endpoint resolved to unexpected device ${result.identity.device_id}`,
-              );
-          return {
-            nextTarget: promoteRememberedHttpEndpoint(nextTarget, httpBaseUrl),
-            result,
-          };
+            assertProbeResultIdentity(result, deviceId);
+            return {
+              nextTarget: promoteRememberedHttpEndpoint(nextTarget, httpBaseUrl),
+              result,
+            };
           },
           {
             beforeOperation: () =>
@@ -1141,6 +1138,13 @@ export function DeviceRegistryProvider({
               },
             )
               .then(({ value: status, baseUrl }) => {
+                const currentRecord = recordsRef.current.find(
+                  (candidate) => candidate.target.deviceId === record.target.deviceId,
+                );
+                assertStatusIdentity(
+                  status,
+                  currentRecord?.identity?.device_id ?? record.target.deviceId,
+                );
                 if (
                   operationToken !== undefined &&
                   !currentDeviceOperation(
@@ -1362,6 +1366,7 @@ export function DeviceRegistryProvider({
           };
         }
         const result = await probeDevice(baseUrl);
+        assertProbeResultIdentity(result, result.identity.device_id);
         const persistedHttpChannel = resolveManualHttpChannelPersistence({
           baseUrl,
           rememberedHttpBaseUrl: input.rememberedHttpBaseUrl,
@@ -1952,6 +1957,7 @@ export function DeviceRegistryProvider({
           throw new Error(
             `LAN companion resolved to unexpected device ${result.identity.device_id}`,
           );
+        assertProbeResultIdentity(result, logicalDeviceId);
         const logicalOperationToken =
           logicalDeviceId === deviceId
             ? operationToken
@@ -5637,6 +5643,43 @@ function firmwareMismatchError(identity: Identity): DeviceRecord["error"] {
       features: identity.firmware.features,
     },
   };
+}
+
+function assertProbeResultIdentity(result: ProbeResult, expectedDeviceId: string): void {
+  if (
+    result.identity.device_id !== expectedDeviceId ||
+    (result.status.device_id && result.status.device_id !== expectedDeviceId)
+  ) {
+    const actual =
+      result.status.device_id && result.status.device_id !== expectedDeviceId
+        ? result.status.device_id
+        : result.identity.device_id;
+    const error = new Error(
+      `HTTP endpoint resolved to unexpected device ${actual}; expected ${expectedDeviceId}`,
+    ) as Error & { envelope: ReturnType<typeof toErrorEnvelope> };
+    error.envelope = {
+      code: "device_identity_mismatch",
+      message: error.message,
+      retryable: false,
+      details: { actual, expected: expectedDeviceId },
+    };
+    throw error;
+  }
+}
+
+function assertStatusIdentity(status: UpsStatus, expectedDeviceId: string): void {
+  if (status.device_id && status.device_id !== expectedDeviceId) {
+    const error = new Error(
+      `HTTP status resolved to unexpected device ${status.device_id}; expected ${expectedDeviceId}`,
+    ) as Error & { envelope: ReturnType<typeof toErrorEnvelope> };
+    error.envelope = {
+      code: "device_identity_mismatch",
+      message: error.message,
+      retryable: false,
+      details: { actual: status.device_id, expected: expectedDeviceId },
+    };
+    throw error;
+  }
 }
 
 function bytesToHex(bytes: Uint8Array): string {
