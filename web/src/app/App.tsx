@@ -1100,8 +1100,7 @@ function hasTransportFailure(record: DeviceRecord | null | undefined): boolean {
     record &&
       (record.connectionState === "error" ||
         record.streamState === "error" ||
-        (record.connectionState === "offline" && record.error !== null) ||
-        record.serial?.connected === false),
+        (record.connectionState === "offline" && record.error !== null)),
   );
 }
 
