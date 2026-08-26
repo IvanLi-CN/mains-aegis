@@ -1187,9 +1187,18 @@ export function DeviceRegistryProvider({
       )
         return staleAddDeviceResult();
 
+      let existingRuntimeClosed = false;
       try {
         const bridgeAuth = bridgeAuthToken(baseUrl) !== null;
         const scan = await scanDevdDevices(baseUrl);
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        )
+          return staleAddDeviceResult();
         const manageableDevices = scan.devices.filter((device) =>
           isManageableDevdDevice(device),
         );
@@ -1304,10 +1313,16 @@ export function DeviceRegistryProvider({
             input.devdDeviceId ??
             null
           : input.devdDeviceId ?? null;
+        const existingLeaseExpired = Boolean(
+          existingOperationRecord?.serial?.leaseExpiresAt &&
+            Date.parse(existingOperationRecord.serial.leaseExpiresAt) <=
+              Date.now(),
+        );
         const reusableLease =
           existingOperationRecord?.serial?.source === "devd" &&
           existingOperationRecord.serial.baseUrl === baseUrl &&
           existingOperationRecord.serial.leaseId &&
+          !existingLeaseExpired &&
           rememberedDeviceId === selectedDevice.id
             ? {
                 lease_id: existingOperationRecord.serial.leaseId,
@@ -1317,7 +1332,6 @@ export function DeviceRegistryProvider({
                 lease_ttl_ms: existingOperationRecord.serial.leaseTtlMs ?? 8000,
               }
             : null;
-        let existingRuntimeClosed = false;
         let lease: DevdLeaseSnapshot;
         if (reusableLease) {
           lease = reusableLease;
@@ -1331,6 +1345,14 @@ export function DeviceRegistryProvider({
               toErrorEnvelope(error).code !== "device_lease_conflict"
             )
               throw error;
+            if (
+              operationContext &&
+              !currentDeviceOperation(
+                operationContext.deviceId,
+                operationContext.token,
+              )
+            )
+              return staleAddDeviceResult();
             await closeDeviceRuntime(
               existingOperationRecord.target.deviceId,
               existingOperationRecord,
@@ -1440,6 +1462,7 @@ export function DeviceRegistryProvider({
             existingOperationRecord.target.deviceId,
             existingOperationRecord,
           );
+          existingRuntimeClosed = true;
           if (
             operationContext &&
             !currentDeviceOperation(
@@ -1476,13 +1499,19 @@ export function DeviceRegistryProvider({
           await releaseDevdWebLease(baseUrl, pendingLeaseId).catch(
             () => undefined,
           );
-        if (
-          operationContext &&
-          !currentDeviceOperation(
+        const operationStillCurrent =
+          !operationContext ||
+          currentDeviceOperation(
             operationContext.deviceId,
             operationContext.token,
-          )
+          );
+        if (
+          existingRuntimeClosed &&
+          existingOperationRecord &&
+          operationStillCurrent
         )
+          await restoreDevdRuntime(existingOperationRecord, operationContext);
+        if (!operationStillCurrent)
           return staleAddDeviceResult();
         return { ok: false, error: toErrorEnvelope(error) };
       }
@@ -1682,6 +1711,26 @@ export function DeviceRegistryProvider({
 
       let openedTransport: WebSerialTransport | null = null;
       try {
+        const operationPreviousRecord = operationContext
+          ? records.find(
+              (candidate) =>
+                candidate.target.deviceId === operationContext.deviceId,
+            )
+          : undefined;
+        if (operationPreviousRecord) {
+          await closeDeviceRuntime(
+            operationPreviousRecord.target.deviceId,
+            operationPreviousRecord,
+          );
+          if (
+            operationContext &&
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            )
+          )
+            return staleAddDeviceResult();
+        }
         let transportRef: WebSerialTransport | null = null;
         const pendingLogs: SerialLogEntry[] = [];
         const pendingTrace: SerialTraceEntry[] = [];
@@ -1800,11 +1849,14 @@ export function DeviceRegistryProvider({
           openedTransport = null;
           return staleAddDeviceResult();
         }
-        const previousRecord = records.find(
+        const identityPreviousRecord = records.find(
           (candidate) => candidate.target.deviceId === identity.device_id,
         );
-        if (previousRecord) {
-          await closeDeviceRuntime(identity.device_id, previousRecord);
+        if (
+          identityPreviousRecord &&
+          identityPreviousRecord !== operationPreviousRecord
+        ) {
+          await closeDeviceRuntime(identity.device_id, identityPreviousRecord);
           if (
             operationContext &&
             !currentDeviceOperation(
@@ -3579,6 +3631,84 @@ export function DeviceRegistryProvider({
         });
     }, intervalMs);
     devdLeaseHeartbeats.current.set(record.target.deviceId, heartbeat);
+  }
+
+  async function restoreDevdRuntime(
+    record: DeviceRecord,
+    operationContext?: DeviceOperationContext,
+  ): Promise<boolean> {
+    const channel = rememberedDevdChannel(record);
+    const baseUrl = record.serial?.baseUrl ?? channel?.baseUrl;
+    const devdDeviceId = channel?.devdDeviceId;
+    if (!baseUrl || !devdDeviceId) return false;
+    if (
+      operationContext &&
+      !currentDeviceOperation(
+        operationContext.deviceId,
+        operationContext.token,
+      )
+    )
+      return false;
+
+    let lease: DevdWebLease | null = null;
+    try {
+      lease = await createDevdWebLease(baseUrl, devdDeviceId);
+      const bridgeAuth =
+        record.target.bridgeAuth || bridgeAuthToken(baseUrl) !== null;
+      const result = await probeDevice(
+        baseUrl,
+        lease.lease_id,
+        bridgeAuth ? { bridgeAuth: true } : undefined,
+      );
+      if (result.identity.device_id !== record.target.deviceId)
+        throw new Error("devd runtime restoration resolved a different device");
+      const session = await getDevdSerialSession(baseUrl, {
+        ...DEVD_SERIAL_SESSION_LIMITS,
+        leaseId: lease.lease_id,
+      });
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      ) {
+        await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
+          () => undefined,
+        );
+        return false;
+      }
+      const target: DeviceTarget = {
+        ...record.target,
+        baseUrl,
+        transport: "devd",
+        preferredTransport: "devd",
+        bridgeAuth: bridgeAuth || undefined,
+        rememberedChannels: mergeRememberedChannels(
+          record.target.rememberedChannels,
+          {
+            devd: {
+              baseUrl,
+              devdDeviceId,
+              seenAt: new Date().toISOString(),
+              transport: "usb",
+            },
+          },
+        ),
+        serialProtocol: session.protocol,
+      };
+      const restored = recordFromDevdProbe(target, result, session, lease);
+      startDevdLeaseHeartbeat(restored);
+      invalidateDeviceReads(record.target.deviceId);
+      setRecords((current) => upsertRecord(current, restored));
+      return true;
+    } catch {
+      if (lease)
+        await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
+          () => undefined,
+        );
+      return false;
+    }
   }
 
   const removeDevice = useCallback(
