@@ -4232,7 +4232,7 @@ export function DeviceRegistryProvider({
     const channel = rememberedDevdChannel(record);
     const baseUrl = record.serial?.baseUrl ?? channel?.baseUrl;
     const devdDeviceId = channel?.devdDeviceId;
-    if (!baseUrl || !devdDeviceId) return false;
+    if (baseUrl === undefined || !devdDeviceId) return false;
     if (
       operationContext &&
       !currentDeviceOperation(

@@ -322,7 +322,7 @@ describe("page presentation ownership", () => {
       createElement(DeviceDataContext, {
         record: makeRecord({
           connectionState: "online",
-          streamState: "error",
+          streamState: "streaming",
           errorSource: "read",
           error: {
             code: "http_400",

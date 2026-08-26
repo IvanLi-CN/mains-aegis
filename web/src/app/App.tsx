@@ -3860,6 +3860,8 @@ function useFleetActiveAlerts(records: DeviceRecord[]): FleetActiveAlertsState {
         record.target.rememberedChannels?.http?.baseUrl ?? "",
         record.target.rememberedChannels?.http?.fallbackBaseUrl ?? "",
         record.serial?.source ?? "",
+        record.serial?.leaseId ?? "",
+        record.runtimeId ?? "",
       ].join(":"),
     )
     .sort()
@@ -3999,6 +4001,8 @@ function useActiveAlertsSnapshot(
     () => (record ? alertControlTargets(record) : []),
     [
       deviceId,
+      record?.runtimeId,
+      record?.serial?.leaseId,
       record?.serial?.baseUrl,
       record?.serial?.source,
       record?.target.baseUrl,
@@ -4386,6 +4390,8 @@ function PowerPage({ record }: { record: DeviceRecord }) {
     record.target.rememberedChannels?.devd?.devdDeviceId ?? "",
     record.serial?.source ?? "",
     record.serial?.baseUrl ?? "",
+    record.serial?.leaseId ?? "",
+    record.runtimeId ?? "",
     record.serial?.connected ? "connected" : "disconnected",
   ].join("|");
 
@@ -4469,6 +4475,8 @@ function PowerPage({ record }: { record: DeviceRecord }) {
   }, [
     requestDialogOpen,
     record.target.deviceId,
+    record.runtimeId,
+    record.serial?.leaseId,
     manualPrefs.target,
     manualPrefs.speed,
     manualPrefs.timer_h,
@@ -6570,14 +6578,15 @@ function streamPresentation(record: DeviceRecord): StreamPresentation {
     };
   }
 
+  if (record.errorSource === "read") {
+    return {
+      label: "Data error",
+      detail: record.error?.message ?? `Device data unavailable${freshness}`,
+      tone: "warning",
+    };
+  }
+
   if (record.streamState === "error") {
-    if (record.errorSource === "read") {
-      return {
-        label: "Data error",
-        detail: record.error?.message ?? `Device data unavailable${freshness}`,
-        tone: "warning",
-      };
-    }
     return {
       label: "Data degraded",
       detail: record.status
