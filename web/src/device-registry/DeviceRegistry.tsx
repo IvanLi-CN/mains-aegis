@@ -982,7 +982,7 @@ export function DeviceRegistryProvider({
             devdBaseUrl,
             operationToken,
             beginDeviceRead(record.target.deviceId, "devd"),
-          );
+          ).catch(() => undefined);
         },
       });
       devdStreams.current.set(record.target.deviceId, subscription);
@@ -1051,7 +1051,7 @@ export function DeviceRegistryProvider({
               return;
             const expectedDeviceId =
               currentRecord.identity?.device_id ?? currentRecord.target.deviceId;
-            if (status.device_id && status.device_id !== expectedDeviceId)
+            if (!status.device_id || status.device_id !== expectedDeviceId)
               return;
             setRecords((current) =>
               current.map((candidate) =>
@@ -1732,7 +1732,12 @@ export function DeviceRegistryProvider({
                 releasePromise = releaseDevdWebLease(
                   baseUrl,
                   lease.lease_id,
-                ).then(() => undefined);
+                )
+                  .then(() => undefined)
+                  .catch((error) => {
+                    releasePromise = null;
+                    throw error;
+                  });
               await releasePromise;
             },
           };
@@ -2478,24 +2483,45 @@ export function DeviceRegistryProvider({
         if (!incoming) continue;
         const currentHttp = record.target.rememberedChannels?.http;
         const nextHttp = incoming.http;
+        const currentDevd = record.target.rememberedChannels?.devd;
+        const nextDevd = incoming.devd;
+        const activeDevdLease =
+          record.serial?.source === "devd" && Boolean(record.serial.leaseId);
+        const devdBindingChanged =
+          Boolean(nextDevd) &&
+          (currentDevd?.baseUrl !== nextDevd?.baseUrl ||
+            currentDevd?.devdDeviceId !== nextDevd?.devdDeviceId);
         if (
           nextHttp &&
           currentHttp?.baseUrl !== nextHttp.baseUrl
         ) {
           invalidateDeviceReads(record.target.deviceId);
         }
+        if (devdBindingChanged) invalidateDeviceReads(record.target.deviceId);
       }
       setRecords((current) =>
         current.map((record) => {
           const memory = discoveryByDeviceId.get(record.target.deviceId);
           if (!memory) return record;
+          const currentDevd = record.target.rememberedChannels?.devd;
+          const activeDevdLease =
+            record.serial?.source === "devd" && Boolean(record.serial.leaseId);
+          const nextDevd = memory.devd;
+          const devdBindingChanged =
+            Boolean(nextDevd) &&
+            (currentDevd?.baseUrl !== nextDevd?.baseUrl ||
+              currentDevd?.devdDeviceId !== nextDevd?.devdDeviceId);
+          const nextMemory =
+            activeDevdLease && devdBindingChanged
+              ? { ...memory, devd: undefined }
+              : memory;
           return {
             ...record,
             target: {
               ...record.target,
               rememberedChannels: mergeRememberedChannels(
                 record.target.rememberedChannels,
-                memory,
+                nextMemory,
               ),
             },
           };
@@ -4251,7 +4277,10 @@ export function DeviceRegistryProvider({
           if (!isOwned()) return;
           const envelope = toErrorEnvelope(error);
           const leaseInvalid = isDevdLeaseInvalidError(envelope);
-          if (leaseInvalid) control.stopIfOwned();
+          if (leaseInvalid) {
+            control.stopIfOwned();
+            invalidateDeviceReads(record.target.deviceId);
+          }
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === record.target.deviceId &&

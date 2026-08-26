@@ -4207,6 +4207,21 @@ function AlertsPage({
                 alertHttpTargetStillCurrent(current, baseUrl),
             );
           },
+          beforeTargetOperation: (target) => {
+            const current = recordRef.current;
+            if (!current || current.target.deviceId !== record.target.deviceId)
+              return false;
+            if (target.kind === "http")
+              return activeRecordTransport(current) === "http";
+            if (target.kind === "devd")
+              return (
+                activeRecordTransport(current) === "devd" &&
+                current.serial?.baseUrl === target.baseUrl &&
+                current.serial?.source === "devd" &&
+                current.serial?.leaseId !== undefined
+              );
+            return activeRecordTransport(current) === "serial";
+          },
         },
       );
       await refresh();
@@ -4329,10 +4344,13 @@ function alertControlTargets(record: DeviceRecord): AlertControlTarget[] {
 async function withAlertTargetFallback<T>(
   targets: AlertControlTarget[],
   operation: (target: AlertControlTarget) => Promise<T>,
+  beforeOperation?: (target: AlertControlTarget) => boolean,
 ): Promise<T> {
   let lastError: unknown = null;
   for (const target of targets) {
     try {
+      if (beforeOperation && !beforeOperation(target))
+        throw staleAlertOperationError();
       return await operation(target);
     } catch (cause) {
       lastError = cause;
@@ -4360,7 +4378,11 @@ async function withAlertHttpFallback<T>(
       if (options.beforeOperation && !options.beforeOperation(baseUrl))
         throw staleAlertOperationError();
       if (!baseUrl.startsWith("mock:")) {
-        const identity = await getIdentity(baseUrl, undefined, bridgeAuth);
+        const identity = await getIdentity(
+          baseUrl,
+          undefined,
+          { ...bridgeAuth, timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS },
+        );
         if (identity.device_id !== expectedDeviceId)
           throw alertIdentityMismatchError(identity.device_id, expectedDeviceId);
       }
@@ -4388,24 +4410,30 @@ async function readAlertsFromTargets(
   targets: AlertControlTarget[],
   getSerialAlerts: (deviceId: string) => Promise<ActiveAlertsSnapshot>,
   record: DeviceRecord,
-  options: { beforeHttpOperation?: (baseUrl: string) => boolean } = {},
+  options: {
+    beforeHttpOperation?: (baseUrl: string) => boolean;
+    beforeTargetOperation?: (target: AlertControlTarget) => boolean;
+  } = {},
 ): Promise<ActiveAlertsSnapshot> {
-  return withAlertTargetFallback(targets, (target) =>
-    target.kind === "devd"
-      ? getDevdDeviceAlerts(target.baseUrl, target.deviceId, {
-          timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
-        })
-      : target.kind === "serial"
-        ? getSerialAlerts(target.deviceId)
-        : withAlertHttpFallback(
-            record,
-            target.baseUrls,
-            (baseUrl) =>
-              getDeviceAlerts(baseUrl, {
-                timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
-              }),
-            { beforeOperation: options.beforeHttpOperation },
-          ),
+  return withAlertTargetFallback(
+    targets,
+    (target) =>
+      target.kind === "devd"
+        ? getDevdDeviceAlerts(target.baseUrl, target.deviceId, {
+            timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
+          })
+        : target.kind === "serial"
+          ? getSerialAlerts(target.deviceId)
+          : withAlertHttpFallback(
+              record,
+              target.baseUrls,
+              (baseUrl) =>
+                getDeviceAlerts(baseUrl, {
+                  timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
+                }),
+              { beforeOperation: options.beforeHttpOperation },
+            ),
+    options.beforeTargetOperation,
   );
 }
 
@@ -4418,27 +4446,34 @@ async function muteAlertFromTargets(
     instanceId: number,
   ) => Promise<unknown>,
   record: DeviceRecord,
-  options: { beforeHttpOperation?: (baseUrl: string) => boolean } = {},
+  options: {
+    beforeHttpOperation?: (baseUrl: string) => boolean;
+    beforeTargetOperation?: (target: AlertControlTarget) => boolean;
+  } = {},
 ): Promise<void> {
-  await withAlertTargetFallback(targets, (target) =>
-    target.kind === "devd"
-      ? muteDevdDeviceAlert(
-          target.baseUrl,
-          target.deviceId,
-          alert.alert_id,
-          alert.instance_id,
-        )
-      : target.kind === "serial"
-        ? muteSerialAlert(target.deviceId, alert.alert_id, alert.instance_id)
-        : withAlertHttpFallback(
-            record,
-            target.baseUrls,
-            (baseUrl) => muteDeviceAlert(baseUrl, alert.alert_id, alert.instance_id),
-            {
-              allowFallback: false,
-              beforeOperation: options.beforeHttpOperation,
-            },
-          ),
+  await withAlertTargetFallback(
+    targets,
+    (target) =>
+      target.kind === "devd"
+        ? muteDevdDeviceAlert(
+            target.baseUrl,
+            target.deviceId,
+            alert.alert_id,
+            alert.instance_id,
+          )
+        : target.kind === "serial"
+          ? muteSerialAlert(target.deviceId, alert.alert_id, alert.instance_id)
+          : withAlertHttpFallback(
+              record,
+              target.baseUrls,
+              (baseUrl) =>
+                muteDeviceAlert(baseUrl, alert.alert_id, alert.instance_id),
+              {
+                allowFallback: false,
+                beforeOperation: options.beforeHttpOperation,
+              },
+            ),
+    options.beforeTargetOperation,
   );
 }
 
