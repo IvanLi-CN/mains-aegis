@@ -412,7 +412,7 @@ export function DeviceRegistryProvider({
               ))
               ? {
                   ...record,
-                  connectionState: error?.retryable ? "offline" : "error",
+                  connectionState: error?.retryable ? "offline" : "online",
                   streamState: "error",
                   error,
                   errorSource: "read",
@@ -421,7 +421,12 @@ export function DeviceRegistryProvider({
                     record.serial &&
                     (readRequest?.transport === "serial" ||
                       readRequest?.transport === "devd")
-                      ? { ...record.serial, connected: false }
+                      ? {
+                          ...record.serial,
+                          connected: error?.retryable
+                            ? false
+                            : record.serial.connected,
+                        }
                       : record.serial,
                   lastUpdated: new Date().toISOString(),
                 }
@@ -1853,7 +1858,15 @@ export function DeviceRegistryProvider({
         const previous = records.find(
           (candidate) => candidate.target.deviceId === logicalDeviceId,
         );
-        if (previous) await closeDeviceRuntime(logicalDeviceId, previous);
+        const previousRuntimeSnapshot = previous
+          ? await closeDeviceRuntime(logicalDeviceId, previous)
+          : undefined;
+        if (
+          !currentDeviceOperation(deviceId, operationToken) ||
+          !currentDeviceOperation(logicalDeviceId, logicalOperationToken)
+        )
+          if (previous)
+            markClosedRuntimeUnavailable(previous, previousRuntimeSnapshot);
         if (
           !currentDeviceOperation(deviceId, operationToken) ||
           !currentDeviceOperation(logicalDeviceId, logicalOperationToken)
@@ -4278,10 +4291,17 @@ export function DeviceRegistryProvider({
           operationContext.token,
         )
       ) {
-        if (pendingDevdLeases.current.get(record.target.deviceId) === pendingLease) {
-          pendingDevdLeases.current.delete(record.target.deviceId);
-          pendingLease.release();
-        }
+        if (pendingDevdLeases.current.get(record.target.deviceId) === pendingLease)
+          void pendingLease
+            .release()
+            .then(() => {
+              if (
+                pendingDevdLeases.current.get(record.target.deviceId) ===
+                pendingLease
+              )
+                pendingDevdLeases.current.delete(record.target.deviceId);
+            })
+            .catch(() => undefined);
         return false;
       }
       return true;
@@ -5393,6 +5413,7 @@ export function recoverReadRecord(
   transport: DeviceChannelTransport,
   streamActive = false,
 ): DeviceRecord {
+  if (transport === "devd" && !record.serial?.leaseId) return record;
   const streamState =
     transport === "serial"
       ? "streaming"

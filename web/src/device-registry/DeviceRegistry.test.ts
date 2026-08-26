@@ -128,6 +128,7 @@ describe("recoverReadRecord", () => {
         connected: false,
         source: "devd",
         baseUrl: "http://127.0.0.1:8765",
+        leaseId: "lease-1",
         protocol: "mains-aegis.cdc.v1",
         logs: [],
         trace: [],
@@ -140,6 +141,44 @@ describe("recoverReadRecord", () => {
     expect(recovered.streamState).toBe("polling");
     expect(recovered.error).toBeNull();
     expect(recovered.serial?.connected).toBe(true);
+  });
+
+  test("does not resurrect a devd record after its lease is invalidated", () => {
+    const record: DeviceRecord = {
+      target: {
+        deviceId: "mains-aegis-a1b2c3",
+        baseUrl: "http://127.0.0.1:8765",
+        alias: "Bench A",
+        location: "Lab",
+        addedAt: "2026-06-07T00:00:00.000Z",
+        transport: "devd",
+        preferredTransport: "devd",
+      },
+      identity: null,
+      network: null,
+      settings: null,
+      status: null,
+      connectionState: "error",
+      streamState: "error",
+      error: {
+        code: "web_session_expired",
+        message: "lease expired",
+        retryable: false,
+        details: null,
+      },
+      errorSource: "transport",
+      lastUpdated: "2026-06-07T00:00:00.000Z",
+      serial: {
+        connected: false,
+        source: "devd",
+        baseUrl: "http://127.0.0.1:8765",
+        protocol: "mains-aegis.cdc.v1",
+        logs: [],
+        trace: [],
+      },
+    };
+
+    expect(recoverReadRecord(record, "devd")).toBe(record);
   });
 
   test("keeps an active HTTP stream streaming after a read succeeds", () => {
