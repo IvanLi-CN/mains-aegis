@@ -117,6 +117,13 @@ type DeviceOperationContext = {
   token: number;
 };
 
+type DeviceRuntimeSnapshot = {
+  serialSession?: WebSerialTransport;
+  stream?: StatusStream;
+  devdStream?: DevdSerialEventStream;
+  heartbeat?: number;
+};
+
 export type DeviceReadRequest = {
   deviceId: string;
   transport: DeviceChannelTransport;
@@ -1038,6 +1045,12 @@ export function DeviceRegistryProvider({
 
   const closeDeviceRuntime = useCallback(
     async (deviceId: string, record?: DeviceRecord) => {
+      const runtimeSnapshot: DeviceRuntimeSnapshot = {
+        serialSession: serialSessions.current.get(deviceId),
+        stream: streams.current.get(deviceId),
+        devdStream: devdStreams.current.get(deviceId),
+        heartbeat: devdLeaseHeartbeats.current.get(deviceId),
+      };
       streams.current.get(deviceId)?.close();
       streams.current.delete(deviceId);
       devdStreams.current.get(deviceId)?.close();
@@ -1050,6 +1063,7 @@ export function DeviceRegistryProvider({
       await session?.close().catch(() => undefined);
       if (record?.serial?.source === "devd")
         await disconnectDevdSerialDevice(record);
+      return runtimeSnapshot;
     },
     [],
   );
@@ -1133,15 +1147,20 @@ export function DeviceRegistryProvider({
           (candidate) => candidate.target.deviceId === result.identity.device_id,
         );
         if (existingRecord) {
-          await closeDeviceRuntime(result.identity.device_id, existingRecord);
+          const closedRuntime = await closeDeviceRuntime(
+            result.identity.device_id,
+            existingRecord,
+          );
           if (
             operationContext &&
             !currentDeviceOperation(
               operationContext.deviceId,
               operationContext.token,
             )
-          )
+          ) {
+            markClosedRuntimeUnavailable(existingRecord, closedRuntime);
             return staleAddDeviceResult();
+          }
         }
         invalidateDeviceReads(result.identity.device_id);
         setRecords((current) => upsertRecord(current, record));
@@ -1188,6 +1207,7 @@ export function DeviceRegistryProvider({
         return staleAddDeviceResult();
 
       let existingRuntimeClosed = false;
+      let existingRuntimeSnapshot: DeviceRuntimeSnapshot | undefined;
       try {
         const bridgeAuth = bridgeAuthToken(baseUrl) !== null;
         const scan = await scanDevdDevices(baseUrl);
@@ -1280,18 +1300,23 @@ export function DeviceRegistryProvider({
             existingRecord &&
             existingRecord.target.deviceId !== existingOperationRecord?.target.deviceId
           ) {
-            await closeDeviceRuntime(result.identity.device_id, existingRecord);
+            const closedRuntime = await closeDeviceRuntime(
+              result.identity.device_id,
+              existingRecord,
+            );
             if (
               operationContext &&
               !currentDeviceOperation(
                 operationContext.deviceId,
                 operationContext.token,
               )
-            )
+            ) {
+              markClosedRuntimeUnavailable(existingRecord, closedRuntime);
               return staleAddDeviceResult();
+            }
           }
           if (existingOperationRecord) {
-            await closeDeviceRuntime(
+            existingRuntimeSnapshot = await closeDeviceRuntime(
               existingOperationRecord.target.deviceId,
               existingOperationRecord,
             );
@@ -1301,8 +1326,13 @@ export function DeviceRegistryProvider({
                 operationContext.deviceId,
                 operationContext.token,
               )
-            )
+            ) {
+              markClosedRuntimeUnavailable(
+                existingOperationRecord,
+                existingRuntimeSnapshot,
+              );
               return staleAddDeviceResult();
+            }
           }
           invalidateDeviceReads(result.identity.device_id);
           setRecords((current) => upsertRecord(current, record));
@@ -1353,7 +1383,7 @@ export function DeviceRegistryProvider({
               )
             )
               return staleAddDeviceResult();
-            await closeDeviceRuntime(
+            existingRuntimeSnapshot = await closeDeviceRuntime(
               existingOperationRecord.target.deviceId,
               existingOperationRecord,
             );
@@ -1364,8 +1394,13 @@ export function DeviceRegistryProvider({
                 operationContext.deviceId,
                 operationContext.token,
               )
-            )
+            ) {
+              markClosedRuntimeUnavailable(
+                existingOperationRecord,
+                existingRuntimeSnapshot,
+              );
               return staleAddDeviceResult();
+            }
             lease = await createDevdWebLease(baseUrl, selectedDevice.id);
           }
         }
@@ -1443,7 +1478,10 @@ export function DeviceRegistryProvider({
           existingRecord &&
           existingRecord.target.deviceId !== existingOperationRecord?.target.deviceId
         ) {
-          await closeDeviceRuntime(result.identity.device_id, existingRecord);
+          const closedRuntime = await closeDeviceRuntime(
+            result.identity.device_id,
+            existingRecord,
+          );
           if (
             operationContext &&
             !currentDeviceOperation(
@@ -1454,14 +1492,16 @@ export function DeviceRegistryProvider({
             await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
               () => undefined,
             );
+            markClosedRuntimeUnavailable(existingRecord, closedRuntime);
             return staleAddDeviceResult();
           }
         }
         if (existingOperationRecord && !existingRuntimeClosed && !reusableLease) {
-          await closeDeviceRuntime(
+          const closedRuntime = await closeDeviceRuntime(
             existingOperationRecord.target.deviceId,
             existingOperationRecord,
           );
+          existingRuntimeSnapshot = closedRuntime;
           existingRuntimeClosed = true;
           if (
             operationContext &&
@@ -1472,6 +1512,10 @@ export function DeviceRegistryProvider({
           ) {
             await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
               () => undefined,
+            );
+            markClosedRuntimeUnavailable(
+              existingOperationRecord,
+              closedRuntime,
             );
             return staleAddDeviceResult();
           }
@@ -1534,8 +1578,14 @@ export function DeviceRegistryProvider({
               operationContext.deviceId,
               operationContext.token,
             ))
-        )
+        ) {
+          if (existingRuntimeClosed && existingOperationRecord)
+            markClosedRuntimeUnavailable(
+              existingOperationRecord,
+              existingRuntimeSnapshot,
+            );
           return staleAddDeviceResult();
+        }
         return { ok: false, error: toErrorEnvelope(error) };
       }
     },
@@ -1740,10 +1790,11 @@ export function DeviceRegistryProvider({
           )
         : undefined;
       let previousRuntimeClosed = false;
+      let previousRuntimeSnapshot: DeviceRuntimeSnapshot | undefined;
       try {
         if (operationPreviousRecord) {
           previousRuntimeClosed = true;
-          await closeDeviceRuntime(
+          previousRuntimeSnapshot = await closeDeviceRuntime(
             operationPreviousRecord.target.deviceId,
             operationPreviousRecord,
           );
@@ -1754,6 +1805,10 @@ export function DeviceRegistryProvider({
               operationContext.token,
             )
           ) {
+            markClosedRuntimeUnavailable(
+              operationPreviousRecord,
+              previousRuntimeSnapshot,
+            );
             return staleAddDeviceResult();
           }
         }
@@ -1882,7 +1937,10 @@ export function DeviceRegistryProvider({
           identityPreviousRecord &&
           identityPreviousRecord !== operationPreviousRecord
         ) {
-          await closeDeviceRuntime(identity.device_id, identityPreviousRecord);
+          const closedRuntime = await closeDeviceRuntime(
+            identity.device_id,
+            identityPreviousRecord,
+          );
           if (
             operationContext &&
             !currentDeviceOperation(
@@ -1892,6 +1950,10 @@ export function DeviceRegistryProvider({
           ) {
             await transport.close().catch(() => undefined);
             openedTransport = null;
+            markClosedRuntimeUnavailable(
+              identityPreviousRecord,
+              closedRuntime,
+            );
             return staleAddDeviceResult();
           }
         }
@@ -2017,8 +2079,14 @@ export function DeviceRegistryProvider({
             operationContext.deviceId,
             operationContext.token,
           )
-        )
+        ) {
+          if (previousRuntimeClosed && operationPreviousRecord)
+            markClosedRuntimeUnavailable(
+              operationPreviousRecord,
+              previousRuntimeSnapshot,
+            );
           return staleAddDeviceResult();
+        }
         return { ok: false, error: errorFromSerialFailure(error) };
       }
     },
@@ -3795,6 +3863,73 @@ export function DeviceRegistryProvider({
     } catch {
       return false;
     }
+  }
+
+  function markClosedRuntimeUnavailable(
+    record: DeviceRecord,
+    runtimeSnapshot?: DeviceRuntimeSnapshot,
+  ) {
+    const deviceId = record.target.deviceId;
+    setRecords((current) => {
+      const replacedRuntime =
+        (runtimeSnapshot?.serialSession !== undefined &&
+          serialSessions.current.get(deviceId) !== undefined &&
+          serialSessions.current.get(deviceId) !== runtimeSnapshot.serialSession) ||
+        (runtimeSnapshot?.stream !== undefined &&
+          streams.current.get(deviceId) !== undefined &&
+          streams.current.get(deviceId) !== runtimeSnapshot.stream) ||
+        (runtimeSnapshot?.devdStream !== undefined &&
+          devdStreams.current.get(deviceId) !== undefined &&
+          devdStreams.current.get(deviceId) !== runtimeSnapshot.devdStream) ||
+        (runtimeSnapshot?.heartbeat !== undefined &&
+          devdLeaseHeartbeats.current.get(deviceId) !== undefined &&
+          devdLeaseHeartbeats.current.get(deviceId) !== runtimeSnapshot.heartbeat);
+      if (replacedRuntime) return current;
+      if (
+        serialSessions.current.has(deviceId) ||
+        streams.current.has(deviceId) ||
+        devdStreams.current.has(deviceId) ||
+        devdLeaseHeartbeats.current.has(deviceId)
+      )
+        return current;
+      return current.map((candidate) => {
+        if (candidate.target.deviceId !== deviceId) return candidate;
+        if (record.serial?.source === "devd") {
+          if (
+            candidate.serial?.source !== "devd" ||
+            candidate.serial.baseUrl !== record.serial.baseUrl ||
+            candidate.serial.leaseId !== record.serial.leaseId
+          )
+            return candidate;
+        } else if (record.serial?.source === "web_serial") {
+          if (candidate.serial?.source !== "web_serial") return candidate;
+        } else if (
+          candidate.target.transport !== record.target.transport ||
+          candidate.target.baseUrl !== record.target.baseUrl
+        ) {
+          return candidate;
+        }
+        return {
+          ...candidate,
+          connectionState: "offline",
+          streamState: "error",
+          error: null,
+          errorSource: undefined,
+          serial:
+            candidate.serial?.source === "devd"
+              ? {
+                  ...candidate.serial,
+                  connected: false,
+                  leaseId: undefined,
+                  leaseExpiresAt: undefined,
+                }
+              : candidate.serial?.source === "web_serial"
+                ? { ...candidate.serial, connected: false }
+                : candidate.serial,
+          lastUpdated: new Date().toISOString(),
+        };
+      });
+    });
   }
 
   function markDeviceRuntimeUnavailable(
