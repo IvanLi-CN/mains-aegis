@@ -470,7 +470,7 @@ export function DeviceRegistryProvider({
       const target = existing?.target;
       if (!target) return;
       const operation = invalidateDeviceReads(deviceId);
-      const readGeneration = deviceReadGenerations.current.get(deviceId);
+      const readGeneration = deviceReadGenerations.current.get(deviceId) ?? 0;
       if (target.mock) {
         setRecords((current) =>
           current.map((record) =>
@@ -580,7 +580,14 @@ export function DeviceRegistryProvider({
         const devdDeviceId =
           rememberedDevdChannel(existing)?.devdDeviceId ?? target.deviceId;
         if (existing.serial?.leaseId) {
-          if (!(await updateDevdSerialSnapshot(deviceId, devdBaseUrl, operation)))
+          if (
+            !(await updateDevdSerialSnapshot(
+              deviceId,
+              devdBaseUrl,
+              operation,
+              { deviceId, transport: "devd", generation: readGeneration },
+            ))
+          )
             return;
           return;
         }
@@ -786,6 +793,7 @@ export function DeviceRegistryProvider({
             record.target.deviceId,
             devdBaseUrl,
             operationToken,
+            beginDeviceRead(record.target.deviceId, "devd"),
           );
         },
       });
@@ -876,6 +884,10 @@ export function DeviceRegistryProvider({
             const operationToken = deviceOperationGenerations.current.get(
               record.target.deviceId,
             );
+            const readRequest = beginDeviceRead(
+              record.target.deviceId,
+              "http",
+            );
             subscription.close();
             streams.current.delete(record.target.deviceId);
             setRecords((current) =>
@@ -900,10 +912,16 @@ export function DeviceRegistryProvider({
                   )
                 )
                   return;
+                if (!currentDeviceRead(readRequest)) return;
                 setRecords((current) =>
                   current.map((candidate) =>
                     candidate.target.deviceId === record.target.deviceId &&
                     candidate.target.transport === "http" &&
+                    canApplyDeviceRead(
+                      candidate,
+                      readRequest,
+                      deviceReadGenerations.current.get(readRequest.deviceId),
+                    ) &&
                     resolvePreferredTransport(
                       candidate,
                       serialSessions.current,
@@ -929,11 +947,17 @@ export function DeviceRegistryProvider({
                   )
                 )
                   return;
+                if (!currentDeviceRead(readRequest)) return;
                 const envelope = toErrorEnvelope(error);
                 setRecords((current) =>
                   current.map((candidate) =>
                     candidate.target.deviceId === record.target.deviceId &&
                     candidate.target.transport === "http" &&
+                    canApplyDeviceRead(
+                      candidate,
+                      readRequest,
+                      deviceReadGenerations.current.get(readRequest.deviceId),
+                    ) &&
                     resolvePreferredTransport(
                       candidate,
                       serialSessions.current,
@@ -1004,7 +1028,7 @@ export function DeviceRegistryProvider({
   }, []);
 
   const closeDeviceRuntime = useCallback(
-    (deviceId: string, record?: DeviceRecord) => {
+    async (deviceId: string, record?: DeviceRecord) => {
       streams.current.get(deviceId)?.close();
       streams.current.delete(deviceId);
       devdStreams.current.get(deviceId)?.close();
@@ -1014,9 +1038,9 @@ export function DeviceRegistryProvider({
       devdLeaseHeartbeats.current.delete(deviceId);
       const session = serialSessions.current.get(deviceId);
       serialSessions.current.delete(deviceId);
-      void session?.close();
+      await session?.close().catch(() => undefined);
       if (record?.serial?.source === "devd")
-        void disconnectDevdSerialDevice(record).catch(() => undefined);
+        await disconnectDevdSerialDevice(record);
     },
     [],
   );
@@ -1099,8 +1123,17 @@ export function DeviceRegistryProvider({
         const existingRecord = records.find(
           (candidate) => candidate.target.deviceId === result.identity.device_id,
         );
-        if (existingRecord && existingRecord.target.transport !== "http")
-          closeDeviceRuntime(result.identity.device_id, existingRecord);
+        if (existingRecord) {
+          await closeDeviceRuntime(result.identity.device_id, existingRecord);
+          if (
+            operationContext &&
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            )
+          )
+            return staleAddDeviceResult();
+        }
         invalidateDeviceReads(result.identity.device_id);
         setRecords((current) => upsertRecord(current, record));
         return { ok: true, record };
@@ -1131,6 +1164,11 @@ export function DeviceRegistryProvider({
     ): Promise<AddDeviceResult> => {
       const baseUrl = normalizeBaseUrl(input.target);
       let pendingLeaseId: string | null = null;
+      const existingOperationRecord = operationContext
+        ? records.find(
+            (candidate) => candidate.target.deviceId === operationContext.deviceId,
+          )
+        : undefined;
       if (
         operationContext &&
         !currentDeviceOperation(
@@ -1141,6 +1179,19 @@ export function DeviceRegistryProvider({
         return staleAddDeviceResult();
 
       try {
+        if (existingOperationRecord)
+          await closeDeviceRuntime(
+            existingOperationRecord.target.deviceId,
+            existingOperationRecord,
+          );
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        )
+          return staleAddDeviceResult();
         const bridgeAuth = bridgeAuthToken(baseUrl) !== null;
         const scan = await scanDevdDevices(baseUrl);
         const manageableDevices = scan.devices.filter((device) =>
@@ -1220,8 +1271,20 @@ export function DeviceRegistryProvider({
           const existingRecord = records.find(
             (candidate) => candidate.target.deviceId === result.identity.device_id,
           );
-          if (existingRecord && existingRecord.target.transport !== "http")
-            closeDeviceRuntime(result.identity.device_id, existingRecord);
+          if (
+            existingRecord &&
+            existingRecord.target.deviceId !== existingOperationRecord?.target.deviceId
+          ) {
+            await closeDeviceRuntime(result.identity.device_id, existingRecord);
+            if (
+              operationContext &&
+              !currentDeviceOperation(
+                operationContext.deviceId,
+                operationContext.token,
+              )
+            )
+              return staleAddDeviceResult();
+          }
           invalidateDeviceReads(result.identity.device_id);
           setRecords((current) => upsertRecord(current, record));
           return { ok: true, record };
@@ -1293,8 +1356,36 @@ export function DeviceRegistryProvider({
         const existingRecord = records.find(
           (candidate) => candidate.target.deviceId === result.identity.device_id,
         );
-        if (existingRecord && existingRecord.target.transport !== "devd")
-          closeDeviceRuntime(result.identity.device_id, existingRecord);
+        if (
+          existingRecord &&
+          existingRecord.target.deviceId !== existingOperationRecord?.target.deviceId
+        ) {
+          await closeDeviceRuntime(result.identity.device_id, existingRecord);
+          if (
+            operationContext &&
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            )
+          ) {
+            await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
+              () => undefined,
+            );
+            return staleAddDeviceResult();
+          }
+        }
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        ) {
+          await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
+            () => undefined,
+          );
+          return staleAddDeviceResult();
+        }
         startDevdLeaseHeartbeat(record);
         pendingLeaseId = null;
         invalidateDeviceReads(result.identity.device_id);
@@ -1406,6 +1497,15 @@ export function DeviceRegistryProvider({
           !currentDeviceOperation(logicalDeviceId, logicalOperationToken)
         )
           return staleAddDeviceResult();
+        const previous = records.find(
+          (candidate) => candidate.target.deviceId === logicalDeviceId,
+        );
+        if (previous) await closeDeviceRuntime(logicalDeviceId, previous);
+        if (
+          !currentDeviceOperation(deviceId, operationToken) ||
+          !currentDeviceOperation(logicalDeviceId, logicalOperationToken)
+        )
+          return staleAddDeviceResult();
         let mergedRecord = record;
         setRecords((current) => {
           const existing = current.find(
@@ -1432,11 +1532,6 @@ export function DeviceRegistryProvider({
             ) ?? nextRecord;
           return merged;
         });
-        const previous = records.find(
-          (candidate) => candidate.target.deviceId === logicalDeviceId,
-        );
-        if (previous && previous.target.transport !== "http")
-          closeDeviceRuntime(logicalDeviceId, previous);
         return { ok: true, record: mergedRecord };
       } catch (error) {
         return { ok: false, error: toErrorEnvelope(error) };
@@ -3283,12 +3378,14 @@ export function DeviceRegistryProvider({
     deviceId: string,
     baseUrl: string,
     operationToken?: number,
+    readRequest?: DeviceReadRequest,
   ): Promise<boolean> {
     if (
       operationToken !== undefined &&
       !currentDeviceOperation(deviceId, operationToken)
     )
       return false;
+    if (readRequest && !currentDeviceRead(readRequest)) return false;
     const record = records.find(
       (candidate) => candidate.target.deviceId === deviceId,
     );
@@ -3303,13 +3400,15 @@ export function DeviceRegistryProvider({
       !currentDeviceOperation(deviceId, operationToken)
     )
       return false;
+    if (readRequest && !currentDeviceRead(readRequest)) return false;
     setRecords((current) =>
       current.map((record) =>
         record.target.deviceId === deviceId &&
         record.target.transport === "devd" &&
         record.serial?.source === "devd" &&
         record.serial.baseUrl === baseUrl &&
-        record.serial.leaseId === leaseId
+        record.serial.leaseId === leaseId &&
+        (!readRequest || canApplyDeviceRead(record, readRequest))
           ? mergeDevdSerial(record, baseUrl, session, {
               lease_id: leaseId,
               expires_at: record.serial?.leaseExpiresAt ?? "",

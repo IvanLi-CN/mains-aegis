@@ -8,6 +8,7 @@
 - PWA service worker 预缓存 app shell、Vite 构建产物、Pages fallback、PWA 图标、相对 base 深链 navigation helper 和 bundled static firmware artifacts；真实设备 `/api`、`/events`、LAN HTTP/SSE、USB/Web Serial 与 GitHub Release live catalog 不进入离线模拟缓存。
 - PWA 更新策略使用 prompt 模式：新 app shell 在后台安装并缓存完成后，Web 只显示非阻塞 `New version available` 提示；用户点击 `Update` 并通过确认对话后才调用 `updateSW(true)` 切换并刷新页面。
 - `DeviceRegistry` 维护浏览器侧设备清单、localStorage 持久化、LAN 探活、settings 读取、SSE 订阅与轮询兜底，并持有当前浏览器连接内的 USB CDC `SerialPort`。
+- `DeviceRegistry` 的设备通道切换、同通道重连和 companion 确认使用操作/读取代次 fence；替换前清理旧 stream、serial session、heartbeat 与 devd Web lease，并等待租约释放后提交新记录。
 - USB CDC / Web Serial 设备使用 `serial:` target，不持久化真实 `SerialPort`；刷新后需要重新授权。
 - `web/src/serial/transport.ts` 实现 JSONL framing、`request_id` response matching、握手、状态读取、WiFi 配网、日志级别与手动充电偏好命令。
 - `web/src/firmware/` 负责 firmware catalog 合并、Bundled 优先去重、Web Serial 烧录 helper 和 Firmware 页面数据流。
