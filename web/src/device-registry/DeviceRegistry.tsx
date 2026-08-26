@@ -112,6 +112,11 @@ const DEVD_SERIAL_SESSION_LIMITS = {
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
 const LEGACY_DEVD_TRANSPORT = "ad" + "apter";
 
+type DeviceOperationContext = {
+  deviceId: string;
+  token: number;
+};
+
 export type DeviceReadRequest = {
   deviceId: string;
   transport: DeviceChannelTransport;
@@ -565,7 +570,8 @@ export function DeviceRegistryProvider({
         const devdDeviceId =
           rememberedDevdChannel(existing)?.devdDeviceId ?? target.deviceId;
         if (existing.serial?.leaseId) {
-          await updateDevdSerialSnapshot(deviceId, devdBaseUrl);
+          if (!(await updateDevdSerialSnapshot(deviceId, devdBaseUrl, operation)))
+            return;
           return;
         }
           const devdTarget = {
@@ -646,7 +652,11 @@ export function DeviceRegistryProvider({
           );
         });
       } catch (error) {
-        if (!currentDeviceOperation(deviceId, operation)) return;
+        if (
+          !currentDeviceOperation(deviceId, operation) ||
+          deviceReadGenerations.current.get(deviceId) !== readGeneration
+        )
+          return;
         const envelope = toErrorEnvelope(error);
         setRecords((current) =>
           current.map((record) =>
@@ -921,8 +931,19 @@ export function DeviceRegistryProvider({
   }, []);
 
   const addDevice = useCallback(
-    async (input: AddDeviceInput): Promise<AddDeviceResult> => {
+    async (
+      input: AddDeviceInput,
+      operationContext?: DeviceOperationContext,
+    ): Promise<AddDeviceResult> => {
       const baseUrl = normalizeBaseUrl(input.target);
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      )
+        return staleAddDeviceResult();
 
       try {
         const bootstrap = await getBridgeBootstrap(baseUrl);
@@ -975,20 +996,48 @@ export function DeviceRegistryProvider({
           "online",
           result.identity.capabilities.sse ? "idle" : "polling",
         );
+        if (
+          operationContext &&
+          (operationContext.deviceId !== result.identity.device_id ||
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            ))
+        )
+          return staleAddDeviceResult();
         invalidateDeviceReads(result.identity.device_id);
         setRecords((current) => upsertRecord(current, record));
         return { ok: true, record };
       } catch (error) {
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        )
+          return staleAddDeviceResult();
         return { ok: false, error: toErrorEnvelope(error) };
       }
     },
-    [invalidateDeviceReads],
+    [currentDeviceOperation, invalidateDeviceReads],
   );
 
   const addDevdDevice = useCallback(
-    async (input: AddDeviceInput): Promise<AddDeviceResult> => {
+    async (
+      input: AddDeviceInput,
+      operationContext?: DeviceOperationContext,
+    ): Promise<AddDeviceResult> => {
       const baseUrl = normalizeBaseUrl(input.target);
       let pendingLeaseId: string | null = null;
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      )
+        return staleAddDeviceResult();
 
       try {
         const bridgeAuth = bridgeAuthToken(baseUrl) !== null;
@@ -1058,6 +1107,15 @@ export function DeviceRegistryProvider({
             "online",
             result.identity.capabilities.sse ? "idle" : "polling",
           );
+          if (
+            operationContext &&
+            (operationContext.deviceId !== result.identity.device_id ||
+              !currentDeviceOperation(
+                operationContext.deviceId,
+                operationContext.token,
+              ))
+          )
+            return staleAddDeviceResult();
           invalidateDeviceReads(result.identity.device_id);
           setRecords((current) => upsertRecord(current, record));
           return { ok: true, record };
@@ -1106,6 +1164,15 @@ export function DeviceRegistryProvider({
           serialProtocol: session.protocol,
         };
         const record = recordFromDevdProbe(target, result, session, lease);
+        if (
+          operationContext &&
+          (operationContext.deviceId !== result.identity.device_id ||
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            ))
+        )
+          return staleAddDeviceResult();
         startDevdLeaseHeartbeat(record);
         pendingLeaseId = null;
         invalidateDeviceReads(result.identity.device_id);
@@ -1116,10 +1183,18 @@ export function DeviceRegistryProvider({
           await releaseDevdWebLease(baseUrl, pendingLeaseId).catch(
             () => undefined,
           );
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        )
+          return staleAddDeviceResult();
         return { ok: false, error: toErrorEnvelope(error) };
       }
     },
-    [invalidateDeviceReads],
+    [currentDeviceOperation, invalidateDeviceReads],
   );
 
   const confirmDevdCompanionLan = useCallback(
@@ -1263,6 +1338,7 @@ export function DeviceRegistryProvider({
         AddDeviceInput,
         "alias" | "location" | "ignoreFirmwareMismatch"
       > = {},
+      operationContext?: DeviceOperationContext,
     ): Promise<AddDeviceResult> => {
       if (!isWebSerialSupported()) {
         return {
@@ -1275,6 +1351,14 @@ export function DeviceRegistryProvider({
           },
         };
       }
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      )
+        return staleAddDeviceResult();
 
       let openedTransport: WebSerialTransport | null = null;
       try {
@@ -1377,8 +1461,6 @@ export function DeviceRegistryProvider({
           },
           serialProtocol: hello.protocol,
         };
-        serialSessions.current.set(identity.device_id, transport);
-        openedTransport = null;
         const decoderArtifact =
           firmwareMatch?.source === "github_release"
             ? await findBundledFirmwareArtifact(identity)
@@ -1386,6 +1468,19 @@ export function DeviceRegistryProvider({
         const bundledElfPath = decoderArtifact
           ? firmwareArtifactElfPath(decoderArtifact)
           : null;
+        if (
+          operationContext &&
+          (operationContext.deviceId !== identity.device_id ||
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            ))
+        ) {
+          await transport.close().catch(() => undefined);
+          openedTransport = null;
+          return staleAddDeviceResult();
+        }
+        serialSessions.current.set(identity.device_id, transport);
         transport.setDefmtDecoder(
           bundledElfPath
             ? (frame) =>
@@ -1395,6 +1490,18 @@ export function DeviceRegistryProvider({
                 })
             : null,
         );
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        ) {
+          serialSessions.current.delete(identity.device_id);
+          await transport.close().catch(() => undefined);
+          openedTransport = null;
+          return staleAddDeviceResult();
+        }
         const record = recordFromSerialProbe(
           target,
           {
@@ -1442,15 +1549,28 @@ export function DeviceRegistryProvider({
           ],
           pendingTrace,
         );
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        ) {
+          serialSessions.current.delete(identity.device_id);
+          await transport.close().catch(() => undefined);
+          openedTransport = null;
+          return staleAddDeviceResult();
+        }
         invalidateDeviceReads(identity.device_id);
         setRecords((current) => upsertRecord(current, record));
+        openedTransport = null;
         return { ok: true, record };
       } catch (error) {
         await openedTransport?.close().catch(() => undefined);
         return { ok: false, error: errorFromSerialFailure(error) };
       }
     },
-    [invalidateDeviceReads, setRecordError],
+    [currentDeviceOperation, invalidateDeviceReads, setRecordError],
   );
 
   const attachMockUsbSerialDevice = useCallback((): AddDeviceResult => {
@@ -1521,7 +1641,8 @@ export function DeviceRegistryProvider({
       transport: DeviceChannelTransport,
       options: Pick<AddDeviceInput, "ignoreFirmwareMismatch"> = {},
     ): Promise<AddDeviceResult> => {
-      invalidateDeviceReads(deviceId);
+      const operationToken = invalidateDeviceReads(deviceId);
+      const operationContext = { deviceId, token: operationToken };
       const record = records.find(
         (candidate) => candidate.target.deviceId === deviceId,
       );
@@ -1546,7 +1667,7 @@ export function DeviceRegistryProvider({
             target: baseUrl,
             alias: record.target.alias,
             location: record.target.location,
-          });
+          }, operationContext);
           if (result.ok) return result;
           lastResult = result;
         }
@@ -1574,14 +1695,14 @@ export function DeviceRegistryProvider({
           alias: record.target.alias,
           location: record.target.location,
           ignoreFirmwareMismatch: options.ignoreFirmwareMismatch,
-        });
+        }, operationContext);
       }
 
       return connectUsbSerialDevice({
         alias: record.target.alias,
         location: record.target.location,
         ignoreFirmwareMismatch: options.ignoreFirmwareMismatch,
-      });
+      }, operationContext);
     },
     [
       addDevice,
@@ -1635,7 +1756,7 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
-      invalidateDeviceReads(deviceId);
+      const operationToken = invalidateDeviceReads(deviceId);
       if (record.target.mock) {
         onProgress?.({
           phase: "connected",
@@ -1646,6 +1767,8 @@ export function DeviceRegistryProvider({
             last_error: null,
           },
         });
+        if (!currentDeviceOperation(deviceId, operationToken))
+          return staleDeviceOperationResult();
         invalidateDeviceReads(deviceId);
         setRecords((current) =>
           current.map((candidate) =>
@@ -1697,6 +1820,8 @@ export function DeviceRegistryProvider({
             message,
             network: status.network,
           });
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
           invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
@@ -1708,7 +1833,7 @@ export function DeviceRegistryProvider({
           return { ok: true, message, network: status.network };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
@@ -1735,14 +1860,24 @@ export function DeviceRegistryProvider({
           const settings = leaseId
             ? null
             : await getDevdDeviceSettings(devdBaseUrl, devdDeviceId);
-          if (leaseId)
-            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+          if (leaseId) {
+            if (
+              !(await updateDevdSerialSnapshot(
+                record.target.deviceId,
+                devdBaseUrl,
+                operationToken,
+              ))
+            )
+              return staleDeviceOperationResult();
+          }
           const message = wifiConnectedMessage(input.ssid, applyResult.network);
           onProgress?.({
             phase: applyResult.network.ipv4 ? "connected" : "ip",
             message,
             network: applyResult.network,
           });
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
           invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
@@ -1769,7 +1904,7 @@ export function DeviceRegistryProvider({
           return { ok: true, message, network: applyResult.network };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
@@ -1796,6 +1931,8 @@ export function DeviceRegistryProvider({
           message,
           network: status.network,
         });
+        if (!currentDeviceOperation(deviceId, operationToken))
+          return staleDeviceOperationResult();
         invalidateDeviceReads(deviceId);
         setRecords((current) =>
           current.map((candidate) =>
@@ -1815,7 +1952,7 @@ export function DeviceRegistryProvider({
         return { ok: true, message, network: status.network };
       } catch (error) {
         const envelope = errorFromSerialFailure(error);
-        setSerialCommandError(deviceId, envelope);
+        setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
         return { ok: false, error: envelope };
       }
     },
@@ -1836,13 +1973,15 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
-      invalidateDeviceReads(deviceId);
+      const operationToken = invalidateDeviceReads(deviceId);
       if (record.target.mock) {
         onProgress?.({
           phase: "disabled",
           message: "WiFi credentials cleared and WiFi disconnected",
           network: { state: "disabled", ipv4: null, last_error: null },
         });
+        if (!currentDeviceOperation(deviceId, operationToken))
+          return staleDeviceOperationResult();
         invalidateDeviceReads(deviceId);
         setRecords((current) =>
           current.map((candidate) =>
@@ -1882,6 +2021,8 @@ export function DeviceRegistryProvider({
           );
           const message = wifiDisabledMessage(status.network);
           onProgress?.({ phase: "disabled", message, network: status.network });
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
           invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
@@ -1893,7 +2034,7 @@ export function DeviceRegistryProvider({
           return { ok: true, message, network: status.network };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
@@ -1915,14 +2056,24 @@ export function DeviceRegistryProvider({
           const settings = leaseId
             ? null
             : await getDevdDeviceSettings(devdBaseUrl, devdDeviceId);
-          if (leaseId)
-            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+          if (leaseId) {
+            if (
+              !(await updateDevdSerialSnapshot(
+                record.target.deviceId,
+                devdBaseUrl,
+                operationToken,
+              ))
+            )
+              return staleDeviceOperationResult();
+          }
           const message = wifiDisabledMessage(applyResult.network);
           onProgress?.({
             phase: "disabled",
             message,
             network: applyResult.network,
           });
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
           invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
@@ -1946,7 +2097,7 @@ export function DeviceRegistryProvider({
           return { ok: true, message, network: applyResult.network };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
@@ -1961,6 +2112,8 @@ export function DeviceRegistryProvider({
         const status = await waitForSerialWifiDisabled(session, onProgress);
         const message = wifiDisabledMessage(status.network);
         onProgress?.({ phase: "disabled", message, network: status.network });
+        if (!currentDeviceOperation(deviceId, operationToken))
+          return staleDeviceOperationResult();
         invalidateDeviceReads(deviceId);
         setRecords((current) =>
           current.map((candidate) =>
@@ -1977,11 +2130,11 @@ export function DeviceRegistryProvider({
         return { ok: true, message, network: status.network };
       } catch (error) {
         const envelope = errorFromSerialFailure(error);
-        setSerialCommandError(deviceId, envelope);
+        setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
         return { ok: false, error: envelope };
       }
     },
-    [invalidateDeviceReads, records, setSerialCommandError],
+    [currentDeviceOperation, invalidateDeviceReads, records, setSerialCommandError],
   );
 
   const setSerialLogLevel = useCallback(
@@ -1993,7 +2146,7 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
-      invalidateDeviceReads(deviceId);
+      const operationToken = invalidateDeviceReads(deviceId);
       const selectedTransport = resolvePreferredTransport(
         record,
         serialSessions.current,
@@ -2007,6 +2160,8 @@ export function DeviceRegistryProvider({
               return getSettings(httpBaseUrl);
             },
           );
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
           invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
@@ -2023,7 +2178,7 @@ export function DeviceRegistryProvider({
           return { ok: true };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
@@ -2040,12 +2195,22 @@ export function DeviceRegistryProvider({
             level,
           );
           if (leaseId) {
-            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+            if (
+              !(await updateDevdSerialSnapshot(
+                record.target.deviceId,
+                devdBaseUrl,
+                operationToken,
+              ))
+            )
+              return staleDeviceOperationResult();
+            return { ok: true };
           } else {
             const settings = await getDevdDeviceSettings(
               devdBaseUrl,
               devdDeviceId,
             );
+            if (!currentDeviceOperation(deviceId, operationToken))
+              return staleDeviceOperationResult();
             invalidateDeviceReads(deviceId);
             setRecords((current) =>
               current.map((candidate) =>
@@ -2063,7 +2228,7 @@ export function DeviceRegistryProvider({
           }
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       } else if (!record.target.mock) {
@@ -2073,10 +2238,12 @@ export function DeviceRegistryProvider({
           await session.setLogLevel(level);
         } catch (error) {
           const envelope = errorFromSerialFailure(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
+      if (!currentDeviceOperation(deviceId, operationToken))
+        return staleDeviceOperationResult();
       invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((candidate) =>
@@ -2092,7 +2259,7 @@ export function DeviceRegistryProvider({
       );
       return { ok: true };
     },
-    [invalidateDeviceReads, records, setSerialCommandError],
+    [currentDeviceOperation, invalidateDeviceReads, records, setSerialCommandError],
   );
 
   const setManualChargePrefs = useCallback(
@@ -2104,7 +2271,7 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
-      invalidateDeviceReads(deviceId);
+      const operationToken = invalidateDeviceReads(deviceId);
       const selectedTransport = resolvePreferredTransport(
         record,
         serialSessions.current,
@@ -2118,6 +2285,8 @@ export function DeviceRegistryProvider({
               return getSettings(httpBaseUrl);
             },
           );
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
           invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
@@ -2134,7 +2303,7 @@ export function DeviceRegistryProvider({
           return { ok: true };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
@@ -2151,12 +2320,21 @@ export function DeviceRegistryProvider({
             prefs,
           );
           if (leaseId) {
-            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+            if (
+              !(await updateDevdSerialSnapshot(
+                record.target.deviceId,
+                devdBaseUrl,
+                operationToken,
+              ))
+            )
+              return staleDeviceOperationResult();
           } else {
             const settings = await getDevdDeviceSettings(
               devdBaseUrl,
               devdDeviceId,
             );
+            if (!currentDeviceOperation(deviceId, operationToken))
+              return staleDeviceOperationResult();
             invalidateDeviceReads(deviceId);
             setRecords((current) =>
               current.map((candidate) =>
@@ -2174,7 +2352,7 @@ export function DeviceRegistryProvider({
           }
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       } else if (!record.target.mock) {
@@ -2184,10 +2362,12 @@ export function DeviceRegistryProvider({
           await session.setManualChargePrefs(prefs);
         } catch (error) {
           const envelope = errorFromSerialFailure(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
+      if (!currentDeviceOperation(deviceId, operationToken))
+        return staleDeviceOperationResult();
       invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((candidate) =>
@@ -2203,7 +2383,7 @@ export function DeviceRegistryProvider({
       );
       return { ok: true };
     },
-    [invalidateDeviceReads, records, setSerialCommandError],
+    [currentDeviceOperation, invalidateDeviceReads, records, setSerialCommandError],
   );
 
   const refreshChargeControlDetail = useCallback(
@@ -2416,6 +2596,8 @@ export function DeviceRegistryProvider({
         } catch (error) {
           const envelope = toErrorEnvelope(error);
           const detail = chargeControlDetailFromErrorDetails(envelope.details);
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
           if (detail) {
             setRecords((current) =>
               current.map((candidate) =>
@@ -2465,6 +2647,8 @@ export function DeviceRegistryProvider({
         } catch (error) {
           const envelope = toErrorEnvelope(error);
           const detail = chargeControlDetailFromErrorDetails(envelope.details);
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
           if (detail) {
             setRecords((current) =>
               current.map((candidate) =>
@@ -2507,6 +2691,8 @@ export function DeviceRegistryProvider({
         } catch (error) {
           const envelope = errorFromSerialFailure(error);
           const detail = chargeControlDetailFromErrorDetails(envelope.details);
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
           if (detail) {
             setRecords((current) =>
               current.map((candidate) =>
@@ -2609,7 +2795,14 @@ export function DeviceRegistryProvider({
             advancedPower,
           );
           if (leaseId) {
-            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+            if (
+              !(await updateDevdSerialSnapshot(
+                record.target.deviceId,
+                devdBaseUrl,
+                operationToken,
+              ))
+            )
+              return staleDeviceOperationResult();
             return { ok: true };
           } else {
             const settings = await getDevdDeviceSettings(
@@ -2745,13 +2938,22 @@ export function DeviceRegistryProvider({
             leaseId,
           );
           if (leaseId) {
-            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+            if (
+              !(await updateDevdSerialSnapshot(
+                record.target.deviceId,
+                devdBaseUrl,
+                operationToken,
+              ))
+            )
+              return staleDeviceOperationResult();
             return { ok: true };
           } else {
             const settings = await getDevdDeviceSettings(
               devdBaseUrl,
               devdDeviceId,
             );
+            if (!currentDeviceOperation(deviceId, operationToken))
+              return staleDeviceOperationResult();
             invalidateDeviceReads(deviceId);
             setRecords((current) =>
               current.map((candidate) =>
@@ -2769,7 +2971,7 @@ export function DeviceRegistryProvider({
           }
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       } else if (!record.target.mock) {
@@ -2821,7 +3023,7 @@ export function DeviceRegistryProvider({
       );
       return { ok: true };
     },
-    [invalidateDeviceReads, records, setSerialCommandError],
+    [currentDeviceOperation, invalidateDeviceReads, records, setSerialCommandError],
   );
 
   function handleSerialFrame(frame: SerialFrame, deviceId: string | null) {
@@ -2931,7 +3133,16 @@ export function DeviceRegistryProvider({
     );
   }
 
-  async function updateDevdSerialSnapshot(deviceId: string, baseUrl: string) {
+  async function updateDevdSerialSnapshot(
+    deviceId: string,
+    baseUrl: string,
+    operationToken?: number,
+  ): Promise<boolean> {
+    if (
+      operationToken !== undefined &&
+      !currentDeviceOperation(deviceId, operationToken)
+    )
+      return false;
     const record = records.find(
       (candidate) => candidate.target.deviceId === deviceId,
     );
@@ -2941,6 +3152,11 @@ export function DeviceRegistryProvider({
       ...DEVD_SERIAL_SESSION_LIMITS,
       leaseId,
     });
+    if (
+      operationToken !== undefined &&
+      !currentDeviceOperation(deviceId, operationToken)
+    )
+      return false;
     setRecords((current) =>
       current.map((record) =>
         record.target.deviceId === deviceId &&
@@ -2957,6 +3173,7 @@ export function DeviceRegistryProvider({
           : record,
       ),
     );
+    return true;
   }
 
   function startDevdLeaseHeartbeat(record: DeviceRecord) {
@@ -3586,6 +3803,18 @@ function liveStatusErrorState(
 }
 
 function staleDeviceOperationResult(): CommandResult {
+  return {
+    ok: false,
+    error: {
+      code: "device_operation_superseded",
+      message: "The device connection changed before the operation completed",
+      retryable: true,
+      details: null,
+    },
+  };
+}
+
+function staleAddDeviceResult(): AddDeviceResult {
   return {
     ok: false,
     error: {
