@@ -114,7 +114,6 @@ PR: include
 Web Alerts 移动端（`393x852`，当前设备上下文包含连接态与当前页）。
 ![Web Alerts mobile](./assets/web-alerts-mobile.png)
 
-PR: include
 Fleet 页面持续显示 fleet 告警指标；单设备 Alerts 页面显示当前设备告警，不重复 Fleet Summary 或完整 Device Overview。
 
 ## Related ADRs

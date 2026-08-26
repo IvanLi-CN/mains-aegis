@@ -251,7 +251,7 @@ PR: none
   scenario: advanced power settings editor
   evidence_note: 验证 Settings 页展示与设备 capabilities 同构的 Advanced Power 编辑器，显示 `rated_vout_mv` 基线、11 个偏移/阈值/时间窗字段的语义、范围/步进/默认值，以及 Apply/Reset 动作。
 
-![Advanced Power settings evidence](./images/advanced-power-settings-storybook.png)
+![Advanced Power settings evidence](./assets/advanced-power-settings-storybook.png)
 
 - source_type: mock_ui
   demo_entry_or_title: `/devices/mains-aegis-a1b2c3/battery?demo=true`
