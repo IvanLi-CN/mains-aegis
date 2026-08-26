@@ -6,6 +6,7 @@ import {
   loadUsbProbeSettings,
   recoverReadRecord,
   resolveManualHttpChannelPersistence,
+  sameDeviceRuntime,
 } from "./DeviceRegistry";
 import type { DeviceRecord } from "../api/types";
 
@@ -276,6 +277,67 @@ describe("canApplyDeviceRead", () => {
     expect(canApplyDeviceRead(record, request, 3)).toBe(false);
     expect(
       canApplyDeviceRead(record, { ...request, transport: "devd" }, 2),
+    ).toBe(false);
+  });
+});
+
+describe("sameDeviceRuntime", () => {
+  const baseRecord: DeviceRecord = {
+    target: {
+      deviceId: "mains-aegis-a1b2c3",
+      baseUrl: "http://mains-aegis-a1b2c3.local",
+      alias: "Bench A",
+      location: "Lab",
+      addedAt: "2026-06-07T00:00:00.000Z",
+      transport: "http",
+    },
+    identity: null,
+    network: null,
+    settings: null,
+    status: null,
+    connectionState: "online",
+    streamState: "idle",
+    error: null,
+    lastUpdated: "2026-06-07T00:00:00.000Z",
+  };
+
+  test("rejects a successor record before its stream effect installs", () => {
+    expect(
+      sameDeviceRuntime(
+        { ...baseRecord, runtimeId: "successor" },
+        { ...baseRecord, runtimeId: "previous" },
+      ),
+    ).toBe(false);
+  });
+
+  test("accepts the same runtime after state-only updates", () => {
+    expect(
+      sameDeviceRuntime(
+        { ...baseRecord, runtimeId: "runtime-1", connectionState: "offline" },
+        { ...baseRecord, runtimeId: "runtime-1" },
+      ),
+    ).toBe(true);
+  });
+
+  test("matches legacy devd records by lease identity", () => {
+    const previous: DeviceRecord = {
+      ...baseRecord,
+      target: { ...baseRecord.target, transport: "devd" },
+      serial: {
+        connected: true,
+        source: "devd",
+        baseUrl: "http://127.0.0.1:8765",
+        leaseId: "lease-1",
+        protocol: "mains-aegis.cdc.v1",
+        logs: [],
+        trace: [],
+      },
+    };
+    expect(
+      sameDeviceRuntime(
+        { ...previous, serial: { ...previous.serial!, leaseId: "lease-2" } },
+        previous,
+      ),
     ).toBe(false);
   });
 });

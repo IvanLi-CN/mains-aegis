@@ -388,6 +388,7 @@ export type AdvancedPowerSettings = DeviceSettings["advanced_power"];
 export type AdvancedPowerCapabilities = DeviceSettings["advanced_power_capabilities"];
 
 export type DeviceRecord = {
+  runtimeId?: string;
   target: DeviceTarget;
   identity: Identity | null;
   network: NetworkSummary | null;
