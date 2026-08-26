@@ -226,7 +226,15 @@ export function DeviceRegistryProvider({
   );
 
   const setSerialCommandError = useCallback(
-    (deviceId: string, error: DeviceRecord["error"]) => {
+    (
+      deviceId: string,
+      error: DeviceRecord["error"],
+      operation: "command" | "read" = "command",
+    ) => {
+      if (operation === "read") {
+        setRecordError(deviceId, error);
+        return;
+      }
       if (!serialSessions.current.has(deviceId)) {
         let handledByDevd = false;
         setRecords((current) =>
@@ -2032,7 +2040,7 @@ export function DeviceRegistryProvider({
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "read");
           return {
             ok: false,
             error: envelope,
@@ -2064,7 +2072,7 @@ export function DeviceRegistryProvider({
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "read");
           return {
             ok: false,
             error: envelope,
@@ -2091,7 +2099,7 @@ export function DeviceRegistryProvider({
         return { ok: true, detail };
       } catch (error) {
         const envelope = errorFromSerialFailure(error);
-        setSerialCommandError(deviceId, envelope);
+        setSerialCommandError(deviceId, envelope, "read");
         return {
           ok: false,
           error: envelope,
