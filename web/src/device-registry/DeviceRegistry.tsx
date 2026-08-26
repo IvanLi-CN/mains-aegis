@@ -559,6 +559,7 @@ export function DeviceRegistryProvider({
             settings,
             traceSession,
           );
+          invalidateDeviceReads(deviceId);
           setRecords((current) => upsertRecord(current, record));
           return;
         }
@@ -585,6 +586,7 @@ export function DeviceRegistryProvider({
             return { nextTarget, result };
           },
         );
+        invalidateDeviceReads(deviceId);
         setRecords((current) => {
           const previous = current.find(
             (record) => record.target.deviceId === deviceId,
@@ -617,6 +619,8 @@ export function DeviceRegistryProvider({
                   connectionState: envelope.retryable ? "offline" : "error",
                   streamState: "polling",
                   error: envelope,
+                  errorSource: "transport",
+                  commandError: record.commandError,
                   lastUpdated: new Date().toISOString(),
                 }
               : record,
@@ -676,7 +680,7 @@ export function DeviceRegistryProvider({
                     ...candidate,
                     streamState: "streaming",
                     connectionState: "online",
-                    error: null,
+                    ...liveStatusErrorState(candidate),
                     lastUpdated: new Date().toISOString(),
                   }
                 : candidate,
@@ -747,7 +751,7 @@ export function DeviceRegistryProvider({
                       status,
                       connectionState: "online",
                       streamState: "streaming",
-                      error: null,
+                      ...liveStatusErrorState(candidate),
                       lastUpdated: new Date().toISOString(),
                     }
                   : candidate,
@@ -789,7 +793,7 @@ export function DeviceRegistryProvider({
                           status,
                           connectionState: "online",
                           streamState: "polling",
-                          error: null,
+                          ...liveStatusErrorState(candidate),
                           lastUpdated: new Date().toISOString(),
                         }
                       : candidate,
@@ -808,6 +812,8 @@ export function DeviceRegistryProvider({
                             : "error",
                           streamState: "error",
                           error: envelope,
+                          errorSource: "transport",
+                          commandError: candidate.commandError,
                           lastUpdated: new Date().toISOString(),
                         }
                       : candidate,
@@ -996,6 +1002,7 @@ export function DeviceRegistryProvider({
             "online",
             result.identity.capabilities.sse ? "idle" : "polling",
           );
+          invalidateDeviceReads(result.identity.device_id);
           setRecords((current) => upsertRecord(current, record));
           return { ok: true, record };
         }
@@ -1097,6 +1104,7 @@ export function DeviceRegistryProvider({
         }
         const logicalDeviceId =
           updated.binding?.logical_device_id ?? result.identity.device_id;
+        invalidateDeviceReads(logicalDeviceId);
         const target: DeviceTarget = {
           deviceId: logicalDeviceId,
           baseUrl: successfulBaseUrl,
@@ -1582,6 +1590,7 @@ export function DeviceRegistryProvider({
             last_error: null,
           },
         });
+        invalidateDeviceReads(deviceId);
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
@@ -1632,6 +1641,7 @@ export function DeviceRegistryProvider({
             message,
             network: status.network,
           });
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1677,6 +1687,7 @@ export function DeviceRegistryProvider({
             message,
             network: applyResult.network,
           });
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1729,6 +1740,7 @@ export function DeviceRegistryProvider({
           message,
           network: status.network,
         });
+        invalidateDeviceReads(deviceId);
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
@@ -1770,6 +1782,7 @@ export function DeviceRegistryProvider({
           message: "WiFi credentials cleared and WiFi disconnected",
           network: { state: "disabled", ipv4: null, last_error: null },
         });
+        invalidateDeviceReads(deviceId);
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
@@ -1808,6 +1821,7 @@ export function DeviceRegistryProvider({
           );
           const message = wifiDisabledMessage(status.network);
           onProgress?.({ phase: "disabled", message, network: status.network });
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1848,6 +1862,7 @@ export function DeviceRegistryProvider({
             message,
             network: applyResult.network,
           });
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1885,6 +1900,7 @@ export function DeviceRegistryProvider({
         const status = await waitForSerialWifiDisabled(session, onProgress);
         const message = wifiDisabledMessage(status.network);
         onProgress?.({ phase: "disabled", message, network: status.network });
+        invalidateDeviceReads(deviceId);
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
@@ -1930,6 +1946,7 @@ export function DeviceRegistryProvider({
               return getSettings(httpBaseUrl);
             },
           );
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1968,6 +1985,7 @@ export function DeviceRegistryProvider({
               devdBaseUrl,
               devdDeviceId,
             );
+            invalidateDeviceReads(deviceId);
             setRecords((current) =>
               current.map((candidate) =>
                 candidate.target.deviceId === deviceId
@@ -1998,6 +2016,7 @@ export function DeviceRegistryProvider({
           return { ok: false, error: envelope };
         }
       }
+      invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
@@ -2038,6 +2057,7 @@ export function DeviceRegistryProvider({
               return getSettings(httpBaseUrl);
             },
           );
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2076,6 +2096,7 @@ export function DeviceRegistryProvider({
               devdBaseUrl,
               devdDeviceId,
             );
+            invalidateDeviceReads(deviceId);
             setRecords((current) =>
               current.map((candidate) =>
                 candidate.target.deviceId === deviceId
@@ -2106,6 +2127,7 @@ export function DeviceRegistryProvider({
           return { ok: false, error: envelope };
         }
       }
+      invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
@@ -2314,6 +2336,7 @@ export function DeviceRegistryProvider({
             record,
             (httpBaseUrl) => setDeviceManualChargeControl(httpBaseUrl, input),
           );
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2360,6 +2383,7 @@ export function DeviceRegistryProvider({
             leaseId,
             input,
           );
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2399,6 +2423,7 @@ export function DeviceRegistryProvider({
         if (!session) return serialCommandUnavailable();
         try {
           const detail = await session.controlManualCharge(input);
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2434,6 +2459,7 @@ export function DeviceRegistryProvider({
         }
       }
       const detail = await getDeviceChargeControl(record.target.baseUrl);
+      invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
@@ -2474,6 +2500,7 @@ export function DeviceRegistryProvider({
               return getSettings(httpBaseUrl);
             },
           );
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2513,6 +2540,7 @@ export function DeviceRegistryProvider({
               devdBaseUrl,
               devdDeviceId,
             );
+            invalidateDeviceReads(deviceId);
             setRecords((current) =>
               current.map((candidate) =>
                 candidate.target.deviceId === deviceId
@@ -2538,6 +2566,7 @@ export function DeviceRegistryProvider({
         try {
           await session.setAdvancedPower(advancedPower);
           const settings = await session.requestSettings();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2557,6 +2586,7 @@ export function DeviceRegistryProvider({
           return { ok: false, error: envelope };
         }
       }
+      invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
@@ -2594,6 +2624,7 @@ export function DeviceRegistryProvider({
               return getSettings(httpBaseUrl);
             },
           );
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2632,6 +2663,7 @@ export function DeviceRegistryProvider({
               devdBaseUrl,
               devdDeviceId,
             );
+            invalidateDeviceReads(deviceId);
             setRecords((current) =>
               current.map((candidate) =>
                 candidate.target.deviceId === deviceId
@@ -2657,6 +2689,7 @@ export function DeviceRegistryProvider({
         try {
           await session.resetAdvancedPower();
           const settings = await session.requestSettings();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2676,6 +2709,7 @@ export function DeviceRegistryProvider({
           return { ok: false, error: envelope };
         }
       }
+      invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
@@ -2732,13 +2766,13 @@ export function DeviceRegistryProvider({
     setRecords((current) =>
       current.map((record) =>
         record.target.deviceId === deviceId && record.serial?.connected
-          ? {
-              ...record,
-              status: frame.status,
-              connectionState: "online",
-              streamState: "streaming",
-              error: null,
-              lastUpdated: new Date().toISOString(),
+              ? {
+                  ...record,
+                  status: frame.status,
+                  connectionState: "online",
+                  streamState: "streaming",
+                  ...liveStatusErrorState(record),
+                  lastUpdated: new Date().toISOString(),
             }
           : record,
       ),
@@ -2796,7 +2830,7 @@ export function DeviceRegistryProvider({
                 : record.network,
               connectionState: "online",
               streamState: "streaming",
-              error: null,
+              ...liveStatusErrorState(record),
               lastUpdated: new Date().toISOString(),
             }
           : record,
@@ -2873,6 +2907,8 @@ export function DeviceRegistryProvider({
                     ...candidate,
                     streamState: "error",
                     error: envelope,
+                    errorSource: "transport",
+                    commandError: candidate.commandError,
                     lastUpdated: new Date().toISOString(),
                   }
                 : candidate,
@@ -3243,6 +3279,13 @@ function mergeDevdSerial(
   session: DevdSerialSession,
   lease?: DevdLeaseSnapshot,
 ): DeviceRecord {
+  const liveError = session.connected
+    ? liveStatusErrorState(record)
+    : {
+        error: record.error,
+        errorSource: record.errorSource,
+        commandError: record.commandError,
+      };
   return {
     ...record,
     target: {
@@ -3263,7 +3306,7 @@ function mergeDevdSerial(
       serialProtocol: session.protocol,
     },
     connectionState: session.connected ? "online" : record.connectionState,
-    error: session.connected ? null : record.error,
+    ...liveError,
     lastUpdated: new Date().toISOString(),
     status: session.status ?? record.status,
     settings: session.settings,
@@ -3388,12 +3431,55 @@ function mergeDeviceRecord(
       existing.streamState === "streaming"
         ? "streaming"
         : incoming.streamState,
-    error: incoming.error ?? existing.error,
+    error: mergedRecordError(existing, incoming),
+    errorSource: mergedRecordErrorSource(existing, incoming),
     commandError:
       incoming.commandError !== undefined
         ? incoming.commandError
         : existing.commandError,
     lastUpdated: incoming.lastUpdated ?? existing.lastUpdated,
+  };
+}
+
+function mergedRecordError(
+  existing: DeviceRecord,
+  incoming: DeviceRecord,
+): DeviceRecord["error"] {
+  if (incoming.error !== null) return incoming.error;
+  if (existing.errorSource === "command") return existing.error;
+  return incoming.commandError ?? null;
+}
+
+function mergedRecordErrorSource(
+  existing: DeviceRecord,
+  incoming: DeviceRecord,
+): DeviceRecord["errorSource"] {
+  if (incoming.error !== null) return incoming.errorSource;
+  if (existing.errorSource === "command" && existing.error) return "command";
+  return incoming.commandError ? "command" : undefined;
+}
+
+function liveStatusErrorState(
+  record: DeviceRecord,
+): Pick<DeviceRecord, "error" | "errorSource" | "commandError"> {
+  if (record.errorSource === "command" || record.errorSource === "read") {
+    return {
+      error: record.error,
+      errorSource: record.errorSource,
+      commandError: record.commandError,
+    };
+  }
+  if (record.error && record.errorSource !== "transport") {
+    return {
+      error: record.error,
+      errorSource: record.errorSource,
+      commandError: record.commandError,
+    };
+  }
+  return {
+    error: record.commandError ?? null,
+    errorSource: record.commandError ? "command" : undefined,
+    commandError: record.commandError,
   };
 }
 
@@ -3850,6 +3936,18 @@ function patchSerialStatusRecord(
     status: nextStatus,
     chargeControlDetail:
       patch.chargeControlDetail ?? record.chargeControlDetail ?? null,
+    connectionState: clearError ? "online" : record.connectionState,
+    streamState: clearError
+      ? record.serial?.source === "web_serial"
+        ? "streaming"
+        : record.serial?.source === "devd"
+          ? "polling"
+          : record.streamState === "streaming"
+            ? "streaming"
+            : record.identity?.capabilities.sse
+              ? "idle"
+              : "polling"
+      : record.streamState,
     error: clearError ? null : record.error,
     errorSource: clearError ? undefined : record.errorSource,
     commandError: clearError ? undefined : record.commandError,

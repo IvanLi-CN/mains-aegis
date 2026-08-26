@@ -468,6 +468,8 @@ export function App({
             className="icon-button"
             type="button"
             aria-label={navOpen ? "Close navigation" : "Open navigation"}
+            aria-expanded={navOpen}
+            aria-controls="sidebar-navigation"
             onClick={() => setNavOpen((open) => !open)}
           >
             {navOpen ? <X size={18} /> : <Menu size={18} />}
@@ -483,7 +485,7 @@ export function App({
           aria-label="Close navigation"
           onClick={() => setNavOpen(false)}
         />
-        <div className="sidebar-panel">
+        <div id="sidebar-navigation" className="sidebar-panel">
           <div className={`brand ${demoMode ? "is-demo" : ""}`}>
             {demoMode ? (
               <DemoControlPanel

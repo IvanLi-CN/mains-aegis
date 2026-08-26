@@ -5061,10 +5061,14 @@ a {
     padding: 16px 12px;
     transform: translateX(-104%);
     transition: transform 180ms ease-out;
+    visibility: hidden;
+    pointer-events: none;
   }
 
   .sidebar.is-open .sidebar-panel {
     transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
   }
 
   .topbar,
