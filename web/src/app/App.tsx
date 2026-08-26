@@ -258,6 +258,44 @@ const deviceSections = [
   { id: "api", label: "API", icon: Cable },
 ] as const;
 
+function deviceSectionLabel(section: Route["section"]): string {
+  return deviceSections.find((item) => item.id === section)?.label ?? "Overview";
+}
+
+export type PagePresentation = {
+  scope: "fleet" | "connect" | "device";
+  title: string;
+  showFleetSummary: boolean;
+  showDeviceOverview: boolean;
+};
+
+export function resolvePagePresentation(
+  section: Route["section"],
+): PagePresentation {
+  if (section === "fleet") {
+    return {
+      scope: "fleet",
+      title: "UPS Fleet",
+      showFleetSummary: true,
+      showDeviceOverview: false,
+    };
+  }
+  if (section === "connect") {
+    return {
+      scope: "connect",
+      title: "Add device",
+      showFleetSummary: false,
+      showDeviceOverview: false,
+    };
+  }
+  return {
+    scope: "device",
+    title: deviceSectionLabel(section),
+    showFleetSummary: false,
+    showDeviceOverview: section === "overview",
+  };
+}
+
 const appBasePath = normalizeBasePath(
   import.meta.env.BASE_URL,
   runtimePathname(),
@@ -385,6 +423,16 @@ export function App({
     void registry.refreshDevice(route.deviceId);
   }, [registry, route.deviceId, selected]);
 
+  const pagePresentation = resolvePagePresentation(route.section);
+  const mobileNavContext =
+    pagePresentation.scope === "connect"
+      ? pagePresentation.title
+      : pagePresentation.scope === "fleet"
+        ? "Fleet"
+        : selected
+          ? `${selected.target.alias} / ${pagePresentation.title}`
+          : "Device";
+
   return (
     <div className="app-shell">
       <aside className={`sidebar ${navOpen ? "is-open" : ""}`}>
@@ -399,11 +447,7 @@ export function App({
           </button>
           <div className="mobile-nav-title">
             <strong>Mains Aegis</strong>
-            <span>
-              {route.section === "connect"
-                ? "Add device"
-                : (selected?.target.alias ?? "Fleet")}
-            </span>
+            <span title={mobileNavContext}>{mobileNavContext}</span>
           </div>
         </div>
         <button
@@ -468,11 +512,12 @@ export function App({
       <main
         className={`main-surface ${route.section === "connect" ? "connect-adapt-command" : ""}`}
       >
-        <TopBar
-          records={fleetRecords}
-          selected={selected}
-          activeAlertsByDevice={fleetAlerts.snapshots}
-        />
+        {pagePresentation.showFleetSummary ? (
+          <FleetHeader
+            records={fleetRecords}
+            activeAlertsByDevice={fleetAlerts.snapshots}
+          />
+        ) : null}
         {renderRoute(
           route,
           fleetEntries,
@@ -518,26 +563,66 @@ function renderRoute(
   }
   if (!selected) return <MissingDevice />;
 
+  const pagePresentation = resolvePagePresentation(route.section);
+
+  let content: ReactNode;
   switch (route.section) {
     case "alerts":
-      return <AlertsPage record={selected} state={activeAlerts!} />;
+      content = <AlertsPage record={selected} state={activeAlerts!} />;
+      break;
     case "power":
-      return <PowerPage record={selected} />;
+      content = <PowerPage record={selected} />;
+      break;
     case "battery":
-      return <BatteryPage record={selected} />;
+      content = <BatteryPage record={selected} />;
+      break;
     case "thermal":
-      return <ThermalPage record={selected} />;
+      content = <ThermalPage record={selected} />;
+      break;
     case "device":
-      return <DeviceInfoPage record={selected} />;
+      content = <DeviceInfoPage record={selected} />;
+      break;
     case "firmware":
-      return <FirmwarePageView record={selected} />;
+      content = <FirmwarePageView record={selected} />;
+      break;
     case "settings":
-      return <SettingsPage record={selected} />;
+      content = <SettingsPage record={selected} />;
+      break;
     case "api":
-      return <ApiDebugPage record={selected} />;
+      content = <ApiDebugPage record={selected} />;
+      break;
     default:
-      return <DeviceOverviewPage record={selected} />;
+      content = <DeviceOverviewPage record={selected} />;
   }
+
+  return (
+    <DevicePageFrame presentation={pagePresentation} record={selected}>
+      {content}
+    </DevicePageFrame>
+  );
+}
+
+function DevicePageFrame({
+  presentation,
+  record,
+  children,
+}: {
+  presentation: PagePresentation;
+  record: DeviceRecord;
+  children: ReactNode;
+}) {
+  return (
+    <div className="device-page-frame" data-evidence-target="device-page">
+      <header className="page-header" data-evidence-target="device-page-header">
+        <div>
+          <div className="eyebrow">{record.target.alias}</div>
+          <h1>{presentation.title}</h1>
+        </div>
+      </header>
+      {presentation.showDeviceOverview ? <DeviceStatusBand record={record} /> : null}
+      {children}
+    </div>
+  );
 }
 
 function useRoute(initialPath?: string): Route {
@@ -1154,13 +1239,11 @@ function ExternalNavLink({
   );
 }
 
-function TopBar({
+function FleetHeader({
   records,
-  selected,
   activeAlertsByDevice,
 }: {
   records: DeviceRecord[];
-  selected: DeviceRecord | null;
   activeAlertsByDevice: Record<string, ActiveAlertsSnapshot>;
 }) {
   const counts = useMemo(() => {
@@ -1178,8 +1261,6 @@ function TopBar({
     };
   }, [activeAlertsByDevice, records]);
 
-  const title = selected ? selected.target.alias : "UPS Fleet";
-  const eyebrow = selected ? selected.target.location : "Fleet";
   const alertTargetDeviceId = (severity: "critical" | "warning") =>
     records.find(
       (record) =>
@@ -1190,10 +1271,10 @@ function TopBar({
   const warningTarget = alertTargetDeviceId("warning");
 
   return (
-    <header className="topbar">
+    <header className="topbar fleet-header" data-evidence-target="fleet-summary">
       <div>
-        <div className="eyebrow">{eyebrow}</div>
-        <h1>{title}</h1>
+        <div className="eyebrow">Fleet</div>
+        <h1>UPS Fleet</h1>
       </div>
       <div className="topbar-metrics">
         <Metric label="Total" value={counts.total} />
@@ -2424,7 +2505,7 @@ function ConnectPage({
   return (
     <section className="page-flow connect-wide">
       <div className="section-heading">
-        <h2>Add device</h2>
+        <h1>Add device</h1>
         <p>
           {devdDiscoveryOnly
             ? "Use this page to add hardware from current mains-aegis-devd device records. USB devices attach through devd, while LAN devices connect directly to the hardware HTTP API."
@@ -3552,7 +3633,6 @@ function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
   const status = record.status;
   return (
     <section className="page-flow" data-evidence-target="device-overview">
-      <DeviceStatusBand record={record} />
       <div className="detail-grid">
         <InfoPanel title="Input" icon={PlugZap}>
           <MetricLine
@@ -3939,7 +4019,6 @@ function AlertsPage({
   const alerts = snapshot?.alerts ?? [];
   return (
     <section className="page-flow alerts-page" data-evidence-target="device-alerts">
-      <DeviceStatusBand record={record} />
       <section className="info-panel alerts-panel">
         <div className="alerts-heading">
           <div>
@@ -4424,7 +4503,6 @@ function PowerPage({ record }: { record: DeviceRecord }) {
 
   return (
     <section className="page-flow">
-      <DeviceStatusBand record={record} />
       <section className="power-domain-section" data-evidence-target="power-charging">
         <div className="power-domain-header">
           <span className="power-domain-icon">
@@ -5197,7 +5275,6 @@ function BatteryPage({ record }: { record: DeviceRecord }) {
   const cellModel = buildCellBalanceModel(cells, battery);
   return (
     <section className="page-flow">
-      <DeviceStatusBand record={record} />
       <div className="detail-grid">
         <InfoPanel title="Pack status" icon={BatteryCharging}>
           <MetricLine label="State" value={battery?.state ?? "--"} />
@@ -5387,7 +5464,6 @@ function ThermalPage({ record }: { record: DeviceRecord }) {
   const thermal = record.status?.thermal;
   return (
     <section className="page-flow">
-      <DeviceStatusBand record={record} />
       <div className="detail-grid">
         <InfoPanel title="TMP A" icon={Thermometer}>
           <MetricLine label="State" value={thermal?.tmp_a_state ?? "--"} />
@@ -5424,7 +5500,6 @@ function DeviceInfoPage({ record }: { record: DeviceRecord }) {
   const hardwareCapability = resolveUpsHardwareCapability(record);
   return (
     <section className="page-flow">
-      <DeviceStatusBand record={record} />
       <div className="detail-grid">
         <InfoPanel title="Identity" icon={Server}>
           <MetricLine
@@ -5839,7 +5914,6 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   if (!settingsReady) {
     return (
       <section className="page-flow">
-        <DeviceStatusBand record={record} />
         <section className="empty-state">
           <SlidersHorizontal size={28} />
           <h2>Settings unavailable</h2>
@@ -5862,7 +5936,6 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
 
   return (
     <section className="page-flow" data-evidence-target="wifi-settings">
-      <DeviceStatusBand record={record} />
       <div className="settings-layout settings-layout-advanced">
         <section className="info-panel settings-panel">
           <header>
@@ -6245,7 +6318,6 @@ function ApiDebugPage({ record }: { record: DeviceRecord }) {
   };
   return (
     <section className="page-flow">
-      <DeviceStatusBand record={record} />
       <div className="api-layout">
         <InfoPanel title="Endpoints" icon={Cable}>
           <MetricLine label="Ping" value="/api/v1/ping" />

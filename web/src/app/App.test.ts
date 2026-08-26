@@ -23,6 +23,7 @@ import {
   resolveDevdTarget,
   resolveOwnerFacingDevdTarget,
   resolveStartupDevdTarget,
+  resolvePagePresentation,
 } from "./App";
 import {
   resolveSpaFallbackInitialPath,
@@ -115,10 +116,12 @@ describe("active alert presentation", () => {
     ).toBe(1);
   });
 
-  test("keeps global alerts inside the existing topbar metrics", () => {
+  test("keeps fleet alert metrics inside the Fleet header", () => {
     const source = readFileSync(join(import.meta.dir, "App.tsx"), "utf8");
     expect(source).not.toContain("PersistentFleetAlertStatus");
     expect(source).not.toContain("persistent-alert-banner");
+    expect(source).toContain("function FleetHeader");
+    expect(source).toContain("pagePresentation.showFleetSummary ?");
     expect(source).toContain("activeAlertsByDevice={fleetAlerts.snapshots}");
     expect(source).toContain('const criticalTarget = alertTargetDeviceId("critical")');
     expect(source).toContain('const warningTarget = alertTargetDeviceId("warning")');
@@ -133,6 +136,52 @@ describe("active alert presentation", () => {
     expect(source).toContain("refreshGeneration.current += 1;");
     expect(source).toContain("refreshInFlight.current = null;");
     expect(source).toContain("[recordKey, refresh]");
+  });
+});
+
+describe("page presentation ownership", () => {
+  test("assigns summaries and titles to their owning routes", () => {
+    expect(resolvePagePresentation("fleet")).toEqual({
+      scope: "fleet",
+      title: "UPS Fleet",
+      showFleetSummary: true,
+      showDeviceOverview: false,
+    });
+    expect(resolvePagePresentation("connect")).toEqual({
+      scope: "connect",
+      title: "Add device",
+      showFleetSummary: false,
+      showDeviceOverview: false,
+    });
+
+    for (const [section, title] of [
+      ["overview", "Overview"],
+      ["alerts", "Alerts"],
+      ["power", "Power"],
+      ["battery", "Battery"],
+      ["thermal", "Thermal"],
+      ["device", "Device"],
+      ["firmware", "Firmware"],
+      ["settings", "Settings"],
+      ["api", "API"],
+    ] as const) {
+      const presentation = resolvePagePresentation(section);
+      expect(presentation.scope).toBe("device");
+      expect(presentation.title).toBe(title);
+      expect(presentation.showFleetSummary).toBe(false);
+      expect(presentation.showDeviceOverview).toBe(section === "overview");
+    }
+  });
+
+  test("keeps global notification UI out of the shared shell", () => {
+    const source = readFileSync(join(import.meta.dir, "App.tsx"), "utf8");
+    expect(source).not.toContain("PersistentFleetAlertStatus");
+    expect(source).not.toContain("global-alert");
+    expect(source).toContain('data-evidence-target="fleet-summary"');
+    expect(source).toContain('data-evidence-target="device-page-header"');
+    expect(source).toContain(
+      "presentation.showDeviceOverview ? <DeviceStatusBand record={record} /> : null",
+    );
   });
 });
 

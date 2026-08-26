@@ -15,6 +15,7 @@
 - 主固件默认启用 `web_serial + net_http`，使用 ESP32-S3 USB Serial/JTAG CDC 通道读取 JSONL 命令，返回 identity/status/ack/error/log frame，并在 `get_status` 上生成 `status` / `output` / `charger` / `battery` / `network` 结构化日志；WiFi config 写入 EEPROM `0x0160` 起始的 4 个 32B block，`set` 后运行时立即连接，`clear` 后清空 EEPROM slot，并让 WiFi task 以 250ms 周期观察配置 generation，立即标记 `network.state=disabled` 后执行 disconnect/stop。
 - `mock:` 设备用于稳定开发预览和视觉证据，不发真实网络请求。
 - 管理端页面已覆盖 Fleet、Connect、Overview、Power、Battery、Thermal、Device、Settings、API。
+- 页面级信息归属已收口：Fleet Header 只在 Fleet 渲染；Connect 和每条单设备路由拥有内容区 `h1`；完整 `DeviceStatusBand` 只在 Overview 出现，移动导航仅显示紧凑的设备/路由上下文。
 - 管理端新增 `/devices/:device_id/firmware`，支持 Web Serial 直烧与 devd 代理烧录，并展示 catalog 去重来源、确认区、阶段进度和终态摘要。
 - Firmware 抽屉在烧录运行中会拦截页面刷新/关闭，禁用抽屉关闭、确认框与重复烧录入口；Web Serial 烧录复用当前已连接的串口并在完成/失败路径尝试复位回应用态。
 - Settings 页对 LAN、USB CDC 或 devd 连接设备开放，提供 WiFi SSID/PSK 覆盖/清除、手动充电偏好、设备日志级别和 USB Console；USB Console 保留当前 Web Serial 或 devd transport 的 tx/rx frame、raw / ignored CDC 行和协议 payload，支持等级过滤、方向过滤、搜索高亮、虚拟滚动、全屏查看与 payload 折行开关，PSK 脱敏。
@@ -57,7 +58,6 @@
 
 ## 当前缺口
 
-- 页面级信息归属合同已更新，App 代码仍需移除共享 Fleet Summary 和次级设备页的完整 Device Overview。
 - 多 USB CDC candidates 场景需要在 `/connect` 显示选择器，不能自动选择已连接或已识别设备。
 - devd 控制 session 需要短 TTL lease；正常关闭立即释放，异常断开默认 8-9 秒内释放。
 - WiFi config 与 settings 写入需要携带有效 lease，避免 Web 不存在时 devd 继续占用或写入硬件。
