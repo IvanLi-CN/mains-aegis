@@ -1668,7 +1668,7 @@ export function isTransportErrorEnvelope(
     code === "unknown_error" ||
     code === "not_found" ||
     code === "device_not_found" ||
-    code.startsWith("http_") ||
+    (code.startsWith("http_") && error?.retryable === true) ||
     code.startsWith("serial_") ||
     code.startsWith("devd_") ||
     code.endsWith("_channel_unavailable")

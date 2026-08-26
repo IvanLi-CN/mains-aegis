@@ -14,6 +14,7 @@ import {
   setDeviceManualChargeControl,
   setDeviceManualChargePrefs,
   setDeviceAdvancedPower,
+  isTransportErrorEnvelope,
   toErrorEnvelope,
 } from "./client";
 import type { DeviceSettings, UpsStatus } from "./types";
@@ -244,6 +245,25 @@ async function withFetchMock<T>(
 }
 
 describe("alert mute errors", () => {
+  test("keeps retryable HTTP failures transport errors but treats HTTP 4xx as action errors", () => {
+    expect(
+      isTransportErrorEnvelope({
+        code: "http_503",
+        message: "Service unavailable",
+        retryable: true,
+        details: null,
+      }),
+    ).toBe(true);
+    expect(
+      isTransportErrorEnvelope({
+        code: "http_400",
+        message: "Unsupported command",
+        retryable: false,
+        details: null,
+      }),
+    ).toBe(false);
+  });
+
   test("uses an AbortController fallback for alert request timeouts", async () => {
     const originalTimeout = AbortSignal.timeout;
     Object.defineProperty(AbortSignal, "timeout", {
