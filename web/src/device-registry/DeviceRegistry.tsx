@@ -3913,6 +3913,9 @@ export function DeviceRegistryProvider({
       window.clearInterval(heartbeat);
       devdLeaseHeartbeats.current.delete(record.target.deviceId);
     };
+    const isOwned = () =>
+      heartbeat !== undefined &&
+      devdLeaseHeartbeats.current.get(record.target.deviceId) === heartbeat;
     const release = (): Promise<void> => {
       if (releasePromise) return releasePromise;
       const nextRelease = releaseDevdWebLease(baseUrl, leaseId)
@@ -3954,6 +3957,7 @@ export function DeviceRegistryProvider({
       }
       void heartbeatDevdWebLease(baseUrl, leaseId)
         .then((lease) => {
+          if (!isOwned()) return;
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === record.target.deviceId &&
@@ -3977,6 +3981,7 @@ export function DeviceRegistryProvider({
           );
         })
         .catch((error) => {
+          if (!isOwned()) return;
           const envelope = toErrorEnvelope(error);
           const leaseInvalid = isDevdLeaseInvalidError(envelope);
           if (leaseInvalid) control.stopIfOwned();
