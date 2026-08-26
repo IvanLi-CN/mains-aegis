@@ -1509,8 +1509,20 @@ export function DeviceRegistryProvider({
           existingRuntimeClosed &&
           existingOperationRecord &&
           operationStillCurrent
-        )
-          await restoreDevdRuntime(existingOperationRecord, operationContext);
+        ) {
+          const restored = await restoreDevdRuntime(
+            existingOperationRecord,
+            operationContext,
+          );
+          if (
+            !restored &&
+            (!operationContext || operationStillCurrent)
+          )
+            markDeviceRuntimeUnavailable(
+              existingOperationRecord,
+              toErrorEnvelope(error),
+            );
+        }
         if (!operationStillCurrent)
           return staleAddDeviceResult();
         return { ok: false, error: toErrorEnvelope(error) };
@@ -1730,8 +1742,14 @@ export function DeviceRegistryProvider({
               operationContext.deviceId,
               operationContext.token,
             )
-          )
+          ) {
+            markDeviceRuntimeUnavailable(
+              operationPreviousRecord,
+              staleAddDeviceError(),
+              false,
+            );
             return staleAddDeviceResult();
+          }
         }
         let transportRef: WebSerialTransport | null = null;
         const pendingLogs: SerialLogEntry[] = [];
@@ -3759,8 +3777,9 @@ export function DeviceRegistryProvider({
   function markDeviceRuntimeUnavailable(
     record: DeviceRecord,
     error: NonNullable<DeviceRecord["error"]>,
+    invalidate = true,
   ) {
-    invalidateDeviceReads(record.target.deviceId);
+    if (invalidate) invalidateDeviceReads(record.target.deviceId);
     setRecords((current) =>
       current.map((candidate) =>
         candidate.target.deviceId === record.target.deviceId
@@ -4450,12 +4469,16 @@ function staleDeviceOperationResult(): CommandResult {
 function staleAddDeviceResult(): AddDeviceResult {
   return {
     ok: false,
-    error: {
-      code: "device_operation_superseded",
-      message: "The device connection changed before the operation completed",
-      retryable: true,
-      details: null,
-    },
+    error: staleAddDeviceError(),
+  };
+}
+
+function staleAddDeviceError(): NonNullable<DeviceRecord["error"]> {
+  return {
+    code: "device_operation_superseded",
+    message: "The device connection changed before the operation completed",
+    retryable: true,
+    details: null,
   };
 }
 
