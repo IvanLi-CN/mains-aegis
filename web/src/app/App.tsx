@@ -421,6 +421,7 @@ export function App({
   );
   const activeAlerts = useActiveAlertsSnapshot(selected);
   const [navOpen, setNavOpen] = useState(false);
+  const [mobileNavViewport, setMobileNavViewport] = useState(false);
   const navToggleRef = useRef<HTMLButtonElement>(null);
   const navPanelRef = useRef<HTMLDivElement>(null);
   const navWasOpen = useRef(false);
@@ -431,9 +432,21 @@ export function App({
   }, [route.path]);
 
   useEffect(() => {
+    if (typeof window.matchMedia !== "function") return undefined;
+    const media = window.matchMedia("(max-width: 960px)");
+    const syncViewport = () => {
+      setMobileNavViewport(media.matches);
+      if (!media.matches) setNavOpen(false);
+    };
+    syncViewport();
+    media.addEventListener("change", syncViewport);
+    return () => media.removeEventListener("change", syncViewport);
+  }, []);
+
+  useEffect(() => {
     const panel = navPanelRef.current;
-    if (!navOpen) {
-      if (navWasOpen.current) navToggleRef.current?.focus();
+    if (!navOpen || !mobileNavViewport) {
+      if (!navOpen && navWasOpen.current) navToggleRef.current?.focus();
       navWasOpen.current = false;
       return undefined;
     }
@@ -470,7 +483,7 @@ export function App({
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [navOpen]);
+  }, [mobileNavViewport, navOpen]);
 
   useEffect(() => {
     if (!route.deviceId || registrySelected) return;
@@ -508,9 +521,9 @@ export function App({
   return (
     <div className="app-shell">
       <aside
-        className={`sidebar ${navOpen ? "is-open" : ""}`}
-        role={navOpen ? "dialog" : undefined}
-        aria-modal={navOpen ? true : undefined}
+        className={`sidebar ${navOpen && mobileNavViewport ? "is-open" : ""}`}
+        role={navOpen && mobileNavViewport ? "dialog" : undefined}
+        aria-modal={navOpen && mobileNavViewport ? true : undefined}
         aria-label="Main navigation"
       >
         <div className="mobile-nav-bar">
@@ -518,8 +531,8 @@ export function App({
             ref={navToggleRef}
             className="icon-button"
             type="button"
-            aria-label={navOpen ? "Close navigation" : "Open navigation"}
-            aria-expanded={navOpen}
+            aria-label={navOpen && mobileNavViewport ? "Close navigation" : "Open navigation"}
+            aria-expanded={navOpen && mobileNavViewport}
             aria-controls="sidebar-navigation"
             onClick={() => setNavOpen((open) => !open)}
           >
@@ -550,7 +563,7 @@ export function App({
           className="mobile-nav-backdrop"
           type="button"
           aria-label="Close navigation"
-          tabIndex={navOpen ? 0 : -1}
+          tabIndex={navOpen && mobileNavViewport ? 0 : -1}
           onClick={() => setNavOpen(false)}
         />
         <div
