@@ -174,6 +174,7 @@ export type ChargeControlDetail = {
 };
 
 export type UpsStatus = {
+  device_id?: string;
   mode: "standby" | "assist" | "backup" | "off" | "fault" | string;
   input: {
     source?: "dcin" | "usbc" | "auto" | "unknown" | string;

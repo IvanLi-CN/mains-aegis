@@ -279,8 +279,19 @@ pub fn render_settings_json<const N: usize>(
 }
 
 pub fn render_status_json<const N: usize>(buf: &mut String<N>, status: UpsStatusSnapshot) {
+    render_status_json_with_device_id(buf, status, None);
+}
+
+pub fn render_status_json_with_device_id<const N: usize>(
+    buf: &mut String<N>,
+    status: UpsStatusSnapshot,
+    device_id: Option<&str>,
+) {
     buf.clear();
     let _ = buf.push('{');
+    if let Some(device_id) = device_id {
+        json_field_str(buf, "device_id", device_id, true);
+    }
     json_field_str(buf, "mode", status.mode, true);
     let _ = buf.push_str("\"input\":{");
     json_field_str(buf, "source", status.input_source, true);
@@ -2356,8 +2367,8 @@ fn json_field_opt_ipv4<const N: usize>(
 mod tests {
     use super::{
         accepts_event_stream, render_compact_status_json, render_diag_snapshot_json,
-        render_identity_json, render_settings_json, render_status_json, write_error_body,
-        write_sse_event, BuildInfo,
+        render_identity_json, render_settings_json, render_status_json,
+        render_status_json_with_device_id, write_error_body, write_sse_event, BuildInfo,
     };
     use crate::{
         mdns_wire::derive_device_identity,
@@ -2503,6 +2514,10 @@ mod tests {
         assert!(body.as_str().contains("\"balance_mask\":10"));
         assert!(body.as_str().contains("\"balance_min_start_delta_mv\":3"));
         assert!(body.as_str().contains("\"charge_fet_on\":false"));
+        render_status_json_with_device_id(&mut body, status, Some("mains-aegis-123456"));
+        assert!(body
+            .as_str()
+            .starts_with("{\"device_id\":\"mains-aegis-123456\","));
         assert!(body.as_str().contains("\"discharge_fet_on\":true"));
         assert!(body.as_str().contains("\"precharge_fet_on\":false"));
         assert!(body.as_str().contains("\"last_error\":\"link_lost\""));

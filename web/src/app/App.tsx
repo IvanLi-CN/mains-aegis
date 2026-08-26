@@ -3372,6 +3372,9 @@ export function ConnectPage({
                     const recommendedActive =
                       activeRecordTransport(record) === recommendedTransport &&
                       record.connectionState === "online";
+                    const switchBusy =
+                      savedDeviceSwitchTarget?.deviceId ===
+                      record.target.deviceId;
                     const otherOptions = channels.slice(1).map((transport) => {
                       const isBusy =
                         savedDeviceSwitchTarget?.deviceId ===
@@ -3383,7 +3386,7 @@ export function ConnectPage({
                       return {
                         value: transport,
                         label: channelUseText(transport, isActive),
-                        disabled: isBusy || isActive,
+                        disabled: switchBusy || isBusy || isActive,
                       };
                     });
                     return (
@@ -3392,7 +3395,7 @@ export function ConnectPage({
                           className="secondary-button small"
                           type="button"
                           disabled={
-                            recommendedActive || Boolean(recommendedBusy)
+                            recommendedActive || switchBusy
                           }
                           onClick={() =>
                             void onSavedDeviceChannelSwitch(

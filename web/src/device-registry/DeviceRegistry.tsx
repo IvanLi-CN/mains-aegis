@@ -151,6 +151,7 @@ export type DeviceReadRequest = {
   deviceId: string;
   transport: DeviceChannelTransport;
   generation: number;
+  baseUrl?: string;
 };
 
 export function canApplyDeviceRead(
@@ -161,7 +162,10 @@ export function canApplyDeviceRead(
   return (
     currentGeneration === request.generation &&
     record.target.deviceId === request.deviceId &&
-    (record.target.transport ?? "http") === request.transport
+    (record.target.transport ?? "http") === request.transport &&
+    (request.transport !== "http" ||
+      request.baseUrl === undefined ||
+      rememberedHttpBaseUrl(record) === request.baseUrl)
   );
 }
 
@@ -332,10 +336,14 @@ export function DeviceRegistryProvider({
   }, [initialDemoSeed]);
 
   const beginDeviceRead = useCallback(
-    (deviceId: string, transport: DeviceChannelTransport): DeviceReadRequest => {
+    (
+      deviceId: string,
+      transport: DeviceChannelTransport,
+      baseUrl?: string,
+    ): DeviceReadRequest => {
       const generation = (deviceReadGenerations.current.get(deviceId) ?? 0) + 1;
       deviceReadGenerations.current.set(deviceId, generation);
-      return { deviceId, transport, generation };
+      return { deviceId, transport, generation, baseUrl };
     },
     [],
   );
@@ -719,6 +727,7 @@ export function DeviceRegistryProvider({
       );
 
       const cachedBridgeAuth = bridgeAuthToken(target.baseUrl) !== null;
+      let httpReadBaseUrl: string | null = null;
       try {
       if (selectedTransport === "devd") {
         const devdBaseUrl =
@@ -780,6 +789,7 @@ export function DeviceRegistryProvider({
         const { nextTarget, result } = await withRememberedHttpFallback(
           existing,
           async (httpBaseUrl) => {
+            httpReadBaseUrl = httpBaseUrl;
             const httpTarget =
               httpBaseUrl === target.baseUrl
                 ? target
@@ -810,6 +820,11 @@ export function DeviceRegistryProvider({
             (record) => record.target.deviceId === deviceId,
           );
           if (!previous) return current;
+          if (
+            httpReadBaseUrl !== null &&
+            rememberedHttpBaseUrl(previous) !== httpReadBaseUrl
+          )
+            return current;
           const streamState =
             result.identity.capabilities.sse &&
             previous.streamState !== "polling"
@@ -830,6 +845,15 @@ export function DeviceRegistryProvider({
         if (
           !currentDeviceOperation(deviceId, operation) ||
           deviceReadGenerations.current.get(deviceId) !== readGeneration
+        )
+          return;
+        const currentRecord = records.find(
+          (record) => record.target.deviceId === deviceId,
+        );
+        if (
+          httpReadBaseUrl !== null &&
+          currentRecord &&
+          rememberedHttpBaseUrl(currentRecord) !== httpReadBaseUrl
         )
           return;
         const envelope = toErrorEnvelope(error);
@@ -1000,6 +1024,10 @@ export function DeviceRegistryProvider({
           onStatus: (status) => {
             if (streams.current.get(record.target.deviceId) !== subscription)
               return;
+            const expectedDeviceId =
+              record.identity?.device_id ?? record.target.deviceId;
+            if (status.device_id && status.device_id !== expectedDeviceId)
+              return;
             setRecords((current) =>
               current.map((candidate) =>
                 candidate.target.deviceId === record.target.deviceId &&
@@ -1047,6 +1075,7 @@ export function DeviceRegistryProvider({
             const readRequest = beginDeviceRead(
               record.target.deviceId,
               "http",
+              httpBaseUrl,
             );
             subscription.close();
             streams.current.delete(record.target.deviceId);
@@ -2594,10 +2623,13 @@ export function DeviceRegistryProvider({
         }
       }
       if (selectedTransport === "devd") {
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
+          return unavailableCommandChannel("devd");
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
-        if (!isDevdWriteAvailable(record))
-          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -2797,10 +2829,13 @@ export function DeviceRegistryProvider({
         }
       }
       if (selectedTransport === "devd") {
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
+          return unavailableCommandChannel("devd");
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
-        if (!isDevdWriteAvailable(record))
-          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -2943,9 +2978,17 @@ export function DeviceRegistryProvider({
         }
       }
       if (selectedTransport === "devd") {
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
+          return unavailableCommandChannel("devd");
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
-        if (!isDevdWriteAvailable(record))
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
           return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
@@ -3072,7 +3115,10 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
-        if (!isDevdWriteAvailable(record))
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
           return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
@@ -3159,7 +3205,13 @@ export function DeviceRegistryProvider({
   const selectedTransport = record.target.mock
         ? (record.target.transport ?? "http")
         : resolvePreferredTransport(record, serialSessions.current);
-      const readRequest = beginDeviceRead(deviceId, selectedTransport);
+      const readRequest = beginDeviceRead(
+        deviceId,
+        selectedTransport,
+        selectedTransport === "http"
+          ? rememberedHttpBaseUrl(record) ?? undefined
+          : undefined,
+      );
       if (record.target.mock) {
         const detail = await getDeviceChargeControl(record.target.baseUrl);
         markDeviceReadSuccess(
@@ -3247,7 +3299,13 @@ export function DeviceRegistryProvider({
   const selectedTransport = record.target.mock
         ? (record.target.transport ?? "http")
         : resolvePreferredTransport(record, serialSessions.current);
-      const readRequest = beginDeviceRead(deviceId, selectedTransport);
+      const readRequest = beginDeviceRead(
+        deviceId,
+        selectedTransport,
+        selectedTransport === "http"
+          ? rememberedHttpBaseUrl(record) ?? undefined
+          : undefined,
+      );
       if (record.target.mock) {
         const detail = await previewDeviceChargeControl(
           record.target.baseUrl,
@@ -3383,7 +3441,10 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
-        if (!isDevdWriteAvailable(record))
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
           return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
@@ -3551,7 +3612,10 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
-        if (!isDevdWriteAvailable(record))
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
           return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
@@ -3697,7 +3761,10 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
-        if (!isDevdWriteAvailable(record))
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
           return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
@@ -5494,6 +5561,12 @@ export function recoverReadRecord(
   transport: DeviceChannelTransport,
   streamActive = false,
 ): DeviceRecord {
+  if (
+    transport === "devd" &&
+    record.target.rememberedChannels?.devd?.transport === "usb" &&
+    !record.serial?.leaseId
+  )
+    return record;
   if (
     transport === "devd" &&
     record.errorSource === "transport" &&

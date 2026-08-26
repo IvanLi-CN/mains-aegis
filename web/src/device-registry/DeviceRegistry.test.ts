@@ -356,6 +356,12 @@ describe("canApplyDeviceRead", () => {
     };
 
     expect(canApplyDeviceRead(record, request, 2)).toBe(true);
+    expect(
+      canApplyDeviceRead(record, { ...request, baseUrl: record.target.baseUrl }, 2),
+    ).toBe(true);
+    expect(
+      canApplyDeviceRead(record, { ...request, baseUrl: "http://192.168.31.42" }, 2),
+    ).toBe(false);
     expect(canApplyDeviceRead(record, request, 3)).toBe(false);
     expect(
       canApplyDeviceRead(record, { ...request, transport: "devd" }, 2),
@@ -435,6 +441,45 @@ describe("isDevdWriteAvailable", () => {
       }),
     ).toBe(true);
   });
+});
+
+test("does not recover an unleased USB devd record", () => {
+  const record: DeviceRecord = {
+    target: {
+      deviceId: "mains-aegis-a1b2c3",
+      baseUrl: "http://127.0.0.1:8765",
+      alias: "Bench A",
+      location: "Lab",
+      addedAt: "2026-06-07T00:00:00.000Z",
+      transport: "devd",
+      rememberedChannels: {
+        devd: {
+          baseUrl: "http://127.0.0.1:8765",
+          seenAt: "2026-06-07T00:00:00.000Z",
+          transport: "usb",
+        },
+      },
+    },
+    identity: null,
+    network: null,
+    settings: null,
+    status: null,
+    connectionState: "error",
+    streamState: "error",
+    error: null,
+    errorSource: "read",
+    lastUpdated: "2026-06-07T00:00:00.000Z",
+    serial: {
+      connected: false,
+      source: "devd",
+      baseUrl: "http://127.0.0.1:8765",
+      protocol: "mains-aegis.cdc.v1",
+      logs: [],
+      trace: [],
+    },
+  };
+
+  expect(recoverReadRecord(record, "devd")).toBe(record);
 });
 
 describe("sameDeviceRuntime", () => {
