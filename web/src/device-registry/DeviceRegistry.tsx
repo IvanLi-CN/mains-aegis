@@ -3446,7 +3446,8 @@ function mergedRecordError(
   incoming: DeviceRecord,
 ): DeviceRecord["error"] {
   if (incoming.error !== null) return incoming.error;
-  if (existing.errorSource === "command") return existing.error;
+  if (existing.errorSource === "command")
+    return existing.error ?? existing.commandError ?? null;
   return incoming.commandError ?? null;
 }
 
@@ -3455,7 +3456,11 @@ function mergedRecordErrorSource(
   incoming: DeviceRecord,
 ): DeviceRecord["errorSource"] {
   if (incoming.error !== null) return incoming.errorSource;
-  if (existing.errorSource === "command" && existing.error) return "command";
+  if (
+    existing.errorSource === "command" &&
+    (existing.error || existing.commandError)
+  )
+    return "command";
   return incoming.commandError ? "command" : undefined;
 }
 
