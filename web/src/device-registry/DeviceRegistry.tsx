@@ -302,6 +302,15 @@ export function DeviceRegistryProvider({
       for (const heartbeat of devdLeaseHeartbeats.current.values())
         window.clearInterval(heartbeat);
       devdLeaseHeartbeats.current.clear();
+      for (const [deviceId, pendingLease] of pendingDevdLeases.current) {
+        void pendingLease
+          .release()
+          .then(() => {
+            if (pendingDevdLeases.current.get(deviceId) === pendingLease)
+              pendingDevdLeases.current.delete(deviceId);
+          })
+          .catch(() => undefined);
+      }
       for (const session of serialSessions.current.values())
         void session.close();
       serialSessions.current.clear();
@@ -354,19 +363,37 @@ export function DeviceRegistryProvider({
 
   const setRecordError = useCallback(
     (deviceId: string, error: DeviceRecord["error"]) => {
+      const leaseInvalid = isDevdLeaseInvalidError(error);
+      if (leaseInvalid) {
+        const heartbeat = devdLeaseHeartbeats.current.get(deviceId);
+        if (heartbeat !== undefined) {
+          window.clearInterval(heartbeat);
+          devdLeaseHeartbeats.current.delete(deviceId);
+        }
+      }
       invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((record) =>
           record.target.deviceId === deviceId
             ? {
                 ...record,
-                connectionState: error?.retryable ? "offline" : "error",
+                connectionState:
+                  error?.retryable || leaseInvalid ? "offline" : "error",
                 streamState: "error",
                 error,
                 errorSource: "transport",
                 commandError: record.commandError,
                 serial: record.serial
-                  ? { ...record.serial, connected: false }
+                  ? {
+                      ...record.serial,
+                      connected: false,
+                      ...(leaseInvalid && record.serial.source === "devd"
+                        ? {
+                            leaseId: undefined,
+                            leaseExpiresAt: undefined,
+                          }
+                        : {}),
+                    }
                   : record.serial,
                 lastUpdated: new Date().toISOString(),
               }
@@ -401,6 +428,13 @@ export function DeviceRegistryProvider({
       if (operation === "command") invalidateDeviceReads(deviceId);
       if (operation === "read") {
         if (readRequest && !currentDeviceRead(readRequest)) return;
+        if (
+          readRequest?.transport === "devd" &&
+          isDevdLeaseInvalidError(error)
+        ) {
+          setRecordError(deviceId, error);
+          return;
+        }
         setRecords((current) =>
           current.map((record) =>
             record.target.deviceId === deviceId &&
