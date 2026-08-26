@@ -275,6 +275,12 @@ a {
   letter-spacing: 0;
 }
 
+.device-page-frame {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
 .topbar-metrics {
   display: flex;
   flex-wrap: wrap;

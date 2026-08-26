@@ -23,6 +23,7 @@ import {
   resolveDevdTarget,
   resolveOwnerFacingDevdTarget,
   resolveStartupDevdTarget,
+  resolveMobileNavContext,
   resolvePagePresentation,
 } from "./App";
 import {
@@ -171,6 +172,19 @@ describe("page presentation ownership", () => {
       expect(presentation.showFleetSummary).toBe(false);
       expect(presentation.showDeviceOverview).toBe(section === "overview");
     }
+  });
+
+  test("keeps device connection state in mobile context", () => {
+    const online = makeRecord({ connectionState: "online" });
+    const offline = makeRecord({ connectionState: "offline" });
+    expect(resolveMobileNavContext("battery", online)).toBe(
+      "Legacy USB UPS / Online / Battery",
+    );
+    expect(resolveMobileNavContext("alerts", offline)).toBe(
+      "Legacy USB UPS / Offline / Alerts",
+    );
+    expect(resolveMobileNavContext("fleet", online)).toBe("Fleet");
+    expect(resolveMobileNavContext("connect", null)).toBe("Add device");
   });
 
   test("keeps global notification UI out of the shared shell", () => {

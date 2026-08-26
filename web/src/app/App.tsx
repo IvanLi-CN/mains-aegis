@@ -296,6 +296,17 @@ export function resolvePagePresentation(
   };
 }
 
+export function resolveMobileNavContext(
+  section: Route["section"],
+  selected: DeviceRecord | null,
+): string {
+  const presentation = resolvePagePresentation(section);
+  if (presentation.scope === "connect") return presentation.title;
+  if (presentation.scope === "fleet") return "Fleet";
+  if (!selected) return "Device";
+  return `${selected.target.alias} / ${connectionSummary(selected)} / ${presentation.title}`;
+}
+
 const appBasePath = normalizeBasePath(
   import.meta.env.BASE_URL,
   runtimePathname(),
@@ -424,14 +435,7 @@ export function App({
   }, [registry, route.deviceId, selected]);
 
   const pagePresentation = resolvePagePresentation(route.section);
-  const mobileNavContext =
-    pagePresentation.scope === "connect"
-      ? pagePresentation.title
-      : pagePresentation.scope === "fleet"
-        ? "Fleet"
-        : selected
-          ? `${selected.target.alias} / ${pagePresentation.title}`
-          : "Device";
+  const mobileNavContext = resolveMobileNavContext(route.section, selected);
 
   return (
     <div className="app-shell">
