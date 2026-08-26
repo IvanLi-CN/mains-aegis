@@ -421,11 +421,56 @@ export function App({
   );
   const activeAlerts = useActiveAlertsSnapshot(selected);
   const [navOpen, setNavOpen] = useState(false);
+  const navToggleRef = useRef<HTMLButtonElement>(null);
+  const navPanelRef = useRef<HTMLDivElement>(null);
+  const navWasOpen = useRef(false);
   const hydratedTemporaryDeviceIds = useRef(new Set<string>());
 
   useEffect(() => {
     setNavOpen(false);
   }, [route.path]);
+
+  useEffect(() => {
+    const panel = navPanelRef.current;
+    if (!navOpen) {
+      if (navWasOpen.current) navToggleRef.current?.focus();
+      navWasOpen.current = false;
+      return undefined;
+    }
+    navWasOpen.current = true;
+    const getFocusable = () =>
+      Array.from(
+        panel?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      );
+    getFocusable()[0]?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setNavOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = getFocusable();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        panel?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [navOpen]);
 
   useEffect(() => {
     if (!route.deviceId || registrySelected) return;
@@ -462,9 +507,15 @@ export function App({
 
   return (
     <div className="app-shell">
-      <aside className={`sidebar ${navOpen ? "is-open" : ""}`}>
+      <aside
+        className={`sidebar ${navOpen ? "is-open" : ""}`}
+        role={navOpen ? "dialog" : undefined}
+        aria-modal={navOpen ? true : undefined}
+        aria-label="Main navigation"
+      >
         <div className="mobile-nav-bar">
           <button
+            ref={navToggleRef}
             className="icon-button"
             type="button"
             aria-label={navOpen ? "Close navigation" : "Open navigation"}
@@ -499,9 +550,15 @@ export function App({
           className="mobile-nav-backdrop"
           type="button"
           aria-label="Close navigation"
+          tabIndex={navOpen ? 0 : -1}
           onClick={() => setNavOpen(false)}
         />
-        <div id="sidebar-navigation" className="sidebar-panel">
+        <div
+          ref={navPanelRef}
+          id="sidebar-navigation"
+          className="sidebar-panel"
+          tabIndex={-1}
+        >
           <div className={`brand ${demoMode ? "is-demo" : ""}`}>
             {demoMode ? (
               <DemoControlPanel
