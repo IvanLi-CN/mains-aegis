@@ -514,6 +514,30 @@ describe("resolveSelectedRecord", () => {
       ),
     ).toBe(fleetRecord);
   });
+
+  test("clears saved transport failures after connected discovery recovery", () => {
+    const registryFailure: DeviceRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      connectionState: "offline",
+      streamState: "error",
+      error: {
+        code: "transport_error",
+        message: "Failed to fetch",
+        retryable: true,
+        details: null,
+      },
+    };
+    const fleetRecord = buildFleetEntries(
+      [registryFailure],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    )[0]?.record;
+
+    expect(fleetRecord?.connectionState).toBe("online");
+    expect(fleetRecord?.streamState).toBe("idle");
+    expect(fleetRecord?.status).toBeNull();
+    expect(fleetRecord?.error).toBeNull();
+  });
 });
 
 describe("resolveOwnerFacingDevdTarget", () => {

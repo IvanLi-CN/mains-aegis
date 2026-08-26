@@ -1947,16 +1947,19 @@ function buildFleetEntryRecord(
   const preserveTransportFailure =
     existingRecord?.target.temporary === true &&
     hasTransportFailure(existingRecord);
+  const recoveredTransportFailure =
+    !preserveTransportFailure &&
+    connected &&
+    hasTransportFailure(existingRecord);
+  const currentStatus = httpDevice?.status ?? devdDevice?.status ?? null;
   return {
     target,
     identity,
     network: identity?.network ?? existingRecord?.network ?? null,
     settings: existingRecord?.settings ?? null,
     status:
-      httpDevice?.status ??
-      devdDevice?.status ??
-      existingRecord?.status ??
-      null,
+      currentStatus ??
+      (recoveredTransportFailure ? null : existingRecord?.status ?? null),
     connectionState: preserveTransportFailure
       ? existingRecord!.connectionState
       : connected
@@ -1968,8 +1971,12 @@ function buildFleetEntryRecord(
             : (existingRecord?.connectionState ?? "offline"),
     streamState: preserveTransportFailure
       ? existingRecord!.streamState
-      : (existingRecord?.streamState ?? "idle"),
-    error: existingRecord?.error ?? null,
+      : recoveredTransportFailure
+        ? currentStatus
+          ? "polling"
+          : "idle"
+        : (existingRecord?.streamState ?? "idle"),
+    error: recoveredTransportFailure ? null : existingRecord?.error ?? null,
     lastUpdated: new Date().toISOString(),
     serial:
       existingRecord?.serial ??
