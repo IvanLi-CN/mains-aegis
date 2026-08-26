@@ -557,6 +557,15 @@ export function DeviceRegistryProvider({
             deviceReadGenerations.current.get(deviceId) !== readGeneration
           )
             return;
+          if (serialSessions.current.get(deviceId) === session) {
+            serialSessions.current.delete(deviceId);
+            await session.close().catch(() => undefined);
+          }
+          if (
+            !currentDeviceOperation(deviceId, operation) ||
+            deviceReadGenerations.current.get(deviceId) !== readGeneration
+          )
+            return;
           setRecordError(deviceId, errorFromSerialFailure(error));
         }
         return;
@@ -1720,6 +1729,23 @@ export function DeviceRegistryProvider({
           openedTransport = null;
           return staleAddDeviceResult();
         }
+        const previousRecord = records.find(
+          (candidate) => candidate.target.deviceId === identity.device_id,
+        );
+        if (previousRecord) {
+          await closeDeviceRuntime(identity.device_id, previousRecord);
+          if (
+            operationContext &&
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            )
+          ) {
+            await transport.close().catch(() => undefined);
+            openedTransport = null;
+            return staleAddDeviceResult();
+          }
+        }
         serialSessions.current.set(identity.device_id, transport);
         transport.setDefmtDecoder(
           bundledElfPath
@@ -1810,7 +1836,13 @@ export function DeviceRegistryProvider({
         return { ok: false, error: errorFromSerialFailure(error) };
       }
     },
-    [currentDeviceOperation, invalidateDeviceReads, setRecordError],
+    [
+      closeDeviceRuntime,
+      currentDeviceOperation,
+      invalidateDeviceReads,
+      records,
+      setRecordError,
+    ],
   );
 
   const attachMockUsbSerialDevice = useCallback((): AddDeviceResult => {
