@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   mkdirSync,
   mkdtempSync,
@@ -25,6 +27,11 @@ import {
   resolveStartupDevdTarget,
   resolveMobileNavContext,
   resolvePagePresentation,
+  resolveDeviceRouteSection,
+  shouldShowDeviceDataContext,
+  ConnectPageHeading,
+  DevicePageFrame,
+  FleetHeader,
 } from "./App";
 import {
   resolveSpaFallbackInitialPath,
@@ -141,6 +148,55 @@ describe("active alert presentation", () => {
 });
 
 describe("page presentation ownership", () => {
+  test("renders route-owned headings and summaries at runtime", () => {
+    const record = makeRecord({ status: null });
+    const fleetMarkup = renderToStaticMarkup(
+      createElement(FleetHeader, {
+        records: [record],
+        activeAlertsByDevice: {},
+      }),
+    );
+    expect(fleetMarkup).toContain('data-evidence-target="fleet-summary"');
+    expect(fleetMarkup).toContain("UPS Fleet");
+
+    const connectMarkup = renderToStaticMarkup(
+      createElement(ConnectPageHeading, { description: "Connect a device." }),
+    );
+    expect(connectMarkup).toContain("<h1>Add device</h1>");
+
+    const deviceRouteSections = [
+      "overview",
+      "alerts",
+      "power",
+      "battery",
+      "thermal",
+      "device",
+      "firmware",
+      "settings",
+      "api",
+    ] as const;
+    const renderDeviceRoute = (section: (typeof deviceRouteSections)[number]) =>
+      renderToStaticMarkup(
+        createElement(
+          DevicePageFrame,
+          { presentation: resolvePagePresentation(section), record },
+          createElement("div", { "data-evidence-target": "ability-content" }),
+        ),
+      );
+    const overviewMarkup = renderDeviceRoute("overview");
+    expect(overviewMarkup).toContain("<h1>Overview</h1>");
+    expect(overviewMarkup).toContain("status-band");
+    expect(overviewMarkup).not.toContain('data-evidence-target="fleet-summary"');
+
+    for (const section of deviceRouteSections.slice(1)) {
+      const markup = renderDeviceRoute(section);
+      expect(markup).toContain(`<h1>${resolvePagePresentation(section).title}</h1>`);
+      expect(markup).toContain('data-evidence-target="ability-content"');
+      expect(markup).not.toContain("status-band");
+      expect(markup).not.toContain('data-evidence-target="fleet-summary"');
+    }
+  });
+
   test("assigns summaries and titles to their owning routes", () => {
     expect(resolvePagePresentation("fleet")).toEqual({
       scope: "fleet",
@@ -187,15 +243,45 @@ describe("page presentation ownership", () => {
     expect(resolveMobileNavContext("connect", null)).toBe("Add device");
   });
 
+  test("normalizes unknown device sections to Overview", () => {
+    expect(resolveDeviceRouteSection(undefined)).toBe("overview");
+    expect(resolveDeviceRouteSection("fleet")).toBe("overview");
+    expect(resolveDeviceRouteSection("unknown")).toBe("overview");
+    expect(resolveDeviceRouteSection("battery")).toBe("battery");
+  });
+
+  test("shows compact data context when device data is not current", () => {
+    expect(
+      shouldShowDeviceDataContext(
+        makeRecord({ connectionState: "online", streamState: "streaming" }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldShowDeviceDataContext(
+        makeRecord({ connectionState: "offline", streamState: "error" }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldShowDeviceDataContext(
+        makeRecord({ connectionState: "online", streamState: "error" }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldShowDeviceDataContext(
+        makeRecord({ connectionState: "online", streamState: "streaming", status: null }),
+      ),
+    ).toBe(true);
+  });
+
   test("keeps global notification UI out of the shared shell", () => {
     const source = readFileSync(join(import.meta.dir, "App.tsx"), "utf8");
     expect(source).not.toContain("PersistentFleetAlertStatus");
     expect(source).not.toContain("global-alert");
     expect(source).toContain('data-evidence-target="fleet-summary"');
     expect(source).toContain('data-evidence-target="device-page-header"');
-    expect(source).toContain(
-      "presentation.showDeviceOverview ? <DeviceStatusBand record={record} /> : null",
-    );
+    expect(source).toContain("presentation.showDeviceOverview ?");
+    expect(source).toContain("<DeviceStatusBand record={record} />");
+    expect(source).toContain("<DeviceDataContext record={record} />");
   });
 });
 

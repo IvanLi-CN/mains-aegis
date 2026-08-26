@@ -296,6 +296,24 @@ export function resolvePagePresentation(
   };
 }
 
+export function resolveDeviceRouteSection(
+  rawSection: string | undefined,
+): Exclude<Route["section"], "fleet" | "connect"> {
+  return (
+    deviceSections.find((item) => item.id === rawSection)?.id ?? "overview"
+  );
+}
+
+export function shouldShowDeviceDataContext(
+  record: Pick<DeviceRecord, "connectionState" | "streamState" | "status">,
+): boolean {
+  return (
+    record.connectionState !== "online" ||
+    record.streamState === "error" ||
+    !record.status
+  );
+}
+
 export function resolveMobileNavContext(
   section: Route["section"],
   selected: DeviceRecord | null,
@@ -545,6 +563,7 @@ function renderRoute(
   devdDiscovery?: SharedDevdDiscovery,
   activeAlerts?: ActiveAlertsViewState,
 ) {
+  const pagePresentation = resolvePagePresentation(route.section);
   if (route.section === "connect") {
     return (
       <ConnectPage
@@ -563,11 +582,11 @@ function renderRoute(
     devdDiscovery &&
     (devdDiscovery.status === "checking" || devdDiscovery.isRefreshing)
   ) {
-    return <FleetLoadingState />;
+    return <DeviceRoutePlaceholder title={pagePresentation.title} state="loading" />;
   }
-  if (!selected) return <MissingDevice />;
-
-  const pagePresentation = resolvePagePresentation(route.section);
+  if (!selected) {
+    return <DeviceRoutePlaceholder title={pagePresentation.title} state="missing" />;
+  }
 
   let content: ReactNode;
   switch (route.section) {
@@ -606,7 +625,7 @@ function renderRoute(
   );
 }
 
-function DevicePageFrame({
+export function DevicePageFrame({
   presentation,
   record,
   children,
@@ -623,8 +642,23 @@ function DevicePageFrame({
           <h1>{presentation.title}</h1>
         </div>
       </header>
-      {presentation.showDeviceOverview ? <DeviceStatusBand record={record} /> : null}
+      {presentation.showDeviceOverview ? (
+        <DeviceStatusBand record={record} />
+      ) : shouldShowDeviceDataContext(record) ? (
+        <DeviceDataContext record={record} />
+      ) : null}
       {children}
+    </div>
+  );
+}
+
+function DeviceDataContext({ record }: { record: DeviceRecord }) {
+  const stream = streamPresentation(record);
+  return (
+    <div className={`device-data-context tone-${stream.tone}`} role="status">
+      <span className="eyebrow">Data state</span>
+      <strong>{stream.label}</strong>
+      <span>{stream.detail}</span>
     </div>
   );
 }
@@ -944,7 +978,7 @@ function parseRoute(path: string): Route {
   if (path === "/connect") return { path, deviceId: null, section: "connect" };
   const match = path.match(/^\/devices\/([^/]+)(?:\/([^/]+))?$/);
   if (match) {
-    const section = (match[2] ?? "overview") as Route["section"];
+    const section = resolveDeviceRouteSection(match[2]);
     return { path, deviceId: decodeURIComponent(match[1]), section };
   }
   return { path, deviceId: null, section: "fleet" };
@@ -1243,7 +1277,7 @@ function ExternalNavLink({
   );
 }
 
-function FleetHeader({
+export function FleetHeader({
   records,
   activeAlertsByDevice,
 }: {
@@ -1963,7 +1997,16 @@ function isMainsAegisLanDevice(device: DevdDevice): boolean {
   );
 }
 
-function ConnectPage({
+export function ConnectPageHeading({ description }: { description: string }) {
+  return (
+    <div className="section-heading">
+      <h1>Add device</h1>
+      <p>{description}</p>
+    </div>
+  );
+}
+
+export function ConnectPage({
   initialDevdTarget,
   hostedHttpServiceApp = isHostedHttpServiceApp(),
   sharedDevdDiscovery,
@@ -2508,16 +2551,15 @@ function ConnectPage({
 
   return (
     <section className="page-flow connect-wide">
-      <div className="section-heading">
-        <h1>Add device</h1>
-        <p>
-          {devdDiscoveryOnly
+      <ConnectPageHeading
+        description={
+          devdDiscoveryOnly
             ? "Use this page to add hardware from current mains-aegis-devd device records. USB devices attach through devd, while LAN devices connect directly to the hardware HTTP API."
             : runtimeMode === "public_static"
               ? "This GitHub Pages build connects to LAN devices directly from the browser. Use Chrome 142+ for manual targets or CIDR scans; hosted devd discovery is not assumed here."
-              : "Use this page to add a new device, bind a new USB port, or add a LAN endpoint. When mains-aegis-devd is reachable, current USB CDC and LAN device records appear here automatically."}
-        </p>
-      </div>
+              : "Use this page to add a new device, bind a new USB port, or add a LAN endpoint. When mains-aegis-devd is reachable, current USB CDC and LAN device records appear here automatically."
+        }
+      />
       {devdTarget ? (
       <section
         className="devd-discovery-panel"
@@ -7564,15 +7606,36 @@ function powerEventSummary(payload: Record<string, unknown> | null): string {
   return `pressure ${pressureState} / reason ${pressureReason} / limit ${limitReason}`;
 }
 
-function MissingDevice() {
+function DeviceRoutePlaceholder({
+  title,
+  state,
+}: {
+  title: string;
+  state: "loading" | "missing";
+}) {
+  const loading = state === "loading";
   return (
-    <section className="empty-state">
-      <Server size={28} />
-      <h2>Device not found</h2>
-      <p>The selected device is no longer available in the fleet or local registry.</p>
-      <button className="primary-button" onClick={() => navigate("/")}>
-        Back to fleet
-      </button>
+    <section className="device-route-placeholder">
+      <header className="page-header">
+        <div>
+          <div className="eyebrow">Device</div>
+          <h1>{title}</h1>
+        </div>
+      </header>
+      <div className="empty-state">
+        {loading ? <Loader2 size={28} className="spin-icon" /> : <Server size={28} />}
+        <h2>{loading ? "Loading device" : "Device not found"}</h2>
+        <p>
+          {loading
+            ? "Loading the selected device before this page renders."
+            : "The selected device is no longer available in the fleet or local registry."}
+        </p>
+        {!loading ? (
+          <button className="primary-button" onClick={() => navigate("/")}>
+            Back to fleet
+          </button>
+        ) : null}
+      </div>
     </section>
   );
 }

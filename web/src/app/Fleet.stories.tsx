@@ -65,7 +65,7 @@ export const Overview: Story = {
     await expect(canvas.queryByText("OUT A")).not.toBeInTheDocument();
     await expect(canvas.queryByText("Charger")).not.toBeInTheDocument();
     await userEvent.click(await canvas.findByText("Critical"));
-    await expect(await canvas.findByRole("heading", { name: "Storage bay" })).toBeInTheDocument();
+    await expect(await canvas.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
   },
 };
 
