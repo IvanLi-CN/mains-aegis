@@ -3910,7 +3910,23 @@ function useFleetActiveAlerts(records: DeviceRecord[]): FleetActiveAlertsState {
           if (record.connectionState === "offline" || targets.length === 0)
             return { record, snapshot: null, error: null };
           try {
-            const snapshot = await readAlertsFromTargets(targets, getSerialAlerts);
+            const snapshot = await readAlertsFromTargets(
+              targets,
+              getSerialAlerts,
+              record,
+              {
+                beforeHttpOperation: (baseUrl) => {
+                  const current = recordsRef.current.find(
+                    (candidate) =>
+                      candidate.target.deviceId === record.target.deviceId,
+                  );
+                  return Boolean(
+                    current &&
+                      alertHttpTargetStillCurrent(current, baseUrl),
+                  );
+                },
+              },
+            );
             return { record, snapshot, error: null };
           } catch (cause) {
             return {
@@ -4029,6 +4045,8 @@ function useActiveAlertsSnapshot(
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const refreshGeneration = useRef(0);
   const refreshInFlight = useRef<Promise<void> | null>(null);
+  const recordRef = useRef(record);
+  recordRef.current = record;
   const targets = useMemo(
     () => (record ? alertControlTargets(record) : []),
     [
@@ -4051,7 +4069,7 @@ function useActiveAlertsSnapshot(
       if (refreshInFlight.current) return refreshInFlight.current;
       const request = (async () => {
         const generation = ++refreshGeneration.current;
-        if (!deviceId || connectionState === "offline") {
+        if (!record || !deviceId || connectionState === "offline") {
           setSnapshot(null);
           setLastUpdated(null);
           setLoading(false);
@@ -4071,7 +4089,21 @@ function useActiveAlertsSnapshot(
         }
         if (!options?.background) setLoading(true);
         try {
-          const nextSnapshot = await readAlertsFromTargets(targets, getSerialAlerts);
+          const nextSnapshot = await readAlertsFromTargets(
+            targets,
+            getSerialAlerts,
+            record,
+            {
+              beforeHttpOperation: (baseUrl) => {
+                const current = recordRef.current;
+                return Boolean(
+                  current &&
+                    current.target.deviceId === deviceId &&
+                    alertHttpTargetStillCurrent(current, baseUrl),
+                );
+              },
+            },
+          );
           if (generation !== refreshGeneration.current) return;
           setSnapshot(nextSnapshot);
           setLastUpdated(new Date().toISOString());
@@ -4153,6 +4185,8 @@ function AlertsPage({
   const [muting, setMuting] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const targets = useMemo(() => alertControlTargets(record), [record]);
+  const recordRef = useRef(record);
+  recordRef.current = record;
 
   const mute = async (alert: ActiveAlert) => {
     if (targets.length === 0 || error || alert.sound_state === "muted") return;
@@ -4163,6 +4197,17 @@ function AlertsPage({
         targets,
         alert,
         muteSerialAlert,
+        record,
+        {
+          beforeHttpOperation: (baseUrl) => {
+            const current = recordRef.current;
+            return Boolean(
+              current &&
+                current.target.deviceId === record.target.deviceId &&
+                alertHttpTargetStillCurrent(current, baseUrl),
+            );
+          },
+        },
       );
       await refresh();
     } catch (cause) {
@@ -4298,12 +4343,29 @@ async function withAlertTargetFallback<T>(
 }
 
 async function withAlertHttpFallback<T>(
+  record: DeviceRecord,
   baseUrls: string[],
   operation: (baseUrl: string) => Promise<T>,
+  options: {
+    allowFallback?: boolean;
+    beforeOperation?: (baseUrl: string) => boolean;
+  } = {},
 ): Promise<T> {
   let lastError: unknown = null;
-  for (const baseUrl of baseUrls) {
+  const candidates = options.allowFallback === false ? baseUrls.slice(0, 1) : baseUrls;
+  const expectedDeviceId = record.identity?.device_id ?? record.target.deviceId;
+  const bridgeAuth = record.target.bridgeAuth ? { bridgeAuth: true } : undefined;
+  for (const baseUrl of candidates) {
     try {
+      if (options.beforeOperation && !options.beforeOperation(baseUrl))
+        throw staleAlertOperationError();
+      if (!baseUrl.startsWith("mock:")) {
+        const identity = await getIdentity(baseUrl, undefined, bridgeAuth);
+        if (identity.device_id !== expectedDeviceId)
+          throw alertIdentityMismatchError(identity.device_id, expectedDeviceId);
+      }
+      if (options.beforeOperation && !options.beforeOperation(baseUrl))
+        throw staleAlertOperationError();
       return await operation(baseUrl);
     } catch (cause) {
       lastError = cause;
@@ -4313,9 +4375,20 @@ async function withAlertHttpFallback<T>(
   throw lastError ?? new Error("No HTTP alerts transport is available");
 }
 
+function alertHttpTargetStillCurrent(
+  record: DeviceRecord,
+  baseUrl: string,
+): boolean {
+  return (
+    baseUrl.startsWith("mock:") || rememberedHttpBaseUrls(record).includes(baseUrl)
+  );
+}
+
 async function readAlertsFromTargets(
   targets: AlertControlTarget[],
   getSerialAlerts: (deviceId: string) => Promise<ActiveAlertsSnapshot>,
+  record: DeviceRecord,
+  options: { beforeHttpOperation?: (baseUrl: string) => boolean } = {},
 ): Promise<ActiveAlertsSnapshot> {
   return withAlertTargetFallback(targets, (target) =>
     target.kind === "devd"
@@ -4325,11 +4398,13 @@ async function readAlertsFromTargets(
       : target.kind === "serial"
         ? getSerialAlerts(target.deviceId)
         : withAlertHttpFallback(
+            record,
             target.baseUrls,
             (baseUrl) =>
               getDeviceAlerts(baseUrl, {
                 timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
               }),
+            { beforeOperation: options.beforeHttpOperation },
           ),
   );
 }
@@ -4342,6 +4417,8 @@ async function muteAlertFromTargets(
     alertId: string,
     instanceId: number,
   ) => Promise<unknown>,
+  record: DeviceRecord,
+  options: { beforeHttpOperation?: (baseUrl: string) => boolean } = {},
 ): Promise<void> {
   await withAlertTargetFallback(targets, (target) =>
     target.kind === "devd"
@@ -4354,10 +4431,45 @@ async function muteAlertFromTargets(
       : target.kind === "serial"
         ? muteSerialAlert(target.deviceId, alert.alert_id, alert.instance_id)
         : withAlertHttpFallback(
+            record,
             target.baseUrls,
             (baseUrl) => muteDeviceAlert(baseUrl, alert.alert_id, alert.instance_id),
+            {
+              allowFallback: false,
+              beforeOperation: options.beforeHttpOperation,
+            },
           ),
   );
+}
+
+function staleAlertOperationError(): Error & {
+  envelope: ReturnType<typeof toErrorEnvelope>;
+} {
+  const error = new Error("The alert transport changed before the request started") as Error & {
+    envelope: ReturnType<typeof toErrorEnvelope>;
+  };
+  error.envelope = {
+    code: "stale_alert_operation",
+    message: error.message,
+    retryable: false,
+    details: null,
+  };
+  return error;
+}
+
+function alertIdentityMismatchError(actual: string, expected: string): Error & {
+  envelope: ReturnType<typeof toErrorEnvelope>;
+} {
+  const error = new Error(
+    `HTTP endpoint resolved to unexpected device ${actual}; expected ${expected}`,
+  ) as Error & { envelope: ReturnType<typeof toErrorEnvelope> };
+  error.envelope = {
+    code: "device_identity_mismatch",
+    message: error.message,
+    retryable: false,
+    details: { actual, expected },
+  };
+  return error;
 }
 
 function alertErrorClearsSnapshot(cause: unknown): boolean {

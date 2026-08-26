@@ -1042,8 +1042,18 @@ export function DeviceRegistryProvider({
           onStatus: (status) => {
             if (streams.current.get(record.target.deviceId) !== subscription)
               return;
+            const currentRecord = recordsRef.current.find(
+              (candidate) => candidate.target.deviceId === record.target.deviceId,
+            );
+            if (
+              !currentRecord ||
+              rememberedHttpBaseUrl(currentRecord) !== httpBaseUrl ||
+              resolvePreferredTransport(currentRecord, serialSessions.current) !==
+                "http"
+            )
+              return;
             const expectedDeviceId =
-              record.identity?.device_id ?? record.target.deviceId;
+              currentRecord.identity?.device_id ?? currentRecord.target.deviceId;
             if (status.device_id && status.device_id !== expectedDeviceId)
               return;
             setRecords((current) =>
@@ -1442,7 +1452,24 @@ export function DeviceRegistryProvider({
       operationContext?: DeviceOperationContext,
     ): Promise<AddDeviceResult> => {
       const baseUrl = normalizeBaseUrl(input.target);
-      let pendingLeaseId: string | null = null;
+      let pendingLeaseKey: string | null = null;
+      let pendingLease: PendingDevdLease | null = null;
+      const clearPendingLease = () => {
+        if (
+          pendingLeaseKey &&
+          pendingLease &&
+          pendingDevdLeases.current.get(pendingLeaseKey) === pendingLease
+        )
+          pendingDevdLeases.current.delete(pendingLeaseKey);
+        pendingLease = null;
+        pendingLeaseKey = null;
+      };
+      const releasePendingLease = async () => {
+        const leaseToRelease = pendingLease;
+        if (!leaseToRelease) return;
+        await leaseToRelease.release();
+        clearPendingLease();
+      };
       const existingOperationRecord = operationContext
         ? records.find(
             (candidate) => candidate.target.deviceId === operationContext.deviceId,
@@ -1687,7 +1714,25 @@ export function DeviceRegistryProvider({
             lease = await createDevdWebLease(baseUrl, selectedDevice.id);
           }
         }
-        if (!reusableLease) pendingLeaseId = lease.lease_id;
+        if (!reusableLease) {
+          pendingLeaseKey =
+            operationContext?.deviceId ??
+            existingOperationRecord?.target.deviceId ??
+            input.devdDeviceId ??
+            selectedDevice.id;
+          let releasePromise: Promise<void> | null = null;
+          pendingLease = {
+            release: async () => {
+              if (!releasePromise)
+                releasePromise = releaseDevdWebLease(
+                  baseUrl,
+                  lease.lease_id,
+                ).then(() => undefined);
+              await releasePromise;
+            },
+          };
+          pendingDevdLeases.current.set(pendingLeaseKey, pendingLease);
+        }
         const result = await probeDevice(
           baseUrl,
           lease.lease_id,
@@ -1697,12 +1742,7 @@ export function DeviceRegistryProvider({
           result.identity,
         );
         if (!firmwareMatch && !input.ignoreFirmwareMismatch) {
-          if (!reusableLease) {
-            await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
-              () => undefined,
-            );
-            pendingLeaseId = null;
-          }
+          if (!reusableLease) await releasePendingLease().catch(() => undefined);
           return {
             ok: false,
             error: firmwareMismatchError(result.identity),
@@ -1740,10 +1780,7 @@ export function DeviceRegistryProvider({
               operationContext.token,
             ))
         ) {
-          if (!reusableLease)
-            await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
-              () => undefined,
-            );
+          if (!reusableLease) await releasePendingLease().catch(() => undefined);
         }
         if (
           operationContext &&
@@ -1772,9 +1809,7 @@ export function DeviceRegistryProvider({
               operationContext.token,
             )
           ) {
-            await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
-              () => undefined,
-            );
+            await releasePendingLease().catch(() => undefined);
             markClosedRuntimeUnavailable(existingRecord, closedRuntime);
             return staleAddDeviceResult();
           }
@@ -1796,9 +1831,7 @@ export function DeviceRegistryProvider({
               operationContext.token,
             )
           ) {
-            await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
-              () => undefined,
-            );
+            await releasePendingLease().catch(() => undefined);
             markClosedRuntimeUnavailable(
               existingOperationRecord,
               closedRuntime,
@@ -1813,22 +1846,16 @@ export function DeviceRegistryProvider({
             operationContext.token,
           )
         ) {
-          if (!reusableLease)
-            await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
-              () => undefined,
-            );
+          if (!reusableLease) await releasePendingLease().catch(() => undefined);
           return staleAddDeviceResult();
         }
         startDevdLeaseHeartbeat(record);
-        pendingLeaseId = null;
+        clearPendingLease();
         invalidateDeviceReads(result.identity.device_id);
         setRecords((current) => upsertRecord(current, record));
         return { ok: true, record };
       } catch (error) {
-        if (pendingLeaseId)
-          await releaseDevdWebLease(baseUrl, pendingLeaseId).catch(
-            () => undefined,
-          );
+        await releasePendingLease().catch(() => undefined);
         const operationStillCurrent =
           !operationContext ||
           currentDeviceOperation(
@@ -5714,7 +5741,7 @@ export function recoverReadRecord(
 ): DeviceRecord {
   if (
     transport === "devd" &&
-    record.target.rememberedChannels?.devd?.transport === "usb" &&
+    record.target.rememberedChannels?.devd &&
     !record.serial?.leaseId
   )
     return record;

@@ -509,7 +509,7 @@ describe("isDevdWriteAvailable", () => {
   });
 });
 
-test("does not recover an unleased USB devd record", () => {
+test("does not recover an unleased legacy devd record", () => {
   const record: DeviceRecord = {
     target: {
       deviceId: "mains-aegis-a1b2c3",
@@ -522,7 +522,6 @@ test("does not recover an unleased USB devd record", () => {
         devd: {
           baseUrl: "http://127.0.0.1:8765",
           seenAt: "2026-06-07T00:00:00.000Z",
-          transport: "usb",
         },
       },
     },
