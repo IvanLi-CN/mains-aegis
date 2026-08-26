@@ -30,6 +30,7 @@ import {
   resetDeviceAdvancedPower,
   resetDevdAdvancedPower,
   scanDevdDevices,
+  assertStatusDeviceIdentity,
   sendDeviceWifiConfig,
   sendDevdWifiConfig,
   setDeviceAdvancedPower,
@@ -2760,6 +2761,7 @@ export function DeviceRegistryProvider({
               const status = await waitForHttpWifiConnected(
                 httpBaseUrl,
                 input.ssid,
+                deviceId,
                 onProgress,
               );
               const settings = await getSettings(httpBaseUrl);
@@ -2976,6 +2978,7 @@ export function DeviceRegistryProvider({
               await clearDeviceWifiConfig(httpBaseUrl);
               const status = await waitForHttpWifiDisabled(
                 httpBaseUrl,
+                deviceId,
                 onProgress,
               );
               const settings = await getSettings(httpBaseUrl);
@@ -3398,7 +3401,11 @@ export function DeviceRegistryProvider({
           : undefined,
       );
       if (record.target.mock) {
-        const detail = await getDeviceChargeControl(record.target.baseUrl);
+        const detail = await getDeviceChargeControl(
+          record.target.baseUrl,
+          undefined,
+          { expectedDeviceId: record.target.deviceId },
+        );
         markDeviceReadSuccess(
           readRequest,
           chargeControlPatchFromDetail(detail),
@@ -3409,7 +3416,10 @@ export function DeviceRegistryProvider({
         try {
           const { value: detail } = await withRememberedHttpFallback(
             record,
-            (httpBaseUrl) => getDeviceChargeControl(httpBaseUrl),
+            (httpBaseUrl) =>
+              getDeviceChargeControl(httpBaseUrl, undefined, {
+                expectedDeviceId: record.target.deviceId,
+              }),
           );
           markDeviceReadSuccess(
             readRequest,
@@ -3729,7 +3739,11 @@ export function DeviceRegistryProvider({
           return { ok: false, error: envelope, detail };
         }
       }
-      const detail = await getDeviceChargeControl(record.target.baseUrl);
+      const detail = await getDeviceChargeControl(
+        record.target.baseUrl,
+        undefined,
+        { expectedDeviceId: record.target.deviceId },
+      );
       if (!currentDeviceOperation(deviceId, operationToken))
         return staleDeviceOperationResult();
       invalidateDeviceReads(deviceId);
@@ -6044,10 +6058,17 @@ async function waitForSerialWifiDisabled(
 async function waitForHttpWifiConnected(
   baseUrl: string,
   ssid: string,
+  expectedDeviceId: string,
   onProgress?: (progress: WifiProvisioningProgress) => void,
 ): Promise<UpsStatus> {
   return waitForSerialWifiState(
-    { requestStatus: () => getStatus(baseUrl) },
+    {
+      requestStatus: async () => {
+        const status = await getStatus(baseUrl);
+        assertStatusDeviceIdentity(status, expectedDeviceId);
+        return status;
+      },
+    },
     "connected",
     ssid,
     onProgress,
@@ -6056,10 +6077,17 @@ async function waitForHttpWifiConnected(
 
 async function waitForHttpWifiDisabled(
   baseUrl: string,
+  expectedDeviceId: string,
   onProgress?: (progress: WifiProvisioningProgress) => void,
 ): Promise<UpsStatus> {
   return waitForSerialWifiState(
-    { requestStatus: () => getStatus(baseUrl) },
+    {
+      requestStatus: async () => {
+        const status = await getStatus(baseUrl);
+        assertStatusDeviceIdentity(status, expectedDeviceId);
+        return status;
+      },
+    },
     "disabled",
     undefined,
     onProgress,

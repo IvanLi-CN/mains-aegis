@@ -107,6 +107,7 @@ function demoSeedEnabled(): boolean {
 type RequestOptions = {
   bridgeAuth?: boolean;
   timeoutMs?: number;
+  expectedDeviceId?: string;
 };
 
 const ACTIVE_ALERT_REQUEST_TIMEOUT_MS = 1_500;
@@ -762,6 +763,19 @@ export const getStatus = (
     `/api/v1/status${leaseQuery(leaseId)}`,
     options,
   );
+
+export function assertStatusDeviceIdentity(
+  status: UpsStatus,
+  expectedDeviceId: string,
+): void {
+  if (!status.device_id || status.device_id === expectedDeviceId) return;
+  throw new MainsAegisApiError({
+    code: "device_identity_mismatch",
+    message: `HTTP status resolved to unexpected device ${status.device_id}; expected ${expectedDeviceId}`,
+    retryable: false,
+    details: { actual: status.device_id, expected: expectedDeviceId },
+  });
+}
 export const getSettings = (
   baseUrl: string,
   leaseId?: string,
@@ -1118,6 +1132,8 @@ async function loadCompatibleDeviceChargeControl(
     getStatus(baseUrl, leaseId, options),
     getSettings(baseUrl, leaseId, options),
   ]);
+  if (options?.expectedDeviceId)
+    assertStatusDeviceIdentity(status, options.expectedDeviceId);
   return compatChargeControlDetail(
     status,
     settings,
