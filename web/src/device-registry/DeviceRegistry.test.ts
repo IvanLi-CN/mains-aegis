@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  canApplyDeviceRead,
   loadUsbProbeSettings,
   recoverReadRecord,
   resolveManualHttpChannelPersistence,
@@ -166,5 +167,40 @@ describe("recoverReadRecord", () => {
     expect(recovered.connectionState).toBe("online");
     expect(recovered.streamState).toBe("streaming");
     expect(recovered.error).toBeNull();
+  });
+});
+
+describe("canApplyDeviceRead", () => {
+  const record: DeviceRecord = {
+    target: {
+      deviceId: "mains-aegis-a1b2c3",
+      baseUrl: "http://mains-aegis-a1b2c3.local",
+      alias: "Bench A",
+      location: "Lab",
+      addedAt: "2026-06-07T00:00:00.000Z",
+      transport: "http",
+    },
+    identity: null,
+    network: null,
+    settings: null,
+    status: null,
+    connectionState: "online",
+    streamState: "idle",
+    error: null,
+    lastUpdated: "2026-06-07T00:00:00.000Z",
+  };
+
+  test("rejects an older generation or a response from another channel", () => {
+    const request = {
+      deviceId: record.target.deviceId,
+      transport: "http" as const,
+      generation: 2,
+    };
+
+    expect(canApplyDeviceRead(record, request, 2)).toBe(true);
+    expect(canApplyDeviceRead(record, request, 3)).toBe(false);
+    expect(
+      canApplyDeviceRead(record, { ...request, transport: "devd" }, 2),
+    ).toBe(false);
   });
 });

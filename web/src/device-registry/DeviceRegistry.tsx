@@ -112,6 +112,24 @@ const DEVD_SERIAL_SESSION_LIMITS = {
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
 const LEGACY_DEVD_TRANSPORT = "ad" + "apter";
 
+export type DeviceReadRequest = {
+  deviceId: string;
+  transport: DeviceChannelTransport;
+  generation: number;
+};
+
+export function canApplyDeviceRead(
+  record: DeviceRecord,
+  request: DeviceReadRequest,
+  currentGeneration = request.generation,
+): boolean {
+  return (
+    currentGeneration === request.generation &&
+    record.target.deviceId === request.deviceId &&
+    (record.target.transport ?? "http") === request.transport
+  );
+}
+
 export function resolveManualHttpChannelPersistence(input: {
   baseUrl: string;
   rememberedHttpBaseUrl?: string;
@@ -160,6 +178,7 @@ export function DeviceRegistryProvider({
   const devdStreams = useRef(new Map<string, DevdSerialEventStream>());
   const devdLeaseHeartbeats = useRef(new Map<string, number>());
   const serialSessions = useRef(new Map<string, WebSerialTransport>());
+  const deviceReadGenerations = useRef(new Map<string, number>());
 
   useEffect(() => {
     if (demoSeed) return;
@@ -217,6 +236,24 @@ export function DeviceRegistryProvider({
     [],
   );
 
+  const beginDeviceRead = useCallback(
+    (deviceId: string, transport: DeviceChannelTransport): DeviceReadRequest => {
+      const generation = (deviceReadGenerations.current.get(deviceId) ?? 0) + 1;
+      deviceReadGenerations.current.set(deviceId, generation);
+      return { deviceId, transport, generation };
+    },
+    [],
+  );
+
+  const invalidateDeviceReads = useCallback((deviceId: string) => {
+    const generation = (deviceReadGenerations.current.get(deviceId) ?? 0) + 1;
+    deviceReadGenerations.current.set(deviceId, generation);
+  }, []);
+
+  const currentDeviceRead = useCallback((request: DeviceReadRequest) => {
+    return deviceReadGenerations.current.get(request.deviceId) === request.generation;
+  }, []);
+
   const resolveBridgeAuthState = useCallback(
     async (target: Pick<DeviceTarget, "baseUrl" | "bridgeAuth">) => {
       if (target.bridgeAuth) return true;
@@ -230,9 +267,32 @@ export function DeviceRegistryProvider({
       deviceId: string,
       error: DeviceRecord["error"],
       operation: "command" | "read" = "command",
+      readRequest?: DeviceReadRequest,
     ) => {
       if (operation === "read") {
-        setRecordError(deviceId, error);
+        if (readRequest && !currentDeviceRead(readRequest)) return;
+        setRecords((current) =>
+          current.map((record) =>
+            record.target.deviceId === deviceId &&
+            (!readRequest ||
+              canApplyDeviceRead(
+                record,
+                readRequest,
+                deviceReadGenerations.current.get(readRequest.deviceId),
+              ))
+              ? {
+                  ...record,
+                  connectionState: error?.retryable ? "offline" : "error",
+                  streamState: "error",
+                  error,
+                  serial: record.serial
+                    ? { ...record.serial, connected: false }
+                    : record.serial,
+                  lastUpdated: new Date().toISOString(),
+                }
+              : record,
+          ),
+        );
         return;
       }
       if (!serialSessions.current.has(deviceId)) {
@@ -312,24 +372,37 @@ export function DeviceRegistryProvider({
         ),
       );
     },
-    [setRecordError],
+    [currentDeviceRead, setRecordError],
   );
 
   const markDeviceReadSuccess = useCallback(
-    (deviceId: string, transport: DeviceChannelTransport) => {
+    (request: DeviceReadRequest, patch?: DeviceStatusPatch) => {
+      if (!currentDeviceRead(request)) return;
       setRecords((current) =>
         current.map((record) =>
-          record.target.deviceId === deviceId
+          canApplyDeviceRead(
+            record,
+            request,
+            deviceReadGenerations.current.get(request.deviceId),
+          )
             ? recoverReadRecord(
-                record,
-                transport,
-                streams.current.has(deviceId) || devdStreams.current.has(deviceId),
+                patch
+                  ? patchSerialStatusRecord(
+                      record,
+                      patch,
+                      "manual_charge",
+                      "Charge control detail refreshed",
+                    )
+                  : record,
+                request.transport,
+                streams.current.has(request.deviceId) ||
+                  devdStreams.current.has(request.deviceId),
               )
             : record,
         ),
       );
     },
-    [],
+    [currentDeviceRead],
   );
 
   const refreshDevice = useCallback(
@@ -1358,6 +1431,7 @@ export function DeviceRegistryProvider({
       transport: DeviceChannelTransport,
       options: Pick<AddDeviceInput, "ignoreFirmwareMismatch"> = {},
     ): Promise<AddDeviceResult> => {
+      invalidateDeviceReads(deviceId);
       const record = records.find(
         (candidate) => candidate.target.deviceId === deviceId,
       );
@@ -1419,10 +1493,17 @@ export function DeviceRegistryProvider({
         ignoreFirmwareMismatch: options.ignoreFirmwareMismatch,
       });
     },
-    [addDevice, addDevdDevice, connectUsbSerialDevice, records],
+    [
+      addDevice,
+      addDevdDevice,
+      connectUsbSerialDevice,
+      invalidateDeviceReads,
+      records,
+    ],
   );
 
   const disconnectUsbSerialDevice = useCallback(async (deviceId: string) => {
+    invalidateDeviceReads(deviceId);
     const session = serialSessions.current.get(deviceId);
     serialSessions.current.delete(deviceId);
     await session?.close();
@@ -1441,7 +1522,7 @@ export function DeviceRegistryProvider({
           : record,
       ),
     );
-  }, []);
+  }, [invalidateDeviceReads]);
 
   const prepareWebSerialFlashPort = useCallback(
     async (deviceId: string): Promise<SerialPortLike | null> => {
@@ -2017,49 +2098,31 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      const selectedTransport = record.target.mock
+        ? (record.target.transport ?? "http")
+        : resolvePreferredTransport(record, serialSessions.current);
+      const readRequest = beginDeviceRead(deviceId, selectedTransport);
       if (record.target.mock) {
         const detail = await getDeviceChargeControl(record.target.baseUrl);
-        setRecords((current) =>
-          current.map((candidate) =>
-            candidate.target.deviceId === deviceId
-              ? patchSerialStatusRecord(
-                  candidate,
-                  chargeControlPatchFromDetail(detail),
-                  "manual_charge",
-                  "Charge control detail refreshed",
-                )
-              : candidate,
-          ),
+        markDeviceReadSuccess(
+          readRequest,
+          chargeControlPatchFromDetail(detail),
         );
-        markDeviceReadSuccess(deviceId, record.target.transport ?? "http");
         return { ok: true, detail };
       }
-      const selectedTransport = resolvePreferredTransport(
-        record,
-        serialSessions.current,
-      );
       if (selectedTransport === "http") {
         try {
           const detail = await withRememberedHttpFallback(record, (httpBaseUrl) =>
             getDeviceChargeControl(httpBaseUrl),
           );
-          setRecords((current) =>
-            current.map((candidate) =>
-              candidate.target.deviceId === deviceId
-                ? patchSerialStatusRecord(
-                    candidate,
-                    chargeControlPatchFromDetail(detail),
-                    "manual_charge",
-                    "Charge control detail refreshed",
-                  )
-                : candidate,
-            ),
+          markDeviceReadSuccess(
+            readRequest,
+            chargeControlPatchFromDetail(detail),
           );
-          markDeviceReadSuccess(deviceId, "http");
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope, "read");
+          setSerialCommandError(deviceId, envelope, "read", readRequest);
           return {
             ok: false,
             error: envelope,
@@ -2076,23 +2139,14 @@ export function DeviceRegistryProvider({
             devdBaseUrl,
             devdDeviceId,
           );
-          setRecords((current) =>
-            current.map((candidate) =>
-              candidate.target.deviceId === deviceId
-                ? patchSerialStatusRecord(
-                    candidate,
-                    chargeControlPatchFromDetail(detail),
-                    "manual_charge",
-                    "Charge control detail refreshed",
-                  )
-                : candidate,
-            ),
+          markDeviceReadSuccess(
+            readRequest,
+            chargeControlPatchFromDetail(detail),
           );
-          markDeviceReadSuccess(deviceId, "devd");
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope, "read");
+          setSerialCommandError(deviceId, envelope, "read", readRequest);
           return {
             ok: false,
             error: envelope,
@@ -2104,23 +2158,14 @@ export function DeviceRegistryProvider({
       if (!session) return serialCommandUnavailable();
       try {
         const detail = await session.requestChargeControl();
-        setRecords((current) =>
-          current.map((candidate) =>
-            candidate.target.deviceId === deviceId
-              ? patchSerialStatusRecord(
-                  candidate,
-                  chargeControlPatchFromDetail(detail),
-                  "manual_charge",
-                  "Charge control detail refreshed",
-                )
-              : candidate,
-          ),
+        markDeviceReadSuccess(
+          readRequest,
+          chargeControlPatchFromDetail(detail),
         );
-        markDeviceReadSuccess(deviceId, "serial");
         return { ok: true, detail };
       } catch (error) {
         const envelope = errorFromSerialFailure(error);
-        setSerialCommandError(deviceId, envelope, "read");
+        setSerialCommandError(deviceId, envelope, "read", readRequest);
         return {
           ok: false,
           error: envelope,
@@ -2141,28 +2186,28 @@ export function DeviceRegistryProvider({
       );
       if (!record) return serialCommandUnavailable();
       const input = manualChargePreviewInput(prefs);
+      const selectedTransport = record.target.mock
+        ? (record.target.transport ?? "http")
+        : resolvePreferredTransport(record, serialSessions.current);
+      const readRequest = beginDeviceRead(deviceId, selectedTransport);
       if (record.target.mock) {
         const detail = await previewDeviceChargeControl(
           record.target.baseUrl,
           input,
         );
-        markDeviceReadSuccess(deviceId, record.target.transport ?? "http");
+        markDeviceReadSuccess(readRequest);
         return { ok: true, detail };
       }
-      const selectedTransport = resolvePreferredTransport(
-        record,
-        serialSessions.current,
-      );
       if (selectedTransport === "http") {
         try {
           const detail = await withRememberedHttpFallback(record, (httpBaseUrl) =>
             previewDeviceChargeControl(httpBaseUrl, input),
           );
-          markDeviceReadSuccess(deviceId, "http");
+          markDeviceReadSuccess(readRequest);
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope, "read");
+          setSerialCommandError(deviceId, envelope, "read", readRequest);
           return {
             ok: false,
             error: envelope,
@@ -2181,11 +2226,11 @@ export function DeviceRegistryProvider({
             devdLeaseIdForRecord(record),
             input,
           );
-          markDeviceReadSuccess(deviceId, "devd");
+          markDeviceReadSuccess(readRequest);
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope, "read");
+          setSerialCommandError(deviceId, envelope, "read", readRequest);
           return {
             ok: false,
             error: envelope,
@@ -2197,11 +2242,11 @@ export function DeviceRegistryProvider({
       if (!session) return serialCommandUnavailable();
       try {
         const detail = await session.previewChargeControl(input);
-        markDeviceReadSuccess(deviceId, "serial");
+        markDeviceReadSuccess(readRequest);
         return { ok: true, detail };
       } catch (error) {
         const envelope = errorFromSerialFailure(error);
-        setSerialCommandError(deviceId, envelope, "read");
+        setSerialCommandError(deviceId, envelope, "read", readRequest);
         return {
           ok: false,
           error: envelope,
