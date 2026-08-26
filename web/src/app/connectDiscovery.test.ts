@@ -434,6 +434,19 @@ describe("resolveSelectedRecord", () => {
     );
 
     expect(selected).toBe(fleetRecord);
+
+    const hydratedRegistry = {
+      ...registryShell,
+      status: fleetRecord.status,
+    };
+    expect(
+      resolveSelectedRecord(
+        "mains-aegis-a1b2c3",
+        [hydratedRegistry],
+        fleetEntries,
+        false,
+      ),
+    ).toBe(fleetRecord);
   });
 });
 

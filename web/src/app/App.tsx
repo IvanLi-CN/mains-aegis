@@ -1113,6 +1113,7 @@ export function resolveSelectedRecord(
       ? null
       : registryRecord;
   }
+  if (registryRecord.target.temporary) return fleetRecord;
   if (
     registryRecord.target.temporary &&
     !registryRecord.status &&
