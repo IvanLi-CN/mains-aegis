@@ -35,7 +35,7 @@
 - USB Console 保留 raw/ignored 串口记录本身，不再额外显示 `Decode issue` 或 `defmt decoder unavailable` 诊断标签；连接时的 firmware artifact 匹配门禁负责阻断不匹配固件。
 - Settings 和 Connect 失败反馈统一为气泡 callout；WiFi 保存、WiFi 清除和 charge-control/advanced-power 写入在固件/devd 返回前显示 spinner 并禁用并发写入。
 - Power 页 owner-facing 手动充电控制已迁到单弹窗 `charge-control` 流：当前态解释来自 `GET /api/v1/charge-control`，preview 来自无副作用 `/preview`，`START/STOP/confirm_loop` 来自 action endpoint。
-- `DeviceRegistry` 为 charge-control detail 与无副作用 preview 的 HTTP、devd、串口失败显式传入 `read` 语义；只有实际写入命令保留 action-error 语义，避免读失败被呈现为动作失败。
+- `DeviceRegistry` 为 charge-control detail 与无副作用 preview 的 HTTP、devd、串口失败显式传入 `read` 语义；只有实际写入命令保留 action-error 语义，避免读失败被呈现为动作失败。读取成功后恢复记录的 online 状态、对应 stream 状态和 devd/serial connected 标记。
 - Fleet 卡片使用用户可理解的摘要字段，技术细节保留到单设备详情与 API 调试页。
 - Demo 复用正式前端路由，通过 `demo=true` 进入 mock-only 运行态；场景切换由左上角 Demo Logo 打开的悬浮控制面板完成，覆盖默认 fleet、空数据、全离线、大数量、USB、Critical Battery、Backup、API Debug 等路径，不再通过 public `seed=` URL 深链暴露。
 

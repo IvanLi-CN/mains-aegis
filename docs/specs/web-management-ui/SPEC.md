@@ -75,7 +75,7 @@
 
 - Fleet Summary 只在 `/` 渲染；`/connect` 和所有 `/devices/:device_id/*` 页面不得重复设备数量、在线数或 fleet `Critical` / `Warning` 指标。
 - 每个单设备页面必须在内容区拥有其能力的 `h1` 和对应内容。设备别名与连接态属于紧凑 Device Context，不能替代该标题或展开为摘要卡组。当前 Web App 不提供跨设备通知或全局告警入口。
-- 单设备深链的未知 section 归一化到 Overview；设备加载或暂时不可用时仍保留当前路由的 `h1`，并在次级页用紧凑上下文明确 Connecting、Offline 或 Connection error。记录级 transport error 也必须触发该上下文，不得把保留的旧 telemetry 标为 Live。仅由当前 devd discovery 暂时纳管的设备在后续快照消失后不得继续作为 Fleet 或路由设备；设备仍在当前快照时，即使已完成 hydration 也必须以最新 discovery entry 作为对象权威，但临时 registry 已记录的明确 connection/stream failure 只能覆盖其失败状态；已保存记录仍随当前 discovery 恢复，恢复到 connected 时清除过期的 transport failure、stream error 与旧 telemetry；在线 transport 的命令失败保留在当前 entry 上并显示为动作错误，不得误报为连接中断；只读的 charge-control detail 与 preview 请求失败必须使用 transport/data-error 上下文，不因 HTTP 状态码而归类为动作失败；首个 status 尚未到达时显示 Waiting。
+- 单设备深链的未知 section 归一化到 Overview；设备加载或暂时不可用时仍保留当前路由的 `h1`，并在次级页用紧凑上下文明确 Connecting、Offline 或 Connection error。记录级 transport error 也必须触发该上下文，不得把保留的旧 telemetry 标为 Live。仅由当前 devd discovery 暂时纳管的设备在后续快照消失后不得继续作为 Fleet 或路由设备；设备仍在当前快照时，即使已完成 hydration 也必须以最新 discovery entry 作为对象权威，但临时 registry 已记录的明确 connection/stream failure 只能覆盖其失败状态；已保存记录仍随当前 discovery 恢复，恢复到 connected 时清除过期的 transport failure、stream error 与旧 telemetry；在线 transport 的命令失败保留在当前 entry 上并显示为动作错误，不得误报为连接中断；只读的 charge-control detail 与 preview 请求失败必须使用 transport/data-error 上下文，不因 HTTP 状态码而归类为动作失败；读取成功后必须恢复对应的 online/streaming 或 polling 状态并清除该读取错误；首个 status 尚未到达时显示 Waiting。
 - `/devices/:device_id` 在其 `h1` 后展示完整单设备运行状态带与关键摘要。该完整 Device Overview 不得在 Power、Battery、Alerts、Thermal、Device、Firmware、Settings 或 API 页重复渲染。
 - 活动告警只在当前设备的 Alerts 页展示，并通过既有设备导航进入；单设备页面不得渲染全局告警图标、徽标或跨设备快捷入口。
 - `/devices/:device_id/power` 展示 input、charger、output gate、OUT A/B。
