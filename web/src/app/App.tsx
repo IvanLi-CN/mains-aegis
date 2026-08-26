@@ -4246,6 +4246,14 @@ function AlertsPage({
   const mute = async (alert: ActiveAlert) => {
     if (targets.length === 0 || error || alert.sound_state === "muted") return;
     const lifecycleToken = lifecycle.current;
+    const runtimeIdentity = {
+      deviceId: record.target.deviceId,
+      runtimeId: record.runtimeId,
+      transport: activeRecordTransport(record),
+      serialSource: record.serial?.source,
+      serialBaseUrl: record.serial?.baseUrl,
+      serialLeaseId: record.serial?.leaseId,
+    };
     setMuting(alert.alert_id);
     setActionError(null);
     try {
@@ -4260,13 +4268,18 @@ function AlertsPage({
             return Boolean(
               current &&
                 current.target.deviceId === record.target.deviceId &&
+                alertRuntimeStillCurrent(current, runtimeIdentity) &&
                 activeRecordTransport(current) === "http" &&
                 alertHttpTargetStillCurrent(current, baseUrl),
             );
           },
           beforeTargetOperation: (target) => {
             const current = recordRef.current;
-            if (!current || current.target.deviceId !== record.target.deviceId)
+            if (
+              !current ||
+              current.target.deviceId !== record.target.deviceId ||
+              !alertRuntimeStillCurrent(current, runtimeIdentity)
+            )
               return false;
             if (target.kind === "http")
               return activeRecordTransport(current) === "http";
@@ -4486,6 +4499,28 @@ function alertTargetStillCurrent(
   return Boolean(
     record.serial?.source === "web_serial" ||
       (record.target.mock && record.serial?.source === "mock"),
+  );
+}
+
+function alertRuntimeStillCurrent(
+  record: DeviceRecord,
+  expected: {
+    deviceId: string;
+    runtimeId?: string;
+    transport: DeviceChannelTransport | null;
+    serialSource?: NonNullable<DeviceRecord["serial"]>["source"];
+    serialBaseUrl?: string;
+    serialLeaseId?: string;
+  },
+): boolean {
+  if (record.target.deviceId !== expected.deviceId) return false;
+  if (record.runtimeId !== undefined || expected.runtimeId !== undefined)
+    return record.runtimeId === expected.runtimeId;
+  return (
+    activeRecordTransport(record) === expected.transport &&
+    record.serial?.source === expected.serialSource &&
+    record.serial?.baseUrl === expected.serialBaseUrl &&
+    record.serial?.leaseId === expected.serialLeaseId
   );
 }
 

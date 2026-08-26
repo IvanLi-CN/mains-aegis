@@ -3506,6 +3506,8 @@ export function DeviceRegistryProvider({
         const detail = await previewDeviceChargeControl(
           record.target.baseUrl,
           input,
+          undefined,
+          { expectedDeviceId: record.target.deviceId },
         );
         markDeviceReadSuccess(readRequest);
         return { ok: true, detail };
@@ -3514,7 +3516,10 @@ export function DeviceRegistryProvider({
         try {
           const { value: detail } = await withRememberedHttpFallback(
             record,
-            (httpBaseUrl) => previewDeviceChargeControl(httpBaseUrl, input),
+            (httpBaseUrl) =>
+              previewDeviceChargeControl(httpBaseUrl, input, undefined, {
+                expectedDeviceId: record.target.deviceId,
+              }),
           );
           markDeviceReadSuccess(readRequest);
           return { ok: true, detail };
@@ -3594,7 +3599,10 @@ export function DeviceRegistryProvider({
         try {
           const { value: detail } = await withRememberedHttpFallback(
             record,
-            (httpBaseUrl) => setDeviceManualChargeControl(httpBaseUrl, input),
+            (httpBaseUrl) =>
+              setDeviceManualChargeControl(httpBaseUrl, input, {
+                expectedDeviceId: record.target.deviceId,
+              }),
             {
               allowFallback: false,
               beforeOperation: () => currentDeviceOperation(deviceId, operationToken),

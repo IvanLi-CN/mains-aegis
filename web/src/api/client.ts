@@ -820,8 +820,9 @@ export const previewDeviceChargeControl = (
   baseUrl: string,
   input: ManualChargePreviewRequest,
   leaseId?: string,
+  options?: RequestOptions,
 ) =>
-  previewDeviceChargeControlCompat(baseUrl, input, leaseId);
+  previewDeviceChargeControlCompat(baseUrl, input, leaseId, options);
 
 export type DevdSerialSession = {
   connected: boolean;
@@ -1146,6 +1147,7 @@ async function previewDeviceChargeControlCompat(
   baseUrl: string,
   input: ManualChargePreviewRequest,
   leaseId?: string,
+  options?: RequestOptions,
 ): Promise<ChargeControlDetail> {
   try {
     const payload = await requestWithBody<unknown>(
@@ -1162,12 +1164,25 @@ async function previewDeviceChargeControlCompat(
         leaseId,
         input,
         legacySummary,
+        options,
       );
     }
-    return loadCompatibleDeviceChargeControl(baseUrl, leaseId, input);
+    return loadCompatibleDeviceChargeControl(
+      baseUrl,
+      leaseId,
+      input,
+      undefined,
+      options,
+    );
   } catch (error) {
     if (shouldFallbackToCompatibleChargeControl(error)) {
-      return loadCompatibleDeviceChargeControl(baseUrl, leaseId, input);
+      return loadCompatibleDeviceChargeControl(
+        baseUrl,
+        leaseId,
+        input,
+        undefined,
+        options,
+      );
     }
     throw error;
   }
@@ -1176,6 +1191,7 @@ async function previewDeviceChargeControlCompat(
 async function setDeviceManualChargeControlCompat(
   baseUrl: string,
   input: ManualChargeControlRequest,
+  options?: RequestOptions,
 ): Promise<ChargeControlDetail> {
   const payload = await requestWithBody<unknown>(
     baseUrl,
@@ -1191,9 +1207,16 @@ async function setDeviceManualChargeControlCompat(
       undefined,
       undefined,
       legacySummary,
+      options,
     );
   }
-  return loadCompatibleDeviceChargeControl(baseUrl);
+  return loadCompatibleDeviceChargeControl(
+    baseUrl,
+    undefined,
+    undefined,
+    undefined,
+    options,
+  );
 }
 
 export type DevdSerialEvent = {
@@ -1471,8 +1494,9 @@ function muteMockAlert(baseUrl: string, path: string, body: unknown): unknown {
 export const setDeviceManualChargeControl = (
   baseUrl: string,
   input: ManualChargeControlRequest,
+  options?: RequestOptions,
 ) =>
-  setDeviceManualChargeControlCompat(baseUrl, input);
+  setDeviceManualChargeControlCompat(baseUrl, input, options);
 export const getDevdDeviceChargeControl = (
   baseUrl: string,
   deviceId: string,
