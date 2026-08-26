@@ -166,6 +166,32 @@ export function sameDeviceRuntime(
   );
 }
 
+export function markClosedRuntimeUnavailableRecord(
+  candidate: DeviceRecord,
+  previous: DeviceRecord,
+): DeviceRecord {
+  if (!sameDeviceRuntime(candidate, previous)) return candidate;
+  return {
+    ...candidate,
+    connectionState: "offline",
+    streamState: "error",
+    error: null,
+    errorSource: undefined,
+    serial:
+      candidate.serial?.source === "devd"
+        ? {
+            ...candidate.serial,
+            connected: false,
+            leaseId: undefined,
+            leaseExpiresAt: undefined,
+          }
+        : candidate.serial?.source === "web_serial"
+          ? { ...candidate.serial, connected: false }
+          : candidate.serial,
+    lastUpdated: new Date().toISOString(),
+  };
+}
+
 export function resolveManualHttpChannelPersistence(input: {
   baseUrl: string;
   rememberedHttpBaseUrl?: string;
@@ -665,7 +691,10 @@ export function DeviceRegistryProvider({
             traceSession.status ?? null,
             settings,
             traceSession,
-            existing.runtimeId,
+            devdLeaseHeartbeats.current.has(deviceId) ||
+              serialSessions.current.has(deviceId)
+              ? existing.runtimeId
+              : undefined,
           );
           if (
             !currentDeviceOperation(deviceId, operation) ||
@@ -715,7 +744,13 @@ export function DeviceRegistryProvider({
               : "polling";
           return upsertRecord(
             current,
-            recordFromProbe(nextTarget, result, "online", streamState),
+            recordFromProbe(
+              nextTarget,
+              result,
+              "online",
+              streamState,
+              streams.current.has(deviceId) ? previous.runtimeId : undefined,
+            ),
           );
         });
       } catch (error) {
@@ -1091,7 +1126,7 @@ export function DeviceRegistryProvider({
       serialSessions.current.delete(deviceId);
       await session?.close().catch(() => undefined);
       if (record?.serial?.source === "devd")
-        await disconnectDevdSerialDevice(record).catch(() => undefined);
+        await disconnectDevdSerialDevice(record);
       return runtimeSnapshot;
     },
     [],
@@ -1412,11 +1447,15 @@ export function DeviceRegistryProvider({
               )
             )
               return staleAddDeviceResult();
-            existingRuntimeSnapshot = await closeDeviceRuntime(
+            existingRuntimeSnapshot = captureDeviceRuntime(
+              existingOperationRecord.target.deviceId,
+            );
+            existingRuntimeClosed = true;
+            const closedRuntime = await closeDeviceRuntime(
               existingOperationRecord.target.deviceId,
               existingOperationRecord,
             );
-            existingRuntimeClosed = true;
+            existingRuntimeSnapshot = closedRuntime;
             if (
               operationContext &&
               !currentDeviceOperation(
@@ -1526,12 +1565,15 @@ export function DeviceRegistryProvider({
           }
         }
         if (existingOperationRecord && !existingRuntimeClosed && !reusableLease) {
+          existingRuntimeSnapshot = captureDeviceRuntime(
+            existingOperationRecord.target.deviceId,
+          );
+          existingRuntimeClosed = true;
           const closedRuntime = await closeDeviceRuntime(
             existingOperationRecord.target.deviceId,
             existingOperationRecord,
           );
           existingRuntimeSnapshot = closedRuntime;
-          existingRuntimeClosed = true;
           if (
             operationContext &&
             !currentDeviceOperation(
@@ -1823,10 +1865,14 @@ export function DeviceRegistryProvider({
       try {
         if (operationPreviousRecord) {
           previousRuntimeClosed = true;
-          previousRuntimeSnapshot = await closeDeviceRuntime(
+          previousRuntimeSnapshot = captureDeviceRuntime(
+            operationPreviousRecord.target.deviceId,
+          );
+          const closedRuntime = await closeDeviceRuntime(
             operationPreviousRecord.target.deviceId,
             operationPreviousRecord,
           );
+          previousRuntimeSnapshot = closedRuntime;
           if (
             operationContext &&
             !currentDeviceOperation(
@@ -3736,7 +3782,10 @@ export function DeviceRegistryProvider({
     return true;
   }
 
-  function startDevdLeaseHeartbeat(record: DeviceRecord) {
+  function startDevdLeaseHeartbeat(
+    record: DeviceRecord,
+    operationContext?: DeviceOperationContext,
+  ) {
     const leaseId = record.serial?.leaseId;
     const baseUrl = record.serial?.baseUrl ?? "";
     if (!leaseId) return;
@@ -3747,6 +3796,20 @@ export function DeviceRegistryProvider({
       Math.min(record.serial?.heartbeatIntervalMs ?? 2000, 5000),
     );
     const heartbeat = window.setInterval(() => {
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      ) {
+        if (devdLeaseHeartbeats.current.get(record.target.deviceId) === heartbeat) {
+          window.clearInterval(heartbeat);
+          devdLeaseHeartbeats.current.delete(record.target.deviceId);
+          void releaseDevdWebLease(baseUrl, leaseId).catch(() => undefined);
+        }
+        return;
+      }
       void heartbeatDevdWebLease(baseUrl, leaseId)
         .then((lease) => {
           setRecords((current) =>
@@ -3873,7 +3936,6 @@ export function DeviceRegistryProvider({
       const streamState = result.identity.capabilities.sse
         ? "idle"
         : "polling";
-      invalidateDeviceReads(record.target.deviceId);
       setRecords((current) => {
         if (
           operationContext &&
@@ -3921,29 +3983,11 @@ export function DeviceRegistryProvider({
         devdLeaseHeartbeats.current.has(deviceId)
       )
         return current;
-      return current.map((candidate) => {
-        if (candidate.target.deviceId !== deviceId) return candidate;
-        if (!sameDeviceRuntime(candidate, record)) return candidate;
-        return {
-          ...candidate,
-          connectionState: "offline",
-          streamState: "error",
-          error: null,
-          errorSource: undefined,
-          serial:
-            candidate.serial?.source === "devd"
-              ? {
-                  ...candidate.serial,
-                  connected: false,
-                  leaseId: undefined,
-                  leaseExpiresAt: undefined,
-                }
-              : candidate.serial?.source === "web_serial"
-                ? { ...candidate.serial, connected: false }
-                : candidate.serial,
-          lastUpdated: new Date().toISOString(),
-        };
-      });
+      return current.map((candidate) =>
+        candidate.target.deviceId === deviceId
+          ? markClosedRuntimeUnavailableRecord(candidate, record)
+          : candidate,
+      );
     });
   }
 
@@ -4061,8 +4105,7 @@ export function DeviceRegistryProvider({
         serialProtocol: session.protocol,
       };
       const restored = recordFromDevdProbe(target, result, session, lease);
-      startDevdLeaseHeartbeat(restored);
-      invalidateDeviceReads(record.target.deviceId);
+      startDevdLeaseHeartbeat(restored, operationContext);
       setRecords((current) => {
         if (
           operationContext &&
@@ -4074,6 +4117,23 @@ export function DeviceRegistryProvider({
           return current;
         return upsertRecord(current, restored);
       });
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      ) {
+        const heartbeat = devdLeaseHeartbeats.current.get(record.target.deviceId);
+        if (heartbeat !== undefined) {
+          window.clearInterval(heartbeat);
+          devdLeaseHeartbeats.current.delete(record.target.deviceId);
+        }
+        await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
+          () => undefined,
+        );
+        return false;
+      }
       return true;
     } catch {
       if (lease)
@@ -4332,9 +4392,10 @@ function recordFromProbe(
   result: ProbeResult,
   connectionState: DeviceRecord["connectionState"],
   streamState: DeviceRecord["streamState"],
+  runtimeId?: string,
 ): DeviceRecord {
   return {
-    runtimeId: newDeviceRuntimeId(),
+    runtimeId: runtimeId ?? newDeviceRuntimeId(),
     target,
     identity: result.identity,
     network: result.network,

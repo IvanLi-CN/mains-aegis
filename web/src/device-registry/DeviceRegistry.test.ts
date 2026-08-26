@@ -4,6 +4,7 @@ import {
   canApplyDeviceRead,
   isDevdLeaseInvalidError,
   loadUsbProbeSettings,
+  markClosedRuntimeUnavailableRecord,
   recoverReadRecord,
   resolveManualHttpChannelPersistence,
   sameDeviceRuntime,
@@ -339,6 +340,65 @@ describe("sameDeviceRuntime", () => {
         previous,
       ),
     ).toBe(false);
+  });
+});
+
+describe("markClosedRuntimeUnavailableRecord", () => {
+  const previous: DeviceRecord = {
+    target: {
+      deviceId: "mains-aegis-a1b2c3",
+      baseUrl: "http://mains-aegis-a1b2c3.local",
+      alias: "Bench A",
+      location: "Lab",
+      addedAt: "2026-06-07T00:00:00.000Z",
+      transport: "http",
+    },
+    runtimeId: "previous-runtime",
+    identity: null,
+    network: null,
+    settings: null,
+    status: null,
+    connectionState: "online",
+    streamState: "streaming",
+    error: null,
+    lastUpdated: "2026-06-07T00:00:00.000Z",
+  };
+
+  test("keeps a successor runtime untouched", () => {
+    const successor = {
+      ...previous,
+      runtimeId: "successor-runtime",
+      connectionState: "online" as const,
+      streamState: "streaming" as const,
+    };
+    expect(markClosedRuntimeUnavailableRecord(successor, previous)).toBe(
+      successor,
+    );
+  });
+
+  test("marks the closed runtime offline and disconnects devd leases", () => {
+    const closed = {
+      ...previous,
+      runtimeId: "previous-runtime",
+      target: { ...previous.target, transport: "devd" as const },
+      serial: {
+        connected: true,
+        source: "devd" as const,
+        baseUrl: "http://127.0.0.1:8765",
+        leaseId: "lease-1",
+        leaseExpiresAt: "2026-06-07T00:00:10.000Z",
+        protocol: "mains-aegis.cdc.v1",
+        logs: [],
+        trace: [],
+      },
+    };
+    const unavailable = markClosedRuntimeUnavailableRecord(closed, previous);
+    expect(unavailable.connectionState).toBe("offline");
+    expect(unavailable.streamState).toBe("error");
+    expect(unavailable.error).toBeNull();
+    expect(unavailable.serial?.connected).toBe(false);
+    expect(unavailable.serial?.leaseId).toBeUndefined();
+    expect(unavailable.serial?.leaseExpiresAt).toBeUndefined();
   });
 });
 
