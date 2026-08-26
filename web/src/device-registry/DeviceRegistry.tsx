@@ -124,6 +124,12 @@ type DeviceRuntimeSnapshot = {
   heartbeat?: number;
 };
 
+type DevdLeaseHeartbeatControl = {
+  markCommitted: () => void;
+  releaseIfOwned: () => void;
+  stopIfOwned: () => void;
+};
+
 export type DeviceReadRequest = {
   deviceId: string;
   transport: DeviceChannelTransport;
@@ -1115,18 +1121,37 @@ export function DeviceRegistryProvider({
   const closeDeviceRuntime = useCallback(
     async (deviceId: string, record?: DeviceRecord) => {
       const runtimeSnapshot = captureDeviceRuntime(deviceId);
-      streams.current.get(deviceId)?.close();
-      streams.current.delete(deviceId);
-      devdStreams.current.get(deviceId)?.close();
-      devdStreams.current.delete(deviceId);
       const heartbeat = devdLeaseHeartbeats.current.get(deviceId);
-      if (heartbeat !== undefined) window.clearInterval(heartbeat);
-      devdLeaseHeartbeats.current.delete(deviceId);
-      const session = serialSessions.current.get(deviceId);
-      serialSessions.current.delete(deviceId);
-      await session?.close().catch(() => undefined);
       if (record?.serial?.source === "devd")
         await disconnectDevdSerialDevice(record);
+      if (
+        heartbeat !== undefined &&
+        devdLeaseHeartbeats.current.get(deviceId) === heartbeat
+      ) {
+        window.clearInterval(heartbeat);
+        devdLeaseHeartbeats.current.delete(deviceId);
+      }
+      if (
+        runtimeSnapshot.stream &&
+        streams.current.get(deviceId) === runtimeSnapshot.stream
+      ) {
+        runtimeSnapshot.stream.close();
+        streams.current.delete(deviceId);
+      }
+      if (
+        runtimeSnapshot.devdStream &&
+        devdStreams.current.get(deviceId) === runtimeSnapshot.devdStream
+      ) {
+        runtimeSnapshot.devdStream.close();
+        devdStreams.current.delete(deviceId);
+      }
+      if (
+        runtimeSnapshot.serialSession &&
+        serialSessions.current.get(deviceId) === runtimeSnapshot.serialSession
+      ) {
+        serialSessions.current.delete(deviceId);
+        await runtimeSnapshot.serialSession.close().catch(() => undefined);
+      }
       return runtimeSnapshot;
     },
     [],
@@ -3785,29 +3810,57 @@ export function DeviceRegistryProvider({
   function startDevdLeaseHeartbeat(
     record: DeviceRecord,
     operationContext?: DeviceOperationContext,
-  ) {
+  ): DevdLeaseHeartbeatControl {
     const leaseId = record.serial?.leaseId;
     const baseUrl = record.serial?.baseUrl ?? "";
-    if (!leaseId) return;
+    if (!leaseId)
+      return {
+        markCommitted: () => undefined,
+        releaseIfOwned: () => undefined,
+        stopIfOwned: () => undefined,
+      };
     const existing = devdLeaseHeartbeats.current.get(record.target.deviceId);
     if (existing !== undefined) window.clearInterval(existing);
     const intervalMs = Math.max(
       1000,
       Math.min(record.serial?.heartbeatIntervalMs ?? 2000, 5000),
     );
-    const heartbeat = window.setInterval(() => {
+    let heartbeat: number | undefined;
+    let committed = !operationContext;
+    const stopIfOwned = () => {
+      if (
+        heartbeat === undefined ||
+        devdLeaseHeartbeats.current.get(record.target.deviceId) !== heartbeat
+      )
+        return;
+      window.clearInterval(heartbeat);
+      devdLeaseHeartbeats.current.delete(record.target.deviceId);
+    };
+    const control: DevdLeaseHeartbeatControl = {
+      markCommitted: () => {
+        committed = true;
+      },
+      stopIfOwned,
+      releaseIfOwned: () => {
+        if (
+          heartbeat === undefined ||
+          devdLeaseHeartbeats.current.get(record.target.deviceId) !== heartbeat
+        )
+          return;
+        stopIfOwned();
+        void releaseDevdWebLease(baseUrl, leaseId).catch(() => undefined);
+      },
+    };
+    heartbeat = window.setInterval(() => {
       if (
         operationContext &&
+        !committed &&
         !currentDeviceOperation(
           operationContext.deviceId,
           operationContext.token,
         )
       ) {
-        if (devdLeaseHeartbeats.current.get(record.target.deviceId) === heartbeat) {
-          window.clearInterval(heartbeat);
-          devdLeaseHeartbeats.current.delete(record.target.deviceId);
-          void releaseDevdWebLease(baseUrl, leaseId).catch(() => undefined);
-        }
+        control.releaseIfOwned();
         return;
       }
       void heartbeatDevdWebLease(baseUrl, leaseId)
@@ -3837,14 +3890,7 @@ export function DeviceRegistryProvider({
         .catch((error) => {
           const envelope = toErrorEnvelope(error);
           const leaseInvalid = isDevdLeaseInvalidError(envelope);
-          if (leaseInvalid) {
-            window.clearInterval(heartbeat);
-            if (
-              devdLeaseHeartbeats.current.get(record.target.deviceId) ===
-              heartbeat
-            )
-              devdLeaseHeartbeats.current.delete(record.target.deviceId);
-          }
+          if (leaseInvalid) control.stopIfOwned();
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === record.target.deviceId &&
@@ -3871,9 +3917,10 @@ export function DeviceRegistryProvider({
                 : candidate,
             ),
           );
-        });
+      });
     }, intervalMs);
     devdLeaseHeartbeats.current.set(record.target.deviceId, heartbeat);
+    return control;
   }
 
   async function restorePreviousRuntime(
@@ -4105,7 +4152,10 @@ export function DeviceRegistryProvider({
         serialProtocol: session.protocol,
       };
       const restored = recordFromDevdProbe(target, result, session, lease);
-      startDevdLeaseHeartbeat(restored, operationContext);
+      const heartbeatControl = startDevdLeaseHeartbeat(
+        restored,
+        operationContext,
+      );
       setRecords((current) => {
         if (
           operationContext &&
@@ -4115,6 +4165,7 @@ export function DeviceRegistryProvider({
           )
         )
           return current;
+        heartbeatControl.markCommitted();
         return upsertRecord(current, restored);
       });
       if (
@@ -4124,14 +4175,7 @@ export function DeviceRegistryProvider({
           operationContext.token,
         )
       ) {
-        const heartbeat = devdLeaseHeartbeats.current.get(record.target.deviceId);
-        if (heartbeat !== undefined) {
-          window.clearInterval(heartbeat);
-          devdLeaseHeartbeats.current.delete(record.target.deviceId);
-        }
-        await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
-          () => undefined,
-        );
+        heartbeatControl.releaseIfOwned();
         return false;
       }
       return true;
