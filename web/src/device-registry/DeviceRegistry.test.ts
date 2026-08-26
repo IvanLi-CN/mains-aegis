@@ -204,6 +204,44 @@ describe("recoverReadRecord", () => {
     expect(recovered.error).toEqual(record.error);
     expect(recovered.errorSource).toBe("command");
   });
+
+  test("restores a preserved command error after a read error recovers", () => {
+    const record: DeviceRecord = {
+      target: {
+        deviceId: "mains-aegis-a1b2c3",
+        baseUrl: "http://mains-aegis-a1b2c3.local",
+        alias: "Bench A",
+        location: "Lab",
+        addedAt: "2026-06-07T00:00:00.000Z",
+        transport: "http",
+      },
+      identity: null,
+      network: null,
+      settings: null,
+      status: null,
+      connectionState: "error",
+      streamState: "error",
+      error: {
+        code: "http_503",
+        message: "charge read unavailable",
+        retryable: true,
+        details: null,
+      },
+      errorSource: "read",
+      commandError: {
+        code: "manual_charge_failed",
+        message: "charge command rejected",
+        retryable: false,
+        details: null,
+      },
+      lastUpdated: "2026-06-07T00:00:00.000Z",
+    };
+
+    const recovered = recoverReadRecord(record, "http");
+
+    expect(recovered.error).toEqual(record.commandError);
+    expect(recovered.errorSource).toBe("command");
+  });
 });
 
 describe("canApplyDeviceRead", () => {

@@ -216,29 +216,6 @@ export function DeviceRegistryProvider({
     return () => window.removeEventListener("popstate", syncSeedFromUrl);
   }, [initialDemoSeed]);
 
-  const setRecordError = useCallback(
-    (deviceId: string, error: DeviceRecord["error"]) => {
-      setRecords((current) =>
-        current.map((record) =>
-          record.target.deviceId === deviceId
-            ? {
-                ...record,
-                connectionState: error?.retryable ? "offline" : "error",
-                streamState: "error",
-                error,
-                errorSource: "transport",
-                serial: record.serial
-                  ? { ...record.serial, connected: false }
-                  : record.serial,
-                lastUpdated: new Date().toISOString(),
-              }
-            : record,
-        ),
-      );
-    },
-    [],
-  );
-
   const beginDeviceRead = useCallback(
     (deviceId: string, transport: DeviceChannelTransport): DeviceReadRequest => {
       const generation = (deviceReadGenerations.current.get(deviceId) ?? 0) + 1;
@@ -256,6 +233,31 @@ export function DeviceRegistryProvider({
   const currentDeviceRead = useCallback((request: DeviceReadRequest) => {
     return deviceReadGenerations.current.get(request.deviceId) === request.generation;
   }, []);
+
+  const setRecordError = useCallback(
+    (deviceId: string, error: DeviceRecord["error"]) => {
+      invalidateDeviceReads(deviceId);
+      setRecords((current) =>
+        current.map((record) =>
+          record.target.deviceId === deviceId
+            ? {
+                ...record,
+                connectionState: error?.retryable ? "offline" : "error",
+                streamState: "error",
+                error,
+                errorSource: "transport",
+                commandError: record.commandError,
+                serial: record.serial
+                  ? { ...record.serial, connected: false }
+                  : record.serial,
+                lastUpdated: new Date().toISOString(),
+              }
+            : record,
+        ),
+      );
+    },
+    [invalidateDeviceReads],
+  );
 
   const resolveBridgeAuthState = useCallback(
     async (target: Pick<DeviceTarget, "baseUrl" | "bridgeAuth">) => {
@@ -284,17 +286,19 @@ export function DeviceRegistryProvider({
                 readRequest,
                 deviceReadGenerations.current.get(readRequest.deviceId),
               ))
-              ? record.errorSource === "command"
-                ? record
-                : {
+              ? {
                   ...record,
                   connectionState: error?.retryable ? "offline" : "error",
                   streamState: "error",
                   error,
                   errorSource: "read",
-                  serial: record.serial
-                    ? { ...record.serial, connected: false }
-                    : record.serial,
+                  commandError: record.commandError,
+                  serial:
+                    record.serial &&
+                    (readRequest?.transport === "serial" ||
+                      readRequest?.transport === "devd")
+                      ? { ...record.serial, connected: false }
+                      : record.serial,
                   lastUpdated: new Date().toISOString(),
                 }
               : record,
@@ -316,6 +320,7 @@ export function DeviceRegistryProvider({
                 streamState: "polling",
                 error,
                 errorSource: "command",
+                commandError: error,
                 serial: { ...record.serial, connected: true },
                 lastUpdated: new Date().toISOString(),
               },
@@ -344,6 +349,7 @@ export function DeviceRegistryProvider({
                           : "polling",
                       error,
                       errorSource: "command",
+                      commandError: error,
                       lastUpdated: new Date().toISOString(),
                     }
                   : record,
@@ -371,6 +377,7 @@ export function DeviceRegistryProvider({
                   streamState: "streaming",
                   error,
                   errorSource: "command",
+                  commandError: error,
                   serial: record.serial
                     ? { ...record.serial, connected: true }
                     : record.serial,
@@ -3382,6 +3389,10 @@ function mergeDeviceRecord(
         ? "streaming"
         : incoming.streamState,
     error: incoming.error ?? existing.error,
+    commandError:
+      incoming.commandError !== undefined
+        ? incoming.commandError
+        : existing.commandError,
     lastUpdated: incoming.lastUpdated ?? existing.lastUpdated,
   };
 }
@@ -3841,6 +3852,7 @@ function patchSerialStatusRecord(
       patch.chargeControlDetail ?? record.chargeControlDetail ?? null,
     error: clearError ? null : record.error,
     errorSource: clearError ? undefined : record.errorSource,
+    commandError: clearError ? undefined : record.commandError,
     lastUpdated: new Date().toISOString(),
   };
   if (!record.serial) return nextRecord;
@@ -3869,8 +3881,17 @@ export function recoverReadRecord(
     ...record,
     connectionState: "online",
     streamState,
-    error: record.errorSource === "read" ? null : record.error,
-    errorSource: record.errorSource === "read" ? undefined : record.errorSource,
+    error:
+      record.errorSource === "read" || record.errorSource === "transport"
+        ? record.commandError ?? null
+        : record.error,
+    errorSource:
+      record.errorSource === "read" || record.errorSource === "transport"
+        ? record.commandError
+          ? "command"
+          : undefined
+        : record.errorSource,
+    commandError: record.commandError,
     lastUpdated: new Date().toISOString(),
     serial:
       record.serial && (transport === "serial" || transport === "devd")
