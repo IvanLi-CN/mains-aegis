@@ -2596,6 +2596,8 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        if (!isDevdWriteAvailable(record))
+          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -2797,6 +2799,8 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        if (!isDevdWriteAvailable(record))
+          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -2941,6 +2945,8 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        if (!isDevdWriteAvailable(record))
+          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -3066,6 +3072,8 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        if (!isDevdWriteAvailable(record))
+          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -3148,7 +3156,7 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
-      const selectedTransport = record.target.mock
+  const selectedTransport = record.target.mock
         ? (record.target.transport ?? "http")
         : resolvePreferredTransport(record, serialSessions.current);
       const readRequest = beginDeviceRead(deviceId, selectedTransport);
@@ -3236,7 +3244,7 @@ export function DeviceRegistryProvider({
       );
       if (!record) return serialCommandUnavailable();
       const input = manualChargePreviewInput(prefs);
-      const selectedTransport = record.target.mock
+  const selectedTransport = record.target.mock
         ? (record.target.transport ?? "http")
         : resolvePreferredTransport(record, serialSessions.current);
       const readRequest = beginDeviceRead(deviceId, selectedTransport);
@@ -3375,6 +3383,8 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        if (!isDevdWriteAvailable(record))
+          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -3541,6 +3551,8 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        if (!isDevdWriteAvailable(record))
+          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -3685,6 +3697,8 @@ export function DeviceRegistryProvider({
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        if (!isDevdWriteAvailable(record))
+          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -5053,6 +5067,17 @@ function devdLeaseIdForRecord(record: DeviceRecord): string | null {
   return record.serial?.source === "devd"
     ? (record.serial.leaseId ?? null)
     : null;
+}
+
+export function isDevdWriteAvailable(record: DeviceRecord): boolean {
+  const devdChannel = record.target.rememberedChannels?.devd;
+  if (devdChannel?.transport === "lan")
+    return devdBaseUrlForRecord(record) !== null;
+  return Boolean(
+    record.serial?.source === "devd" &&
+      record.serial.connected &&
+      record.serial.leaseId,
+  );
 }
 
 function isDirectLanRecord(record: DeviceRecord): boolean {

@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import {
   canApplyDeviceRead,
   isDevdLeaseInvalidError,
+  isDevdWriteAvailable,
   loadUsbProbeSettings,
   markClosedRuntimeUnavailableRecord,
   recoverReadRecord,
@@ -359,6 +360,80 @@ describe("canApplyDeviceRead", () => {
     expect(
       canApplyDeviceRead(record, { ...request, transport: "devd" }, 2),
     ).toBe(false);
+  });
+});
+
+describe("isDevdWriteAvailable", () => {
+  const baseRecord: DeviceRecord = {
+    target: {
+      deviceId: "mains-aegis-a1b2c3",
+      baseUrl: "http://127.0.0.1:8765",
+      alias: "Bench A",
+      location: "Lab",
+      addedAt: "2026-06-07T00:00:00.000Z",
+      transport: "devd",
+      preferredTransport: "devd",
+      rememberedChannels: {
+        devd: {
+          baseUrl: "http://127.0.0.1:8765",
+          seenAt: "2026-06-07T00:00:00.000Z",
+          transport: "usb",
+        },
+      },
+    },
+    identity: null,
+    network: null,
+    settings: null,
+    status: null,
+    connectionState: "online",
+    streamState: "polling",
+    error: null,
+    lastUpdated: "2026-06-07T00:00:00.000Z",
+  };
+
+  test("requires an active lease for USB-backed devd writes", () => {
+    expect(
+      isDevdWriteAvailable({
+        ...baseRecord,
+        serial: {
+          source: "devd",
+          baseUrl: "http://127.0.0.1:8765",
+          connected: false,
+          logs: [],
+          trace: [],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isDevdWriteAvailable({
+        ...baseRecord,
+        serial: {
+          source: "devd",
+          baseUrl: "http://127.0.0.1:8765",
+          connected: true,
+          leaseId: "lease-1",
+          logs: [],
+          trace: [],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  test("allows lease-less writes for devd LAN channels", () => {
+    expect(
+      isDevdWriteAvailable({
+        ...baseRecord,
+        target: {
+          ...baseRecord.target,
+          rememberedChannels: {
+            devd: {
+              ...baseRecord.target.rememberedChannels!.devd!,
+              transport: "lan",
+            },
+          },
+        },
+      }),
+    ).toBe(true);
   });
 });
 
