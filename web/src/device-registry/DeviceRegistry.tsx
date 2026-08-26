@@ -1051,7 +1051,23 @@ export function DeviceRegistryProvider({
               return;
             const expectedDeviceId =
               currentRecord.identity?.device_id ?? currentRecord.target.deviceId;
-            if (!status.device_id || status.device_id !== expectedDeviceId)
+            if (!status.device_id) {
+              subscription.close();
+              streams.current.delete(record.target.deviceId);
+              streamBaseUrls.current.delete(record.target.deviceId);
+              setRecords((current) =>
+                current.map((candidate) =>
+                  candidate.target.deviceId === record.target.deviceId &&
+                  candidate.target.transport === "http" &&
+                  rememberedHttpBaseUrl(candidate) === httpBaseUrl
+                    ? { ...candidate, streamState: "polling" }
+                    : candidate,
+                ),
+              );
+              void refreshDevice(record.target.deviceId);
+              return;
+            }
+            if (status.device_id !== expectedDeviceId)
               return;
             setRecords((current) =>
               current.map((candidate) =>
