@@ -111,6 +111,7 @@ const DEVD_SERIAL_SESSION_LIMITS = {
 
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
 const LEGACY_DEVD_TRANSPORT = "ad" + "apter";
+const LEGACY_CLOSED_RUNTIME = "legacy-runtime-closed";
 
 type DeviceOperationContext = {
   deviceId: string;
@@ -248,6 +249,10 @@ export function DeviceRegistryProvider({
   const serialSessions = useRef(new Map<string, WebSerialTransport>());
   const deviceReadGenerations = useRef(new Map<string, number>());
   const deviceOperationGenerations = useRef(new Map<string, number>());
+  const closingDeviceRuntimes = useRef(
+    new Map<string, Promise<DeviceRuntimeSnapshot>>(),
+  );
+  const closedRuntimeIds = useRef(new Map<string, string>());
 
   function captureDeviceRuntime(deviceId: string): DeviceRuntimeSnapshot {
     return {
@@ -1120,39 +1125,58 @@ export function DeviceRegistryProvider({
 
   const closeDeviceRuntime = useCallback(
     async (deviceId: string, record?: DeviceRecord) => {
+      while (true) {
+        const pendingClose = closingDeviceRuntimes.current.get(deviceId);
+        if (!pendingClose) break;
+        await pendingClose.catch(() => undefined);
+      }
       const runtimeSnapshot = captureDeviceRuntime(deviceId);
-      const heartbeat = devdLeaseHeartbeats.current.get(deviceId);
-      if (record?.serial?.source === "devd")
-        await disconnectDevdSerialDevice(record);
-      if (
-        heartbeat !== undefined &&
-        devdLeaseHeartbeats.current.get(deviceId) === heartbeat
-      ) {
-        window.clearInterval(heartbeat);
-        devdLeaseHeartbeats.current.delete(deviceId);
+      const closePromise = (async () => {
+        const heartbeat = devdLeaseHeartbeats.current.get(deviceId);
+        if (record?.serial?.source === "devd")
+          await disconnectDevdSerialDevice(record);
+        if (
+          heartbeat !== undefined &&
+          devdLeaseHeartbeats.current.get(deviceId) === heartbeat
+        ) {
+          window.clearInterval(heartbeat);
+          devdLeaseHeartbeats.current.delete(deviceId);
+        }
+        if (
+          runtimeSnapshot.stream &&
+          streams.current.get(deviceId) === runtimeSnapshot.stream
+        ) {
+          runtimeSnapshot.stream.close();
+          streams.current.delete(deviceId);
+        }
+        if (
+          runtimeSnapshot.devdStream &&
+          devdStreams.current.get(deviceId) === runtimeSnapshot.devdStream
+        ) {
+          runtimeSnapshot.devdStream.close();
+          devdStreams.current.delete(deviceId);
+        }
+        if (
+          runtimeSnapshot.serialSession &&
+          serialSessions.current.get(deviceId) === runtimeSnapshot.serialSession
+        ) {
+          serialSessions.current.delete(deviceId);
+          await runtimeSnapshot.serialSession.close().catch(() => undefined);
+        }
+        if (record)
+          closedRuntimeIds.current.set(
+            deviceId,
+            record.runtimeId ?? LEGACY_CLOSED_RUNTIME,
+          );
+        return runtimeSnapshot;
+      })();
+      closingDeviceRuntimes.current.set(deviceId, closePromise);
+      try {
+        return await closePromise;
+      } finally {
+        if (closingDeviceRuntimes.current.get(deviceId) === closePromise)
+          closingDeviceRuntimes.current.delete(deviceId);
       }
-      if (
-        runtimeSnapshot.stream &&
-        streams.current.get(deviceId) === runtimeSnapshot.stream
-      ) {
-        runtimeSnapshot.stream.close();
-        streams.current.delete(deviceId);
-      }
-      if (
-        runtimeSnapshot.devdStream &&
-        devdStreams.current.get(deviceId) === runtimeSnapshot.devdStream
-      ) {
-        runtimeSnapshot.devdStream.close();
-        devdStreams.current.delete(deviceId);
-      }
-      if (
-        runtimeSnapshot.serialSession &&
-        serialSessions.current.get(deviceId) === runtimeSnapshot.serialSession
-      ) {
-        serialSessions.current.delete(deviceId);
-        await runtimeSnapshot.serialSession.close().catch(() => undefined);
-      }
-      return runtimeSnapshot;
     },
     [],
   );
@@ -1435,14 +1459,30 @@ export function DeviceRegistryProvider({
         const existingLeaseExpired = Boolean(
           existingOperationRecord?.serial?.leaseExpiresAt &&
             Date.parse(existingOperationRecord.serial.leaseExpiresAt) <=
-              Date.now(),
+            Date.now(),
         );
+        if (existingOperationRecord) {
+          const pendingClose = closingDeviceRuntimes.current.get(
+            existingOperationRecord.target.deviceId,
+          );
+          if (pendingClose) await pendingClose.catch(() => undefined);
+        }
+        const closedRuntimeId = existingOperationRecord
+          ? closedRuntimeIds.current.get(existingOperationRecord.target.deviceId)
+          : undefined;
+        const existingRuntimeWasClosed =
+          existingOperationRecord !== undefined &&
+          closedRuntimeId !== undefined &&
+          (closedRuntimeId === existingOperationRecord.runtimeId ||
+            (closedRuntimeId === LEGACY_CLOSED_RUNTIME &&
+              existingOperationRecord.runtimeId === undefined));
         const reusableLease =
           existingOperationRecord?.serial?.source === "devd" &&
           existingOperationRecord.serial.baseUrl === baseUrl &&
           existingOperationRecord.serial.leaseId &&
           !existingLeaseExpired &&
-          rememberedDeviceId === selectedDevice.id
+          rememberedDeviceId === selectedDevice.id &&
+          !existingRuntimeWasClosed
             ? {
                 lease_id: existingOperationRecord.serial.leaseId,
                 expires_at: existingOperationRecord.serial.leaseExpiresAt ?? "",
