@@ -16,6 +16,7 @@
 - `mock:` 设备用于稳定开发预览和视觉证据，不发真实网络请求。
 - 管理端页面已覆盖 Fleet、Connect、Overview、Power、Battery、Thermal、Device、Settings、API。
 - 页面级信息归属已收口：Fleet Header 只在 Fleet 渲染；Connect 和每条单设备路由拥有内容区 `h1`；完整 `DeviceStatusBand` 只在 Overview 出现，移动导航仅显示紧凑的设备/路由上下文。
+- 单设备深链从当前 devd discovery 暂时纳管的记录只在该发现快照仍包含设备时参与 Fleet 与路由选择；设备消失后保留路由标题并进入不可用态。在线 transport 的命令错误显示为 `Action failed`，不冒充连接中断；无首个 status 时显示 `Waiting`。
 - 管理端新增 `/devices/:device_id/firmware`，支持 Web Serial 直烧与 devd 代理烧录，并展示 catalog 去重来源、确认区、阶段进度和终态摘要。
 - Firmware 抽屉在烧录运行中会拦截页面刷新/关闭，禁用抽屉关闭、确认框与重复烧录入口；Web Serial 烧录复用当前已连接的串口并在完成/失败路径尝试复位回应用态。
 - Settings 页对 LAN、USB CDC 或 devd 连接设备开放，提供 WiFi SSID/PSK 覆盖/清除、手动充电偏好、设备日志级别和 USB Console；USB Console 保留当前 Web Serial 或 devd transport 的 tx/rx frame、raw / ignored CDC 行和协议 payload，支持等级过滤、方向过滤、搜索高亮、虚拟滚动、全屏查看与 payload 折行开关，PSK 脱敏。
