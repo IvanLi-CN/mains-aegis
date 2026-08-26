@@ -4247,6 +4247,7 @@ function AlertsPage({
             return Boolean(
               current &&
                 current.target.deviceId === record.target.deviceId &&
+                activeRecordTransport(current) === "http" &&
                 alertHttpTargetStillCurrent(current, baseUrl),
             );
           },
@@ -4500,7 +4501,13 @@ async function readAlertsFromTargets(
                 getDeviceAlerts(baseUrl, {
                   timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
                 }),
-              { beforeOperation: options.beforeHttpOperation },
+              {
+                beforeOperation: (baseUrl) =>
+                  (!options.beforeHttpOperation ||
+                    options.beforeHttpOperation(baseUrl)) &&
+                  (!options.beforeTargetOperation ||
+                    options.beforeTargetOperation(target)),
+              },
             ),
     options.beforeTargetOperation,
   );
@@ -4539,7 +4546,11 @@ async function muteAlertFromTargets(
                 muteDeviceAlert(baseUrl, alert.alert_id, alert.instance_id),
               {
                 allowFallback: false,
-                beforeOperation: options.beforeHttpOperation,
+                beforeOperation: (baseUrl) =>
+                  (!options.beforeHttpOperation ||
+                    options.beforeHttpOperation(baseUrl)) &&
+                  (!options.beforeTargetOperation ||
+                    options.beforeTargetOperation(target)),
               },
             ),
     options.beforeTargetOperation,

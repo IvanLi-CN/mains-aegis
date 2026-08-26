@@ -282,6 +282,7 @@ export function DeviceRegistryProvider({
   const pendingDevdLeases = useRef(
     new Map<string, PendingDevdLease>(),
   );
+  const unscopedDevdAdds = useRef(new Map<string, Promise<void>>());
 
   function captureDeviceRuntime(deviceId: string): DeviceRuntimeSnapshot {
     return {
@@ -1477,6 +1478,7 @@ export function DeviceRegistryProvider({
       const baseUrl = normalizeBaseUrl(input.target);
       let pendingLeaseKey: string | null = null;
       let pendingLease: PendingDevdLease | null = null;
+      let releaseUnscopedDevdAdd: (() => void) | null = null;
       const clearPendingLease = () => {
         if (
           pendingLeaseKey &&
@@ -1493,7 +1495,7 @@ export function DeviceRegistryProvider({
         await leaseToRelease.release();
         clearPendingLease();
       };
-      const existingOperationRecord = operationContext
+      let existingOperationRecord = operationContext
         ? records.find(
             (candidate) => candidate.target.deviceId === operationContext.deviceId,
           )
@@ -1651,6 +1653,25 @@ export function DeviceRegistryProvider({
           invalidateDeviceReads(result.identity.device_id);
           setRecords((current) => upsertRecord(current, record));
           return { ok: true, record };
+        }
+        if (!operationContext) {
+          const lockKey = `${baseUrl}:${selectedDevice.id}`;
+          const previous = unscopedDevdAdds.current.get(lockKey);
+          let releaseLock!: () => void;
+          const lock = new Promise<void>((resolve) => {
+            releaseLock = resolve;
+          });
+          unscopedDevdAdds.current.set(lockKey, lock);
+          if (previous) await previous;
+          releaseUnscopedDevdAdd = () => {
+            if (unscopedDevdAdds.current.get(lockKey) === lock)
+              unscopedDevdAdds.current.delete(lockKey);
+            releaseLock();
+          };
+          existingOperationRecord = recordsRef.current.find(
+            (candidate) =>
+              candidate.target.deviceId === devdLogicalDeviceId(selectedDevice),
+          );
         }
         const rememberedDeviceId = existingOperationRecord
           ? rememberedDevdChannel(existingOperationRecord)?.devdDeviceId ??
@@ -1932,6 +1953,8 @@ export function DeviceRegistryProvider({
           return staleAddDeviceResult();
         }
         return { ok: false, error: toErrorEnvelope(error) };
+      } finally {
+        releaseUnscopedDevdAdd?.();
       }
     },
     [
