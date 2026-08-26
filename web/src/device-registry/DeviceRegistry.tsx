@@ -1188,19 +1188,6 @@ export function DeviceRegistryProvider({
         return staleAddDeviceResult();
 
       try {
-        if (existingOperationRecord)
-          await closeDeviceRuntime(
-            existingOperationRecord.target.deviceId,
-            existingOperationRecord,
-          );
-        if (
-          operationContext &&
-          !currentDeviceOperation(
-            operationContext.deviceId,
-            operationContext.token,
-          )
-        )
-          return staleAddDeviceResult();
         const bridgeAuth = bridgeAuthToken(baseUrl) !== null;
         const scan = await scanDevdDevices(baseUrl);
         const manageableDevices = scan.devices.filter((device) =>
@@ -1294,12 +1281,73 @@ export function DeviceRegistryProvider({
             )
               return staleAddDeviceResult();
           }
+          if (existingOperationRecord) {
+            await closeDeviceRuntime(
+              existingOperationRecord.target.deviceId,
+              existingOperationRecord,
+            );
+            if (
+              operationContext &&
+              !currentDeviceOperation(
+                operationContext.deviceId,
+                operationContext.token,
+              )
+            )
+              return staleAddDeviceResult();
+          }
           invalidateDeviceReads(result.identity.device_id);
           setRecords((current) => upsertRecord(current, record));
           return { ok: true, record };
         }
-        const lease = await createDevdWebLease(baseUrl, selectedDevice.id);
-        pendingLeaseId = lease.lease_id;
+        const rememberedDeviceId = existingOperationRecord
+          ? rememberedDevdChannel(existingOperationRecord)?.devdDeviceId ??
+            input.devdDeviceId ??
+            null
+          : input.devdDeviceId ?? null;
+        const reusableLease =
+          existingOperationRecord?.serial?.source === "devd" &&
+          existingOperationRecord.serial.baseUrl === baseUrl &&
+          existingOperationRecord.serial.leaseId &&
+          rememberedDeviceId === selectedDevice.id
+            ? {
+                lease_id: existingOperationRecord.serial.leaseId,
+                expires_at: existingOperationRecord.serial.leaseExpiresAt ?? "",
+                heartbeat_interval_ms:
+                  existingOperationRecord.serial.heartbeatIntervalMs ?? 2000,
+                lease_ttl_ms: existingOperationRecord.serial.leaseTtlMs ?? 8000,
+              }
+            : null;
+        let existingRuntimeClosed = false;
+        let lease: DevdLeaseSnapshot;
+        if (reusableLease) {
+          lease = reusableLease;
+        } else {
+          try {
+            lease = await createDevdWebLease(baseUrl, selectedDevice.id);
+          } catch (error) {
+            if (
+              !existingOperationRecord ||
+              existingOperationRecord.serial?.source !== "devd" ||
+              toErrorEnvelope(error).code !== "device_lease_conflict"
+            )
+              throw error;
+            await closeDeviceRuntime(
+              existingOperationRecord.target.deviceId,
+              existingOperationRecord,
+            );
+            existingRuntimeClosed = true;
+            if (
+              operationContext &&
+              !currentDeviceOperation(
+                operationContext.deviceId,
+                operationContext.token,
+              )
+            )
+              return staleAddDeviceResult();
+            lease = await createDevdWebLease(baseUrl, selectedDevice.id);
+          }
+        }
+        if (!reusableLease) pendingLeaseId = lease.lease_id;
         const result = await probeDevice(
           baseUrl,
           lease.lease_id,
@@ -1309,10 +1357,12 @@ export function DeviceRegistryProvider({
           result.identity,
         );
         if (!firmwareMatch && !input.ignoreFirmwareMismatch) {
-          await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
-            () => undefined,
-          );
-          pendingLeaseId = null;
+          if (!reusableLease) {
+            await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
+              () => undefined,
+            );
+            pendingLeaseId = null;
+          }
           return {
             ok: false,
             error: firmwareMismatchError(result.identity),
@@ -1349,10 +1399,12 @@ export function DeviceRegistryProvider({
               operationContext.deviceId,
               operationContext.token,
             ))
-        )
-          await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
-            () => undefined,
-          );
+        ) {
+          if (!reusableLease)
+            await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
+              () => undefined,
+            );
+        }
         if (
           operationContext &&
           (operationContext.deviceId !== result.identity.device_id ||
@@ -1383,6 +1435,24 @@ export function DeviceRegistryProvider({
             return staleAddDeviceResult();
           }
         }
+        if (existingOperationRecord && !existingRuntimeClosed && !reusableLease) {
+          await closeDeviceRuntime(
+            existingOperationRecord.target.deviceId,
+            existingOperationRecord,
+          );
+          if (
+            operationContext &&
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            )
+          ) {
+            await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
+              () => undefined,
+            );
+            return staleAddDeviceResult();
+          }
+        }
         if (
           operationContext &&
           !currentDeviceOperation(
@@ -1390,9 +1460,10 @@ export function DeviceRegistryProvider({
             operationContext.token,
           )
         ) {
-          await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
-            () => undefined,
-          );
+          if (!reusableLease)
+            await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
+              () => undefined,
+            );
           return staleAddDeviceResult();
         }
         startDevdLeaseHeartbeat(record);
@@ -4021,11 +4092,7 @@ function mergeDeviceRecord(
       existing.connectionState === "online"
         ? "online"
         : incoming.connectionState,
-    streamState:
-      incoming.streamState === "streaming" ||
-      existing.streamState === "streaming"
-        ? "streaming"
-        : incoming.streamState,
+    streamState: incoming.streamState,
     error: mergedRecordError(existing, incoming),
     errorSource: mergedRecordErrorSource(existing, incoming),
     commandError:
