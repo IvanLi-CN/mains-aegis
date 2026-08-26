@@ -440,7 +440,7 @@ export function DeviceRegistryProvider({
                     ...record,
                     connectionState: "online",
                     streamState: "streaming",
-                    error: null,
+                    ...liveStatusErrorState(record),
                     serial: record.serial
                       ? { ...record.serial, connected: true }
                       : record.serial,
@@ -500,7 +500,7 @@ export function DeviceRegistryProvider({
                     network: record.identity?.network ?? record.network,
                     connectionState: "online",
                     streamState: "streaming",
-                    error: null,
+                    ...liveStatusErrorState(record),
                     lastUpdated: new Date().toISOString(),
                   }
                 : record,
@@ -4025,6 +4025,7 @@ function mergeLanDeviceSnapshot(
     connectionState: "online",
     error: null,
     errorSource: undefined,
+    commandError: undefined,
     lastUpdated: new Date().toISOString(),
   };
   if (!record.serial) return nextRecord;
