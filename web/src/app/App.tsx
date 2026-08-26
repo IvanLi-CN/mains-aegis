@@ -3922,8 +3922,15 @@ function useFleetActiveAlerts(records: DeviceRecord[]): FleetActiveAlertsState {
                   );
                   return Boolean(
                     current &&
-                      alertHttpTargetStillCurrent(current, baseUrl),
+                    alertHttpTargetStillCurrent(current, baseUrl),
                   );
+                },
+                beforeTargetOperation: (target) => {
+                  const current = recordsRef.current.find(
+                    (candidate) =>
+                      candidate.target.deviceId === record.target.deviceId,
+                  );
+                  return Boolean(current && alertTargetStillCurrent(current, target));
                 },
               },
             );
@@ -4044,6 +4051,7 @@ function useActiveAlertsSnapshot(
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const refreshGeneration = useRef(0);
+  const refreshScope = useRef(0);
   const refreshInFlight = useRef<Promise<void> | null>(null);
   const recordRef = useRef(record);
   recordRef.current = record;
@@ -4069,7 +4077,12 @@ function useActiveAlertsSnapshot(
       if (refreshInFlight.current) return refreshInFlight.current;
       const request = (async () => {
         const generation = ++refreshGeneration.current;
+        const scope = refreshScope.current;
+        const isCurrent = () =>
+          generation === refreshGeneration.current &&
+          scope === refreshScope.current;
         if (!record || !deviceId || connectionState === "offline") {
+          if (!isCurrent()) return;
           setSnapshot(null);
           setLastUpdated(null);
           setLoading(false);
@@ -4081,13 +4094,14 @@ function useActiveAlertsSnapshot(
           return;
         }
         if (targets.length === 0) {
+          if (!isCurrent()) return;
           setSnapshot(null);
           setLastUpdated(null);
           setLoading(false);
           setError("This connected device does not expose the alerts contract yet.");
           return;
         }
-        if (!options?.background) setLoading(true);
+        if (!options?.background && isCurrent()) setLoading(true);
         try {
           const nextSnapshot = await readAlertsFromTargets(
             targets,
@@ -4102,21 +4116,29 @@ function useActiveAlertsSnapshot(
                     alertHttpTargetStillCurrent(current, baseUrl),
                 );
               },
+              beforeTargetOperation: (target) => {
+                const current = recordRef.current;
+                return Boolean(
+                  current &&
+                    current.target.deviceId === deviceId &&
+                    alertTargetStillCurrent(current, target),
+                );
+              },
             },
           );
-          if (generation !== refreshGeneration.current) return;
+          if (!isCurrent()) return;
           setSnapshot(nextSnapshot);
           setLastUpdated(new Date().toISOString());
           if (!options?.preserveError) setError(null);
         } catch (cause) {
-          if (generation !== refreshGeneration.current) return;
+          if (!isCurrent()) return;
           if (alertErrorClearsSnapshot(cause)) {
             setSnapshot(null);
             setLastUpdated(null);
           }
           setError(alertErrorMessage(cause));
         } finally {
-          if (generation === refreshGeneration.current) setLoading(false);
+          if (isCurrent()) setLoading(false);
         }
       })();
       const trackedRequest = request.finally(() => {
@@ -4129,15 +4151,19 @@ function useActiveAlertsSnapshot(
   );
 
   useEffect(() => {
+    const scope = ++refreshScope.current;
+    return () => {
+      if (refreshScope.current === scope) refreshScope.current += 1;
+      refreshInFlight.current = null;
+    };
+  }, [deviceId, record?.runtimeId]);
+
+  useEffect(() => {
     setSnapshot(null);
     setLastUpdated(null);
     setError(null);
     void refresh();
-    return () => {
-      // Invalidate an in-flight read before the selected device or transport changes.
-      refreshGeneration.current += 1;
-      refreshInFlight.current = null;
-    };
+    return undefined;
   }, [deviceId, refresh]);
 
   useEffect(() => {
@@ -4187,9 +4213,26 @@ function AlertsPage({
   const targets = useMemo(() => alertControlTargets(record), [record]);
   const recordRef = useRef(record);
   recordRef.current = record;
+  const lifecycle = useRef(0);
+
+  useEffect(() => {
+    const token = ++lifecycle.current;
+    return () => {
+      if (lifecycle.current === token) lifecycle.current += 1;
+    };
+  }, [
+    record.target.deviceId,
+    record.runtimeId,
+    record.target.transport,
+    record.target.baseUrl,
+    record.serial?.source,
+    record.serial?.baseUrl,
+    record.serial?.leaseId,
+  ]);
 
   const mute = async (alert: ActiveAlert) => {
     if (targets.length === 0 || error || alert.sound_state === "muted") return;
+    const lifecycleToken = lifecycle.current;
     setMuting(alert.alert_id);
     setActionError(null);
     try {
@@ -4224,12 +4267,14 @@ function AlertsPage({
           },
         },
       );
+      if (lifecycle.current !== lifecycleToken) return;
       await refresh();
     } catch (cause) {
+      if (lifecycle.current !== lifecycleToken) return;
       setActionError(alertErrorMessage(cause));
       await refresh({ preserveError: true });
     } finally {
-      setMuting(null);
+      if (lifecycle.current === lifecycleToken) setMuting(null);
     }
   };
 
@@ -4403,6 +4448,30 @@ function alertHttpTargetStillCurrent(
 ): boolean {
   return (
     baseUrl.startsWith("mock:") || rememberedHttpBaseUrls(record).includes(baseUrl)
+  );
+}
+
+function alertTargetStillCurrent(
+  record: DeviceRecord,
+  target: AlertControlTarget,
+): boolean {
+  if (target.kind === "http")
+    return target.baseUrls.some((baseUrl) =>
+      alertHttpTargetStillCurrent(record, baseUrl),
+    );
+  if (target.kind === "devd") {
+    const remembered = record.target.rememberedChannels?.devd;
+    return Boolean(
+      (record.serial?.source === "devd" &&
+        record.serial.baseUrl === target.baseUrl &&
+        record.serial.leaseId) ||
+        (remembered?.baseUrl === target.baseUrl &&
+          remembered.devdDeviceId === target.deviceId),
+    );
+  }
+  return Boolean(
+    record.serial?.source === "web_serial" ||
+      (record.target.mock && record.serial?.source === "mock"),
   );
 }
 

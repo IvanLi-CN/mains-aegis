@@ -137,6 +137,8 @@ type PendingDevdLease = {
   release: () => Promise<void>;
 };
 
+let pendingDevdLeaseSequence = 0;
+
 export async function waitForPendingDevdLeaseRelease(
   pendingLeases: Map<string, PendingDevdLease>,
   deviceId: string,
@@ -1740,8 +1742,7 @@ export function DeviceRegistryProvider({
           pendingLeaseKey =
             operationContext?.deviceId ??
             existingOperationRecord?.target.deviceId ??
-            input.devdDeviceId ??
-            selectedDevice.id;
+            `pending:${baseUrl}:${selectedDevice.id}:${++pendingDevdLeaseSequence}`;
           let releasePromise: Promise<void> | null = null;
           pendingLease = {
             release: async () => {
@@ -2518,7 +2519,8 @@ export function DeviceRegistryProvider({
         ) {
           invalidateDeviceReads(record.target.deviceId);
         }
-        if (devdBindingChanged) invalidateDeviceReads(record.target.deviceId);
+        if (devdBindingChanged && !activeDevdLease)
+          invalidateDeviceReads(record.target.deviceId);
       }
       setRecords((current) =>
         current.map((record) => {
