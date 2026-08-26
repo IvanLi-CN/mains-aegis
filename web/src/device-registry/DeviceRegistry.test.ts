@@ -405,6 +405,34 @@ describe("canApplyDeviceRead", () => {
       canApplyDeviceRead(record, { ...request, transport: "devd" }, 2),
     ).toBe(false);
   });
+
+  test("accepts a response from a remembered fallback endpoint", () => {
+    const recordWithFallback = {
+      ...record,
+      target: {
+        ...record.target,
+        rememberedChannels: {
+          http: {
+            baseUrl: record.target.baseUrl,
+            fallbackBaseUrl: "http://192.168.31.42",
+            seenAt: record.target.addedAt,
+          },
+        },
+      },
+    };
+    expect(
+      canApplyDeviceRead(
+        recordWithFallback,
+        {
+          deviceId: record.target.deviceId,
+          transport: "http",
+          generation: 2,
+          baseUrl: "http://192.168.31.42",
+        },
+        2,
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("isDevdWriteAvailable", () => {

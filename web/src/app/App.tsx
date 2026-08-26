@@ -1924,6 +1924,11 @@ function buildFleetEntryRecord(
     : null;
   const httpBaseUrl =
     companionBaseUrl ?? devdLanBaseUrl(httpDevice, identity);
+  const hasDevdChannel = Boolean(devdDevice);
+  const targetTransport = hasDevdChannel ? "devd" : "http";
+  const targetBaseUrl = hasDevdChannel
+    ? devdBaseUrl
+    : httpBaseUrl ?? existingRecord?.target.baseUrl ?? devdBaseUrl;
   const devdRecordId =
     devdDevice?.id ??
     httpDevice?.id ??
@@ -1931,15 +1936,15 @@ function buildFleetEntryRecord(
     deviceId;
   const target = {
     deviceId,
-    baseUrl: devdBaseUrl,
+    baseUrl: targetBaseUrl,
     alias:
       existingRecord?.target.alias ??
       identity?.hostname ??
       discovered.displayName,
     location: existingRecord?.target.location ?? "devd records",
     addedAt: existingRecord?.target.addedAt ?? new Date().toISOString(),
-    transport: "devd" as const,
-    preferredTransport: "devd" as const,
+    transport: targetTransport as "devd" | "http",
+    preferredTransport: targetTransport as "devd" | "http",
     rememberedChannels: {
       ...existingRecord?.target.rememberedChannels,
       ...(httpDevice
@@ -1962,14 +1967,17 @@ function buildFleetEntryRecord(
             },
           }
         : {}),
-      devd: {
-        baseUrl: devdBaseUrl,
-        devdDeviceId: devdRecordId,
-        seenAt: new Date().toISOString(),
-        transport: devdDevice
-          ? (devdDevice.transport === "mock" ? "mock" : "usb")
-          : "lan",
-      },
+      ...(devdDevice
+        ? {
+            devd: {
+              baseUrl: devdBaseUrl,
+              devdDeviceId: devdRecordId,
+              seenAt: new Date().toISOString(),
+              transport:
+                devdDevice.transport === "mock" ? "mock" : "usb",
+            },
+          }
+        : {}),
     },
   } satisfies DeviceRecord["target"];
   const connected =

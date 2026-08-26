@@ -243,7 +243,7 @@ describe("buildFleetEntries", () => {
     );
   });
 
-  test("keeps same-origin devd-backed saved entries online without any mock query target", () => {
+  test("models LAN-only discovery as a direct HTTP entry", () => {
     const entries = buildFleetEntries(
       [savedRecord("mains-aegis-a1b2c3")],
       [lanDevice("mains-aegis-a1b2c3")],
@@ -252,16 +252,12 @@ describe("buildFleetEntries", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.record.connectionState).toBe("online");
-    expect(entries[0]?.record.target.transport).toBe("devd");
-    expect(entries[0]?.record.target.baseUrl).toBe("");
+    expect(entries[0]?.record.target.transport).toBe("http");
+    expect(entries[0]?.record.target.baseUrl).toBe("http://192.168.31.42");
     expect(entries[0]?.record.target.rememberedChannels?.http?.baseUrl).toBe(
       "http://192.168.31.42",
     );
-    expect(entries[0]?.record.target.rememberedChannels?.devd).toMatchObject({
-      baseUrl: "",
-      devdDeviceId: "mains-aegis-a1b2c3",
-      transport: "lan",
-    });
+    expect(entries[0]?.record.target.rememberedChannels?.devd).toBeUndefined();
   });
 
   test("refreshes confirmed companion fallback IP from current LAN discovery", () => {
