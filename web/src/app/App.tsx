@@ -652,7 +652,7 @@ export function DevicePageFrame({
   );
 }
 
-function DeviceDataContext({ record }: { record: DeviceRecord }) {
+export function DeviceDataContext({ record }: { record: DeviceRecord }) {
   const stream = streamPresentation(record);
   return (
     <div className={`device-data-context tone-${stream.tone}`} role="status">
@@ -6477,11 +6477,21 @@ function streamPresentation(record: DeviceRecord): StreamPresentation {
     };
   }
 
-  if (record.connectionState === "connecting" && !record.status) {
+  if (record.connectionState === "connecting") {
     return {
       label: "Connecting",
-      detail: "Waiting for the first device response",
+      detail: record.status
+        ? "Refreshing device data"
+        : "Waiting for the first device response",
       tone: "info",
+    };
+  }
+
+  if (record.connectionState === "error") {
+    return {
+      label: "Connection error",
+      detail: record.error?.message ?? `Device data unavailable${freshness}`,
+      tone: "critical",
     };
   }
 

@@ -30,6 +30,7 @@ import {
   resolveDeviceRouteSection,
   shouldShowDeviceDataContext,
   ConnectPageHeading,
+  DeviceDataContext,
   DevicePageFrame,
   FleetHeader,
 } from "./App";
@@ -271,6 +272,34 @@ describe("page presentation ownership", () => {
         makeRecord({ connectionState: "online", streamState: "streaming", status: null }),
       ),
     ).toBe(true);
+  });
+
+  test("labels connecting and error context ahead of retained telemetry", () => {
+    const connectingMarkup = renderToStaticMarkup(
+      createElement(DeviceDataContext, {
+        record: makeRecord({ connectionState: "connecting" }),
+      }),
+    );
+    expect(connectingMarkup).toContain("Connecting");
+    expect(connectingMarkup).toContain("Waiting for the first device response");
+
+    const errorMarkup = renderToStaticMarkup(
+      createElement(DeviceDataContext, {
+        record: makeRecord({
+          connectionState: "error",
+          streamState: "polling",
+          error: {
+            code: "transport_error",
+            message: "Device refresh failed",
+            retryable: true,
+            details: null,
+          },
+        }),
+      }),
+    );
+    expect(errorMarkup).toContain("Connection error");
+    expect(errorMarkup).toContain("Device refresh failed");
+    expect(errorMarkup).not.toContain("Live data");
   });
 
   test("keeps global notification UI out of the shared shell", () => {
