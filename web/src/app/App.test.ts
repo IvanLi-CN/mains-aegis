@@ -300,6 +300,21 @@ describe("page presentation ownership", () => {
     expect(errorMarkup).toContain("Connection error");
     expect(errorMarkup).toContain("Device refresh failed");
     expect(errorMarkup).not.toContain("Live data");
+
+    expect(
+      shouldShowDeviceDataContext(
+        makeRecord({
+          connectionState: "online",
+          streamState: "streaming",
+          error: {
+            code: "command_failed",
+            message: "Command failed",
+            retryable: true,
+            details: null,
+          },
+        }),
+      ),
+    ).toBe(true);
   });
 
   test("keeps global notification UI out of the shared shell", () => {

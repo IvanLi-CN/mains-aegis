@@ -305,11 +305,15 @@ export function resolveDeviceRouteSection(
 }
 
 export function shouldShowDeviceDataContext(
-  record: Pick<DeviceRecord, "connectionState" | "streamState" | "status">,
+  record: Pick<
+    DeviceRecord,
+    "connectionState" | "streamState" | "status" | "error"
+  >,
 ): boolean {
   return (
     record.connectionState !== "online" ||
     record.streamState === "error" ||
+    Boolean(record.error) ||
     !record.status
   );
 }
@@ -6487,7 +6491,7 @@ function streamPresentation(record: DeviceRecord): StreamPresentation {
     };
   }
 
-  if (record.connectionState === "error") {
+  if (record.connectionState === "error" || record.error) {
     return {
       label: "Connection error",
       detail: record.error?.message ?? `Device data unavailable${freshness}`,
@@ -6497,11 +6501,11 @@ function streamPresentation(record: DeviceRecord): StreamPresentation {
 
   if (record.streamState === "error") {
     return {
-      label: record.status ? "Live data" : "Connection error",
+      label: "Data degraded",
       detail: record.status
         ? `Transport reconnecting, polling fallback${freshness}`
-        : (record.error?.message ?? `Stream error${freshness}`),
-      tone: record.status ? "warning" : "critical",
+        : `Stream error${freshness}`,
+      tone: "warning",
     };
   }
 
