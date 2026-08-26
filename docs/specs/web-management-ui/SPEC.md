@@ -8,6 +8,10 @@
 - Web 无 devd 的 LAN 管理、LAN/USB logical device 收敛、`safeSettings` 废弃与新的 `connection / settings / trace` 信息架构，已转由 [`lan-management-convergence`](../lan-management-convergence/SPEC.md) 接管。
 - 本规格保留 Fleet、Connect、DeviceRegistry、USB CDC / Web Serial、firmware mismatch gate 等 v1 UI foundation 的历史记录。
 
+## Related ADRs
+
+- [ADR 0001: Assign summaries to their owning pages](../../adr/0001-assign-summary-ownership-to-pages.md)
+
 ## 背景 / 问题陈述
 
 - `mains-aegis` 已具备设备侧只读 `v1` HTTP API、mDNS / DNS-SD 与 `/api/v1/status` SSE 底座，但缺少浏览器侧管理界面。
@@ -69,7 +73,10 @@
 
 ### 单设备详情
 
-- `/devices/:device_id` 展示单设备运行状态带与关键摘要。
+- Fleet Summary 只在 `/` 渲染；`/connect` 和所有 `/devices/:device_id/*` 页面不得重复设备数量、在线数或 fleet `Critical` / `Warning` 指标。
+- 每个单设备页面必须在内容区拥有其能力的 `h1` 和对应内容。设备别名与连接态属于紧凑 Device Context，不能替代该标题或展开为摘要卡组。当前 Web App 不提供跨设备通知或全局告警入口。
+- `/devices/:device_id` 在其 `h1` 后展示完整单设备运行状态带与关键摘要。该完整 Device Overview 不得在 Power、Battery、Alerts、Thermal、Device、Firmware、Settings 或 API 页重复渲染。
+- 活动告警只在当前设备的 Alerts 页展示，并通过既有设备导航进入；单设备页面不得渲染全局告警图标、徽标或跨设备快捷入口。
 - `/devices/:device_id/power` 展示 input、charger、output gate、OUT A/B。
 - `/devices/:device_id/battery` 展示 pack status、四节 cell voltage、cell delta、均衡起步阈值、BAL 状态、BMS readiness、三路 BMS MOS 状态与 issue detail。
 - Cell voltage 面板必须把每串相对最低电芯的 mV 偏差写在 tile 内，并在当前 `balance_mask` 命中的 cell 上标注 `BAL`；颜色分级只做辅助，不能替代 delta 与 BAL 文本。
@@ -155,6 +162,7 @@
 - `/devices/:device_id/api` 或 settings 页面能显示 USB structured logs。
 - 正式路由能通过 `demo=true` 打开可复现 mock-only Demo，并通过页面内 Demo 控制面板切换 mock 场景，同时保持与正式产品一致的导航和页面结构。
 - 单设备详情页可从 Fleet 卡片进入，并展示 power、battery、thermal、device、api 子页。
+- 在 `393x852` 的 mock-only 移动视口中，Power、Battery、Alerts、Thermal、Device、Firmware、Settings 和 API 页不得渲染 Fleet Summary 或完整 Device Overview；页面 `h1` 与首个能力内容必须在首屏可见。Overview 在其 `h1` 后保留完整 Device Overview，Fleet 在首屏保留 Fleet Summary。
 - 浏览器视觉验证覆盖 desktop Fleet、mobile Fleet、empty Fleet、large Fleet、单设备 Dashboard、USB Connect、USB structured logs 和 WiFi settings。
 - Storybook 或等价稳定预览必须覆盖：Pages direct LAN 支持态、非支持浏览器降级态、手动目标成功态、CIDR 扫描命中态，以及 PWA update prompt 的 ready、activating、offline ready、error、mobile 状态。
 

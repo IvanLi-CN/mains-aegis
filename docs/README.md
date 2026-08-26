@@ -16,6 +16,7 @@ This folder stores project documentation and offline-renderable datasheets.
 - Boot self-test flow (module gating + emergency-stop): `docs/boot-self-test-flow.md`
 - UPS main output design: `docs/ups-output-design.md`
 - Web management UI plan: `docs/web-management-ui.md`
+- Web summary ownership decision: `docs/adr/0001-assign-summary-ownership-to-pages.md`
 - USB CDC / Web Serial protocol: `docs/usb-cdc-web-serial-protocol.md`
 - Mains Aegis device daemon, host power control, and firmware catalog: `docs/specs/mains-aegis-devd/SPEC.md`, `docs/firmware-catalog.md`
 - Low-voltage recovery maintenance: `docs/recovery/low-voltage-recovery.md`

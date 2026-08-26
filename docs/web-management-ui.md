@@ -54,6 +54,13 @@ Web 管理界面是 UPS 的浏览器侧运维台，负责设备发现、多设�
 - 接口对接：首屏 `GET /api/v1/status`，随后用 `GET /api/v1/status` + `Accept: text/event-stream` 订阅实时状态。
 - 布局：顶部深绿黑运行状态带；下方两列或三列仪表区；底部放最近一次错误或阻断原因。
 
+### 页面上下文归属
+
+- Fleet Summary 只属于 `/`：设备总数、在线数和跨设备的 critical / warning 汇总不进入 `/connect` 或任何单设备页面。
+- 完整 Device Overview 只属于 `/devices/:device_id`：运行状态带和全量状态矩阵不在 Power、Battery、Alerts、Thermal、Device、Firmware、Settings 或 API 页重复出现。
+- 每个 Device Page 在内容区拥有自己的页面标题和能力内容；设备身份与连接态只作为紧凑 Device Context 存在，不得替代页面标题或展开为摘要卡组。
+- 手机上的 App Chrome 只保留菜单、当前设备与当前路由上下文；当前 Web App 不提供跨设备通知、告警徽标或全局告警入口。
+
 ### 4. 电源路径
 
 - 入口：`/devices/:device_id/power`
@@ -189,7 +196,8 @@ web/
 
 ## 导航结构
 
-- 顶部：当前视图、设备数量、在线状态、全局告警摘要。
+- Fleet 页面：Fleet Summary 显示设备数量、在线状态和跨设备告警摘要。
+- 单设备页面：内容区先显示当前能力页面标题；完整 Device Overview 只显示在 Overview。手机顶部设备条只承载 Device Context、菜单和当前路由上下文。
 - 群总览左侧导航：Fleet、Connect。
 - 单设备左侧导航：Overview、Power、Battery、Thermal、Device、Settings、API。
 - 内容区：宽屏使用 12 栅格；平板降为 2 列；手机保留顶部设备条并把侧边导航折叠为菜单。

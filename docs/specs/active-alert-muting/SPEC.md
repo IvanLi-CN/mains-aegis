@@ -16,6 +16,10 @@
 - 通过 USB CDC、LAN HTTP、devd、CLI、Web App 与前面板呈现同一权威状态。
 - 前面板复用固件 scene、字体和 `320x172` little-endian RGB565 framebuffer 导出评审图。
 
+## Related ADRs
+
+- [ADR 0001: Assign summaries to their owning pages](../../adr/0001-assign-summary-ownership-to-pages.md)
+
 ### Non-goals
 
 - 不提供批量消音、手动恢复声音、跨实例或跨重启的永久静音，也不写入 EEPROM。
@@ -89,7 +93,7 @@
 - 9 个告警类型均通过 `inactive -> active -> muted -> cleared -> reactivated` 测试，且复发的 `instance_id` 不同。
 - stale 或 inactive 消音请求不影响新实例；一个实例消音不移除或停止任何其它活动告警。
 - CDC、LAN、devd、CLI 和 Web 对同一设备返回一致的告警状态；旧固件、offline 和 transport error 有显式结果。
-- Web 自动回读所有在线设备的权威告警；Fleet、Add device 和全部单设备页面复用永久存在的 TopBar `Critical` / `Warning` 指标作为全局告警位置，不得插入大型 Alert、额外正常态文案或改变页面高度。非零指标可进入相关设备 Alerts；瞬时刷新失败不得隐藏最后确认的活动告警，也不得允许基于过期实例执行消音。
+- Web 自动回读所有在线设备的权威告警；Fleet Summary 仅在 Fleet 页面显示 fleet `Critical` / `Warning` 指标，当前设备的活动告警只在该设备的 Alerts 页呈现。当前 Web App 不提供跨设备通知、全局告警图标或徽标；不得插入大型 Alert 或以 fleet 指标卡组占用设备页面首屏。瞬时刷新失败不得隐藏最后确认的活动告警，也不得允许基于过期实例执行消音。
 - 前面板按本 spec 的矩阵导出真实 framebuffer/PNG，获批准后才连接运行时输入、触摸与按键路由。
 
 ## Visual Evidence
@@ -115,5 +119,4 @@ Web Alerts 移动端（`393x852`）。
 ![Web Alerts mobile](./assets/web-alerts-mobile.png)
 
 PR: include
-普通 Overview 页面仍在既有 TopBar `Critical` / `Warning` 指标中持续展示全局告警；未新增大型 Alert 或额外状态区域。
-![Web global alert status](./assets/web-global-alert-status-desktop.png)
+Fleet 页面持续显示 fleet 告警指标；单设备 Alerts 页面显示当前设备告警，不重复 Fleet Summary 或完整 Device Overview。

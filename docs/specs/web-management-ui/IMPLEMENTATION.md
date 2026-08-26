@@ -57,6 +57,7 @@
 
 ## 当前缺口
 
+- 页面级信息归属合同已更新，App 代码仍需移除共享 Fleet Summary 和次级设备页的完整 Device Overview。
 - 多 USB CDC candidates 场景需要在 `/connect` 显示选择器，不能自动选择已连接或已识别设备。
 - devd 控制 session 需要短 TTL lease；正常关闭立即释放，异常断开默认 8-9 秒内释放。
 - WiFi config 与 settings 写入需要携带有效 lease，避免 Web 不存在时 devd 继续占用或写入硬件。

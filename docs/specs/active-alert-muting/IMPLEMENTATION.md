@@ -36,7 +36,7 @@
   - 每行独立消音、写入中锁定、完成后权威回读，并呈现 unsupported、stale 与传输错误。
   - direct LAN 的旧固件 Alerts `404` 在客户端限定归一化为 `unsupported`，升级提示与 devd/Web Serial 一致。
   - offline 或 unsupported 时清空旧告警快照；瞬时刷新失败时保留最后确认的活动告警作为持续风险提示，但禁用基于过期实例的消音按钮，直到权威回读恢复。
-  - 所有在线设备的告警合同每 2 秒自动回读，页面重新可见时立即回读；每个设备同一时间只允许一个回读请求，HTTP/devd 请求有 1.5 秒超时；fleet 级快照直接驱动所有路由已有的 TopBar `Critical` / `Warning` 指标，非零指标进入相关设备 Alerts，不新增大型 Alert 或正常态提示；当前设备快照同时驱动 Alerts 列表。
+  - 所有在线设备的告警合同每 2 秒自动回读，页面重新可见时立即回读；每个设备同一时间只允许一个回读请求，HTTP/devd 请求有 1.5 秒超时；当前 App 仍由所有路由的 TopBar `Critical` / `Warning` 指标展示 fleet 级快照，当前设备快照同时驱动 Alerts 列表。
   - Web Serial 保留 CDC error envelope；刷新使用代次保护，mute 冲突后的权威回读不清除 stale/inactive 提示。
   - 告警控制优先使用当前已确认的活动传输，再按可重试错误回退到 devd、LAN 主地址、LAN fallback 地址或 Web Serial；非重试错误不会伪装成另一种传输状态。
   - `system_silent` 与 `policy_silent` 告警仍可写入当前实例的用户消音状态；内置 mock USB 记录使用 mock Alerts transport 验证同一流程。
