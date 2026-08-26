@@ -332,7 +332,7 @@ export function DeviceRegistryProvider({
   const invalidateDeviceReads = useCallback((deviceId: string): number => {
     const pendingLease = pendingDevdLeases.current.get(deviceId);
     if (pendingLease) {
-      void pendingLease.release();
+      void pendingLease.release().catch(() => undefined);
     }
     const generation = (deviceReadGenerations.current.get(deviceId) ?? 0) + 1;
     deviceReadGenerations.current.set(deviceId, generation);
@@ -1341,23 +1341,22 @@ export function DeviceRegistryProvider({
         )
       )
         return staleAddDeviceResult();
-      if (operationContext) {
-        await waitForPendingDevdLeaseRelease(
-          pendingDevdLeases.current,
-          operationContext.deviceId,
-        );
-        if (
-          !currentDeviceOperation(
-            operationContext.deviceId,
-            operationContext.token,
-          )
-        )
-          return staleAddDeviceResult();
-      }
-
       let existingRuntimeClosed = false;
       let existingRuntimeSnapshot: DeviceRuntimeSnapshot | undefined;
       try {
+        if (operationContext) {
+          await waitForPendingDevdLeaseRelease(
+            pendingDevdLeases.current,
+            operationContext.deviceId,
+          );
+          if (
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            )
+          )
+            return staleAddDeviceResult();
+        }
         const bridgeAuth = bridgeAuthToken(baseUrl) !== null;
         const scan = await scanDevdDevices(baseUrl);
         if (
@@ -3916,10 +3915,12 @@ export function DeviceRegistryProvider({
     };
     const release = (): Promise<void> => {
       if (releasePromise) return releasePromise;
-      const nextRelease = releaseDevdWebLease(baseUrl, leaseId).then(
-        () => undefined,
-        () => undefined,
-      );
+      const nextRelease = releaseDevdWebLease(baseUrl, leaseId)
+        .then(() => undefined)
+        .catch((error) => {
+          releasePromise = undefined;
+          throw error;
+        });
       releasePromise = nextRelease;
       return nextRelease;
     };
@@ -3936,7 +3937,7 @@ export function DeviceRegistryProvider({
         )
           return;
         stopIfOwned();
-        release();
+        void release().catch(() => undefined);
       },
     };
     heartbeat = window.setInterval(() => {
@@ -4139,13 +4140,13 @@ export function DeviceRegistryProvider({
       )
     )
       return;
-    invalidateDeviceReads(record.target.deviceId);
+    const operation = invalidateDeviceReads(record.target.deviceId);
     setRecords((current) => {
       if (
         operationContext &&
         !currentDeviceOperation(
           operationContext.deviceId,
-          operationContext.token,
+          operation,
         )
       )
         return current;

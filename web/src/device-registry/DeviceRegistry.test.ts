@@ -464,4 +464,20 @@ describe("waitForPendingDevdLeaseRelease", () => {
 
     expect(pendingLeases.has("mains-aegis-a1b2c3")).toBe(false);
   });
+
+  test("keeps the pending lease when release fails", async () => {
+    const pendingLeases = new Map([
+      [
+        "mains-aegis-a1b2c3",
+        {
+          release: () => Promise.reject(new Error("release failed")),
+        },
+      ],
+    ]);
+
+    await expect(
+      waitForPendingDevdLeaseRelease(pendingLeases, "mains-aegis-a1b2c3"),
+    ).rejects.toThrow("release failed");
+    expect(pendingLeases.has("mains-aegis-a1b2c3")).toBe(true);
+  });
 });

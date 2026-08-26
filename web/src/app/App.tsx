@@ -903,6 +903,7 @@ function useFleetDevdDiscovery(
   const [isRefreshing, setIsRefreshing] = useState(Boolean(devdTarget));
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const hasDiscoverySnapshot = useRef(false);
+  const discoveryRequestGeneration = useRef(0);
 
   const filterDevices = useCallback(
     (devices: DevdDevice[]) =>
@@ -926,6 +927,8 @@ function useFleetDevdDiscovery(
   );
 
   const refreshDiscovery = useCallback(async () => {
+    const requestGeneration = discoveryRequestGeneration.current + 1;
+    discoveryRequestGeneration.current = requestGeneration;
     if (!devdTarget) {
       hasDiscoverySnapshot.current = false;
       setDevdDevices([]);
@@ -938,15 +941,18 @@ function useFleetDevdDiscovery(
     setIsRefreshing(true);
     try {
       const devices = await listDevdDevices(devdBaseUrl);
+      if (requestGeneration !== discoveryRequestGeneration.current) return;
       applyDiscoverySnapshot(devdBaseUrl, devices.devices);
     } catch {
+      if (requestGeneration !== discoveryRequestGeneration.current) return;
       setStatus(hasDiscoverySnapshot.current ? "available" : "unavailable");
       if (!hasDiscoverySnapshot.current) {
         setDevdDevices([]);
         setLastUpdated(null);
       }
     } finally {
-      setIsRefreshing(false);
+      if (requestGeneration === discoveryRequestGeneration.current)
+        setIsRefreshing(false);
     }
   }, [applyDiscoverySnapshot, devdTarget]);
 
