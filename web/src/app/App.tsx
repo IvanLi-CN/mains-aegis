@@ -1945,7 +1945,9 @@ function buildFleetEntryRecord(
     httpDevice?.connection === "busy" || devdDevice?.connection === "busy";
   const errored =
     httpDevice?.connection === "error" || devdDevice?.connection === "error";
-  const preserveTransportFailure = hasTransportFailure(existingRecord);
+  const preserveTransportFailure =
+    existingRecord?.target.temporary === true &&
+    hasTransportFailure(existingRecord);
   return {
     target,
     identity,
