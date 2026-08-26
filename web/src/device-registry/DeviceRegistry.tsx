@@ -2139,7 +2139,7 @@ export function DeviceRegistryProvider({
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "read");
           return {
             ok: false,
             error: envelope,
@@ -2161,7 +2161,7 @@ export function DeviceRegistryProvider({
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "read");
           return {
             ok: false,
             error: envelope,
@@ -2176,7 +2176,7 @@ export function DeviceRegistryProvider({
         return { ok: true, detail };
       } catch (error) {
         const envelope = errorFromSerialFailure(error);
-        setSerialCommandError(deviceId, envelope);
+        setSerialCommandError(deviceId, envelope, "read");
         return {
           ok: false,
           error: envelope,
