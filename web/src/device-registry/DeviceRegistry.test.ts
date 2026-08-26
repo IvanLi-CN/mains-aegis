@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   canApplyDeviceRead,
+  isDevdLeaseInvalidError,
   loadUsbProbeSettings,
   recoverReadRecord,
   resolveManualHttpChannelPersistence,
@@ -275,6 +276,35 @@ describe("canApplyDeviceRead", () => {
     expect(canApplyDeviceRead(record, request, 3)).toBe(false);
     expect(
       canApplyDeviceRead(record, { ...request, transport: "devd" }, 2),
+    ).toBe(false);
+  });
+});
+
+describe("isDevdLeaseInvalidError", () => {
+  test("identifies server responses that invalidate a cached web lease", () => {
+    expect(
+      isDevdLeaseInvalidError({
+        code: "web_session_expired",
+        message: "expired",
+        retryable: false,
+        details: null,
+      }),
+    ).toBe(true);
+    expect(
+      isDevdLeaseInvalidError({
+        code: "web_session_required",
+        message: "required",
+        retryable: false,
+        details: null,
+      }),
+    ).toBe(true);
+    expect(
+      isDevdLeaseInvalidError({
+        code: "transport_error",
+        message: "temporary failure",
+        retryable: true,
+        details: null,
+      }),
     ).toBe(false);
   });
 });
