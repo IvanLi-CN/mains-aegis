@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import {
   loadUsbProbeSettings,
+  recoverReadRecord,
   resolveManualHttpChannelPersistence,
 } from "./DeviceRegistry";
+import type { DeviceRecord } from "../api/types";
 
 describe("loadUsbProbeSettings", () => {
   test("skips get_settings for hello frames that do not advertise settings support", async () => {
@@ -88,5 +90,81 @@ describe("resolveManualHttpChannelPersistence", () => {
       rememberedHttpMdnsHost: "mains-aegis-a1b2c3.local",
       rememberedHttpFallbackBaseUrl: "http://192.168.31.42",
     });
+  });
+});
+
+describe("recoverReadRecord", () => {
+  test("restores a devd record after a transient read failure", () => {
+    const record: DeviceRecord = {
+      target: {
+        deviceId: "mains-aegis-a1b2c3",
+        baseUrl: "http://127.0.0.1:8765",
+        alias: "Bench A",
+        location: "Lab",
+        addedAt: "2026-06-07T00:00:00.000Z",
+        transport: "devd",
+        preferredTransport: "devd",
+      },
+      identity: null,
+      network: null,
+      settings: null,
+      status: null,
+      connectionState: "error",
+      streamState: "error",
+      error: {
+        code: "http_503",
+        message: "charge control unavailable",
+        retryable: true,
+        details: null,
+      },
+      lastUpdated: "2026-06-07T00:00:00.000Z",
+      serial: {
+        connected: false,
+        source: "devd",
+        baseUrl: "http://127.0.0.1:8765",
+        protocol: "mains-aegis.cdc.v1",
+        logs: [],
+        trace: [],
+      },
+    };
+
+    const recovered = recoverReadRecord(record, "devd");
+
+    expect(recovered.connectionState).toBe("online");
+    expect(recovered.streamState).toBe("polling");
+    expect(recovered.error).toBeNull();
+    expect(recovered.serial?.connected).toBe(true);
+  });
+
+  test("keeps an active HTTP stream streaming after a read succeeds", () => {
+    const record: DeviceRecord = {
+      target: {
+        deviceId: "mains-aegis-a1b2c3",
+        baseUrl: "http://mains-aegis-a1b2c3.local",
+        alias: "Bench A",
+        location: "Lab",
+        addedAt: "2026-06-07T00:00:00.000Z",
+        transport: "http",
+      },
+      identity: null,
+      network: null,
+      settings: null,
+      status: null,
+      connectionState: "error",
+      streamState: "error",
+      error: {
+        code: "http_400",
+        message: "invalid preview",
+        retryable: false,
+        details: null,
+      },
+      lastUpdated: "2026-06-07T00:00:00.000Z",
+    };
+
+    const recovered = recoverReadRecord(record, "http", true);
+
+    expect(recovered.connectionState).toBe("online");
+    expect(recovered.streamState).toBe("streaming");
+    expect(recovered.error).toBeNull();
   });
 });

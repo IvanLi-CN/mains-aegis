@@ -315,6 +315,23 @@ export function DeviceRegistryProvider({
     [setRecordError],
   );
 
+  const markDeviceReadSuccess = useCallback(
+    (deviceId: string, transport: DeviceChannelTransport) => {
+      setRecords((current) =>
+        current.map((record) =>
+          record.target.deviceId === deviceId
+            ? recoverReadRecord(
+                record,
+                transport,
+                streams.current.has(deviceId) || devdStreams.current.has(deviceId),
+              )
+            : record,
+        ),
+      );
+    },
+    [],
+  );
+
   const refreshDevice = useCallback(
     async (deviceId: string) => {
       const existing = records.find(
@@ -2014,6 +2031,7 @@ export function DeviceRegistryProvider({
               : candidate,
           ),
         );
+        markDeviceReadSuccess(deviceId, record.target.transport ?? "http");
         return { ok: true, detail };
       }
       const selectedTransport = resolvePreferredTransport(
@@ -2037,6 +2055,7 @@ export function DeviceRegistryProvider({
                 : candidate,
             ),
           );
+          markDeviceReadSuccess(deviceId, "http");
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
@@ -2069,6 +2088,7 @@ export function DeviceRegistryProvider({
                 : candidate,
             ),
           );
+          markDeviceReadSuccess(deviceId, "devd");
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
@@ -2096,6 +2116,7 @@ export function DeviceRegistryProvider({
               : candidate,
           ),
         );
+        markDeviceReadSuccess(deviceId, "serial");
         return { ok: true, detail };
       } catch (error) {
         const envelope = errorFromSerialFailure(error);
@@ -2107,7 +2128,7 @@ export function DeviceRegistryProvider({
         };
       }
     },
-    [records, setSerialCommandError],
+    [markDeviceReadSuccess, records, setSerialCommandError],
   );
 
   const previewManualCharge = useCallback(
@@ -2125,6 +2146,7 @@ export function DeviceRegistryProvider({
           record.target.baseUrl,
           input,
         );
+        markDeviceReadSuccess(deviceId, record.target.transport ?? "http");
         return { ok: true, detail };
       }
       const selectedTransport = resolvePreferredTransport(
@@ -2136,6 +2158,7 @@ export function DeviceRegistryProvider({
           const detail = await withRememberedHttpFallback(record, (httpBaseUrl) =>
             previewDeviceChargeControl(httpBaseUrl, input),
           );
+          markDeviceReadSuccess(deviceId, "http");
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
@@ -2158,6 +2181,7 @@ export function DeviceRegistryProvider({
             devdLeaseIdForRecord(record),
             input,
           );
+          markDeviceReadSuccess(deviceId, "devd");
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
@@ -2173,6 +2197,7 @@ export function DeviceRegistryProvider({
       if (!session) return serialCommandUnavailable();
       try {
         const detail = await session.previewChargeControl(input);
+        markDeviceReadSuccess(deviceId, "serial");
         return { ok: true, detail };
       } catch (error) {
         const envelope = errorFromSerialFailure(error);
@@ -2184,7 +2209,7 @@ export function DeviceRegistryProvider({
         };
       }
     },
-    [records, setSerialCommandError],
+    [markDeviceReadSuccess, records, setSerialCommandError],
   );
 
   const controlManualCharge = useCallback(
@@ -3746,6 +3771,34 @@ function patchSerialStatusRecord(
     nextRecord,
     serialLogFromFrame({ type: "log", level: "info", target, message }),
   );
+}
+
+export function recoverReadRecord(
+  record: DeviceRecord,
+  transport: DeviceChannelTransport,
+  streamActive = false,
+): DeviceRecord {
+  const streamState =
+    transport === "serial"
+      ? "streaming"
+      : streamActive
+        ? "streaming"
+        : transport === "devd"
+          ? "polling"
+          : record.identity?.capabilities.sse
+            ? "idle"
+            : "polling";
+  return {
+    ...record,
+    connectionState: "online",
+    streamState,
+    error: null,
+    lastUpdated: new Date().toISOString(),
+    serial:
+      record.serial && (transport === "serial" || transport === "devd")
+        ? { ...record.serial, connected: true }
+        : record.serial,
+  };
 }
 
 function mergeLanDeviceSnapshot(
