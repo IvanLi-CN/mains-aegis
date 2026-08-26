@@ -1573,6 +1573,7 @@ export function DeviceRegistryProvider({
             };
           }
           const result = await probeDevice(lanBaseUrl);
+          assertProbeResultIdentity(result, identity.device_id);
           const target: DeviceTarget = {
             deviceId: result.identity.device_id,
             baseUrl: lanBaseUrl,
@@ -1763,6 +1764,10 @@ export function DeviceRegistryProvider({
           baseUrl,
           lease.lease_id,
           bridgeAuth ? { bridgeAuth: true } : undefined,
+        );
+        assertProbeResultIdentity(
+          result,
+          existingOperationRecord?.target.deviceId ?? result.identity.device_id,
         );
         const firmwareMatch = await findFirmwareArtifactForIdentity(
           result.identity,
@@ -4535,6 +4540,7 @@ export function DeviceRegistryProvider({
         lease.lease_id,
         bridgeAuth ? { bridgeAuth: true } : undefined,
       );
+      assertProbeResultIdentity(result, record.target.deviceId);
       if (result.identity.device_id !== record.target.deviceId)
         throw new Error("devd runtime restoration resolved a different device");
       const session = await getDevdSerialSession(baseUrl, {
