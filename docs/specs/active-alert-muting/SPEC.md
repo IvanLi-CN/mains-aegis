@@ -16,10 +16,6 @@
 - 通过 USB CDC、LAN HTTP、devd、CLI、Web App 与前面板呈现同一权威状态。
 - 前面板复用固件 scene、字体和 `320x172` little-endian RGB565 framebuffer 导出评审图。
 
-## Related ADRs
-
-- [ADR 0001: Assign summaries to their owning pages](../../adr/0001-assign-summary-ownership-to-pages.md)
-
 ### Non-goals
 
 - 不提供批量消音、手动恢复声音、跨实例或跨重启的永久静音，也不写入 EEPROM。
@@ -120,3 +116,7 @@ Web Alerts 移动端（`393x852`）。
 
 PR: include
 Fleet 页面持续显示 fleet 告警指标；单设备 Alerts 页面显示当前设备告警，不重复 Fleet Summary 或完整 Device Overview。
+
+## Related ADRs
+
+- [ADR 0001: Assign summaries to their owning pages](../../adr/0001-assign-summary-ownership-to-pages.md)
