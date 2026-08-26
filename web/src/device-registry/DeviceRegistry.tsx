@@ -4379,10 +4379,7 @@ export function DeviceRegistryProvider({
             undefined,
             bridgeAuth ? { bridgeAuth: true } : undefined,
           );
-          if (result.identity.device_id !== record.target.deviceId)
-            throw new Error(
-              `HTTP runtime restoration resolved to unexpected device ${result.identity.device_id}`,
-            );
+          assertProbeResultIdentity(result, record.target.deviceId);
           return {
             nextTarget: promoteRememberedHttpEndpoint(
               bridgeAuth ? { ...nextTarget, bridgeAuth: true } : nextTarget,
