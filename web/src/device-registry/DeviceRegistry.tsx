@@ -1514,9 +1514,15 @@ export function DeviceRegistryProvider({
             existingOperationRecord,
             operationContext,
           );
+          const operationStillCurrentAfterRestore =
+            !operationContext ||
+            currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            );
           if (
             !restored &&
-            (!operationContext || operationStillCurrent)
+            operationStillCurrentAfterRestore
           )
             markDeviceRuntimeUnavailable(
               existingOperationRecord,
@@ -1743,11 +1749,6 @@ export function DeviceRegistryProvider({
               operationContext.token,
             )
           ) {
-            markDeviceRuntimeUnavailable(
-              operationPreviousRecord,
-              staleAddDeviceError(),
-              false,
-            );
             return staleAddDeviceResult();
           }
         }
@@ -3777,9 +3778,8 @@ export function DeviceRegistryProvider({
   function markDeviceRuntimeUnavailable(
     record: DeviceRecord,
     error: NonNullable<DeviceRecord["error"]>,
-    invalidate = true,
   ) {
-    if (invalidate) invalidateDeviceReads(record.target.deviceId);
+    invalidateDeviceReads(record.target.deviceId);
     setRecords((current) =>
       current.map((candidate) =>
         candidate.target.deviceId === record.target.deviceId
