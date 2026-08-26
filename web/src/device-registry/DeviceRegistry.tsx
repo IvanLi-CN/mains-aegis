@@ -1864,14 +1864,11 @@ export function DeviceRegistryProvider({
         if (
           !currentDeviceOperation(deviceId, operationToken) ||
           !currentDeviceOperation(logicalDeviceId, logicalOperationToken)
-        )
+        ) {
           if (previous)
             markClosedRuntimeUnavailable(previous, previousRuntimeSnapshot);
-        if (
-          !currentDeviceOperation(deviceId, operationToken) ||
-          !currentDeviceOperation(logicalDeviceId, logicalOperationToken)
-        )
           return staleAddDeviceResult();
+        }
         let mergedRecord = record;
         setRecords((current) => {
           const existing = current.find(
@@ -4873,10 +4870,17 @@ function mergedRecordErrorSource(
 function liveStatusErrorState(
   record: DeviceRecord,
 ): Pick<DeviceRecord, "error" | "errorSource" | "commandError"> {
-  if (record.errorSource === "command" || record.errorSource === "read") {
+  if (record.errorSource === "command") {
     return {
       error: record.error,
       errorSource: record.errorSource,
+      commandError: record.commandError,
+    };
+  }
+  if (record.errorSource === "read") {
+    return {
+      error: record.commandError ?? null,
+      errorSource: record.commandError ? "command" : undefined,
       commandError: record.commandError,
     };
   }

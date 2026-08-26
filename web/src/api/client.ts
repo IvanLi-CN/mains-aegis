@@ -1668,6 +1668,8 @@ export function isTransportErrorEnvelope(
     code === "unknown_error" ||
     code === "not_found" ||
     code === "device_not_found" ||
+    code === "web_session_expired" ||
+    code === "web_session_required" ||
     (code.startsWith("http_") && error?.retryable === true) ||
     code.startsWith("serial_") ||
     code.startsWith("devd_") ||

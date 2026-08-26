@@ -262,6 +262,22 @@ describe("alert mute errors", () => {
         details: null,
       }),
     ).toBe(false);
+    expect(
+      isTransportErrorEnvelope({
+        code: "web_session_expired",
+        message: "lease expired",
+        retryable: false,
+        details: null,
+      }),
+    ).toBe(true);
+    expect(
+      isTransportErrorEnvelope({
+        code: "web_session_required",
+        message: "lease required",
+        retryable: false,
+        details: null,
+      }),
+    ).toBe(true);
   });
 
   test("uses an AbortController fallback for alert request timeouts", async () => {
