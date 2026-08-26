@@ -1106,6 +1106,7 @@ function deviceDefaultHref(record: DeviceRecord) {
 function hasTransportFailure(record: DeviceRecord | null | undefined): boolean {
   return Boolean(
     record &&
+      record.errorSource !== "read" &&
       (record.connectionState === "error" ||
         record.streamState === "error" ||
         (record.connectionState === "offline" && record.error !== null)),
@@ -1974,6 +1975,7 @@ function buildFleetEntryRecord(
     connected &&
     existingRecord?.target.transport === "http" &&
     Boolean(existingRecord.error) &&
+    existingRecord.errorSource !== "read" &&
     !hasTransportFailure(existingRecord);
   const currentStatus = httpDevice?.status ?? devdDevice?.status ?? null;
   return {
@@ -2005,6 +2007,10 @@ function buildFleetEntryRecord(
             : "idle"
         : (existingRecord?.streamState ?? "idle"),
     error: recoveredTransportFailure ? null : existingRecord?.error ?? null,
+    errorSource: recoveredTransportFailure
+      ? undefined
+      : existingRecord?.errorSource,
+    commandError: existingRecord?.commandError,
     lastUpdated: new Date().toISOString(),
     serial:
       existingRecord?.serial ??
@@ -6565,6 +6571,13 @@ function streamPresentation(record: DeviceRecord): StreamPresentation {
   }
 
   if (record.streamState === "error") {
+    if (record.errorSource === "read") {
+      return {
+        label: "Data error",
+        detail: record.error?.message ?? `Device data unavailable${freshness}`,
+        tone: "warning",
+      };
+    }
     return {
       label: "Data degraded",
       detail: record.status

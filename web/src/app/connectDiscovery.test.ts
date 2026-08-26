@@ -546,6 +546,31 @@ describe("resolveSelectedRecord", () => {
     ).toBe(fleetRecord);
   });
 
+  test("preserves saved read failures during connected discovery recovery", () => {
+    const registryFailure: DeviceRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      connectionState: "online",
+      streamState: "error",
+      error: {
+        code: "http_400",
+        message: "Charge control read failed",
+        retryable: false,
+        details: null,
+      },
+      errorSource: "read",
+    };
+    const fleetRecord = buildFleetEntries(
+      [registryFailure],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    )[0]?.record;
+
+    expect(fleetRecord?.connectionState).toBe("online");
+    expect(fleetRecord?.streamState).toBe("error");
+    expect(fleetRecord?.error).toBe(registryFailure.error);
+    expect(fleetRecord?.errorSource).toBe("read");
+  });
+
   test("keeps saved HTTP action failures on the recovered discovery entry", () => {
     const registryActionFailure: DeviceRecord = {
       ...savedRecord("mains-aegis-a1b2c3"),

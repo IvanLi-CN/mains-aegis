@@ -128,7 +128,6 @@ describe("recoverReadRecord", () => {
         connected: false,
         source: "devd",
         baseUrl: "http://127.0.0.1:8765",
-        leaseId: "lease-1",
         protocol: "mains-aegis.cdc.v1",
         logs: [],
         trace: [],

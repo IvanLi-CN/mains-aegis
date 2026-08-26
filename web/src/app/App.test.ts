@@ -318,6 +318,25 @@ describe("page presentation ownership", () => {
     expect(commandErrorMarkup).toContain("Action failed");
     expect(commandErrorMarkup).not.toContain("Connection error");
 
+    const readErrorMarkup = renderToStaticMarkup(
+      createElement(DeviceDataContext, {
+        record: makeRecord({
+          connectionState: "online",
+          streamState: "error",
+          errorSource: "read",
+          error: {
+            code: "http_400",
+            message: "Charge control read failed",
+            retryable: false,
+            details: null,
+          },
+        }),
+      }),
+    );
+    expect(readErrorMarkup).toContain("Data error");
+    expect(readErrorMarkup).toContain("Charge control read failed");
+    expect(readErrorMarkup).not.toContain("Action failed");
+
     expect(
       shouldShowDeviceDataContext(
         makeRecord({

@@ -1666,7 +1666,6 @@ export function isTransportErrorEnvelope(
   return (
     code === "transport_error" ||
     code === "unknown_error" ||
-    code === "not_found" ||
     code === "device_not_found" ||
     code === "web_session_expired" ||
     code === "web_session_required" ||

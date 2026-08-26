@@ -4913,8 +4913,8 @@ function liveStatusErrorState(
   }
   if (record.errorSource === "read") {
     return {
-      error: record.commandError ?? null,
-      errorSource: record.commandError ? "command" : undefined,
+      error: record.error,
+      errorSource: record.errorSource,
       commandError: record.commandError,
     };
   }
@@ -5451,7 +5451,12 @@ export function recoverReadRecord(
   transport: DeviceChannelTransport,
   streamActive = false,
 ): DeviceRecord {
-  if (transport === "devd" && !record.serial?.leaseId) return record;
+  if (
+    transport === "devd" &&
+    record.errorSource === "transport" &&
+    isDevdLeaseInvalidError(record.error)
+  )
+    return record;
   const streamState =
     transport === "serial"
       ? "streaming"

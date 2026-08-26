@@ -264,6 +264,22 @@ describe("alert mute errors", () => {
     ).toBe(false);
     expect(
       isTransportErrorEnvelope({
+        code: "not_found",
+        message: "unsupported command",
+        retryable: false,
+        details: null,
+      }),
+    ).toBe(false);
+    expect(
+      isTransportErrorEnvelope({
+        code: "device_not_found",
+        message: "device unavailable",
+        retryable: false,
+        details: null,
+      }),
+    ).toBe(true);
+    expect(
+      isTransportErrorEnvelope({
         code: "web_session_expired",
         message: "lease expired",
         retryable: false,
