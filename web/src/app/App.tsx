@@ -4156,7 +4156,20 @@ function useActiveAlertsSnapshot(
       if (refreshScope.current === scope) refreshScope.current += 1;
       refreshInFlight.current = null;
     };
-  }, [deviceId, record?.runtimeId]);
+  }, [
+    deviceId,
+    record?.runtimeId,
+    connectionState,
+    record?.target.transport,
+    record?.target.baseUrl,
+    record?.serial?.source,
+    record?.serial?.baseUrl,
+    record?.serial?.leaseId,
+    record?.target.rememberedChannels?.devd?.baseUrl,
+    record?.target.rememberedChannels?.devd?.devdDeviceId,
+    record?.target.rememberedChannels?.http?.baseUrl,
+    record?.target.rememberedChannels?.http?.fallbackBaseUrl,
+  ]);
 
   useEffect(() => {
     setSnapshot(null);
