@@ -8,6 +8,7 @@ import {
   markClosedRuntimeUnavailableRecord,
   recoverReadRecord,
   resolveManualHttpChannelPersistence,
+  rememberedHttpBaseUrls,
   sameDeviceRuntime,
   waitForPendingDevdLeaseRelease,
 } from "./DeviceRegistry";
@@ -96,6 +97,43 @@ describe("resolveManualHttpChannelPersistence", () => {
       rememberedHttpMdnsHost: "mains-aegis-a1b2c3.local",
       rememberedHttpFallbackBaseUrl: "http://192.168.31.42",
     });
+  });
+});
+
+describe("rememberedHttpBaseUrls", () => {
+  test("keeps both the primary and fallback endpoints available to a read fence", () => {
+    const record: DeviceRecord = {
+      target: {
+        deviceId: "mains-aegis-a1b2c3",
+        baseUrl: "http://mains-aegis-a1b2c3.local",
+        alias: "Bench A",
+        location: "Lab",
+        addedAt: "2026-06-07T00:00:00.000Z",
+        transport: "http",
+        preferredTransport: "http",
+        rememberedChannels: {
+          http: {
+            baseUrl: "http://mains-aegis-a1b2c3.local",
+            fallbackBaseUrl: "http://192.168.31.42",
+            seenAt: "2026-06-07T00:00:00.000Z",
+          },
+        },
+      },
+      identity: null,
+      network: null,
+      settings: null,
+      status: null,
+      connectionState: "error",
+      streamState: "error",
+      error: null,
+      errorSource: undefined,
+      lastUpdated: "2026-06-07T00:00:00.000Z",
+    };
+
+    expect(rememberedHttpBaseUrls(record)).toEqual([
+      "http://mains-aegis-a1b2c3.local",
+      "http://192.168.31.42",
+    ]);
   });
 });
 

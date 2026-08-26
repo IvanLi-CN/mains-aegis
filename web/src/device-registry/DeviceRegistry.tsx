@@ -822,7 +822,7 @@ export function DeviceRegistryProvider({
           if (!previous) return current;
           if (
             httpReadBaseUrl !== null &&
-            rememberedHttpBaseUrl(previous) !== httpReadBaseUrl
+            !rememberedHttpBaseUrls(previous).includes(httpReadBaseUrl)
           )
             return current;
           const streamState =
@@ -853,7 +853,7 @@ export function DeviceRegistryProvider({
         if (
           httpReadBaseUrl !== null &&
           currentRecord &&
-          rememberedHttpBaseUrl(currentRecord) !== httpReadBaseUrl
+          !rememberedHttpBaseUrls(currentRecord).includes(httpReadBaseUrl)
         )
           return;
         const envelope = toErrorEnvelope(error);
@@ -5155,7 +5155,7 @@ function rememberedHttpBaseUrl(record: DeviceRecord): string | null {
   return rememberedHttpBaseUrls(record)[0] ?? null;
 }
 
-function rememberedHttpBaseUrls(record: DeviceRecord): string[] {
+export function rememberedHttpBaseUrls(record: DeviceRecord): string[] {
   const candidates = [
     record.target.rememberedChannels?.http?.baseUrl,
     record.target.rememberedChannels?.http?.fallbackBaseUrl,
