@@ -203,6 +203,8 @@ export function DeviceRegistryProvider({
       for (const session of serialSessions.current.values())
         void session.close();
       serialSessions.current.clear();
+      for (const [deviceId, generation] of deviceReadGenerations.current)
+        deviceReadGenerations.current.set(deviceId, generation + 1);
       if (!nextSeed) {
         setRecords(loadInitialRecords(null));
         return;
@@ -224,6 +226,7 @@ export function DeviceRegistryProvider({
                 connectionState: error?.retryable ? "offline" : "error",
                 streamState: "error",
                 error,
+                errorSource: "transport",
                 serial: record.serial
                   ? { ...record.serial, connected: false }
                   : record.serial,
@@ -269,6 +272,7 @@ export function DeviceRegistryProvider({
       operation: "command" | "read" = "command",
       readRequest?: DeviceReadRequest,
     ) => {
+      if (operation === "command") invalidateDeviceReads(deviceId);
       if (operation === "read") {
         if (readRequest && !currentDeviceRead(readRequest)) return;
         setRecords((current) =>
@@ -280,11 +284,14 @@ export function DeviceRegistryProvider({
                 readRequest,
                 deviceReadGenerations.current.get(readRequest.deviceId),
               ))
-              ? {
+              ? record.errorSource === "command"
+                ? record
+                : {
                   ...record,
                   connectionState: error?.retryable ? "offline" : "error",
                   streamState: "error",
                   error,
+                  errorSource: "read",
                   serial: record.serial
                     ? { ...record.serial, connected: false }
                     : record.serial,
@@ -308,6 +315,7 @@ export function DeviceRegistryProvider({
                 connectionState: "online",
                 streamState: "polling",
                 error,
+                errorSource: "command",
                 serial: { ...record.serial, connected: true },
                 lastUpdated: new Date().toISOString(),
               },
@@ -335,6 +343,7 @@ export function DeviceRegistryProvider({
                           ? "streaming"
                           : "polling",
                       error,
+                      errorSource: "command",
                       lastUpdated: new Date().toISOString(),
                     }
                   : record,
@@ -361,6 +370,7 @@ export function DeviceRegistryProvider({
                   connectionState: "online",
                   streamState: "streaming",
                   error,
+                  errorSource: "command",
                   serial: record.serial
                     ? { ...record.serial, connected: true }
                     : record.serial,
@@ -372,7 +382,7 @@ export function DeviceRegistryProvider({
         ),
       );
     },
-    [currentDeviceRead, setRecordError],
+    [currentDeviceRead, invalidateDeviceReads, setRecordError],
   );
 
   const markDeviceReadSuccess = useCallback(
@@ -392,6 +402,7 @@ export function DeviceRegistryProvider({
                       patch,
                       "manual_charge",
                       "Charge control detail refreshed",
+                      false,
                     )
                   : record,
                 request.transport,
@@ -1040,6 +1051,7 @@ export function DeviceRegistryProvider({
 
   const confirmDevdCompanionLan = useCallback(
     async (deviceId: string, devdBaseUrl: string): Promise<AddDeviceResult> => {
+      invalidateDeviceReads(deviceId);
       try {
         const updated = await bindDevdCompanionLan(deviceId, {}, devdBaseUrl);
         const companion = updated.binding?.lan_companion;
@@ -1136,7 +1148,7 @@ export function DeviceRegistryProvider({
         return { ok: false, error: toErrorEnvelope(error) };
       }
     },
-    [],
+    [invalidateDeviceReads],
   );
 
   const dismissDevdCompanionLan = useCallback(
@@ -1367,13 +1379,15 @@ export function DeviceRegistryProvider({
 
   const attachMockUsbSerialDevice = useCallback((): AddDeviceResult => {
     const record = makeMockUsbSerialRecord();
+    invalidateDeviceReads(record.target.deviceId);
     setRecords((current) => upsertRecord(current, record));
     return { ok: true, record };
-  }, []);
+  }, [invalidateDeviceReads]);
 
   const stageDeviceRecord = useCallback((record: DeviceRecord) => {
+    invalidateDeviceReads(record.target.deviceId);
     setRecords((current) => upsertRecord(current, record));
-  }, []);
+  }, [invalidateDeviceReads]);
 
   const rememberDiscoveredChannels = useCallback(
     (devdBaseUrl: string, devices: DevdDevice[]) => {
@@ -1526,12 +1540,13 @@ export function DeviceRegistryProvider({
 
   const prepareWebSerialFlashPort = useCallback(
     async (deviceId: string): Promise<SerialPortLike | null> => {
+      invalidateDeviceReads(deviceId);
       const session = serialSessions.current.get(deviceId);
       if (!session) return null;
       serialSessions.current.delete(deviceId);
       return session.releasePort();
     },
-    [],
+    [invalidateDeviceReads],
   );
 
   const sendWifiConfig = useCallback(
@@ -1544,6 +1559,7 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      invalidateDeviceReads(deviceId);
       if (record.target.mock) {
         onProgress?.({
           phase: "connected",
@@ -1723,7 +1739,7 @@ export function DeviceRegistryProvider({
         return { ok: false, error: envelope };
       }
     },
-    [records, setSerialCommandError],
+    [invalidateDeviceReads, records, setSerialCommandError],
   );
 
   const clearWifiConfig = useCallback(
@@ -1735,6 +1751,7 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      invalidateDeviceReads(deviceId);
       if (record.target.mock) {
         onProgress?.({
           phase: "disabled",
@@ -1875,7 +1892,7 @@ export function DeviceRegistryProvider({
         return { ok: false, error: envelope };
       }
     },
-    [records, setSerialCommandError],
+    [invalidateDeviceReads, records, setSerialCommandError],
   );
 
   const setSerialLogLevel = useCallback(
@@ -1887,6 +1904,7 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      invalidateDeviceReads(deviceId);
       const selectedTransport = resolvePreferredTransport(
         record,
         serialSessions.current,
@@ -1982,7 +2000,7 @@ export function DeviceRegistryProvider({
       );
       return { ok: true };
     },
-    [records, setSerialCommandError],
+    [invalidateDeviceReads, records, setSerialCommandError],
   );
 
   const setManualChargePrefs = useCallback(
@@ -1994,6 +2012,7 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      invalidateDeviceReads(deviceId);
       const selectedTransport = resolvePreferredTransport(
         record,
         serialSessions.current,
@@ -2089,7 +2108,7 @@ export function DeviceRegistryProvider({
       );
       return { ok: true };
     },
-    [records, setSerialCommandError],
+    [invalidateDeviceReads, records, setSerialCommandError],
   );
 
   const refreshChargeControlDetail = useCallback(
@@ -2266,6 +2285,7 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      invalidateDeviceReads(deviceId);
       const selectedTransport = resolvePreferredTransport(
         record,
         serialSessions.current,
@@ -2416,7 +2436,7 @@ export function DeviceRegistryProvider({
       );
       return { ok: true, message: successMessage, detail };
     },
-    [records, setSerialCommandError],
+    [invalidateDeviceReads, records, setSerialCommandError],
   );
 
   const setAdvancedPower = useCallback(
@@ -2428,6 +2448,7 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      invalidateDeviceReads(deviceId);
       const selectedTransport = resolvePreferredTransport(
         record,
         serialSessions.current,
@@ -2538,7 +2559,7 @@ export function DeviceRegistryProvider({
       );
       return { ok: true };
     },
-    [records, setSerialCommandError],
+    [invalidateDeviceReads, records, setSerialCommandError],
   );
 
   const resetAdvancedPower = useCallback(
@@ -2547,6 +2568,7 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      invalidateDeviceReads(deviceId);
       const selectedTransport = resolvePreferredTransport(
         record,
         serialSessions.current,
@@ -2660,7 +2682,7 @@ export function DeviceRegistryProvider({
       );
       return { ok: true };
     },
-    [records, setSerialCommandError],
+    [invalidateDeviceReads, records, setSerialCommandError],
   );
 
   function handleSerialFrame(frame: SerialFrame, deviceId: string | null) {
@@ -2851,6 +2873,7 @@ export function DeviceRegistryProvider({
 
   const removeDevice = useCallback(
     (deviceId: string) => {
+      invalidateDeviceReads(deviceId);
       const record = records.find(
         (candidate) => candidate.target.deviceId === deviceId,
       );
@@ -2872,11 +2895,12 @@ export function DeviceRegistryProvider({
         });
       }
     },
-    [records],
+    [invalidateDeviceReads, records],
   );
 
   const setDemoSeed = useCallback((seed: DemoSeed) => {
     if (!seedRef.current) return;
+    for (const record of records) invalidateDeviceReads(record.target.deviceId);
     for (const stream of streams.current.values()) stream.close();
     streams.current.clear();
     for (const stream of devdStreams.current.values()) stream.close();
@@ -2890,10 +2914,11 @@ export function DeviceRegistryProvider({
     seedRef.current = seed;
     setActiveDemoSeed(seed);
     setRecords(makeMockRecords(seed));
-  }, [records]);
+  }, [invalidateDeviceReads, records]);
 
   const resetDemo = useCallback(() => {
     if (!seedRef.current) return;
+    for (const record of records) invalidateDeviceReads(record.target.deviceId);
     for (const stream of streams.current.values()) stream.close();
     streams.current.clear();
     for (const stream of devdStreams.current.values()) stream.close();
@@ -2907,7 +2932,7 @@ export function DeviceRegistryProvider({
     seedRef.current = DEFAULT_DEMO_SEED;
     setActiveDemoSeed(DEFAULT_DEMO_SEED);
     setRecords(makeMockRecords(DEFAULT_DEMO_SEED));
-  }, [records]);
+  }, [invalidateDeviceReads, records]);
 
   const getSerialAlerts = useCallback(async (deviceId: string): Promise<ActiveAlertsSnapshot> => {
     const session = serialSessions.current.get(deviceId);
@@ -3801,6 +3826,7 @@ function patchSerialStatusRecord(
   patch: DeviceStatusPatch,
   target: string,
   message: string,
+  clearError = true,
 ): DeviceRecord {
   const nextStatus = mergeDeviceStatus(record.status, patch);
   const nextRecord: DeviceRecord = {
@@ -3808,7 +3834,8 @@ function patchSerialStatusRecord(
     status: nextStatus,
     chargeControlDetail:
       patch.chargeControlDetail ?? record.chargeControlDetail ?? null,
-    error: null,
+    error: clearError ? null : record.error,
+    errorSource: clearError ? undefined : record.errorSource,
     lastUpdated: new Date().toISOString(),
   };
   if (!record.serial) return nextRecord;
@@ -3837,7 +3864,8 @@ export function recoverReadRecord(
     ...record,
     connectionState: "online",
     streamState,
-    error: null,
+    error: record.errorSource === "read" ? null : record.error,
+    errorSource: record.errorSource === "read" ? undefined : record.errorSource,
     lastUpdated: new Date().toISOString(),
     serial:
       record.serial && (transport === "serial" || transport === "devd")
@@ -3867,6 +3895,7 @@ function mergeLanDeviceSnapshot(
         : record.network,
     connectionState: "online",
     error: null,
+    errorSource: undefined,
     lastUpdated: new Date().toISOString(),
   };
   if (!record.serial) return nextRecord;

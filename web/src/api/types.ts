@@ -397,6 +397,7 @@ export type DeviceRecord = {
   connectionState: ConnectionState;
   streamState: "idle" | "streaming" | "polling" | "error";
   error: ApiErrorEnvelope["error"] | null;
+  errorSource?: "transport" | "command" | "read";
   lastUpdated: string | null;
   serial?: {
     connected: boolean;

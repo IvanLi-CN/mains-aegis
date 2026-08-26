@@ -118,6 +118,7 @@ describe("recoverReadRecord", () => {
         retryable: true,
         details: null,
       },
+      errorSource: "read",
       lastUpdated: "2026-06-07T00:00:00.000Z",
       serial: {
         connected: false,
@@ -159,6 +160,7 @@ describe("recoverReadRecord", () => {
         retryable: false,
         details: null,
       },
+      errorSource: "read",
       lastUpdated: "2026-06-07T00:00:00.000Z",
     };
 
@@ -167,6 +169,40 @@ describe("recoverReadRecord", () => {
     expect(recovered.connectionState).toBe("online");
     expect(recovered.streamState).toBe("streaming");
     expect(recovered.error).toBeNull();
+  });
+
+  test("preserves an online command error while recovering transport state", () => {
+    const record: DeviceRecord = {
+      target: {
+        deviceId: "mains-aegis-a1b2c3",
+        baseUrl: "http://mains-aegis-a1b2c3.local",
+        alias: "Bench A",
+        location: "Lab",
+        addedAt: "2026-06-07T00:00:00.000Z",
+        transport: "http",
+      },
+      identity: null,
+      network: null,
+      settings: null,
+      status: null,
+      connectionState: "online",
+      streamState: "polling",
+      error: {
+        code: "manual_charge_failed",
+        message: "charge command rejected",
+        retryable: false,
+        details: null,
+      },
+      errorSource: "command",
+      lastUpdated: "2026-06-07T00:00:00.000Z",
+    };
+
+    const recovered = recoverReadRecord(record, "http");
+
+    expect(recovered.connectionState).toBe("online");
+    expect(recovered.streamState).toBe("polling");
+    expect(recovered.error).toEqual(record.error);
+    expect(recovered.errorSource).toBe("command");
   });
 });
 
