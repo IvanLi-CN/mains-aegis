@@ -7996,10 +7996,11 @@ function attentionSummary(record: DeviceRecord): string {
   return "Normal";
 }
 
-function connectionSummary(record: DeviceRecord): string {
+export function connectionSummary(record: DeviceRecord): string {
   if (record.connectionState === "online") return "Online";
   if (record.connectionState === "connecting") return "Connecting";
   if (record.connectionState === "offline") return "Offline";
+  if (record.connectionState === "error") return "Connection error";
   if (
     record.network?.state === "connected" ||
     record.status?.network.state === "connected"

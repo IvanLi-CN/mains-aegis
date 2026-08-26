@@ -30,6 +30,7 @@ import {
   resolveDeviceRouteSection,
   shouldShowDeviceDataContext,
   ConnectPageHeading,
+  connectionSummary,
   DeviceDataContext,
   DevicePageFrame,
   FleetHeader,
@@ -243,6 +244,9 @@ describe("page presentation ownership", () => {
     expect(resolveMobileNavContext("fleet", online)).toBe("Fleet");
     expect(resolveMobileNavContext("connect", null)).toBe("Add device");
     expect(resolveMobileNavContext("battery", null)).toBe("Device / Battery");
+    expect(connectionSummary(makeRecord({ connectionState: "error" }))).toBe(
+      "Connection error",
+    );
   });
 
   test("normalizes unknown device sections to Overview", () => {

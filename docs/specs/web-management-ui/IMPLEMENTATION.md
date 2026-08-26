@@ -15,7 +15,7 @@
 - 固件新增 `usb_cdc_protocol` host-testable 协议模块，定义 `hello/status/log/request/response/error/wifi_config` frame、WiFi secret validation、PSK redaction 与 128B EEPROM WiFi config record CRC。
 - 主固件默认启用 `web_serial + net_http`，使用 ESP32-S3 USB Serial/JTAG CDC 通道读取 JSONL 命令，返回 identity/status/ack/error/log frame，并在 `get_status` 上生成 `status` / `output` / `charger` / `battery` / `network` 结构化日志；WiFi config 写入 EEPROM `0x0160` 起始的 4 个 32B block，`set` 后运行时立即连接，`clear` 后清空 EEPROM slot，并让 WiFi task 以 250ms 周期观察配置 generation，立即标记 `network.state=disabled` 后执行 disconnect/stop。
 - `mock:` 设备用于稳定开发预览和视觉证据，不发真实网络请求。
-- 管理端页面已覆盖 Fleet、Connect、Overview、Power、Battery、Thermal、Device、Settings、API。
+- 管理端页面已覆盖 Fleet、Connect、Overview、Alerts、Power、Battery、Thermal、Device、Firmware、Settings、API。
 - 页面级信息归属已收口：Fleet Header 只在 Fleet 渲染；Connect 和每条单设备路由拥有内容区 `h1`；完整 `DeviceStatusBand` 只在 Overview 出现，移动导航仅显示紧凑的设备/路由上下文。
 - 单设备深链从当前 devd discovery 暂时纳管的记录只在该发现快照仍包含设备时参与 Fleet 与路由选择；hydration 后仍以最新 discovery entry 为准，设备消失后保留路由标题并进入不可用态。若临时 registry 记录已经记录明确 transport failure（error、error stream 或已断开的 serial），则把失败状态覆盖到当前 discovery entry，避免在线 discovery 快照覆盖错误上下文；已保存记录在当前 discovery 恢复 connected 时清除过期 transport failure、stream error 与旧 telemetry；在线 transport 的命令错误仍附着在当前 discovery entry 并显示为 `Action failed`，不冒充连接中断；无首个 status 时显示 `Waiting`。
 - 管理端新增 `/devices/:device_id/firmware`，支持 Web Serial 直烧与 devd 代理烧录，并展示 catalog 去重来源、确认区、阶段进度和终态摘要。
