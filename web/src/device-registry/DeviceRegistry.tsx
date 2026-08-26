@@ -264,6 +264,8 @@ export function DeviceRegistryProvider({
   const [records, setRecords] = useState<DeviceRecord[]>(() =>
     loadInitialRecords(seedRef.current),
   );
+  const recordsRef = useRef(records);
+  recordsRef.current = records;
   const streams = useRef(new Map<string, StatusStream>());
   const streamBaseUrls = useRef(new Map<string, string>());
   const devdStreams = useRef(new Map<string, DevdSerialEventStream>());
@@ -895,7 +897,7 @@ export function DeviceRegistryProvider({
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      for (const record of records) {
+      for (const record of recordsRef.current) {
         if (
           resolvePreferredTransport(record, serialSessions.current) !==
             "devd" &&
@@ -2021,7 +2023,7 @@ export function DeviceRegistryProvider({
         return { ok: false, error: toErrorEnvelope(error) };
       }
     },
-    [invalidateDeviceReads, records],
+    [invalidateDeviceReads],
   );
 
   const connectUsbSerialDevice = useCallback(
