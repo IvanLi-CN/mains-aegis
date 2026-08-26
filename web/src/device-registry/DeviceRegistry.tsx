@@ -260,6 +260,7 @@ export function DeviceRegistryProvider({
     loadInitialRecords(seedRef.current),
   );
   const streams = useRef(new Map<string, StatusStream>());
+  const streamBaseUrls = useRef(new Map<string, string>());
   const devdStreams = useRef(new Map<string, DevdSerialEventStream>());
   const devdLeaseHeartbeats = useRef(new Map<string, number>());
   const serialSessions = useRef(new Map<string, WebSerialTransport>());
@@ -297,6 +298,7 @@ export function DeviceRegistryProvider({
       setActiveDemoSeed(nextSeed);
       for (const stream of streams.current.values()) stream.close();
       streams.current.clear();
+      streamBaseUrls.current.clear();
       for (const stream of devdStreams.current.values()) stream.close();
       devdStreams.current.clear();
       for (const heartbeat of devdLeaseHeartbeats.current.values())
@@ -1002,6 +1004,7 @@ export function DeviceRegistryProvider({
               current.map((candidate) =>
                 candidate.target.deviceId === record.target.deviceId &&
                 candidate.target.transport === "http" &&
+                rememberedHttpBaseUrl(candidate) === httpBaseUrl &&
                 resolvePreferredTransport(candidate, serialSessions.current) ===
                   "http"
                   ? {
@@ -1023,6 +1026,7 @@ export function DeviceRegistryProvider({
               current.map((candidate) =>
                 candidate.target.deviceId === record.target.deviceId &&
                 candidate.target.transport === "http" &&
+                rememberedHttpBaseUrl(candidate) === httpBaseUrl &&
                 resolvePreferredTransport(candidate, serialSessions.current) ===
                   "http"
                   ? {
@@ -1046,6 +1050,7 @@ export function DeviceRegistryProvider({
             );
             subscription.close();
             streams.current.delete(record.target.deviceId);
+            streamBaseUrls.current.delete(record.target.deviceId);
             setRecords((current) =>
               current.map((candidate) =>
                 candidate.target.deviceId === record.target.deviceId &&
@@ -1073,6 +1078,7 @@ export function DeviceRegistryProvider({
                   current.map((candidate) =>
                     candidate.target.deviceId === record.target.deviceId &&
                     candidate.target.transport === "http" &&
+                    rememberedHttpBaseUrl(candidate) === httpBaseUrl &&
                     canApplyDeviceRead(
                       candidate,
                       readRequest,
@@ -1109,6 +1115,7 @@ export function DeviceRegistryProvider({
                   current.map((candidate) =>
                     candidate.target.deviceId === record.target.deviceId &&
                     candidate.target.transport === "http" &&
+                    rememberedHttpBaseUrl(candidate) === httpBaseUrl &&
                     canApplyDeviceRead(
                       candidate,
                       readRequest,
@@ -1139,6 +1146,7 @@ export function DeviceRegistryProvider({
       );
 
       streams.current.set(record.target.deviceId, subscription);
+      streamBaseUrls.current.set(record.target.deviceId, httpBaseUrl);
     }
 
     for (const [deviceId, stream] of streams.current.entries()) {
@@ -1147,10 +1155,12 @@ export function DeviceRegistryProvider({
       );
       if (
         !record ||
-        resolvePreferredTransport(record, serialSessions.current) !== "http"
+        resolvePreferredTransport(record, serialSessions.current) !== "http" ||
+        streamBaseUrls.current.get(deviceId) !== rememberedHttpBaseUrl(record)
       ) {
         stream.close();
         streams.current.delete(deviceId);
+        streamBaseUrls.current.delete(deviceId);
       }
     }
   }, [records]);
@@ -1171,6 +1181,7 @@ export function DeviceRegistryProvider({
     return () => {
       for (const stream of streams.current.values()) stream.close();
       streams.current.clear();
+      streamBaseUrls.current.clear();
       for (const stream of devdStreams.current.values()) stream.close();
       devdStreams.current.clear();
       for (const heartbeat of devdLeaseHeartbeats.current.values())
@@ -1208,6 +1219,7 @@ export function DeviceRegistryProvider({
         ) {
           runtimeSnapshot.stream.close();
           streams.current.delete(deviceId);
+          streamBaseUrls.current.delete(deviceId);
         }
         if (
           runtimeSnapshot.devdStream &&
@@ -3911,7 +3923,12 @@ export function DeviceRegistryProvider({
         record.serial?.source === "devd" &&
         record.serial.baseUrl === baseUrl &&
         record.serial.leaseId === leaseId &&
-        (!readRequest || canApplyDeviceRead(record, readRequest))
+        (!readRequest ||
+          canApplyDeviceRead(
+            record,
+            readRequest,
+            deviceReadGenerations.current.get(readRequest.deviceId),
+          ))
           ? mergeDevdSerial(record, baseUrl, session, {
               lease_id: leaseId,
               expires_at: record.serial?.leaseExpiresAt ?? "",
@@ -4351,6 +4368,7 @@ export function DeviceRegistryProvider({
       );
       streams.current.get(deviceId)?.close();
       streams.current.delete(deviceId);
+      streamBaseUrls.current.delete(deviceId);
       devdStreams.current.get(deviceId)?.close();
       devdStreams.current.delete(deviceId);
       const heartbeat = devdLeaseHeartbeats.current.get(deviceId);
@@ -4375,6 +4393,7 @@ export function DeviceRegistryProvider({
     for (const record of records) invalidateDeviceReads(record.target.deviceId);
     for (const stream of streams.current.values()) stream.close();
     streams.current.clear();
+    streamBaseUrls.current.clear();
     for (const stream of devdStreams.current.values()) stream.close();
     devdStreams.current.clear();
     for (const heartbeat of devdLeaseHeartbeats.current.values())
@@ -4393,6 +4412,7 @@ export function DeviceRegistryProvider({
     for (const record of records) invalidateDeviceReads(record.target.deviceId);
     for (const stream of streams.current.values()) stream.close();
     streams.current.clear();
+    streamBaseUrls.current.clear();
     for (const stream of devdStreams.current.values()) stream.close();
     devdStreams.current.clear();
     for (const heartbeat of devdLeaseHeartbeats.current.values())

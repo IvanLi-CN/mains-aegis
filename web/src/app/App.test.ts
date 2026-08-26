@@ -242,6 +242,7 @@ describe("page presentation ownership", () => {
     );
     expect(resolveMobileNavContext("fleet", online)).toBe("Fleet");
     expect(resolveMobileNavContext("connect", null)).toBe("Add device");
+    expect(resolveMobileNavContext("battery", null)).toBe("Device / Battery");
   });
 
   test("normalizes unknown device sections to Overview", () => {

@@ -325,7 +325,7 @@ export function resolveMobileNavContext(
   const presentation = resolvePagePresentation(section);
   if (presentation.scope === "connect") return presentation.title;
   if (presentation.scope === "fleet") return "Fleet";
-  if (!selected) return "Device";
+  if (!selected) return `Device / ${presentation.title}`;
   return `${selected.target.alias} / ${connectionSummary(selected)} / ${presentation.title}`;
 }
 
@@ -7733,6 +7733,15 @@ function DeviceRoutePlaceholder({
           <h1>{title}</h1>
         </div>
       </header>
+      <div className="device-data-context tone-warning" role="status">
+        <span className="eyebrow">Device state</span>
+        <strong>{loading ? "Connecting" : "Offline"}</strong>
+        <span>
+          {loading
+            ? "Waiting for the device connection to resolve."
+            : "The device is not currently available to this page."}
+        </span>
+      </div>
       <div className="empty-state">
         {loading ? <Loader2 size={28} className="spin-icon" /> : <Server size={28} />}
         <h2>{loading ? "Loading device" : "Device not found"}</h2>
