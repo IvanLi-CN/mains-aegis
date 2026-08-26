@@ -127,10 +127,25 @@ type DeviceRuntimeSnapshot = {
 
 type DevdLeaseHeartbeatControl = {
   markCommitted: () => void;
-  release: () => void;
+  release: () => Promise<void>;
   releaseIfOwned: () => void;
   stopIfOwned: () => void;
 };
+
+type PendingDevdLease = {
+  release: () => Promise<void>;
+};
+
+export async function waitForPendingDevdLeaseRelease(
+  pendingLeases: Map<string, PendingDevdLease>,
+  deviceId: string,
+): Promise<void> {
+  const pendingLease = pendingLeases.get(deviceId);
+  if (!pendingLease) return;
+  await pendingLease.release();
+  if (pendingLeases.get(deviceId) === pendingLease)
+    pendingLeases.delete(deviceId);
+}
 
 export type DeviceReadRequest = {
   deviceId: string;
@@ -255,7 +270,7 @@ export function DeviceRegistryProvider({
   );
   const closedRuntimeIds = useRef(new Map<string, string>());
   const pendingDevdLeases = useRef(
-    new Map<string, { release: () => void }>(),
+    new Map<string, PendingDevdLease>(),
   );
 
   function captureDeviceRuntime(deviceId: string): DeviceRuntimeSnapshot {
@@ -317,8 +332,7 @@ export function DeviceRegistryProvider({
   const invalidateDeviceReads = useCallback((deviceId: string): number => {
     const pendingLease = pendingDevdLeases.current.get(deviceId);
     if (pendingLease) {
-      pendingDevdLeases.current.delete(deviceId);
-      pendingLease.release();
+      void pendingLease.release();
     }
     const generation = (deviceReadGenerations.current.get(deviceId) ?? 0) + 1;
     deviceReadGenerations.current.set(deviceId, generation);
@@ -1327,6 +1341,19 @@ export function DeviceRegistryProvider({
         )
       )
         return staleAddDeviceResult();
+      if (operationContext) {
+        await waitForPendingDevdLeaseRelease(
+          pendingDevdLeases.current,
+          operationContext.deviceId,
+        );
+        if (
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        )
+          return staleAddDeviceResult();
+      }
 
       let existingRuntimeClosed = false;
       let existingRuntimeSnapshot: DeviceRuntimeSnapshot | undefined;
@@ -3865,7 +3892,7 @@ export function DeviceRegistryProvider({
     if (!leaseId)
       return {
         markCommitted: () => undefined,
-        release: () => undefined,
+        release: () => Promise.resolve(),
         releaseIfOwned: () => undefined,
         stopIfOwned: () => undefined,
       };
@@ -3877,7 +3904,7 @@ export function DeviceRegistryProvider({
     );
     let heartbeat: number | undefined;
     let committed = !operationContext;
-    let released = false;
+    let releasePromise: Promise<void> | undefined;
     const stopIfOwned = () => {
       if (
         heartbeat === undefined ||
@@ -3887,10 +3914,14 @@ export function DeviceRegistryProvider({
       window.clearInterval(heartbeat);
       devdLeaseHeartbeats.current.delete(record.target.deviceId);
     };
-    const release = () => {
-      if (released) return;
-      released = true;
-      void releaseDevdWebLease(baseUrl, leaseId).catch(() => undefined);
+    const release = (): Promise<void> => {
+      if (releasePromise) return releasePromise;
+      const nextRelease = releaseDevdWebLease(baseUrl, leaseId).then(
+        () => undefined,
+        () => undefined,
+      );
+      releasePromise = nextRelease;
+      return nextRelease;
     };
     const control: DevdLeaseHeartbeatControl = {
       markCommitted: () => {
@@ -4214,9 +4245,9 @@ export function DeviceRegistryProvider({
         operationContext,
       );
       const pendingLease = {
-        release: () => {
+        release: async () => {
           heartbeatControl.stopIfOwned();
-          heartbeatControl.release();
+          await heartbeatControl.release();
         },
       };
       pendingDevdLeases.current.set(record.target.deviceId, pendingLease);

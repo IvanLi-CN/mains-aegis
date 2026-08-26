@@ -8,6 +8,7 @@ import {
   recoverReadRecord,
   resolveManualHttpChannelPersistence,
   sameDeviceRuntime,
+  waitForPendingDevdLeaseRelease,
 } from "./DeviceRegistry";
 import type { DeviceRecord } from "../api/types";
 
@@ -428,5 +429,39 @@ describe("isDevdLeaseInvalidError", () => {
         details: null,
       }),
     ).toBe(false);
+  });
+});
+
+describe("waitForPendingDevdLeaseRelease", () => {
+  test("waits for release before clearing the pending lease", async () => {
+    let resolveRelease!: () => void;
+    let releaseCalls = 0;
+    const pendingLeases = new Map([
+      [
+        "mains-aegis-a1b2c3",
+        {
+          release: () => {
+            releaseCalls += 1;
+            return new Promise<void>((resolve) => {
+              resolveRelease = resolve;
+            });
+          },
+        },
+      ],
+    ]);
+
+    const waiting = waitForPendingDevdLeaseRelease(
+      pendingLeases,
+      "mains-aegis-a1b2c3",
+    );
+    await Promise.resolve();
+
+    expect(releaseCalls).toBe(1);
+    expect(pendingLeases.has("mains-aegis-a1b2c3")).toBe(true);
+
+    resolveRelease();
+    await waiting;
+
+    expect(pendingLeases.has("mains-aegis-a1b2c3")).toBe(false);
   });
 });
