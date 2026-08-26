@@ -14,6 +14,7 @@ import {
   setDeviceManualChargeControl,
   setDeviceManualChargePrefs,
   setDeviceAdvancedPower,
+  isTransportErrorEnvelope,
   toErrorEnvelope,
 } from "./client";
 import type { DeviceSettings, UpsStatus } from "./types";
@@ -244,6 +245,57 @@ async function withFetchMock<T>(
 }
 
 describe("alert mute errors", () => {
+  test("classifies retryable HTTP failures separately from non-retryable command errors", () => {
+    expect(
+      isTransportErrorEnvelope({
+        code: "http_503",
+        message: "Service unavailable",
+        retryable: true,
+        details: null,
+      }),
+    ).toBe(true);
+    expect(
+      isTransportErrorEnvelope({
+        code: "http_400",
+        message: "Unsupported command",
+        retryable: false,
+        details: null,
+      }),
+    ).toBe(false);
+    expect(
+      isTransportErrorEnvelope({
+        code: "not_found",
+        message: "unsupported command",
+        retryable: false,
+        details: null,
+      }),
+    ).toBe(false);
+    expect(
+      isTransportErrorEnvelope({
+        code: "device_not_found",
+        message: "device unavailable",
+        retryable: false,
+        details: null,
+      }),
+    ).toBe(true);
+    expect(
+      isTransportErrorEnvelope({
+        code: "web_session_expired",
+        message: "lease expired",
+        retryable: false,
+        details: null,
+      }),
+    ).toBe(true);
+    expect(
+      isTransportErrorEnvelope({
+        code: "web_session_required",
+        message: "lease required",
+        retryable: false,
+        details: null,
+      }),
+    ).toBe(true);
+  });
+
   test("uses an AbortController fallback for alert request timeouts", async () => {
     const originalTimeout = AbortSignal.timeout;
     Object.defineProperty(AbortSignal, "timeout", {

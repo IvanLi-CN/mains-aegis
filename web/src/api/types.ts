@@ -174,6 +174,7 @@ export type ChargeControlDetail = {
 };
 
 export type UpsStatus = {
+  device_id?: string;
   mode: "standby" | "assist" | "backup" | "off" | "fault" | string;
   input: {
     source?: "dcin" | "usbc" | "auto" | "unknown" | string;
@@ -388,6 +389,7 @@ export type AdvancedPowerSettings = DeviceSettings["advanced_power"];
 export type AdvancedPowerCapabilities = DeviceSettings["advanced_power_capabilities"];
 
 export type DeviceRecord = {
+  runtimeId?: string;
   target: DeviceTarget;
   identity: Identity | null;
   network: NetworkSummary | null;
@@ -397,6 +399,8 @@ export type DeviceRecord = {
   connectionState: ConnectionState;
   streamState: "idle" | "streaming" | "polling" | "error";
   error: ApiErrorEnvelope["error"] | null;
+  errorSource?: "transport" | "command" | "read";
+  commandError?: ApiErrorEnvelope["error"] | null;
   lastUpdated: string | null;
   serial?: {
     connected: boolean;

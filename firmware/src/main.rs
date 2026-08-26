@@ -61,7 +61,7 @@ use mains_aegis_firmware::{
     mdns_wire::{derive_device_identity, DeviceIdentity},
     net_contract::{
         render_charge_control_result_json, render_compact_status_json, render_diag_snapshot_json,
-        render_identity_json_with_write_controls, render_status_json, BuildInfo,
+        render_identity_json_with_write_controls, render_status_json_with_device_id, BuildInfo,
     },
     net_types::{UpsStatusSnapshot, WifiConnectionState, WifiErrorKind},
     usb_cdc_protocol::{
@@ -2594,7 +2594,11 @@ fn handle_web_serial_frame<'d, I2C>(
                 {
                     render_compact_status_json(&mut body, status);
                 } else {
-                    render_status_json(&mut body, status);
+                    render_status_json_with_device_id(
+                        &mut body,
+                        status,
+                        Some(identity.device_id.as_str()),
+                    );
                 }
                 render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());

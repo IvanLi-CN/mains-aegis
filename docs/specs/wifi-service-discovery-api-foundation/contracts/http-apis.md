@@ -540,6 +540,7 @@ Host: mains-aegis-a1b2c3.local
 
 ```json
 {
+  "device_id": "mains-aegis-a1b2c3",
   "mode": "standby",
   "input": {
     "mains_present": true,
@@ -618,6 +619,7 @@ Host: mains-aegis-a1b2c3.local
 ### 兼容性与迁移（Compatibility / migration）
 
 - `status` 是后续客户端和 Web 的主要只读 SoT；新增字段应保持向后兼容，不删除现有 key。
+- `device_id` 为可选的顶层身份字段。新固件应返回逻辑设备 ID；客户端必须校验其与已绑定设备一致。旧固件可能省略该字段；对 HTTP SSE，客户端应将缺失身份视为不具备实时遥测资格并回退到轮询，以避免端点复用时接受过期结果。
 
 ## Status Stream（GET `/api/v1/status` + `Accept: text/event-stream`）
 
@@ -670,3 +672,4 @@ data: {"ok":true}
 ### 兼容性与迁移（Compatibility / migration）
 
 - 首版只保证单连接；若后续升级为多订阅广播，应保持事件名和 payload 形状不变。
+- `status` 事件的 `data` 复用普通状态响应的可选 `device_id` 字段；缺失该字段表示旧版固件兼容模式，客户端可继续使用普通轮询，不改变事件名或其他字段语义。

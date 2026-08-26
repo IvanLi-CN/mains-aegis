@@ -8,13 +8,16 @@
 - PWA service worker 预缓存 app shell、Vite 构建产物、Pages fallback、PWA 图标、相对 base 深链 navigation helper 和 bundled static firmware artifacts；真实设备 `/api`、`/events`、LAN HTTP/SSE、USB/Web Serial 与 GitHub Release live catalog 不进入离线模拟缓存。
 - PWA 更新策略使用 prompt 模式：新 app shell 在后台安装并缓存完成后，Web 只显示非阻塞 `New version available` 提示；用户点击 `Update` 并通过确认对话后才调用 `updateSW(true)` 切换并刷新页面。
 - `DeviceRegistry` 维护浏览器侧设备清单、localStorage 持久化、LAN 探活、settings 读取、SSE 订阅与轮询兜底，并持有当前浏览器连接内的 USB CDC `SerialPort`。
+- `DeviceRegistry` 的设备通道切换、同通道重连和 companion 确认使用操作/读取代次 fence；替换前清理旧 stream、serial session、heartbeat 与 devd Web lease，并等待租约释放后提交新记录。
 - USB CDC / Web Serial 设备使用 `serial:` target，不持久化真实 `SerialPort`；刷新后需要重新授权。
 - `web/src/serial/transport.ts` 实现 JSONL framing、`request_id` response matching、握手、状态读取、WiFi 配网、日志级别与手动充电偏好命令。
 - `web/src/firmware/` 负责 firmware catalog 合并、Bundled 优先去重、Web Serial 烧录 helper 和 Firmware 页面数据流。
 - 固件新增 `usb_cdc_protocol` host-testable 协议模块，定义 `hello/status/log/request/response/error/wifi_config` frame、WiFi secret validation、PSK redaction 与 128B EEPROM WiFi config record CRC。
 - 主固件默认启用 `web_serial + net_http`，使用 ESP32-S3 USB Serial/JTAG CDC 通道读取 JSONL 命令，返回 identity/status/ack/error/log frame，并在 `get_status` 上生成 `status` / `output` / `charger` / `battery` / `network` 结构化日志；WiFi config 写入 EEPROM `0x0160` 起始的 4 个 32B block，`set` 后运行时立即连接，`clear` 后清空 EEPROM slot，并让 WiFi task 以 250ms 周期观察配置 generation，立即标记 `network.state=disabled` 后执行 disconnect/stop。
 - `mock:` 设备用于稳定开发预览和视觉证据，不发真实网络请求。
-- 管理端页面已覆盖 Fleet、Connect、Overview、Power、Battery、Thermal、Device、Settings、API。
+- 管理端页面已覆盖 Fleet、Connect、Overview、Alerts、Power、Battery、Thermal、Device、Firmware、Settings、API。
+- 页面级信息归属已收口：Fleet Header 只在 Fleet 渲染；Connect 和每条单设备路由拥有内容区 `h1`；完整 `DeviceStatusBand` 只在 Overview 出现，移动导航仅显示紧凑的设备/路由上下文。
+- 单设备深链从当前 devd discovery 暂时纳管的记录只在该发现快照仍包含设备时参与 Fleet 与路由选择；hydration 后仍以最新 discovery entry 为准，设备消失后保留路由标题并进入不可用态。若临时 registry 记录已经记录明确 transport failure（error、error stream 或已断开的 serial），则把失败状态覆盖到当前 discovery entry，避免在线 discovery 快照覆盖错误上下文；已保存记录在当前 discovery 恢复 connected 时清除过期 transport failure、stream error 与旧 telemetry；在线 transport 的命令错误仍附着在当前 discovery entry 并显示为 `Action failed`，不冒充连接中断；无首个 status 时显示 `Waiting`。
 - 管理端新增 `/devices/:device_id/firmware`，支持 Web Serial 直烧与 devd 代理烧录，并展示 catalog 去重来源、确认区、阶段进度和终态摘要。
 - Firmware 抽屉在烧录运行中会拦截页面刷新/关闭，禁用抽屉关闭、确认框与重复烧录入口；Web Serial 烧录复用当前已连接的串口并在完成/失败路径尝试复位回应用态。
 - Settings 页对 LAN、USB CDC 或 devd 连接设备开放，提供 WiFi SSID/PSK 覆盖/清除、手动充电偏好、设备日志级别和 USB Console；USB Console 保留当前 Web Serial 或 devd transport 的 tx/rx frame、raw / ignored CDC 行和协议 payload，支持等级过滤、方向过滤、搜索高亮、虚拟滚动、全屏查看与 payload 折行开关，PSK 脱敏。
@@ -33,6 +36,7 @@
 - USB Console 保留 raw/ignored 串口记录本身，不再额外显示 `Decode issue` 或 `defmt decoder unavailable` 诊断标签；连接时的 firmware artifact 匹配门禁负责阻断不匹配固件。
 - Settings 和 Connect 失败反馈统一为气泡 callout；WiFi 保存、WiFi 清除和 charge-control/advanced-power 写入在固件/devd 返回前显示 spinner 并禁用并发写入。
 - Power 页 owner-facing 手动充电控制已迁到单弹窗 `charge-control` 流：当前态解释来自 `GET /api/v1/charge-control`，preview 来自无副作用 `/preview`，`START/STOP/confirm_loop` 来自 action endpoint。
+- `DeviceRegistry` 为 charge-control detail 与无副作用 preview 的 HTTP、devd、串口失败显式传入 `read` 语义；只有实际写入命令保留 action-error 语义，避免读失败被呈现为动作失败。读取成功后恢复记录的 online 状态、对应 stream 状态和 devd/serial connected 标记。
 - Fleet 卡片使用用户可理解的摘要字段，技术细节保留到单设备详情与 API 调试页。
 - Demo 复用正式前端路由，通过 `demo=true` 进入 mock-only 运行态；场景切换由左上角 Demo Logo 打开的悬浮控制面板完成，覆盖默认 fleet、空数据、全离线、大数量、USB、Critical Battery、Backup、API Debug 等路径，不再通过 public `seed=` URL 深链暴露。
 

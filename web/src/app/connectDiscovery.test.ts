@@ -243,7 +243,7 @@ describe("buildFleetEntries", () => {
     );
   });
 
-  test("keeps same-origin devd-backed saved entries online without any mock query target", () => {
+  test("models LAN-only discovery as a direct HTTP entry", () => {
     const entries = buildFleetEntries(
       [savedRecord("mains-aegis-a1b2c3")],
       [lanDevice("mains-aegis-a1b2c3")],
@@ -252,16 +252,12 @@ describe("buildFleetEntries", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.record.connectionState).toBe("online");
-    expect(entries[0]?.record.target.transport).toBe("devd");
-    expect(entries[0]?.record.target.baseUrl).toBe("");
+    expect(entries[0]?.record.target.transport).toBe("http");
+    expect(entries[0]?.record.target.baseUrl).toBe("http://192.168.31.42");
     expect(entries[0]?.record.target.rememberedChannels?.http?.baseUrl).toBe(
       "http://192.168.31.42",
     );
-    expect(entries[0]?.record.target.rememberedChannels?.devd).toMatchObject({
-      baseUrl: "",
-      devdDeviceId: "mains-aegis-a1b2c3",
-      transport: "lan",
-    });
+    expect(entries[0]?.record.target.rememberedChannels?.devd).toBeUndefined();
   });
 
   test("refreshes confirmed companion fallback IP from current LAN discovery", () => {
@@ -297,6 +293,26 @@ describe("buildFleetEntries", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.saved).toBe(false);
+  });
+
+  test("does not keep a staged-only record after a current discovery snapshot loses it", () => {
+    const temporaryRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      target: {
+        ...savedRecord("mains-aegis-a1b2c3").target,
+        temporary: true,
+      },
+    } satisfies DeviceRecord;
+
+    expect(buildFleetEntries([temporaryRecord], [], "same-origin")).toEqual([]);
+    expect(
+      resolveSelectedRecord(
+        "mains-aegis-a1b2c3",
+        [temporaryRecord],
+        [],
+        false,
+      ),
+    ).toBeNull();
   });
 });
 
@@ -414,6 +430,171 @@ describe("resolveSelectedRecord", () => {
     );
 
     expect(selected).toBe(fleetRecord);
+
+    const hydratedRegistry = {
+      ...registryShell,
+      status: fleetRecord.status,
+    };
+    expect(
+      resolveSelectedRecord(
+        "mains-aegis-a1b2c3",
+        [hydratedRegistry],
+        fleetEntries,
+        false,
+      ),
+    ).toBe(fleetRecord);
+  });
+
+  test("preserves a temporary registry transport failure over an online discovery snapshot", () => {
+    const registryFailure: DeviceRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      target: {
+        ...savedRecord("mains-aegis-a1b2c3").target,
+        temporary: true,
+      },
+      connectionState: "offline",
+      streamState: "polling",
+      error: {
+        code: "transport_error",
+        message: "Failed to fetch",
+        retryable: true,
+        details: null,
+      },
+    };
+    const fleetRecord = buildFleetEntries(
+      [registryFailure],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    )[0]?.record;
+
+    expect(fleetRecord?.connectionState).toBe("offline");
+    expect(fleetRecord?.error).toBe(registryFailure.error);
+    expect(
+      resolveSelectedRecord(
+        "mains-aegis-a1b2c3",
+        [registryFailure],
+        [{ key: "mains-aegis-a1b2c3", record: fleetRecord!, saved: false }],
+      ),
+    ).toBe(fleetRecord);
+  });
+
+  test("keeps an online temporary action failure attached to the current discovery record", () => {
+    const registryActionFailure: DeviceRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      target: {
+        ...savedRecord("mains-aegis-a1b2c3").target,
+        temporary: true,
+      },
+      connectionState: "online",
+      streamState: "polling",
+      error: {
+        code: "command_failed",
+        message: "Power command rejected",
+        retryable: false,
+        details: null,
+      },
+    };
+    const fleetRecord = buildFleetEntries(
+      [registryActionFailure],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    )[0]?.record;
+
+    expect(fleetRecord?.connectionState).toBe("online");
+    expect(fleetRecord?.error).toBe(registryActionFailure.error);
+    expect(
+      resolveSelectedRecord(
+        "mains-aegis-a1b2c3",
+        [registryActionFailure],
+        [{ key: "mains-aegis-a1b2c3", record: fleetRecord!, saved: false }],
+      ),
+    ).toBe(fleetRecord);
+  });
+
+  test("clears saved transport failures after connected discovery recovery", () => {
+    const registryFailure: DeviceRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      connectionState: "offline",
+      streamState: "error",
+      error: {
+        code: "transport_error",
+        message: "Failed to fetch",
+        retryable: true,
+        details: null,
+      },
+    };
+    const fleetRecord = buildFleetEntries(
+      [registryFailure],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    )[0]?.record;
+
+    expect(fleetRecord?.connectionState).toBe("online");
+    expect(fleetRecord?.streamState).toBe("idle");
+    expect(fleetRecord?.status).toBeNull();
+    expect(fleetRecord?.error).toBeNull();
+    expect(
+      resolveSelectedRecord(
+        "mains-aegis-a1b2c3",
+        [registryFailure],
+        [{ key: "mains-aegis-a1b2c3", record: fleetRecord!, saved: true }],
+      ),
+    ).toBe(fleetRecord);
+  });
+
+  test("preserves saved read failures during connected discovery recovery", () => {
+    const registryFailure: DeviceRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      connectionState: "online",
+      streamState: "error",
+      error: {
+        code: "http_400",
+        message: "Charge control read failed",
+        retryable: false,
+        details: null,
+      },
+      errorSource: "read",
+    };
+    const fleetRecord = buildFleetEntries(
+      [registryFailure],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    )[0]?.record;
+
+    expect(fleetRecord?.connectionState).toBe("online");
+    expect(fleetRecord?.streamState).toBe("error");
+    expect(fleetRecord?.error).toBe(registryFailure.error);
+    expect(fleetRecord?.errorSource).toBe("read");
+  });
+
+  test("keeps saved HTTP action failures on the recovered discovery entry", () => {
+    const registryActionFailure: DeviceRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      connectionState: "online",
+      streamState: "polling",
+      error: {
+        code: "unsupported_operation",
+        message: "Command is not supported",
+        retryable: false,
+        details: null,
+      },
+    };
+    const fleetRecord = buildFleetEntries(
+      [registryActionFailure],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    )[0]?.record;
+
+    expect(fleetRecord?.connectionState).toBe("online");
+    expect(fleetRecord?.streamState).toBe("idle");
+    expect(fleetRecord?.error).toBe(registryActionFailure.error);
+    expect(
+      resolveSelectedRecord(
+        "mains-aegis-a1b2c3",
+        [registryActionFailure],
+        [{ key: "mains-aegis-a1b2c3", record: fleetRecord!, saved: true }],
+      ),
+    ).toBe(fleetRecord);
   });
 });
 

@@ -89,7 +89,9 @@
 - 9 个告警类型均通过 `inactive -> active -> muted -> cleared -> reactivated` 测试，且复发的 `instance_id` 不同。
 - stale 或 inactive 消音请求不影响新实例；一个实例消音不移除或停止任何其它活动告警。
 - CDC、LAN、devd、CLI 和 Web 对同一设备返回一致的告警状态；旧固件、offline 和 transport error 有显式结果。
-- Web 自动回读所有在线设备的权威告警；Fleet、Add device 和全部单设备页面复用永久存在的 TopBar `Critical` / `Warning` 指标作为全局告警位置，不得插入大型 Alert、额外正常态文案或改变页面高度。非零指标可进入相关设备 Alerts；瞬时刷新失败不得隐藏最后确认的活动告警，也不得允许基于过期实例执行消音。
+- Web 自动回读所有在线设备的权威告警；Fleet Summary 仅在 Fleet 页面显示 fleet `Critical` / `Warning` 指标，当前设备的活动告警只在该设备的 Alerts 页呈现。当前 Web App 不提供跨设备通知、全局告警图标或徽标；不得插入大型 Alert 或以 fleet 指标卡组占用设备页面首屏。瞬时刷新失败不得隐藏最后确认的活动告警，也不得允许基于过期实例执行消音。
+- Web 告警回读、消音与设备通道切换遵循设备操作/读取代次；旧传输的延迟回读、SSE 恢复或消音结果不得覆盖更新的通道状态或当前告警实例。
+- 设备页面的离线、连接中和传输错误上下文必须优先于保留的旧 telemetry；记录级 transport error 同样必须显示该上下文。次级页面可显示紧凑状态提示，但不得把非在线数据标为 Live；临时设备路由在当前 discovery 快照中仍以该快照为对象权威，但临时 registry 已记录明确 connection/stream failure 时只能覆盖其失败状态；已保存记录仍随当前 discovery 恢复，恢复到 connected 时清除过期的 transport failure、stream error 与旧 telemetry；在线 transport 的命令失败应保留在当前 discovery entry 上作为动作错误反馈，不得误报为连接中断；只读的 charge-control detail 与 preview 请求失败必须使用 transport/data-error 上下文，不因 HTTP 状态码而归类为动作失败；读取成功后必须恢复对应的 online/streaming 或 polling 状态并清除该读取错误。
 - 前面板按本 spec 的矩阵导出真实 framebuffer/PNG，获批准后才连接运行时输入、触摸与按键路由。
 
 ## Visual Evidence
@@ -107,13 +109,15 @@ Dashboard 与告警列表热区。
 ![Front-panel alert hotspots](./assets/front-panel-alerts/review-sheets/hotspots.png)
 
 PR: include
-Web Alerts 桌面端。
+Web Alerts 桌面端（当前设备页面不重复 Fleet Summary 或完整 Device Overview）。
 ![Web Alerts desktop](./assets/web-alerts-desktop.png)
 
 PR: include
-Web Alerts 移动端（`393x852`）。
+Web Alerts 移动端（`393x852`，当前设备上下文包含连接态与当前页）。
 ![Web Alerts mobile](./assets/web-alerts-mobile.png)
 
-PR: include
-普通 Overview 页面仍在既有 TopBar `Critical` / `Warning` 指标中持续展示全局告警；未新增大型 Alert 或额外状态区域。
-![Web global alert status](./assets/web-global-alert-status-desktop.png)
+Fleet 页面持续显示 fleet 告警指标；单设备 Alerts 页面显示当前设备告警，不重复 Fleet Summary 或完整 Device Overview。
+
+## Related ADRs
+
+- [ADR 0001: Assign summaries to their owning pages](../../adr/0001-assign-summary-ownership-to-pages.md)

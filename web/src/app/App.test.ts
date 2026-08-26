@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   mkdirSync,
   mkdtempSync,
@@ -23,6 +25,15 @@ import {
   resolveDevdTarget,
   resolveOwnerFacingDevdTarget,
   resolveStartupDevdTarget,
+  resolveMobileNavContext,
+  resolvePagePresentation,
+  resolveDeviceRouteSection,
+  shouldShowDeviceDataContext,
+  ConnectPageHeading,
+  connectionSummary,
+  DeviceDataContext,
+  DevicePageFrame,
+  FleetHeader,
 } from "./App";
 import {
   resolveSpaFallbackInitialPath,
@@ -115,10 +126,12 @@ describe("active alert presentation", () => {
     ).toBe(1);
   });
 
-  test("keeps global alerts inside the existing topbar metrics", () => {
+  test("keeps fleet alert metrics inside the Fleet header", () => {
     const source = readFileSync(join(import.meta.dir, "App.tsx"), "utf8");
     expect(source).not.toContain("PersistentFleetAlertStatus");
     expect(source).not.toContain("persistent-alert-banner");
+    expect(source).toContain("function FleetHeader");
+    expect(source).toContain("pagePresentation.showFleetSummary ?");
     expect(source).toContain("activeAlertsByDevice={fleetAlerts.snapshots}");
     expect(source).toContain('const criticalTarget = alertTargetDeviceId("critical")');
     expect(source).toContain('const warningTarget = alertTargetDeviceId("warning")');
@@ -133,6 +146,240 @@ describe("active alert presentation", () => {
     expect(source).toContain("refreshGeneration.current += 1;");
     expect(source).toContain("refreshInFlight.current = null;");
     expect(source).toContain("[recordKey, refresh]");
+  });
+});
+
+describe("page presentation ownership", () => {
+  test("renders route-owned headings and summaries at runtime", () => {
+    const record = makeRecord({ status: null });
+    const fleetMarkup = renderToStaticMarkup(
+      createElement(FleetHeader, {
+        records: [record],
+        activeAlertsByDevice: {},
+      }),
+    );
+    expect(fleetMarkup).toContain('data-evidence-target="fleet-summary"');
+    expect(fleetMarkup).toContain("UPS Fleet");
+
+    const connectMarkup = renderToStaticMarkup(
+      createElement(ConnectPageHeading, { description: "Connect a device." }),
+    );
+    expect(connectMarkup).toContain("<h1>Add device</h1>");
+
+    const deviceRouteSections = [
+      "overview",
+      "alerts",
+      "power",
+      "battery",
+      "thermal",
+      "device",
+      "firmware",
+      "settings",
+      "api",
+    ] as const;
+    const renderDeviceRoute = (section: (typeof deviceRouteSections)[number]) =>
+      renderToStaticMarkup(
+        createElement(
+          DevicePageFrame,
+          { presentation: resolvePagePresentation(section), record },
+          createElement("div", { "data-evidence-target": "ability-content" }),
+        ),
+      );
+    const overviewMarkup = renderDeviceRoute("overview");
+    expect(overviewMarkup).toContain("<h1>Overview</h1>");
+    expect(overviewMarkup).toContain("status-band");
+    expect(overviewMarkup).not.toContain('data-evidence-target="fleet-summary"');
+
+    for (const section of deviceRouteSections.slice(1)) {
+      const markup = renderDeviceRoute(section);
+      expect(markup).toContain(`<h1>${resolvePagePresentation(section).title}</h1>`);
+      expect(markup).toContain('data-evidence-target="ability-content"');
+      expect(markup).not.toContain("status-band");
+      expect(markup).not.toContain('data-evidence-target="fleet-summary"');
+    }
+  });
+
+  test("assigns summaries and titles to their owning routes", () => {
+    expect(resolvePagePresentation("fleet")).toEqual({
+      scope: "fleet",
+      title: "UPS Fleet",
+      showFleetSummary: true,
+      showDeviceOverview: false,
+    });
+    expect(resolvePagePresentation("connect")).toEqual({
+      scope: "connect",
+      title: "Add device",
+      showFleetSummary: false,
+      showDeviceOverview: false,
+    });
+
+    for (const [section, title] of [
+      ["overview", "Overview"],
+      ["alerts", "Alerts"],
+      ["power", "Power"],
+      ["battery", "Battery"],
+      ["thermal", "Thermal"],
+      ["device", "Device"],
+      ["firmware", "Firmware"],
+      ["settings", "Settings"],
+      ["api", "API"],
+    ] as const) {
+      const presentation = resolvePagePresentation(section);
+      expect(presentation.scope).toBe("device");
+      expect(presentation.title).toBe(title);
+      expect(presentation.showFleetSummary).toBe(false);
+      expect(presentation.showDeviceOverview).toBe(section === "overview");
+    }
+  });
+
+  test("keeps device connection state in mobile context", () => {
+    const online = makeRecord({ connectionState: "online" });
+    const offline = makeRecord({ connectionState: "offline" });
+    expect(resolveMobileNavContext("battery", online)).toBe(
+      "Legacy USB UPS / Online / Battery",
+    );
+    expect(resolveMobileNavContext("alerts", offline)).toBe(
+      "Legacy USB UPS / Offline / Alerts",
+    );
+    expect(resolveMobileNavContext("fleet", online)).toBe("Fleet");
+    expect(resolveMobileNavContext("connect", null)).toBe("Add device");
+    expect(resolveMobileNavContext("battery", null)).toBe("Device / Battery");
+    expect(connectionSummary(makeRecord({ connectionState: "error" }))).toBe(
+      "Connection error",
+    );
+  });
+
+  test("normalizes unknown device sections to Overview", () => {
+    expect(resolveDeviceRouteSection(undefined)).toBe("overview");
+    expect(resolveDeviceRouteSection("fleet")).toBe("overview");
+    expect(resolveDeviceRouteSection("unknown")).toBe("overview");
+    expect(resolveDeviceRouteSection("battery")).toBe("battery");
+  });
+
+  test("shows compact data context when device data is not current", () => {
+    expect(
+      shouldShowDeviceDataContext(
+        makeRecord({ connectionState: "online", streamState: "streaming" }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldShowDeviceDataContext(
+        makeRecord({ connectionState: "offline", streamState: "error" }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldShowDeviceDataContext(
+        makeRecord({ connectionState: "online", streamState: "error" }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldShowDeviceDataContext(
+        makeRecord({ connectionState: "online", streamState: "streaming", status: null }),
+      ),
+    ).toBe(true);
+  });
+
+  test("labels connecting and error context ahead of retained telemetry", () => {
+    const connectingMarkup = renderToStaticMarkup(
+      createElement(DeviceDataContext, {
+        record: makeRecord({ connectionState: "connecting" }),
+      }),
+    );
+    expect(connectingMarkup).toContain("Connecting");
+    expect(connectingMarkup).toContain("Waiting for the first device response");
+
+    const errorMarkup = renderToStaticMarkup(
+      createElement(DeviceDataContext, {
+        record: makeRecord({
+          connectionState: "error",
+          streamState: "polling",
+          error: {
+            code: "transport_error",
+            message: "Device refresh failed",
+            retryable: true,
+            details: null,
+          },
+        }),
+      }),
+    );
+    expect(errorMarkup).toContain("Connection error");
+    expect(errorMarkup).toContain("Device refresh failed");
+    expect(errorMarkup).not.toContain("Live data");
+
+    const commandErrorMarkup = renderToStaticMarkup(
+      createElement(DeviceDataContext, {
+        record: makeRecord({
+          connectionState: "online",
+          streamState: "streaming",
+          error: {
+            code: "command_failed",
+            message: "Command failed",
+            retryable: true,
+            details: null,
+          },
+        }),
+      }),
+    );
+    expect(commandErrorMarkup).toContain("Action failed");
+    expect(commandErrorMarkup).not.toContain("Connection error");
+
+    const readErrorMarkup = renderToStaticMarkup(
+      createElement(DeviceDataContext, {
+        record: makeRecord({
+          connectionState: "online",
+          streamState: "streaming",
+          errorSource: "read",
+          error: {
+            code: "http_400",
+            message: "Charge control read failed",
+            retryable: false,
+            details: null,
+          },
+        }),
+      }),
+    );
+    expect(readErrorMarkup).toContain("Data error");
+    expect(readErrorMarkup).toContain("Charge control read failed");
+    expect(readErrorMarkup).not.toContain("Action failed");
+
+    expect(
+      shouldShowDeviceDataContext(
+        makeRecord({
+          connectionState: "online",
+          streamState: "streaming",
+          error: {
+            code: "command_failed",
+            message: "Command failed",
+            retryable: true,
+            details: null,
+          },
+        }),
+      ),
+    ).toBe(true);
+
+    const waitingMarkup = renderToStaticMarkup(
+      createElement(DeviceDataContext, {
+        record: makeRecord({
+          connectionState: "online",
+          streamState: "streaming",
+          status: null,
+        }),
+      }),
+    );
+    expect(waitingMarkup).toContain("Waiting");
+    expect(waitingMarkup).toContain("Waiting for the first device response");
+    expect(waitingMarkup).not.toContain("Live");
+  });
+
+  test("keeps global notification UI out of the shared shell", () => {
+    const source = readFileSync(join(import.meta.dir, "App.tsx"), "utf8");
+    expect(source).not.toContain("PersistentFleetAlertStatus");
+    expect(source).not.toContain("global-alert");
+    expect(source).toContain('data-evidence-target="fleet-summary"');
+    expect(source).toContain('data-evidence-target="device-page-header"');
+    expect(source).toContain("presentation.showDeviceOverview ?");
+    expect(source).toContain("<DeviceStatusBand record={record} />");
+    expect(source).toContain("<DeviceDataContext record={record} />");
   });
 });
 

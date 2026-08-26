@@ -31,8 +31,8 @@ use crate::{
     net_contract::{
         accepts_event_stream, is_api_v1_path, render_charge_control_result_json,
         render_diag_snapshot_json, render_identity_json, render_network_json, render_ping_json,
-        render_settings_json, render_status_json, write_error_body, write_json_string_escaped,
-        write_sse_event, BuildInfo,
+        render_settings_json, render_status_json_with_device_id, write_error_body,
+        write_json_string_escaped, write_sse_event, BuildInfo,
     },
     net_logic::{
         build_chunked_json_response_head, build_http_response_head, build_sse_response_head,
@@ -925,7 +925,11 @@ async fn handle_http_connection(socket: &mut TcpSocket<'_>) -> Result<(), embass
             handle_status_sse(socket, origin).await?;
         }
         "/api/v1/status" => {
-            render_status_json(&mut body, current_status_snapshot());
+            render_status_json_with_device_id(
+                &mut body,
+                current_status_snapshot(),
+                Some(identity.device_id.as_str()),
+            );
             write_http_response(socket, "200 OK", body.as_str(), origin).await?;
         }
         "/api/v1/alerts" => {
@@ -1238,7 +1242,13 @@ async fn handle_status_sse(
         let mut event_id = 1u32;
         loop {
             let mut status_json = String::<HTTP_RESPONSE_BODY_CAP>::new();
-            render_status_json(&mut status_json, current_status_snapshot());
+            render_status_json_with_device_id(
+                &mut status_json,
+                current_status_snapshot(),
+                current_identity()
+                    .as_ref()
+                    .map(|identity| identity.device_id.as_str()),
+            );
             let mut frame = String::<SSE_FRAME_CAP>::new();
             write_sse_event(&mut frame, "status", status_json.as_str(), Some(event_id));
             event_id = event_id.wrapping_add(1);

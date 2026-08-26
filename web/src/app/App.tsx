@@ -258,6 +258,77 @@ const deviceSections = [
   { id: "api", label: "API", icon: Cable },
 ] as const;
 
+function deviceSectionLabel(section: Route["section"]): string {
+  return deviceSections.find((item) => item.id === section)?.label ?? "Overview";
+}
+
+export type PagePresentation = {
+  scope: "fleet" | "connect" | "device";
+  title: string;
+  showFleetSummary: boolean;
+  showDeviceOverview: boolean;
+};
+
+export function resolvePagePresentation(
+  section: Route["section"],
+): PagePresentation {
+  if (section === "fleet") {
+    return {
+      scope: "fleet",
+      title: "UPS Fleet",
+      showFleetSummary: true,
+      showDeviceOverview: false,
+    };
+  }
+  if (section === "connect") {
+    return {
+      scope: "connect",
+      title: "Add device",
+      showFleetSummary: false,
+      showDeviceOverview: false,
+    };
+  }
+  return {
+    scope: "device",
+    title: deviceSectionLabel(section),
+    showFleetSummary: false,
+    showDeviceOverview: section === "overview",
+  };
+}
+
+export function resolveDeviceRouteSection(
+  rawSection: string | undefined,
+): Exclude<Route["section"], "fleet" | "connect"> {
+  return (
+    deviceSections.find((item) => item.id === rawSection)?.id ?? "overview"
+  );
+}
+
+export function shouldShowDeviceDataContext(
+  record: Pick<
+    DeviceRecord,
+    "connectionState" | "streamState" | "status" | "error"
+  >,
+): boolean {
+  return (
+    record.connectionState !== "online" ||
+    record.streamState === "error" ||
+    Boolean(record.error) ||
+    !record.status
+  );
+}
+
+export function resolveMobileNavContext(
+  section: Route["section"],
+  selected: DeviceRecord | null,
+): string {
+  const presentation = resolvePagePresentation(section);
+  if (presentation.scope === "connect") return presentation.title;
+  if (presentation.scope === "fleet") return "Fleet";
+  if (!selected) return `Device / ${presentation.title}`;
+  return `${selected.target.alias} / ${connectionSummary(selected)} / ${presentation.title}`;
+}
+
 const appBasePath = normalizeBasePath(
   import.meta.env.BASE_URL,
   runtimePathname(),
@@ -346,14 +417,73 @@ export function App({
     route.deviceId,
     registry.records,
     fleetEntries,
+    devdDiscovery.devdTarget === null,
   );
   const activeAlerts = useActiveAlertsSnapshot(selected);
   const [navOpen, setNavOpen] = useState(false);
+  const [mobileNavViewport, setMobileNavViewport] = useState(false);
+  const navToggleRef = useRef<HTMLButtonElement>(null);
+  const navPanelRef = useRef<HTMLDivElement>(null);
+  const navWasOpen = useRef(false);
   const hydratedTemporaryDeviceIds = useRef(new Set<string>());
 
   useEffect(() => {
     setNavOpen(false);
   }, [route.path]);
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return undefined;
+    const media = window.matchMedia("(max-width: 960px)");
+    const syncViewport = () => {
+      setMobileNavViewport(media.matches);
+      if (!media.matches) setNavOpen(false);
+    };
+    syncViewport();
+    media.addEventListener("change", syncViewport);
+    return () => media.removeEventListener("change", syncViewport);
+  }, []);
+
+  useEffect(() => {
+    const panel = navPanelRef.current;
+    if (!navOpen || !mobileNavViewport) {
+      if (!navOpen && navWasOpen.current) navToggleRef.current?.focus();
+      navWasOpen.current = false;
+      return undefined;
+    }
+    navWasOpen.current = true;
+    const getFocusable = () =>
+      Array.from(
+        panel?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      );
+    getFocusable()[0]?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setNavOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = getFocusable();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        panel?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [mobileNavViewport, navOpen]);
 
   useEffect(() => {
     if (!route.deviceId || registrySelected) return;
@@ -385,34 +515,63 @@ export function App({
     void registry.refreshDevice(route.deviceId);
   }, [registry, route.deviceId, selected]);
 
+  const pagePresentation = resolvePagePresentation(route.section);
+  const mobileNavContext = resolveMobileNavContext(route.section, selected);
+
   return (
     <div className="app-shell">
-      <aside className={`sidebar ${navOpen ? "is-open" : ""}`}>
+      <aside
+        className={`sidebar ${navOpen && mobileNavViewport ? "is-open" : ""}`}
+        role={navOpen && mobileNavViewport ? "dialog" : undefined}
+        aria-modal={navOpen && mobileNavViewport ? true : undefined}
+        aria-label="Main navigation"
+      >
         <div className="mobile-nav-bar">
           <button
+            ref={navToggleRef}
             className="icon-button"
             type="button"
-            aria-label={navOpen ? "Close navigation" : "Open navigation"}
+            aria-label={navOpen && mobileNavViewport ? "Close navigation" : "Open navigation"}
+            aria-expanded={navOpen && mobileNavViewport}
+            aria-controls="sidebar-navigation"
             onClick={() => setNavOpen((open) => !open)}
           >
             {navOpen ? <X size={18} /> : <Menu size={18} />}
           </button>
           <div className="mobile-nav-title">
             <strong>Mains Aegis</strong>
-            <span>
-              {route.section === "connect"
-                ? "Add device"
-                : (selected?.target.alias ?? "Fleet")}
-            </span>
+            {pagePresentation.scope === "device" && selected ? (
+              <span className="mobile-nav-context" title={mobileNavContext}>
+                <span className="mobile-nav-device">
+                  {selected.target.alias}
+                </span>
+                <span className="mobile-nav-divider" aria-hidden="true">
+                  /
+                </span>
+                <span className="mobile-nav-route">
+                  {connectionSummary(selected)} / {pagePresentation.title}
+                </span>
+              </span>
+            ) : (
+              <span className="mobile-nav-context" title={mobileNavContext}>
+                {mobileNavContext}
+              </span>
+            )}
           </div>
         </div>
         <button
           className="mobile-nav-backdrop"
           type="button"
           aria-label="Close navigation"
+          tabIndex={navOpen && mobileNavViewport ? 0 : -1}
           onClick={() => setNavOpen(false)}
         />
-        <div className="sidebar-panel">
+        <div
+          ref={navPanelRef}
+          id="sidebar-navigation"
+          className="sidebar-panel"
+          tabIndex={-1}
+        >
           <div className={`brand ${demoMode ? "is-demo" : ""}`}>
             {demoMode ? (
               <DemoControlPanel
@@ -468,11 +627,12 @@ export function App({
       <main
         className={`main-surface ${route.section === "connect" ? "connect-adapt-command" : ""}`}
       >
-        <TopBar
-          records={fleetRecords}
-          selected={selected}
-          activeAlertsByDevice={fleetAlerts.snapshots}
-        />
+        {pagePresentation.showFleetSummary ? (
+          <FleetHeader
+            records={fleetRecords}
+            activeAlertsByDevice={fleetAlerts.snapshots}
+          />
+        ) : null}
         {renderRoute(
           route,
           fleetEntries,
@@ -496,6 +656,7 @@ function renderRoute(
   devdDiscovery?: SharedDevdDiscovery,
   activeAlerts?: ActiveAlertsViewState,
 ) {
+  const pagePresentation = resolvePagePresentation(route.section);
   if (route.section === "connect") {
     return (
       <ConnectPage
@@ -514,30 +675,85 @@ function renderRoute(
     devdDiscovery &&
     (devdDiscovery.status === "checking" || devdDiscovery.isRefreshing)
   ) {
-    return <FleetLoadingState />;
+    return <DeviceRoutePlaceholder title={pagePresentation.title} state="loading" />;
   }
-  if (!selected) return <MissingDevice />;
+  if (!selected) {
+    return <DeviceRoutePlaceholder title={pagePresentation.title} state="missing" />;
+  }
 
+  let content: ReactNode;
   switch (route.section) {
     case "alerts":
-      return <AlertsPage record={selected} state={activeAlerts!} />;
+      content = <AlertsPage record={selected} state={activeAlerts!} />;
+      break;
     case "power":
-      return <PowerPage record={selected} />;
+      content = <PowerPage record={selected} />;
+      break;
     case "battery":
-      return <BatteryPage record={selected} />;
+      content = <BatteryPage record={selected} />;
+      break;
     case "thermal":
-      return <ThermalPage record={selected} />;
+      content = <ThermalPage record={selected} />;
+      break;
     case "device":
-      return <DeviceInfoPage record={selected} />;
+      content = <DeviceInfoPage record={selected} />;
+      break;
     case "firmware":
-      return <FirmwarePageView record={selected} />;
+      content = <FirmwarePageView record={selected} />;
+      break;
     case "settings":
-      return <SettingsPage record={selected} />;
+      content = <SettingsPage record={selected} />;
+      break;
     case "api":
-      return <ApiDebugPage record={selected} />;
+      content = <ApiDebugPage record={selected} />;
+      break;
     default:
-      return <DeviceOverviewPage record={selected} />;
+      content = <DeviceOverviewPage record={selected} />;
   }
+
+  return (
+    <DevicePageFrame presentation={pagePresentation} record={selected}>
+      {content}
+    </DevicePageFrame>
+  );
+}
+
+export function DevicePageFrame({
+  presentation,
+  record,
+  children,
+}: {
+  presentation: PagePresentation;
+  record: DeviceRecord;
+  children: ReactNode;
+}) {
+  return (
+    <div className="device-page-frame" data-evidence-target="device-page">
+      <header className="page-header" data-evidence-target="device-page-header">
+        <div>
+          <div className="eyebrow">{record.target.alias}</div>
+          <h1>{presentation.title}</h1>
+        </div>
+      </header>
+      {presentation.showDeviceOverview ? (
+        <DeviceStatusBand record={record} />
+      ) : shouldShowDeviceDataContext(record) ? (
+        <DeviceDataContext record={record} />
+      ) : null}
+      {children}
+    </div>
+  );
+}
+
+export function DeviceDataContext({ record }: { record: DeviceRecord }) {
+  const stream = streamPresentation(record);
+  return (
+    <div className={`device-data-context tone-${stream.tone}`} role="status">
+      <span className="eyebrow">Data state</span>
+      <strong>{stream.label}</strong>
+      <span>{stream.detail}</span>
+    </div>
+  );
 }
 
 function useRoute(initialPath?: string): Route {
@@ -773,6 +989,7 @@ function useFleetDevdDiscovery(
   const [isRefreshing, setIsRefreshing] = useState(Boolean(devdTarget));
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const hasDiscoverySnapshot = useRef(false);
+  const discoveryRequestGeneration = useRef(0);
 
   const filterDevices = useCallback(
     (devices: DevdDevice[]) =>
@@ -796,6 +1013,8 @@ function useFleetDevdDiscovery(
   );
 
   const refreshDiscovery = useCallback(async () => {
+    const requestGeneration = discoveryRequestGeneration.current + 1;
+    discoveryRequestGeneration.current = requestGeneration;
     if (!devdTarget) {
       hasDiscoverySnapshot.current = false;
       setDevdDevices([]);
@@ -808,15 +1027,18 @@ function useFleetDevdDiscovery(
     setIsRefreshing(true);
     try {
       const devices = await listDevdDevices(devdBaseUrl);
+      if (requestGeneration !== discoveryRequestGeneration.current) return;
       applyDiscoverySnapshot(devdBaseUrl, devices.devices);
     } catch {
+      if (requestGeneration !== discoveryRequestGeneration.current) return;
       setStatus(hasDiscoverySnapshot.current ? "available" : "unavailable");
       if (!hasDiscoverySnapshot.current) {
         setDevdDevices([]);
         setLastUpdated(null);
       }
     } finally {
-      setIsRefreshing(false);
+      if (requestGeneration === discoveryRequestGeneration.current)
+        setIsRefreshing(false);
     }
   }, [applyDiscoverySnapshot, devdTarget]);
 
@@ -855,7 +1077,7 @@ function parseRoute(path: string): Route {
   if (path === "/connect") return { path, deviceId: null, section: "connect" };
   const match = path.match(/^\/devices\/([^/]+)(?:\/([^/]+))?$/);
   if (match) {
-    const section = (match[2] ?? "overview") as Route["section"];
+    const section = resolveDeviceRouteSection(match[2]);
     return { path, deviceId: decodeURIComponent(match[1]), section };
   }
   return { path, deviceId: null, section: "fleet" };
@@ -967,10 +1189,21 @@ function deviceDefaultHref(record: DeviceRecord) {
   );
 }
 
+function hasTransportFailure(record: DeviceRecord | null | undefined): boolean {
+  return Boolean(
+    record &&
+      record.errorSource !== "read" &&
+      (record.connectionState === "error" ||
+        record.streamState === "error" ||
+        (record.connectionState === "offline" && record.error !== null)),
+  );
+}
+
 export function resolveSelectedRecord(
   deviceId: string | null,
   records: DeviceRecord[],
   fleetEntries: FleetDeviceEntry[],
+  allowTemporaryRegistry = true,
 ) {
   if (!deviceId) return null;
   const registryRecord =
@@ -979,7 +1212,22 @@ export function resolveSelectedRecord(
     fleetEntries.find((entry) => entry.record.target.deviceId === deviceId)
       ?.record ?? null;
   if (!registryRecord) return fleetRecord;
-  if (!fleetRecord) return registryRecord;
+  if (!fleetRecord) {
+    return registryRecord.target.temporary && !allowTemporaryRegistry
+      ? null
+      : registryRecord;
+  }
+  const registryActionFailure =
+    registryRecord.target.transport === "http" &&
+    registryRecord.error &&
+    !hasTransportFailure(registryRecord);
+  if (
+    (hasTransportFailure(registryRecord) || registryActionFailure) &&
+    !hasTransportFailure(fleetRecord)
+  ) {
+    return fleetRecord;
+  }
+  if (registryRecord.target.temporary) return fleetRecord;
   if (
     registryRecord.target.temporary &&
     !registryRecord.status &&
@@ -1154,13 +1402,11 @@ function ExternalNavLink({
   );
 }
 
-function TopBar({
+export function FleetHeader({
   records,
-  selected,
   activeAlertsByDevice,
 }: {
   records: DeviceRecord[];
-  selected: DeviceRecord | null;
   activeAlertsByDevice: Record<string, ActiveAlertsSnapshot>;
 }) {
   const counts = useMemo(() => {
@@ -1178,8 +1424,6 @@ function TopBar({
     };
   }, [activeAlertsByDevice, records]);
 
-  const title = selected ? selected.target.alias : "UPS Fleet";
-  const eyebrow = selected ? selected.target.location : "Fleet";
   const alertTargetDeviceId = (severity: "critical" | "warning") =>
     records.find(
       (record) =>
@@ -1190,10 +1434,10 @@ function TopBar({
   const warningTarget = alertTargetDeviceId("warning");
 
   return (
-    <header className="topbar">
+    <header className="topbar fleet-header" data-evidence-target="fleet-summary">
       <div>
-        <div className="eyebrow">{eyebrow}</div>
-        <h1>{title}</h1>
+        <div className="eyebrow">Fleet</div>
+        <h1>UPS Fleet</h1>
       </div>
       <div className="topbar-metrics">
         <Metric label="Total" value={counts.total} />
@@ -1697,6 +1941,7 @@ export function buildFleetEntries(
 ): FleetDeviceEntry[] {
   const entries = new Map<string, FleetDeviceEntry>();
   for (const record of records) {
+    if (devdTarget && record.target.temporary) continue;
     entries.set(record.target.deviceId, {
       key: record.target.deviceId,
       record,
@@ -1708,12 +1953,18 @@ export function buildFleetEntries(
   for (const discovered of buildDiscoveredLogicalDevices(devdDevices, records)) {
     if (!discovered.deviceId) continue;
     const current = entries.get(discovered.deviceId);
-    const mergedRecord = buildFleetEntryRecord(discovered, current?.record, devdBaseUrl);
+    const mergedRecord = buildFleetEntryRecord(
+      discovered,
+      current?.record ?? discovered.existingRecord,
+      devdBaseUrl,
+    );
     if (!mergedRecord) continue;
     entries.set(discovered.deviceId, {
       key: discovered.deviceId,
       record: mergedRecord,
-      saved: current?.saved ?? Boolean(discovered.existingRecord),
+      saved:
+        current?.saved ??
+        Boolean(discovered.existingRecord && !discovered.existingRecord.target.temporary),
     });
   }
   return Array.from(entries.values());
@@ -1721,7 +1972,7 @@ export function buildFleetEntries(
 
 function buildFleetEntryRecord(
   discovered: DiscoveredLogicalDevice,
-  existingRecord: DeviceRecord | undefined,
+  existingRecord: DeviceRecord | null | undefined,
   devdBaseUrl: string,
 ): DeviceRecord | null {
   const deviceId = discovered.deviceId;
@@ -1743,6 +1994,11 @@ function buildFleetEntryRecord(
     : null;
   const httpBaseUrl =
     companionBaseUrl ?? devdLanBaseUrl(httpDevice, identity);
+  const hasDevdChannel = Boolean(devdDevice);
+  const targetTransport = hasDevdChannel ? "devd" : "http";
+  const targetBaseUrl = hasDevdChannel
+    ? devdBaseUrl
+    : httpBaseUrl ?? existingRecord?.target.baseUrl ?? devdBaseUrl;
   const devdRecordId =
     devdDevice?.id ??
     httpDevice?.id ??
@@ -1750,15 +2006,15 @@ function buildFleetEntryRecord(
     deviceId;
   const target = {
     deviceId,
-    baseUrl: devdBaseUrl,
+    baseUrl: targetBaseUrl,
     alias:
       existingRecord?.target.alias ??
       identity?.hostname ??
       discovered.displayName,
     location: existingRecord?.target.location ?? "devd records",
     addedAt: existingRecord?.target.addedAt ?? new Date().toISOString(),
-    transport: "devd" as const,
-    preferredTransport: "devd" as const,
+    transport: targetTransport as "devd" | "http",
+    preferredTransport: targetTransport as "devd" | "http",
     rememberedChannels: {
       ...existingRecord?.target.rememberedChannels,
       ...(httpDevice
@@ -1781,14 +2037,17 @@ function buildFleetEntryRecord(
             },
           }
         : {}),
-      devd: {
-        baseUrl: devdBaseUrl,
-        devdDeviceId: devdRecordId,
-        seenAt: new Date().toISOString(),
-        transport: devdDevice
-          ? (devdDevice.transport === "mock" ? "mock" : "usb")
-          : "lan",
-      },
+      ...(devdDevice
+        ? {
+            devd: {
+              baseUrl: devdBaseUrl,
+              devdDeviceId: devdRecordId,
+              seenAt: new Date().toISOString(),
+              transport:
+                devdDevice.transport === "mock" ? "mock" : "usb",
+            },
+          }
+        : {}),
     },
   } satisfies DeviceRecord["target"];
   const connected =
@@ -1798,25 +2057,54 @@ function buildFleetEntryRecord(
     httpDevice?.connection === "busy" || devdDevice?.connection === "busy";
   const errored =
     httpDevice?.connection === "error" || devdDevice?.connection === "error";
+  const preserveTransportFailure =
+    existingRecord?.target.temporary === true &&
+    hasTransportFailure(existingRecord);
+  const recoveredTransportFailure =
+    !preserveTransportFailure &&
+    connected &&
+    hasTransportFailure(existingRecord);
+  const recoveredActionError =
+    !preserveTransportFailure &&
+    connected &&
+    existingRecord?.target.transport === "http" &&
+    Boolean(existingRecord.error) &&
+    existingRecord.errorSource !== "read" &&
+    !hasTransportFailure(existingRecord);
+  const currentStatus = httpDevice?.status ?? devdDevice?.status ?? null;
   return {
     target,
     identity,
     network: identity?.network ?? existingRecord?.network ?? null,
     settings: existingRecord?.settings ?? null,
     status:
-      httpDevice?.status ??
-      devdDevice?.status ??
-      existingRecord?.status ??
-      null,
-    connectionState: connected
-      ? "online"
-      : connecting
-        ? "connecting"
-        : errored
-          ? "error"
-          : (existingRecord?.connectionState ?? "offline"),
-    streamState: existingRecord?.streamState ?? "idle",
-    error: existingRecord?.error ?? null,
+      currentStatus ??
+      (recoveredTransportFailure ? null : existingRecord?.status ?? null),
+    connectionState: preserveTransportFailure
+      ? existingRecord!.connectionState
+      : connected
+        ? "online"
+        : connecting
+          ? "connecting"
+          : errored
+            ? "error"
+            : (existingRecord?.connectionState ?? "offline"),
+    streamState: preserveTransportFailure
+      ? existingRecord!.streamState
+      : recoveredTransportFailure
+        ? currentStatus
+          ? "polling"
+          : "idle"
+        : recoveredActionError
+          ? currentStatus
+            ? "polling"
+            : "idle"
+        : (existingRecord?.streamState ?? "idle"),
+    error: recoveredTransportFailure ? null : existingRecord?.error ?? null,
+    errorSource: recoveredTransportFailure
+      ? undefined
+      : existingRecord?.errorSource,
+    commandError: existingRecord?.commandError,
     lastUpdated: new Date().toISOString(),
     serial:
       existingRecord?.serial ??
@@ -1878,7 +2166,16 @@ function isMainsAegisLanDevice(device: DevdDevice): boolean {
   );
 }
 
-function ConnectPage({
+export function ConnectPageHeading({ description }: { description: string }) {
+  return (
+    <div className="section-heading">
+      <h1>Add device</h1>
+      <p>{description}</p>
+    </div>
+  );
+}
+
+export function ConnectPage({
   initialDevdTarget,
   hostedHttpServiceApp = isHostedHttpServiceApp(),
   sharedDevdDiscovery,
@@ -2371,23 +2668,28 @@ function ConnectPage({
   ) {
     setSavedDeviceSwitchTarget({ deviceId: record.target.deviceId, transport });
     setSavedDeviceMessage(null);
-    const result = await connectKnownDeviceChannel(
-      record.target.deviceId,
-      transport,
-    );
-    setSavedDeviceSwitchTarget(null);
-    if (result.ok) {
-      setSavedDeviceMessage(
-        successFeedback(
-          `Switched ${result.record.target.alias} to ${channelBadgeLabel(transport)}`,
-        ),
+    try {
+      const result = await connectKnownDeviceChannel(
+        record.target.deviceId,
+        transport,
       );
-      navigate(deviceDefaultHref(result.record));
-      if (transport === "devd" || transport === "http")
-        void refreshDevdDiscovery();
-      return;
+      if (result.ok) {
+        setSavedDeviceMessage(
+          successFeedback(
+            `Switched ${result.record.target.alias} to ${channelBadgeLabel(transport)}`,
+          ),
+        );
+        navigate(deviceDefaultHref(result.record));
+        if (transport === "devd" || transport === "http")
+          void refreshDevdDiscovery();
+        return;
+      }
+      setSavedDeviceMessage(errorFeedback(result.error));
+    } catch (error) {
+      setSavedDeviceMessage(errorFeedback(toErrorEnvelope(error)));
+    } finally {
+      setSavedDeviceSwitchTarget(null);
     }
-    setSavedDeviceMessage(errorFeedback(result.error));
   }
 
   function onMockUsbConnect() {
@@ -2423,16 +2725,15 @@ function ConnectPage({
 
   return (
     <section className="page-flow connect-wide">
-      <div className="section-heading">
-        <h2>Add device</h2>
-        <p>
-          {devdDiscoveryOnly
+      <ConnectPageHeading
+        description={
+          devdDiscoveryOnly
             ? "Use this page to add hardware from current mains-aegis-devd device records. USB devices attach through devd, while LAN devices connect directly to the hardware HTTP API."
             : runtimeMode === "public_static"
               ? "This GitHub Pages build connects to LAN devices directly from the browser. Use Chrome 142+ for manual targets or CIDR scans; hosted devd discovery is not assumed here."
-              : "Use this page to add a new device, bind a new USB port, or add a LAN endpoint. When mains-aegis-devd is reachable, current USB CDC and LAN device records appear here automatically."}
-        </p>
-      </div>
+              : "Use this page to add a new device, bind a new USB port, or add a LAN endpoint. When mains-aegis-devd is reachable, current USB CDC and LAN device records appear here automatically."
+        }
+      />
       {devdTarget ? (
       <section
         className="devd-discovery-panel"
@@ -3154,6 +3455,9 @@ function ConnectPage({
                     const recommendedActive =
                       activeRecordTransport(record) === recommendedTransport &&
                       record.connectionState === "online";
+                    const switchBusy =
+                      savedDeviceSwitchTarget?.deviceId ===
+                      record.target.deviceId;
                     const otherOptions = channels.slice(1).map((transport) => {
                       const isBusy =
                         savedDeviceSwitchTarget?.deviceId ===
@@ -3165,7 +3469,7 @@ function ConnectPage({
                       return {
                         value: transport,
                         label: channelUseText(transport, isActive),
-                        disabled: isBusy || isActive,
+                        disabled: switchBusy || isBusy || isActive,
                       };
                     });
                     return (
@@ -3174,7 +3478,7 @@ function ConnectPage({
                           className="secondary-button small"
                           type="button"
                           disabled={
-                            recommendedActive || Boolean(recommendedBusy)
+                            recommendedActive || switchBusy
                           }
                           onClick={() =>
                             void onSavedDeviceChannelSwitch(
@@ -3552,7 +3856,6 @@ function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
   const status = record.status;
   return (
     <section className="page-flow" data-evidence-target="device-overview">
-      <DeviceStatusBand record={record} />
       <div className="detail-grid">
         <InfoPanel title="Input" icon={PlugZap}>
           <MetricLine
@@ -3659,6 +3962,8 @@ function useFleetActiveAlerts(records: DeviceRecord[]): FleetActiveAlertsState {
         record.target.rememberedChannels?.http?.baseUrl ?? "",
         record.target.rememberedChannels?.http?.fallbackBaseUrl ?? "",
         record.serial?.source ?? "",
+        record.serial?.leaseId ?? "",
+        record.runtimeId ?? "",
       ].join(":"),
     )
     .sort()
@@ -3675,7 +3980,30 @@ function useFleetActiveAlerts(records: DeviceRecord[]): FleetActiveAlertsState {
           if (record.connectionState === "offline" || targets.length === 0)
             return { record, snapshot: null, error: null };
           try {
-            const snapshot = await readAlertsFromTargets(targets, getSerialAlerts);
+            const snapshot = await readAlertsFromTargets(
+              targets,
+              getSerialAlerts,
+              record,
+              {
+                beforeHttpOperation: (baseUrl) => {
+                  const current = recordsRef.current.find(
+                    (candidate) =>
+                      candidate.target.deviceId === record.target.deviceId,
+                  );
+                  return Boolean(
+                    current &&
+                    alertHttpTargetStillCurrent(current, baseUrl),
+                  );
+                },
+                beforeTargetOperation: (target) => {
+                  const current = recordsRef.current.find(
+                    (candidate) =>
+                      candidate.target.deviceId === record.target.deviceId,
+                  );
+                  return Boolean(current && alertTargetStillCurrent(current, target));
+                },
+              },
+            );
             return { record, snapshot, error: null };
           } catch (cause) {
             return {
@@ -3793,11 +4121,16 @@ function useActiveAlertsSnapshot(
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const refreshGeneration = useRef(0);
+  const refreshScope = useRef(0);
   const refreshInFlight = useRef<Promise<void> | null>(null);
+  const recordRef = useRef(record);
+  recordRef.current = record;
   const targets = useMemo(
     () => (record ? alertControlTargets(record) : []),
     [
       deviceId,
+      record?.runtimeId,
+      record?.serial?.leaseId,
       record?.serial?.baseUrl,
       record?.serial?.source,
       record?.target.baseUrl,
@@ -3814,7 +4147,12 @@ function useActiveAlertsSnapshot(
       if (refreshInFlight.current) return refreshInFlight.current;
       const request = (async () => {
         const generation = ++refreshGeneration.current;
-        if (!deviceId || connectionState === "offline") {
+        const scope = refreshScope.current;
+        const isCurrent = () =>
+          generation === refreshGeneration.current &&
+          scope === refreshScope.current;
+        if (!record || !deviceId || connectionState === "offline") {
+          if (!isCurrent()) return;
           setSnapshot(null);
           setLastUpdated(null);
           setLoading(false);
@@ -3826,28 +4164,51 @@ function useActiveAlertsSnapshot(
           return;
         }
         if (targets.length === 0) {
+          if (!isCurrent()) return;
           setSnapshot(null);
           setLastUpdated(null);
           setLoading(false);
           setError("This connected device does not expose the alerts contract yet.");
           return;
         }
-        if (!options?.background) setLoading(true);
+        if (!options?.background && isCurrent()) setLoading(true);
         try {
-          const nextSnapshot = await readAlertsFromTargets(targets, getSerialAlerts);
-          if (generation !== refreshGeneration.current) return;
+          const nextSnapshot = await readAlertsFromTargets(
+            targets,
+            getSerialAlerts,
+            record,
+            {
+              beforeHttpOperation: (baseUrl) => {
+                const current = recordRef.current;
+                return Boolean(
+                  current &&
+                    current.target.deviceId === deviceId &&
+                    alertHttpTargetStillCurrent(current, baseUrl),
+                );
+              },
+              beforeTargetOperation: (target) => {
+                const current = recordRef.current;
+                return Boolean(
+                  current &&
+                    current.target.deviceId === deviceId &&
+                    alertTargetStillCurrent(current, target),
+                );
+              },
+            },
+          );
+          if (!isCurrent()) return;
           setSnapshot(nextSnapshot);
           setLastUpdated(new Date().toISOString());
           if (!options?.preserveError) setError(null);
         } catch (cause) {
-          if (generation !== refreshGeneration.current) return;
+          if (!isCurrent()) return;
           if (alertErrorClearsSnapshot(cause)) {
             setSnapshot(null);
             setLastUpdated(null);
           }
           setError(alertErrorMessage(cause));
         } finally {
-          if (generation === refreshGeneration.current) setLoading(false);
+          if (isCurrent()) setLoading(false);
         }
       })();
       const trackedRequest = request.finally(() => {
@@ -3860,15 +4221,32 @@ function useActiveAlertsSnapshot(
   );
 
   useEffect(() => {
+    const scope = ++refreshScope.current;
+    return () => {
+      if (refreshScope.current === scope) refreshScope.current += 1;
+      refreshInFlight.current = null;
+    };
+  }, [
+    deviceId,
+    record?.runtimeId,
+    connectionState,
+    record?.target.transport,
+    record?.target.baseUrl,
+    record?.serial?.source,
+    record?.serial?.baseUrl,
+    record?.serial?.leaseId,
+    record?.target.rememberedChannels?.devd?.baseUrl,
+    record?.target.rememberedChannels?.devd?.devdDeviceId,
+    record?.target.rememberedChannels?.http?.baseUrl,
+    record?.target.rememberedChannels?.http?.fallbackBaseUrl,
+  ]);
+
+  useEffect(() => {
     setSnapshot(null);
     setLastUpdated(null);
     setError(null);
     void refresh();
-    return () => {
-      // Invalidate an in-flight read before the selected device or transport changes.
-      refreshGeneration.current += 1;
-      refreshInFlight.current = null;
-    };
+    return undefined;
   }, [deviceId, refresh]);
 
   useEffect(() => {
@@ -3916,9 +4294,36 @@ function AlertsPage({
   const [muting, setMuting] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const targets = useMemo(() => alertControlTargets(record), [record]);
+  const recordRef = useRef(record);
+  recordRef.current = record;
+  const lifecycle = useRef(0);
+
+  useEffect(() => {
+    const token = ++lifecycle.current;
+    return () => {
+      if (lifecycle.current === token) lifecycle.current += 1;
+    };
+  }, [
+    record.target.deviceId,
+    record.runtimeId,
+    record.target.transport,
+    record.target.baseUrl,
+    record.serial?.source,
+    record.serial?.baseUrl,
+    record.serial?.leaseId,
+  ]);
 
   const mute = async (alert: ActiveAlert) => {
     if (targets.length === 0 || error || alert.sound_state === "muted") return;
+    const lifecycleToken = lifecycle.current;
+    const runtimeIdentity = {
+      deviceId: record.target.deviceId,
+      runtimeId: record.runtimeId,
+      transport: activeRecordTransport(record),
+      serialSource: record.serial?.source,
+      serialBaseUrl: record.serial?.baseUrl,
+      serialLeaseId: record.serial?.leaseId,
+    };
     setMuting(alert.alert_id);
     setActionError(null);
     try {
@@ -3926,20 +4331,53 @@ function AlertsPage({
         targets,
         alert,
         muteSerialAlert,
+        record,
+        {
+          beforeHttpOperation: (baseUrl) => {
+            const current = recordRef.current;
+            return Boolean(
+              current &&
+                current.target.deviceId === record.target.deviceId &&
+                alertRuntimeStillCurrent(current, runtimeIdentity) &&
+                activeRecordTransport(current) === "http" &&
+                alertHttpTargetStillCurrent(current, baseUrl),
+            );
+          },
+          beforeTargetOperation: (target) => {
+            const current = recordRef.current;
+            if (
+              !current ||
+              current.target.deviceId !== record.target.deviceId ||
+              !alertRuntimeStillCurrent(current, runtimeIdentity)
+            )
+              return false;
+            if (target.kind === "http")
+              return activeRecordTransport(current) === "http";
+            if (target.kind === "devd")
+              return (
+                activeRecordTransport(current) === "devd" &&
+                current.serial?.baseUrl === target.baseUrl &&
+                current.serial?.source === "devd" &&
+                current.serial?.leaseId !== undefined
+              );
+            return activeRecordTransport(current) === "serial";
+          },
+        },
       );
+      if (lifecycle.current !== lifecycleToken) return;
       await refresh();
     } catch (cause) {
+      if (lifecycle.current !== lifecycleToken) return;
       setActionError(alertErrorMessage(cause));
       await refresh({ preserveError: true });
     } finally {
-      setMuting(null);
+      if (lifecycle.current === lifecycleToken) setMuting(null);
     }
   };
 
   const alerts = snapshot?.alerts ?? [];
   return (
     <section className="page-flow alerts-page" data-evidence-target="device-alerts">
-      <DeviceStatusBand record={record} />
       <section className="info-panel alerts-panel">
         <div className="alerts-heading">
           <div>
@@ -4048,10 +4486,13 @@ function alertControlTargets(record: DeviceRecord): AlertControlTarget[] {
 async function withAlertTargetFallback<T>(
   targets: AlertControlTarget[],
   operation: (target: AlertControlTarget) => Promise<T>,
+  beforeOperation?: (target: AlertControlTarget) => boolean,
 ): Promise<T> {
   let lastError: unknown = null;
   for (const target of targets) {
     try {
+      if (beforeOperation && !beforeOperation(target))
+        throw staleAlertOperationError();
       return await operation(target);
     } catch (cause) {
       lastError = cause;
@@ -4062,12 +4503,33 @@ async function withAlertTargetFallback<T>(
 }
 
 async function withAlertHttpFallback<T>(
+  record: DeviceRecord,
   baseUrls: string[],
   operation: (baseUrl: string) => Promise<T>,
+  options: {
+    allowFallback?: boolean;
+    beforeOperation?: (baseUrl: string) => boolean;
+  } = {},
 ): Promise<T> {
   let lastError: unknown = null;
-  for (const baseUrl of baseUrls) {
+  const candidates = options.allowFallback === false ? baseUrls.slice(0, 1) : baseUrls;
+  const expectedDeviceId = record.identity?.device_id ?? record.target.deviceId;
+  const bridgeAuth = record.target.bridgeAuth ? { bridgeAuth: true } : undefined;
+  for (const baseUrl of candidates) {
     try {
+      if (options.beforeOperation && !options.beforeOperation(baseUrl))
+        throw staleAlertOperationError();
+      if (!baseUrl.startsWith("mock:")) {
+        const identity = await getIdentity(
+          baseUrl,
+          undefined,
+          { ...bridgeAuth, timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS },
+        );
+        if (identity.device_id !== expectedDeviceId)
+          throw alertIdentityMismatchError(identity.device_id, expectedDeviceId);
+      }
+      if (options.beforeOperation && !options.beforeOperation(baseUrl))
+        throw staleAlertOperationError();
       return await operation(baseUrl);
     } catch (cause) {
       lastError = cause;
@@ -4077,24 +4539,95 @@ async function withAlertHttpFallback<T>(
   throw lastError ?? new Error("No HTTP alerts transport is available");
 }
 
+function alertHttpTargetStillCurrent(
+  record: DeviceRecord,
+  baseUrl: string,
+): boolean {
+  return (
+    baseUrl.startsWith("mock:") || rememberedHttpBaseUrls(record).includes(baseUrl)
+  );
+}
+
+function alertTargetStillCurrent(
+  record: DeviceRecord,
+  target: AlertControlTarget,
+): boolean {
+  if (target.kind === "http")
+    return target.baseUrls.some((baseUrl) =>
+      alertHttpTargetStillCurrent(record, baseUrl),
+    );
+  if (target.kind === "devd") {
+    const remembered = record.target.rememberedChannels?.devd;
+    return Boolean(
+      (record.serial?.source === "devd" &&
+        record.serial.baseUrl === target.baseUrl &&
+        record.serial.leaseId) ||
+        (remembered?.baseUrl === target.baseUrl &&
+          remembered.devdDeviceId === target.deviceId),
+    );
+  }
+  return Boolean(
+    record.serial?.source === "web_serial" ||
+      (record.target.mock && record.serial?.source === "mock"),
+  );
+}
+
+function alertRuntimeStillCurrent(
+  record: DeviceRecord,
+  expected: {
+    deviceId: string;
+    runtimeId?: string;
+    transport: DeviceChannelTransport | null;
+    serialSource?: NonNullable<DeviceRecord["serial"]>["source"];
+    serialBaseUrl?: string;
+    serialLeaseId?: string;
+  },
+): boolean {
+  if (record.target.deviceId !== expected.deviceId) return false;
+  if (record.runtimeId !== undefined || expected.runtimeId !== undefined)
+    return record.runtimeId === expected.runtimeId;
+  return (
+    activeRecordTransport(record) === expected.transport &&
+    record.serial?.source === expected.serialSource &&
+    record.serial?.baseUrl === expected.serialBaseUrl &&
+    record.serial?.leaseId === expected.serialLeaseId
+  );
+}
+
 async function readAlertsFromTargets(
   targets: AlertControlTarget[],
   getSerialAlerts: (deviceId: string) => Promise<ActiveAlertsSnapshot>,
+  record: DeviceRecord,
+  options: {
+    beforeHttpOperation?: (baseUrl: string) => boolean;
+    beforeTargetOperation?: (target: AlertControlTarget) => boolean;
+  } = {},
 ): Promise<ActiveAlertsSnapshot> {
-  return withAlertTargetFallback(targets, (target) =>
-    target.kind === "devd"
-      ? getDevdDeviceAlerts(target.baseUrl, target.deviceId, {
-          timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
-        })
-      : target.kind === "serial"
-        ? getSerialAlerts(target.deviceId)
-        : withAlertHttpFallback(
-            target.baseUrls,
-            (baseUrl) =>
-              getDeviceAlerts(baseUrl, {
-                timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
-              }),
-          ),
+  return withAlertTargetFallback(
+    targets,
+    (target) =>
+      target.kind === "devd"
+        ? getDevdDeviceAlerts(target.baseUrl, target.deviceId, {
+            timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
+          })
+        : target.kind === "serial"
+          ? getSerialAlerts(target.deviceId)
+          : withAlertHttpFallback(
+              record,
+              target.baseUrls,
+              (baseUrl) =>
+                getDeviceAlerts(baseUrl, {
+                  timeoutMs: ACTIVE_ALERT_REQUEST_TIMEOUT_MS,
+                }),
+              {
+                beforeOperation: (baseUrl) =>
+                  (!options.beforeHttpOperation ||
+                    options.beforeHttpOperation(baseUrl)) &&
+                  (!options.beforeTargetOperation ||
+                    options.beforeTargetOperation(target)),
+              },
+            ),
+    options.beforeTargetOperation,
   );
 }
 
@@ -4106,22 +4639,70 @@ async function muteAlertFromTargets(
     alertId: string,
     instanceId: number,
   ) => Promise<unknown>,
+  record: DeviceRecord,
+  options: {
+    beforeHttpOperation?: (baseUrl: string) => boolean;
+    beforeTargetOperation?: (target: AlertControlTarget) => boolean;
+  } = {},
 ): Promise<void> {
-  await withAlertTargetFallback(targets, (target) =>
-    target.kind === "devd"
-      ? muteDevdDeviceAlert(
-          target.baseUrl,
-          target.deviceId,
-          alert.alert_id,
-          alert.instance_id,
-        )
-      : target.kind === "serial"
-        ? muteSerialAlert(target.deviceId, alert.alert_id, alert.instance_id)
-        : withAlertHttpFallback(
-            target.baseUrls,
-            (baseUrl) => muteDeviceAlert(baseUrl, alert.alert_id, alert.instance_id),
-          ),
+  await withAlertTargetFallback(
+    targets,
+    (target) =>
+      target.kind === "devd"
+        ? muteDevdDeviceAlert(
+            target.baseUrl,
+            target.deviceId,
+            alert.alert_id,
+            alert.instance_id,
+          )
+        : target.kind === "serial"
+          ? muteSerialAlert(target.deviceId, alert.alert_id, alert.instance_id)
+          : withAlertHttpFallback(
+              record,
+              target.baseUrls,
+              (baseUrl) =>
+                muteDeviceAlert(baseUrl, alert.alert_id, alert.instance_id),
+              {
+                allowFallback: false,
+                beforeOperation: (baseUrl) =>
+                  (!options.beforeHttpOperation ||
+                    options.beforeHttpOperation(baseUrl)) &&
+                  (!options.beforeTargetOperation ||
+                    options.beforeTargetOperation(target)),
+              },
+            ),
+    options.beforeTargetOperation,
   );
+}
+
+function staleAlertOperationError(): Error & {
+  envelope: ReturnType<typeof toErrorEnvelope>;
+} {
+  const error = new Error("The alert transport changed before the request started") as Error & {
+    envelope: ReturnType<typeof toErrorEnvelope>;
+  };
+  error.envelope = {
+    code: "stale_alert_operation",
+    message: error.message,
+    retryable: false,
+    details: null,
+  };
+  return error;
+}
+
+function alertIdentityMismatchError(actual: string, expected: string): Error & {
+  envelope: ReturnType<typeof toErrorEnvelope>;
+} {
+  const error = new Error(
+    `HTTP endpoint resolved to unexpected device ${actual}; expected ${expected}`,
+  ) as Error & { envelope: ReturnType<typeof toErrorEnvelope> };
+  error.envelope = {
+    code: "device_identity_mismatch",
+    message: error.message,
+    retryable: false,
+    details: { actual, expected },
+  };
+  return error;
 }
 
 function alertErrorClearsSnapshot(cause: unknown): boolean {
@@ -4186,6 +4767,8 @@ function PowerPage({ record }: { record: DeviceRecord }) {
     record.target.rememberedChannels?.devd?.devdDeviceId ?? "",
     record.serial?.source ?? "",
     record.serial?.baseUrl ?? "",
+    record.serial?.leaseId ?? "",
+    record.runtimeId ?? "",
     record.serial?.connected ? "connected" : "disconnected",
   ].join("|");
 
@@ -4269,6 +4852,8 @@ function PowerPage({ record }: { record: DeviceRecord }) {
   }, [
     requestDialogOpen,
     record.target.deviceId,
+    record.runtimeId,
+    record.serial?.leaseId,
     manualPrefs.target,
     manualPrefs.speed,
     manualPrefs.timer_h,
@@ -4424,7 +5009,6 @@ function PowerPage({ record }: { record: DeviceRecord }) {
 
   return (
     <section className="page-flow">
-      <DeviceStatusBand record={record} />
       <section className="power-domain-section" data-evidence-target="power-charging">
         <div className="power-domain-header">
           <span className="power-domain-icon">
@@ -5197,7 +5781,6 @@ function BatteryPage({ record }: { record: DeviceRecord }) {
   const cellModel = buildCellBalanceModel(cells, battery);
   return (
     <section className="page-flow">
-      <DeviceStatusBand record={record} />
       <div className="detail-grid">
         <InfoPanel title="Pack status" icon={BatteryCharging}>
           <MetricLine label="State" value={battery?.state ?? "--"} />
@@ -5387,7 +5970,6 @@ function ThermalPage({ record }: { record: DeviceRecord }) {
   const thermal = record.status?.thermal;
   return (
     <section className="page-flow">
-      <DeviceStatusBand record={record} />
       <div className="detail-grid">
         <InfoPanel title="TMP A" icon={Thermometer}>
           <MetricLine label="State" value={thermal?.tmp_a_state ?? "--"} />
@@ -5424,7 +6006,6 @@ function DeviceInfoPage({ record }: { record: DeviceRecord }) {
   const hardwareCapability = resolveUpsHardwareCapability(record);
   return (
     <section className="page-flow">
-      <DeviceStatusBand record={record} />
       <div className="detail-grid">
         <InfoPanel title="Identity" icon={Server}>
           <MetricLine
@@ -5839,7 +6420,6 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
   if (!settingsReady) {
     return (
       <section className="page-flow">
-        <DeviceStatusBand record={record} />
         <section className="empty-state">
           <SlidersHorizontal size={28} />
           <h2>Settings unavailable</h2>
@@ -5862,7 +6442,6 @@ function SettingsPage({ record }: { record: DeviceRecord }) {
 
   return (
     <section className="page-flow" data-evidence-target="wifi-settings">
-      <DeviceStatusBand record={record} />
       <div className="settings-layout settings-layout-advanced">
         <section className="info-panel settings-panel">
           <header>
@@ -6245,7 +6824,6 @@ function ApiDebugPage({ record }: { record: DeviceRecord }) {
   };
   return (
     <section className="page-flow">
-      <DeviceStatusBand record={record} />
       <div className="api-layout">
         <InfoPanel title="Endpoints" icon={Cable}>
           <MetricLine label="Ping" value="/api/v1/ping" />
@@ -6359,21 +6937,47 @@ function streamPresentation(record: DeviceRecord): StreamPresentation {
     };
   }
 
-  if (record.connectionState === "connecting" && !record.status) {
+  if (record.connectionState === "connecting") {
     return {
       label: "Connecting",
-      detail: "Waiting for the first device response",
+      detail: record.status
+        ? "Refreshing device data"
+        : "Waiting for the first device response",
       tone: "info",
+    };
+  }
+
+  if (record.connectionState === "error") {
+    return {
+      label: "Connection error",
+      detail: record.error?.message ?? `Device data unavailable${freshness}`,
+      tone: "critical",
+    };
+  }
+
+  if (record.errorSource === "read") {
+    return {
+      label: "Data error",
+      detail: record.error?.message ?? `Device data unavailable${freshness}`,
+      tone: "warning",
     };
   }
 
   if (record.streamState === "error") {
     return {
-      label: record.status ? "Live data" : "Connection error",
+      label: "Data degraded",
       detail: record.status
         ? `Transport reconnecting, polling fallback${freshness}`
-        : (record.error?.message ?? `Stream error${freshness}`),
-      tone: record.status ? "warning" : "critical",
+        : `Stream error${freshness}`,
+      tone: "warning",
+    };
+  }
+
+  if (record.error) {
+    return {
+      label: "Action failed",
+      detail: record.error.message,
+      tone: "warning",
     };
   }
 
@@ -6389,9 +6993,11 @@ function streamPresentation(record: DeviceRecord): StreamPresentation {
 
   if (record.streamState === "streaming" || record.streamState === "idle") {
     return {
-      label: "Live",
-      detail: `${record.streamState}${freshness}`,
-      tone: "ok",
+      label: record.status ? "Live" : "Waiting",
+      detail: record.status
+        ? `${record.streamState}${freshness}`
+        : `Waiting for the first device response${freshness}`,
+      tone: record.status ? "ok" : "warning",
     };
   }
 
@@ -7488,15 +8094,45 @@ function powerEventSummary(payload: Record<string, unknown> | null): string {
   return `pressure ${pressureState} / reason ${pressureReason} / limit ${limitReason}`;
 }
 
-function MissingDevice() {
+function DeviceRoutePlaceholder({
+  title,
+  state,
+}: {
+  title: string;
+  state: "loading" | "missing";
+}) {
+  const loading = state === "loading";
   return (
-    <section className="empty-state">
-      <Server size={28} />
-      <h2>Device not found</h2>
-      <p>The selected device is no longer available in the fleet or local registry.</p>
-      <button className="primary-button" onClick={() => navigate("/")}>
-        Back to fleet
-      </button>
+    <section className="device-route-placeholder">
+      <header className="page-header">
+        <div>
+          <div className="eyebrow">Device</div>
+          <h1>{title}</h1>
+        </div>
+      </header>
+      <div className="device-data-context tone-warning" role="status">
+        <span className="eyebrow">Device state</span>
+        <strong>{loading ? "Connecting" : "Offline"}</strong>
+        <span>
+          {loading
+            ? "Waiting for the device connection to resolve."
+            : "The device is not currently available to this page."}
+        </span>
+      </div>
+      <div className="empty-state">
+        {loading ? <Loader2 size={28} className="spin-icon" /> : <Server size={28} />}
+        <h2>{loading ? "Loading device" : "Device not found"}</h2>
+        <p>
+          {loading
+            ? "Loading the selected device before this page renders."
+            : "The selected device is no longer available in the fleet or local registry."}
+        </p>
+        {!loading ? (
+          <button className="primary-button" onClick={() => navigate("/")}>
+            Back to fleet
+          </button>
+        ) : null}
+      </div>
     </section>
   );
 }
@@ -7713,10 +8349,11 @@ function attentionSummary(record: DeviceRecord): string {
   return "Normal";
 }
 
-function connectionSummary(record: DeviceRecord): string {
+export function connectionSummary(record: DeviceRecord): string {
   if (record.connectionState === "online") return "Online";
   if (record.connectionState === "connecting") return "Connecting";
   if (record.connectionState === "offline") return "Offline";
+  if (record.connectionState === "error") return "Connection error";
   if (
     record.network?.state === "connected" ||
     record.status?.network.state === "connected"

@@ -41,7 +41,7 @@ export const CriticalDashboard: Story = {
   render: () => renderApp("/devices/mains-aegis-e4f5a6"),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByRole("heading", { name: "Storage bay" })).toBeInTheDocument();
+    await expect(await canvas.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
     await expect(await canvas.findByText("FAULT")).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("link", { name: "Battery" }));
     await expect(await canvas.findByText("BMS readiness")).toBeInTheDocument();
@@ -53,7 +53,9 @@ export const BatteryDetail: Story = {
   render: () => renderApp("/devices/mains-aegis-a1b2c3/battery"),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText("Live")).toBeInTheDocument();
+    await expect(
+      await canvas.findByRole("heading", { name: "Battery" }),
+    ).toBeInTheDocument();
     await expect(await canvas.findByText("Cell voltages")).toBeInTheDocument();
     await expect(await canvas.findByText("Delta 13 mV")).toBeInTheDocument();
     await expect(await canvas.findByText("BAL MULTI")).toBeInTheDocument();

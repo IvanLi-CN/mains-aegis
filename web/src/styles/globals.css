@@ -258,6 +258,78 @@ a {
   letter-spacing: 0;
 }
 
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 2px;
+}
+
+.page-header > div {
+  min-width: 0;
+}
+
+.page-header .eyebrow {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-header h1 {
+  margin: 4px 0 0;
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.device-page-frame {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.device-route-placeholder {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.device-data-context {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-card);
+  padding: 10px 14px;
+  background: var(--color-panel);
+}
+
+.device-data-context strong,
+.device-data-context > span:last-child {
+  min-width: 0;
+}
+
+.device-data-context > span:last-child {
+  overflow: hidden;
+  color: var(--color-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-data-context.tone-warning {
+  border-color: color-mix(in oklch, var(--color-warning) 38%, var(--color-hairline));
+}
+
+.device-data-context.tone-critical,
+.device-data-context.tone-offline {
+  border-color: color-mix(in oklch, var(--color-status-critical) 42%, var(--color-hairline));
+}
+
 .topbar-metrics {
   display: flex;
   flex-wrap: wrap;
@@ -1011,6 +1083,7 @@ a {
   background: var(--color-panel);
 }
 
+.section-heading h1,
 .section-heading h2 {
   margin: 0;
   font-size: 28px;
@@ -4921,6 +4994,7 @@ a {
 
 @media (max-width: 960px) {
   .app-shell {
+    align-content: start;
     grid-template-columns: 1fr;
   }
 
@@ -4944,6 +5018,8 @@ a {
 
   .mobile-nav-title {
     display: grid;
+    min-width: 0;
+    flex: 1;
     gap: 1px;
   }
 
@@ -4952,9 +5028,32 @@ a {
     line-height: 1.1;
   }
 
-  .mobile-nav-title span {
+  .mobile-nav-context {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    overflow: hidden;
     color: var(--color-muted);
     font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-nav-device {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .mobile-nav-divider {
+    flex: 0 0 auto;
+    margin-inline: 4px;
+  }
+
+  .mobile-nav-route {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 
   .mobile-nav-backdrop {
@@ -4981,10 +5080,14 @@ a {
     padding: 16px 12px;
     transform: translateX(-104%);
     transition: transform 180ms ease-out;
+    visibility: hidden;
+    pointer-events: none;
   }
 
   .sidebar.is-open .sidebar-panel {
     transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
   }
 
   .topbar,
@@ -5218,39 +5321,28 @@ a {
     padding-bottom: 88px;
   }
 
-  .connect-adapt-command .topbar {
-    margin: -18px -14px 14px;
-    padding: 14px;
-    border-bottom: 1px solid var(--color-hairline);
-    background: var(--color-mobile-topbar);
-  }
-
-  .connect-adapt-command .topbar h1 {
-    font-size: 28px;
-  }
-
-  .topbar-metrics {
+  .fleet-header .topbar-metrics {
     display: grid;
     width: 100%;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
   }
 
-  .topbar-metrics .top-metric {
+  .fleet-header .topbar-metrics .top-metric {
     flex: 1 1 0;
     min-width: 0;
     padding: 6px 4px 7px;
     text-align: center;
   }
 
-  .topbar-metrics .top-metric span {
+  .fleet-header .topbar-metrics .top-metric span {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 10px;
   }
 
-  .topbar-metrics .top-metric strong {
+  .fleet-header .topbar-metrics .top-metric strong {
     margin-top: 1px;
     font-size: 28px;
     line-height: 1;
@@ -5359,8 +5451,13 @@ a {
     background: var(--color-panel);
   }
 
+  .connect-adapt-command .section-heading h1,
   .connect-adapt-command .section-heading h2 {
     font-size: 22px;
+  }
+
+  .page-header h1 {
+    font-size: 24px;
   }
 
   .connect-adapt-command .section-heading p {

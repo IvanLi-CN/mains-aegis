@@ -107,6 +107,7 @@ function demoSeedEnabled(): boolean {
 type RequestOptions = {
   bridgeAuth?: boolean;
   timeoutMs?: number;
+  expectedDeviceId?: string;
 };
 
 const ACTIVE_ALERT_REQUEST_TIMEOUT_MS = 1_500;
@@ -762,6 +763,19 @@ export const getStatus = (
     `/api/v1/status${leaseQuery(leaseId)}`,
     options,
   );
+
+export function assertStatusDeviceIdentity(
+  status: UpsStatus,
+  expectedDeviceId: string,
+): void {
+  if (!status.device_id || status.device_id === expectedDeviceId) return;
+  throw new MainsAegisApiError({
+    code: "device_identity_mismatch",
+    message: `HTTP status resolved to unexpected device ${status.device_id}; expected ${expectedDeviceId}`,
+    retryable: false,
+    details: { actual: status.device_id, expected: expectedDeviceId },
+  });
+}
 export const getSettings = (
   baseUrl: string,
   leaseId?: string,
@@ -806,8 +820,9 @@ export const previewDeviceChargeControl = (
   baseUrl: string,
   input: ManualChargePreviewRequest,
   leaseId?: string,
+  options?: RequestOptions,
 ) =>
-  previewDeviceChargeControlCompat(baseUrl, input, leaseId);
+  previewDeviceChargeControlCompat(baseUrl, input, leaseId, options);
 
 export type DevdSerialSession = {
   connected: boolean;
@@ -1118,6 +1133,8 @@ async function loadCompatibleDeviceChargeControl(
     getStatus(baseUrl, leaseId, options),
     getSettings(baseUrl, leaseId, options),
   ]);
+  if (options?.expectedDeviceId)
+    assertStatusDeviceIdentity(status, options.expectedDeviceId);
   return compatChargeControlDetail(
     status,
     settings,
@@ -1130,6 +1147,7 @@ async function previewDeviceChargeControlCompat(
   baseUrl: string,
   input: ManualChargePreviewRequest,
   leaseId?: string,
+  options?: RequestOptions,
 ): Promise<ChargeControlDetail> {
   try {
     const payload = await requestWithBody<unknown>(
@@ -1146,12 +1164,25 @@ async function previewDeviceChargeControlCompat(
         leaseId,
         input,
         legacySummary,
+        options,
       );
     }
-    return loadCompatibleDeviceChargeControl(baseUrl, leaseId, input);
+    return loadCompatibleDeviceChargeControl(
+      baseUrl,
+      leaseId,
+      input,
+      undefined,
+      options,
+    );
   } catch (error) {
     if (shouldFallbackToCompatibleChargeControl(error)) {
-      return loadCompatibleDeviceChargeControl(baseUrl, leaseId, input);
+      return loadCompatibleDeviceChargeControl(
+        baseUrl,
+        leaseId,
+        input,
+        undefined,
+        options,
+      );
     }
     throw error;
   }
@@ -1160,6 +1191,7 @@ async function previewDeviceChargeControlCompat(
 async function setDeviceManualChargeControlCompat(
   baseUrl: string,
   input: ManualChargeControlRequest,
+  options?: RequestOptions,
 ): Promise<ChargeControlDetail> {
   const payload = await requestWithBody<unknown>(
     baseUrl,
@@ -1175,9 +1207,16 @@ async function setDeviceManualChargeControlCompat(
       undefined,
       undefined,
       legacySummary,
+      options,
     );
   }
-  return loadCompatibleDeviceChargeControl(baseUrl);
+  return loadCompatibleDeviceChargeControl(
+    baseUrl,
+    undefined,
+    undefined,
+    undefined,
+    options,
+  );
 }
 
 export type DevdSerialEvent = {
@@ -1455,8 +1494,9 @@ function muteMockAlert(baseUrl: string, path: string, body: unknown): unknown {
 export const setDeviceManualChargeControl = (
   baseUrl: string,
   input: ManualChargeControlRequest,
+  options?: RequestOptions,
 ) =>
-  setDeviceManualChargeControlCompat(baseUrl, input);
+  setDeviceManualChargeControlCompat(baseUrl, input, options);
 export const getDevdDeviceChargeControl = (
   baseUrl: string,
   deviceId: string,
@@ -1657,6 +1697,23 @@ export function toErrorEnvelope(error: unknown): ApiErrorEnvelope["error"] {
     retryable: true,
     details: null,
   };
+}
+
+export function isTransportErrorEnvelope(
+  error: ApiErrorEnvelope["error"] | null | undefined,
+): boolean {
+  const code = error?.code ?? "";
+  return (
+    code === "transport_error" ||
+    code === "unknown_error" ||
+    code === "device_not_found" ||
+    code === "web_session_expired" ||
+    code === "web_session_required" ||
+    (code.startsWith("http_") && error?.retryable === true) ||
+    code.startsWith("serial_") ||
+    code.startsWith("devd_") ||
+    code.endsWith("_channel_unavailable")
+  );
 }
 
 function isApiError(value: unknown): value is ApiErrorEnvelope["error"] {

@@ -16,6 +16,8 @@ import {
   getDevdDeviceTrace,
   getDevdSerialSession,
   getBridgeBootstrap,
+  getIdentity,
+  isTransportErrorEnvelope,
   getSettings,
   heartbeatDevdWebLease,
   getStatus,
@@ -28,6 +30,7 @@ import {
   resetDeviceAdvancedPower,
   resetDevdAdvancedPower,
   scanDevdDevices,
+  assertStatusDeviceIdentity,
   sendDeviceWifiConfig,
   sendDevdWifiConfig,
   setDeviceAdvancedPower,
@@ -110,6 +113,115 @@ const DEVD_SERIAL_SESSION_LIMITS = {
 
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
 const LEGACY_DEVD_TRANSPORT = "ad" + "apter";
+const LEGACY_CLOSED_RUNTIME = "legacy-runtime-closed";
+
+type DeviceOperationContext = {
+  deviceId: string;
+  token: number;
+};
+
+type DeviceRuntimeSnapshot = {
+  serialSession?: WebSerialTransport;
+  stream?: StatusStream;
+  devdStream?: DevdSerialEventStream;
+  heartbeat?: number;
+};
+
+type DevdLeaseHeartbeatControl = {
+  markCommitted: () => void;
+  release: () => Promise<void>;
+  releaseIfOwned: () => void;
+  stopIfOwned: () => void;
+};
+
+type PendingDevdLease = {
+  release: () => Promise<void>;
+};
+
+let pendingDevdLeaseSequence = 0;
+
+export async function waitForPendingDevdLeaseRelease(
+  pendingLeases: Map<string, PendingDevdLease>,
+  deviceId: string,
+): Promise<void> {
+  const pendingLease = pendingLeases.get(deviceId);
+  if (!pendingLease) return;
+  await pendingLease.release();
+  if (pendingLeases.get(deviceId) === pendingLease)
+    pendingLeases.delete(deviceId);
+}
+
+export type DeviceReadRequest = {
+  deviceId: string;
+  transport: DeviceChannelTransport;
+  generation: number;
+  baseUrl?: string;
+};
+
+export function canApplyDeviceRead(
+  record: DeviceRecord,
+  request: DeviceReadRequest,
+  currentGeneration = request.generation,
+): boolean {
+  return (
+    currentGeneration === request.generation &&
+    record.target.deviceId === request.deviceId &&
+    (record.target.transport ?? "http") === request.transport &&
+    (request.transport !== "http" ||
+      request.baseUrl === undefined ||
+      rememberedHttpBaseUrls(record).includes(request.baseUrl))
+  );
+}
+
+export function sameDeviceRuntime(
+  candidate: DeviceRecord,
+  previous: DeviceRecord,
+): boolean {
+  if (candidate.target.deviceId !== previous.target.deviceId) return false;
+  if (
+    candidate.runtimeId !== undefined ||
+    previous.runtimeId !== undefined
+  )
+    return candidate.runtimeId === previous.runtimeId;
+  if (previous.serial?.source === "devd")
+    return (
+      candidate.serial?.source === "devd" &&
+      candidate.serial.baseUrl === previous.serial.baseUrl &&
+      candidate.serial.leaseId === previous.serial.leaseId
+    );
+  if (previous.serial?.source === "web_serial")
+    return candidate.serial?.source === "web_serial";
+  return (
+    candidate.target.transport === previous.target.transport &&
+    candidate.target.baseUrl === previous.target.baseUrl
+  );
+}
+
+export function markClosedRuntimeUnavailableRecord(
+  candidate: DeviceRecord,
+  previous: DeviceRecord,
+): DeviceRecord {
+  if (!sameDeviceRuntime(candidate, previous)) return candidate;
+  return {
+    ...candidate,
+    connectionState: "offline",
+    streamState: "error",
+    error: null,
+    errorSource: undefined,
+    serial:
+      candidate.serial?.source === "devd"
+        ? {
+            ...candidate.serial,
+            connected: false,
+            leaseId: undefined,
+            leaseExpiresAt: undefined,
+          }
+        : candidate.serial?.source === "web_serial"
+          ? { ...candidate.serial, connected: false }
+          : candidate.serial,
+    lastUpdated: new Date().toISOString(),
+  };
+}
 
 export function resolveManualHttpChannelPersistence(input: {
   baseUrl: string;
@@ -155,10 +267,32 @@ export function DeviceRegistryProvider({
   const [records, setRecords] = useState<DeviceRecord[]>(() =>
     loadInitialRecords(seedRef.current),
   );
+  const recordsRef = useRef(records);
+  recordsRef.current = records;
   const streams = useRef(new Map<string, StatusStream>());
+  const streamBaseUrls = useRef(new Map<string, string>());
   const devdStreams = useRef(new Map<string, DevdSerialEventStream>());
   const devdLeaseHeartbeats = useRef(new Map<string, number>());
   const serialSessions = useRef(new Map<string, WebSerialTransport>());
+  const deviceReadGenerations = useRef(new Map<string, number>());
+  const deviceOperationGenerations = useRef(new Map<string, number>());
+  const closingDeviceRuntimes = useRef(
+    new Map<string, Promise<DeviceRuntimeSnapshot>>(),
+  );
+  const closedRuntimeIds = useRef(new Map<string, string>());
+  const pendingDevdLeases = useRef(
+    new Map<string, PendingDevdLease>(),
+  );
+  const unscopedDevdAdds = useRef(new Map<string, Promise<void>>());
+
+  function captureDeviceRuntime(deviceId: string): DeviceRuntimeSnapshot {
+    return {
+      serialSession: serialSessions.current.get(deviceId),
+      stream: streams.current.get(deviceId),
+      devdStream: devdStreams.current.get(deviceId),
+      heartbeat: devdLeaseHeartbeats.current.get(deviceId),
+    };
+  }
 
   useEffect(() => {
     if (demoSeed) return;
@@ -175,14 +309,28 @@ export function DeviceRegistryProvider({
       setActiveDemoSeed(nextSeed);
       for (const stream of streams.current.values()) stream.close();
       streams.current.clear();
+      streamBaseUrls.current.clear();
       for (const stream of devdStreams.current.values()) stream.close();
       devdStreams.current.clear();
       for (const heartbeat of devdLeaseHeartbeats.current.values())
         window.clearInterval(heartbeat);
       devdLeaseHeartbeats.current.clear();
+      for (const [deviceId, pendingLease] of pendingDevdLeases.current) {
+        void pendingLease
+          .release()
+          .then(() => {
+            if (pendingDevdLeases.current.get(deviceId) === pendingLease)
+              pendingDevdLeases.current.delete(deviceId);
+          })
+          .catch(() => undefined);
+      }
       for (const session of serialSessions.current.values())
         void session.close();
       serialSessions.current.clear();
+      for (const [deviceId, generation] of deviceReadGenerations.current)
+        deviceReadGenerations.current.set(deviceId, generation + 1);
+      for (const [deviceId, operation] of deviceOperationGenerations.current)
+        deviceOperationGenerations.current.set(deviceId, operation + 1);
       if (!nextSeed) {
         setRecords(loadInitialRecords(null));
         return;
@@ -194,18 +342,75 @@ export function DeviceRegistryProvider({
     return () => window.removeEventListener("popstate", syncSeedFromUrl);
   }, [initialDemoSeed]);
 
+  const beginDeviceRead = useCallback(
+    (
+      deviceId: string,
+      transport: DeviceChannelTransport,
+      baseUrl?: string,
+    ): DeviceReadRequest => {
+      const generation = (deviceReadGenerations.current.get(deviceId) ?? 0) + 1;
+      deviceReadGenerations.current.set(deviceId, generation);
+      return { deviceId, transport, generation, baseUrl };
+    },
+    [],
+  );
+
+  const invalidateDeviceReads = useCallback((deviceId: string): number => {
+    const pendingLease = pendingDevdLeases.current.get(deviceId);
+    if (pendingLease) {
+      void pendingLease.release().catch(() => undefined);
+    }
+    const generation = (deviceReadGenerations.current.get(deviceId) ?? 0) + 1;
+    deviceReadGenerations.current.set(deviceId, generation);
+    const operation =
+      (deviceOperationGenerations.current.get(deviceId) ?? 0) + 1;
+    deviceOperationGenerations.current.set(deviceId, operation);
+    return operation;
+  }, []);
+
+  const currentDeviceOperation = useCallback(
+    (deviceId: string, operation: number) =>
+      deviceOperationGenerations.current.get(deviceId) === operation,
+    [],
+  );
+
+  const currentDeviceRead = useCallback((request: DeviceReadRequest) => {
+    return deviceReadGenerations.current.get(request.deviceId) === request.generation;
+  }, []);
+
   const setRecordError = useCallback(
     (deviceId: string, error: DeviceRecord["error"]) => {
+      const leaseInvalid = isDevdLeaseInvalidError(error);
+      if (leaseInvalid) {
+        const heartbeat = devdLeaseHeartbeats.current.get(deviceId);
+        if (heartbeat !== undefined) {
+          window.clearInterval(heartbeat);
+          devdLeaseHeartbeats.current.delete(deviceId);
+        }
+      }
+      invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((record) =>
           record.target.deviceId === deviceId
             ? {
                 ...record,
-                connectionState: error?.retryable ? "offline" : "error",
+                connectionState:
+                  error?.retryable || leaseInvalid ? "offline" : "error",
                 streamState: "error",
                 error,
+                errorSource: "transport",
+                commandError: record.commandError,
                 serial: record.serial
-                  ? { ...record.serial, connected: false }
+                  ? {
+                      ...record.serial,
+                      connected: false,
+                      ...(leaseInvalid && record.serial.source === "devd"
+                        ? {
+                            leaseId: undefined,
+                            leaseExpiresAt: undefined,
+                          }
+                        : {}),
+                    }
                   : record.serial,
                 lastUpdated: new Date().toISOString(),
               }
@@ -213,7 +418,7 @@ export function DeviceRegistryProvider({
         ),
       );
     },
-    [],
+    [invalidateDeviceReads],
   );
 
   const resolveBridgeAuthState = useCallback(
@@ -225,8 +430,70 @@ export function DeviceRegistryProvider({
   );
 
   const setSerialCommandError = useCallback(
-    (deviceId: string, error: DeviceRecord["error"]) => {
+    (
+      deviceId: string,
+      error: DeviceRecord["error"],
+      operation: "command" | "read" = "command",
+      readRequest?: DeviceReadRequest,
+      operationToken?: number,
+    ) => {
+      if (
+        operationToken !== undefined &&
+        !currentDeviceOperation(deviceId, operationToken)
+      )
+        return;
+      if (operation === "command") invalidateDeviceReads(deviceId);
+      if (operation === "read") {
+        if (readRequest && !currentDeviceRead(readRequest)) return;
+        if (
+          readRequest?.transport === "devd" &&
+          isDevdLeaseInvalidError(error)
+        ) {
+          setRecordError(deviceId, error);
+          return;
+        }
+        setRecords((current) =>
+          current.map((record) =>
+            record.target.deviceId === deviceId &&
+            (!readRequest ||
+              canApplyDeviceRead(
+                record,
+                readRequest,
+                deviceReadGenerations.current.get(readRequest.deviceId),
+              ))
+              ? {
+                  ...record,
+                  connectionState: record.connectionState,
+                  streamState: "error",
+                  error,
+                  errorSource: "read",
+                  commandError: record.commandError,
+                  serial:
+                    record.serial &&
+                    (readRequest?.transport === "serial" ||
+                      readRequest?.transport === "devd")
+                      ? {
+                          ...record.serial,
+                          connected: record.serial.connected,
+                        }
+                      : record.serial,
+                  lastUpdated: new Date().toISOString(),
+                }
+              : record,
+          ),
+        );
+        return;
+      }
       if (!serialSessions.current.has(deviceId)) {
+        const currentRecord = records.find(
+          (record) => record.target.deviceId === deviceId,
+        );
+        if (currentRecord && isDevdSerial(currentRecord)) {
+          if (isTransportErrorEnvelope(error)) {
+            setRecordError(deviceId, error);
+            return;
+          }
+        }
         let handledByDevd = false;
         setRecords((current) =>
           current.map((record) => {
@@ -239,6 +506,8 @@ export function DeviceRegistryProvider({
                 connectionState: "online",
                 streamState: "polling",
                 error,
+                errorSource: "command",
+                commandError: error,
                 serial: { ...record.serial, connected: true },
                 lastUpdated: new Date().toISOString(),
               },
@@ -251,7 +520,32 @@ export function DeviceRegistryProvider({
             );
           }),
         );
-        if (!handledByDevd) setRecordError(deviceId, error);
+        if (!handledByDevd) {
+          const httpCommandFailure = !isTransportErrorEnvelope(error);
+          if (httpCommandFailure) {
+            setRecords((current) =>
+              current.map((record) =>
+                record.target.deviceId === deviceId &&
+                record.target.transport === "http"
+                  ? {
+                      ...record,
+                      connectionState: "online",
+                      streamState:
+                        record.streamState === "streaming"
+                          ? "streaming"
+                          : "polling",
+                      error,
+                      errorSource: "command",
+                      commandError: error,
+                      lastUpdated: new Date().toISOString(),
+                    }
+                  : record,
+              ),
+            );
+          } else {
+            setRecordError(deviceId, error);
+          }
+        }
         return;
       }
       const log = serialLogFromFrame({
@@ -269,6 +563,8 @@ export function DeviceRegistryProvider({
                   connectionState: "online",
                   streamState: "streaming",
                   error,
+                  errorSource: "command",
+                  commandError: error,
                   serial: record.serial
                     ? { ...record.serial, connected: true }
                     : record.serial,
@@ -280,7 +576,44 @@ export function DeviceRegistryProvider({
         ),
       );
     },
-    [setRecordError],
+    [
+      currentDeviceOperation,
+      currentDeviceRead,
+      invalidateDeviceReads,
+      records,
+      setRecordError,
+    ],
+  );
+
+  const markDeviceReadSuccess = useCallback(
+    (request: DeviceReadRequest, patch?: DeviceStatusPatch) => {
+      if (!currentDeviceRead(request)) return;
+      setRecords((current) =>
+        current.map((record) =>
+          canApplyDeviceRead(
+            record,
+            request,
+            deviceReadGenerations.current.get(request.deviceId),
+          )
+            ? recoverReadRecord(
+                patch
+                  ? patchSerialStatusRecord(
+                      record,
+                      patch,
+                      "manual_charge",
+                      "Charge control detail refreshed",
+                      false,
+                    )
+                  : record,
+                request.transport,
+                streams.current.has(request.deviceId) ||
+                  devdStreams.current.has(request.deviceId),
+              )
+            : record,
+        ),
+      );
+    },
+    [currentDeviceRead],
   );
 
   const refreshDevice = useCallback(
@@ -290,6 +623,8 @@ export function DeviceRegistryProvider({
       );
       const target = existing?.target;
       if (!target) return;
+      const operation = invalidateDeviceReads(deviceId);
+      const readGeneration = deviceReadGenerations.current.get(deviceId) ?? 0;
       if (target.mock) {
         setRecords((current) =>
           current.map((record) =>
@@ -299,7 +634,7 @@ export function DeviceRegistryProvider({
                     ...record,
                     connectionState: "online",
                     streamState: "streaming",
-                    error: null,
+                    ...liveStatusErrorState(record),
                     serial: record.serial
                       ? { ...record.serial, connected: true }
                       : record.serial,
@@ -350,6 +685,11 @@ export function DeviceRegistryProvider({
         );
         try {
           const status = await session.requestStatus();
+          if (
+            !currentDeviceOperation(deviceId, operation) ||
+            deviceReadGenerations.current.get(deviceId) !== readGeneration
+          )
+            return;
           setRecords((current) =>
             current.map((record) =>
               record.target.deviceId === deviceId
@@ -359,13 +699,27 @@ export function DeviceRegistryProvider({
                     network: record.identity?.network ?? record.network,
                     connectionState: "online",
                     streamState: "streaming",
-                    error: null,
+                    ...liveStatusErrorState(record),
                     lastUpdated: new Date().toISOString(),
                   }
                 : record,
             ),
           );
         } catch (error) {
+          if (
+            !currentDeviceOperation(deviceId, operation) ||
+            deviceReadGenerations.current.get(deviceId) !== readGeneration
+          )
+            return;
+          if (serialSessions.current.get(deviceId) === session) {
+            serialSessions.current.delete(deviceId);
+            await session.close().catch(() => undefined);
+          }
+          if (
+            !currentDeviceOperation(deviceId, operation) ||
+            deviceReadGenerations.current.get(deviceId) !== readGeneration
+          )
+            return;
           setRecordError(deviceId, errorFromSerialFailure(error));
         }
         return;
@@ -380,6 +734,7 @@ export function DeviceRegistryProvider({
       );
 
       const cachedBridgeAuth = bridgeAuthToken(target.baseUrl) !== null;
+      let httpReadBaseUrl: string | null = null;
       try {
       if (selectedTransport === "devd") {
         const devdBaseUrl =
@@ -389,7 +744,15 @@ export function DeviceRegistryProvider({
         const devdDeviceId =
           rememberedDevdChannel(existing)?.devdDeviceId ?? target.deviceId;
         if (existing.serial?.leaseId) {
-          await updateDevdSerialSnapshot(deviceId, devdBaseUrl);
+          if (
+            !(await updateDevdSerialSnapshot(
+              deviceId,
+              devdBaseUrl,
+              operation,
+              { deviceId, transport: "devd", generation: readGeneration },
+            ))
+          )
+            return;
           return;
         }
           const devdTarget = {
@@ -417,13 +780,25 @@ export function DeviceRegistryProvider({
             traceSession.status ?? null,
             settings,
             traceSession,
+            devdLeaseHeartbeats.current.has(deviceId) ||
+              serialSessions.current.has(deviceId)
+              ? existing.runtimeId
+              : undefined,
           );
+          if (
+            !currentDeviceOperation(deviceId, operation) ||
+            deviceReadGenerations.current.get(deviceId) !== readGeneration
+          )
+            return;
           setRecords((current) => upsertRecord(current, record));
           return;
         }
-        const { nextTarget, result } = await withRememberedHttpFallback(
+        const {
+          value: { nextTarget, result },
+        } = await withRememberedHttpFallback(
           existing,
           async (httpBaseUrl) => {
+            httpReadBaseUrl = httpBaseUrl;
             const httpTarget =
               httpBaseUrl === target.baseUrl
                 ? target
@@ -441,14 +816,32 @@ export function DeviceRegistryProvider({
               undefined,
               bridgeAuth ? { bridgeAuth: true } : undefined,
             );
-            return { nextTarget, result };
+            assertProbeResultIdentity(result, deviceId);
+            return {
+              nextTarget: promoteRememberedHttpEndpoint(nextTarget, httpBaseUrl),
+              result,
+            };
+          },
+          {
+            beforeOperation: () =>
+              currentDeviceOperation(deviceId, operation),
           },
         );
+        if (
+          !currentDeviceOperation(deviceId, operation) ||
+          deviceReadGenerations.current.get(deviceId) !== readGeneration
+        )
+          return;
         setRecords((current) => {
           const previous = current.find(
             (record) => record.target.deviceId === deviceId,
           );
           if (!previous) return current;
+          if (
+            httpReadBaseUrl !== null &&
+            !rememberedHttpBaseUrls(previous).includes(httpReadBaseUrl)
+          )
+            return current;
           const streamState =
             result.identity.capabilities.sse &&
             previous.streamState !== "polling"
@@ -456,14 +849,27 @@ export function DeviceRegistryProvider({
               : "polling";
           return upsertRecord(
             current,
-            recordFromProbe(nextTarget, result, "online", streamState),
+            recordFromProbe(
+              nextTarget,
+              result,
+              "online",
+              streamState,
+              streams.current.has(deviceId) ? previous.runtimeId : undefined,
+            ),
           );
         });
       } catch (error) {
+        if (
+          !currentDeviceOperation(deviceId, operation) ||
+          deviceReadGenerations.current.get(deviceId) !== readGeneration
+        )
+          return;
         const envelope = toErrorEnvelope(error);
         setRecords((current) =>
           current.map((record) =>
-            record.target.deviceId === deviceId
+            record.target.deviceId === deviceId &&
+            (httpReadBaseUrl === null ||
+              rememberedHttpBaseUrls(record).includes(httpReadBaseUrl))
               ? {
                   ...record,
                   target: {
@@ -476,6 +882,8 @@ export function DeviceRegistryProvider({
                   connectionState: envelope.retryable ? "offline" : "error",
                   streamState: "polling",
                   error: envelope,
+                  errorSource: "transport",
+                  commandError: record.commandError,
                   lastUpdated: new Date().toISOString(),
                 }
               : record,
@@ -483,12 +891,18 @@ export function DeviceRegistryProvider({
         );
       }
     },
-    [records, resolveBridgeAuthState, setRecordError],
+    [
+      currentDeviceOperation,
+      invalidateDeviceReads,
+      records,
+      resolveBridgeAuthState,
+      setRecordError,
+    ],
   );
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      for (const record of records) {
+      for (const record of recordsRef.current) {
         if (
           resolvePreferredTransport(record, serialSessions.current) !==
             "devd" &&
@@ -516,6 +930,8 @@ export function DeviceRegistryProvider({
         continue;
       const subscription = subscribeDevdSerialEvents(devdBaseUrl, leaseId, {
         onEvent: (event) => {
+          if (devdStreams.current.get(record.target.deviceId) !== subscription)
+            return;
           if (event.kind === "serial_trace" && event.payload.trace)
             appendSerialTraceToSession(
               event.payload.trace,
@@ -530,12 +946,16 @@ export function DeviceRegistryProvider({
             );
           setRecords((current) =>
             current.map((candidate) =>
-              candidate.target.deviceId === record.target.deviceId
+              candidate.target.deviceId === record.target.deviceId &&
+              candidate.target.transport === "devd" &&
+              candidate.serial?.source === "devd" &&
+              candidate.serial.baseUrl === devdBaseUrl &&
+              candidate.serial.leaseId === leaseId
                 ? {
                     ...candidate,
                     streamState: "streaming",
                     connectionState: "online",
-                    error: null,
+                    ...liveStatusErrorState(candidate),
                     lastUpdated: new Date().toISOString(),
                   }
                 : candidate,
@@ -543,16 +963,30 @@ export function DeviceRegistryProvider({
           );
         },
         onError: () => {
+          if (devdStreams.current.get(record.target.deviceId) !== subscription)
+            return;
+          const operationToken = deviceOperationGenerations.current.get(
+            record.target.deviceId,
+          );
           devdStreams.current.get(record.target.deviceId)?.close();
           devdStreams.current.delete(record.target.deviceId);
           setRecords((current) =>
             current.map((candidate) =>
-              candidate.target.deviceId === record.target.deviceId
+              candidate.target.deviceId === record.target.deviceId &&
+              candidate.target.transport === "devd" &&
+              candidate.serial?.source === "devd" &&
+              candidate.serial.baseUrl === devdBaseUrl &&
+              candidate.serial.leaseId === leaseId
                 ? { ...candidate, streamState: "polling" }
                 : candidate,
             ),
           );
-          void updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+          void updateDevdSerialSnapshot(
+            record.target.deviceId,
+            devdBaseUrl,
+            operationToken,
+            beginDeviceRead(record.target.deviceId, "devd"),
+          ).catch(() => undefined);
         },
       });
       devdStreams.current.set(record.target.deviceId, subscription);
@@ -579,6 +1013,15 @@ export function DeviceRegistryProvider({
         serialSessions.current,
       );
       const httpBaseUrl = rememberedHttpBaseUrl(record);
+      const existingStream = streams.current.get(record.target.deviceId);
+      if (
+        existingStream &&
+        streamBaseUrls.current.get(record.target.deviceId) !== httpBaseUrl
+      ) {
+        existingStream.close();
+        streams.current.delete(record.target.deviceId);
+        streamBaseUrls.current.delete(record.target.deviceId);
+      }
       if (
         selectedTransport === "serial" ||
         selectedTransport === "devd" ||
@@ -598,15 +1041,51 @@ export function DeviceRegistryProvider({
         httpBaseUrl,
         {
           onStatus: (status) => {
+            if (streams.current.get(record.target.deviceId) !== subscription)
+              return;
+            const currentRecord = recordsRef.current.find(
+              (candidate) => candidate.target.deviceId === record.target.deviceId,
+            );
+            if (
+              !currentRecord ||
+              rememberedHttpBaseUrl(currentRecord) !== httpBaseUrl ||
+              resolvePreferredTransport(currentRecord, serialSessions.current) !==
+                "http"
+            )
+              return;
+            const expectedDeviceId =
+              currentRecord.identity?.device_id ?? currentRecord.target.deviceId;
+            if (!status.device_id) {
+              subscription.close();
+              streams.current.delete(record.target.deviceId);
+              streamBaseUrls.current.delete(record.target.deviceId);
+              setRecords((current) =>
+                current.map((candidate) =>
+                  candidate.target.deviceId === record.target.deviceId &&
+                  candidate.target.transport === "http" &&
+                  rememberedHttpBaseUrl(candidate) === httpBaseUrl
+                    ? { ...candidate, streamState: "polling" }
+                    : candidate,
+                ),
+              );
+              void refreshDevice(record.target.deviceId);
+              return;
+            }
+            if (status.device_id !== expectedDeviceId)
+              return;
             setRecords((current) =>
               current.map((candidate) =>
-                candidate.target.deviceId === record.target.deviceId
+                candidate.target.deviceId === record.target.deviceId &&
+                candidate.target.transport === "http" &&
+                rememberedHttpBaseUrl(candidate) === httpBaseUrl &&
+                resolvePreferredTransport(candidate, serialSessions.current) ===
+                  "http"
                   ? {
                       ...candidate,
                       status,
                       connectionState: "online",
                       streamState: "streaming",
-                      error: null,
+                      ...liveStatusErrorState(candidate),
                       lastUpdated: new Date().toISOString(),
                     }
                   : candidate,
@@ -614,9 +1093,15 @@ export function DeviceRegistryProvider({
             );
           },
           onHeartbeat: () => {
+            if (streams.current.get(record.target.deviceId) !== subscription)
+              return;
             setRecords((current) =>
               current.map((candidate) =>
-                candidate.target.deviceId === record.target.deviceId
+                candidate.target.deviceId === record.target.deviceId &&
+                candidate.target.transport === "http" &&
+                rememberedHttpBaseUrl(candidate) === httpBaseUrl &&
+                resolvePreferredTransport(candidate, serialSessions.current) ===
+                  "http"
                   ? {
                       ...candidate,
                       streamState: "streaming",
@@ -627,28 +1112,88 @@ export function DeviceRegistryProvider({
             );
           },
           onError: () => {
+            if (streams.current.get(record.target.deviceId) !== subscription)
+              return;
+            const currentRecord = recordsRef.current.find(
+              (candidate) => candidate.target.deviceId === record.target.deviceId,
+            );
+            if (
+              !currentRecord ||
+              rememberedHttpBaseUrl(currentRecord) !== httpBaseUrl ||
+              resolvePreferredTransport(currentRecord, serialSessions.current) !==
+                "http"
+            )
+              return;
+            const operationToken = deviceOperationGenerations.current.get(
+              record.target.deviceId,
+            );
+            const readRequest = beginDeviceRead(
+              record.target.deviceId,
+              "http",
+              httpBaseUrl,
+            );
             subscription.close();
             streams.current.delete(record.target.deviceId);
+            streamBaseUrls.current.delete(record.target.deviceId);
             setRecords((current) =>
               current.map((candidate) =>
-                candidate.target.deviceId === record.target.deviceId
+                candidate.target.deviceId === record.target.deviceId &&
+                candidate.target.transport === "http" &&
+                resolvePreferredTransport(candidate, serialSessions.current) ===
+                  "http"
                   ? { ...candidate, streamState: "polling" }
                   : candidate,
               ),
             );
             void withRememberedHttpFallback(record, (baseUrl) =>
               getStatus(baseUrl, undefined, bridgeAuth),
+              {
+                beforeOperation: () =>
+                  currentDeviceRead(readRequest) &&
+                  (operationToken === undefined ||
+                    currentDeviceOperation(
+                      record.target.deviceId,
+                      operationToken,
+                    )),
+              },
             )
-              .then((status) => {
+              .then(({ value: status, baseUrl }) => {
+                const currentRecord = recordsRef.current.find(
+                  (candidate) => candidate.target.deviceId === record.target.deviceId,
+                );
+                assertStatusIdentity(
+                  status,
+                  currentRecord?.identity?.device_id ?? record.target.deviceId,
+                );
+                if (
+                  operationToken !== undefined &&
+                  !currentDeviceOperation(
+                    record.target.deviceId,
+                    operationToken,
+                  )
+                )
+                  return;
+                if (!currentDeviceRead(readRequest)) return;
                 setRecords((current) =>
                   current.map((candidate) =>
-                    candidate.target.deviceId === record.target.deviceId
+                    candidate.target.deviceId === record.target.deviceId &&
+                    candidate.target.transport === "http" &&
+                    rememberedHttpBaseUrls(candidate).includes(baseUrl) &&
+                    canApplyDeviceRead(
+                      candidate,
+                      readRequest,
+                      deviceReadGenerations.current.get(readRequest.deviceId),
+                    ) &&
+                    resolvePreferredTransport(
+                      candidate,
+                      serialSessions.current,
+                    ) === "http"
                       ? {
                           ...candidate,
                           status,
                           connectionState: "online",
                           streamState: "polling",
-                          error: null,
+                          ...liveStatusErrorState(candidate),
                           lastUpdated: new Date().toISOString(),
                         }
                       : candidate,
@@ -656,10 +1201,30 @@ export function DeviceRegistryProvider({
                 );
               })
               .catch((error) => {
+                if (
+                  operationToken !== undefined &&
+                  !currentDeviceOperation(
+                    record.target.deviceId,
+                    operationToken,
+                  )
+                )
+                  return;
+                if (!currentDeviceRead(readRequest)) return;
                 const envelope = toErrorEnvelope(error);
                 setRecords((current) =>
                   current.map((candidate) =>
-                    candidate.target.deviceId === record.target.deviceId
+                    candidate.target.deviceId === record.target.deviceId &&
+                    candidate.target.transport === "http" &&
+                    rememberedHttpBaseUrl(candidate) === httpBaseUrl &&
+                    canApplyDeviceRead(
+                      candidate,
+                      readRequest,
+                      deviceReadGenerations.current.get(readRequest.deviceId),
+                    ) &&
+                    resolvePreferredTransport(
+                      candidate,
+                      serialSessions.current,
+                    ) === "http"
                       ? {
                           ...candidate,
                           connectionState: envelope.retryable
@@ -667,6 +1232,8 @@ export function DeviceRegistryProvider({
                             : "error",
                           streamState: "error",
                           error: envelope,
+                          errorSource: "transport",
+                          commandError: candidate.commandError,
                           lastUpdated: new Date().toISOString(),
                         }
                       : candidate,
@@ -679,12 +1246,21 @@ export function DeviceRegistryProvider({
       );
 
       streams.current.set(record.target.deviceId, subscription);
+      streamBaseUrls.current.set(record.target.deviceId, httpBaseUrl);
     }
 
     for (const [deviceId, stream] of streams.current.entries()) {
-      if (!records.some((record) => record.target.deviceId === deviceId)) {
+      const record = records.find(
+        (candidate) => candidate.target.deviceId === deviceId,
+      );
+      if (
+        !record ||
+        resolvePreferredTransport(record, serialSessions.current) !== "http" ||
+        streamBaseUrls.current.get(deviceId) !== rememberedHttpBaseUrl(record)
+      ) {
         stream.close();
         streams.current.delete(deviceId);
+        streamBaseUrls.current.delete(deviceId);
       }
     }
   }, [records]);
@@ -705,6 +1281,7 @@ export function DeviceRegistryProvider({
     return () => {
       for (const stream of streams.current.values()) stream.close();
       streams.current.clear();
+      streamBaseUrls.current.clear();
       for (const stream of devdStreams.current.values()) stream.close();
       devdStreams.current.clear();
       for (const heartbeat of devdLeaseHeartbeats.current.values())
@@ -717,9 +1294,79 @@ export function DeviceRegistryProvider({
     };
   }, []);
 
+  const closeDeviceRuntime = useCallback(
+    async (deviceId: string, record?: DeviceRecord) => {
+      while (true) {
+        const pendingClose = closingDeviceRuntimes.current.get(deviceId);
+        if (!pendingClose) break;
+        await pendingClose.catch(() => undefined);
+      }
+      const runtimeSnapshot = captureDeviceRuntime(deviceId);
+      const closePromise = (async () => {
+        const heartbeat = devdLeaseHeartbeats.current.get(deviceId);
+        if (record?.serial?.source === "devd")
+          await disconnectDevdSerialDevice(record);
+        if (
+          heartbeat !== undefined &&
+          devdLeaseHeartbeats.current.get(deviceId) === heartbeat
+        ) {
+          window.clearInterval(heartbeat);
+          devdLeaseHeartbeats.current.delete(deviceId);
+        }
+        if (
+          runtimeSnapshot.stream &&
+          streams.current.get(deviceId) === runtimeSnapshot.stream
+        ) {
+          runtimeSnapshot.stream.close();
+          streams.current.delete(deviceId);
+          streamBaseUrls.current.delete(deviceId);
+        }
+        if (
+          runtimeSnapshot.devdStream &&
+          devdStreams.current.get(deviceId) === runtimeSnapshot.devdStream
+        ) {
+          runtimeSnapshot.devdStream.close();
+          devdStreams.current.delete(deviceId);
+        }
+        if (
+          runtimeSnapshot.serialSession &&
+          serialSessions.current.get(deviceId) === runtimeSnapshot.serialSession
+        ) {
+          serialSessions.current.delete(deviceId);
+          await runtimeSnapshot.serialSession.close().catch(() => undefined);
+        }
+        if (record)
+          closedRuntimeIds.current.set(
+            deviceId,
+            record.runtimeId ?? LEGACY_CLOSED_RUNTIME,
+          );
+        return runtimeSnapshot;
+      })();
+      closingDeviceRuntimes.current.set(deviceId, closePromise);
+      try {
+        return await closePromise;
+      } finally {
+        if (closingDeviceRuntimes.current.get(deviceId) === closePromise)
+          closingDeviceRuntimes.current.delete(deviceId);
+      }
+    },
+    [],
+  );
+
   const addDevice = useCallback(
-    async (input: AddDeviceInput): Promise<AddDeviceResult> => {
+    async (
+      input: AddDeviceInput,
+      operationContext?: DeviceOperationContext,
+    ): Promise<AddDeviceResult> => {
       const baseUrl = normalizeBaseUrl(input.target);
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      )
+        return staleAddDeviceResult();
 
       try {
         const bootstrap = await getBridgeBootstrap(baseUrl);
@@ -739,6 +1386,7 @@ export function DeviceRegistryProvider({
           };
         }
         const result = await probeDevice(baseUrl);
+        assertProbeResultIdentity(result, result.identity.device_id);
         const persistedHttpChannel = resolveManualHttpChannelPersistence({
           baseUrl,
           rememberedHttpBaseUrl: input.rememberedHttpBaseUrl,
@@ -772,23 +1420,121 @@ export function DeviceRegistryProvider({
           "online",
           result.identity.capabilities.sse ? "idle" : "polling",
         );
+        if (
+          operationContext &&
+          (operationContext.deviceId !== result.identity.device_id ||
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            ))
+        )
+          return staleAddDeviceResult();
+        const existingRecord = records.find(
+          (candidate) => candidate.target.deviceId === result.identity.device_id,
+        );
+        if (existingRecord) {
+          const closedRuntime = await closeDeviceRuntime(
+            result.identity.device_id,
+            existingRecord,
+          );
+          if (
+            operationContext &&
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            )
+          ) {
+            markClosedRuntimeUnavailable(existingRecord, closedRuntime);
+            return staleAddDeviceResult();
+          }
+        }
+        invalidateDeviceReads(result.identity.device_id);
         setRecords((current) => upsertRecord(current, record));
         return { ok: true, record };
       } catch (error) {
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        )
+          return staleAddDeviceResult();
         return { ok: false, error: toErrorEnvelope(error) };
       }
     },
-    [],
+    [
+      closeDeviceRuntime,
+      currentDeviceOperation,
+      invalidateDeviceReads,
+      records,
+    ],
   );
 
   const addDevdDevice = useCallback(
-    async (input: AddDeviceInput): Promise<AddDeviceResult> => {
+    async (
+      input: AddDeviceInput,
+      operationContext?: DeviceOperationContext,
+    ): Promise<AddDeviceResult> => {
       const baseUrl = normalizeBaseUrl(input.target);
-      let pendingLeaseId: string | null = null;
-
+      let pendingLeaseKey: string | null = null;
+      let pendingLease: PendingDevdLease | null = null;
+      let releaseUnscopedDevdAdd: (() => void) | null = null;
+      const clearPendingLease = () => {
+        if (
+          pendingLeaseKey &&
+          pendingLease &&
+          pendingDevdLeases.current.get(pendingLeaseKey) === pendingLease
+        )
+          pendingDevdLeases.current.delete(pendingLeaseKey);
+        pendingLease = null;
+        pendingLeaseKey = null;
+      };
+      const releasePendingLease = async () => {
+        const leaseToRelease = pendingLease;
+        if (!leaseToRelease) return;
+        await leaseToRelease.release();
+        clearPendingLease();
+      };
+      let existingOperationRecord = operationContext
+        ? records.find(
+            (candidate) => candidate.target.deviceId === operationContext.deviceId,
+          )
+        : undefined;
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      )
+        return staleAddDeviceResult();
+      let existingRuntimeClosed = false;
+      let existingRuntimeSnapshot: DeviceRuntimeSnapshot | undefined;
       try {
+        if (operationContext) {
+          await waitForPendingDevdLeaseRelease(
+            pendingDevdLeases.current,
+            operationContext.deviceId,
+          );
+          if (
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            )
+          )
+            return staleAddDeviceResult();
+        }
         const bridgeAuth = bridgeAuthToken(baseUrl) !== null;
         const scan = await scanDevdDevices(baseUrl);
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        )
+          return staleAddDeviceResult();
         const manageableDevices = scan.devices.filter((device) =>
           isManageableDevdDevice(device),
         );
@@ -832,6 +1578,7 @@ export function DeviceRegistryProvider({
             };
           }
           const result = await probeDevice(lanBaseUrl);
+          assertProbeResultIdentity(result, identity.device_id);
           const target: DeviceTarget = {
             deviceId: result.identity.device_id,
             baseUrl: lanBaseUrl,
@@ -854,24 +1601,202 @@ export function DeviceRegistryProvider({
             "online",
             result.identity.capabilities.sse ? "idle" : "polling",
           );
+          if (
+            operationContext &&
+            (operationContext.deviceId !== result.identity.device_id ||
+              !currentDeviceOperation(
+                operationContext.deviceId,
+                operationContext.token,
+              ))
+          )
+            return staleAddDeviceResult();
+          const existingRecord = records.find(
+            (candidate) => candidate.target.deviceId === result.identity.device_id,
+          );
+          if (
+            existingRecord &&
+            existingRecord.target.deviceId !== existingOperationRecord?.target.deviceId
+          ) {
+            const closedRuntime = await closeDeviceRuntime(
+              result.identity.device_id,
+              existingRecord,
+            );
+            if (
+              operationContext &&
+              !currentDeviceOperation(
+                operationContext.deviceId,
+                operationContext.token,
+              )
+            ) {
+              markClosedRuntimeUnavailable(existingRecord, closedRuntime);
+              return staleAddDeviceResult();
+            }
+          }
+          if (existingOperationRecord) {
+            existingRuntimeSnapshot = await closeDeviceRuntime(
+              existingOperationRecord.target.deviceId,
+              existingOperationRecord,
+            );
+            if (
+              operationContext &&
+              !currentDeviceOperation(
+                operationContext.deviceId,
+                operationContext.token,
+              )
+            ) {
+              markClosedRuntimeUnavailable(
+                existingOperationRecord,
+                existingRuntimeSnapshot,
+              );
+              return staleAddDeviceResult();
+            }
+          }
+          invalidateDeviceReads(result.identity.device_id);
           setRecords((current) => upsertRecord(current, record));
           return { ok: true, record };
         }
-        const lease = await createDevdWebLease(baseUrl, selectedDevice.id);
-        pendingLeaseId = lease.lease_id;
+        if (!operationContext) {
+          const lockKey = `${baseUrl}:${selectedDevice.id}`;
+          const previous = unscopedDevdAdds.current.get(lockKey);
+          let releaseLock!: () => void;
+          const lock = new Promise<void>((resolve) => {
+            releaseLock = resolve;
+          });
+          unscopedDevdAdds.current.set(lockKey, lock);
+          if (previous) await previous;
+          releaseUnscopedDevdAdd = () => {
+            if (unscopedDevdAdds.current.get(lockKey) === lock)
+              unscopedDevdAdds.current.delete(lockKey);
+            releaseLock();
+          };
+          existingOperationRecord = recordsRef.current.find(
+            (candidate) =>
+              candidate.target.deviceId === devdLogicalDeviceId(selectedDevice),
+          );
+        }
+        const rememberedDeviceId = existingOperationRecord
+          ? rememberedDevdChannel(existingOperationRecord)?.devdDeviceId ??
+            input.devdDeviceId ??
+            null
+          : input.devdDeviceId ?? null;
+        const existingLeaseExpired = Boolean(
+          existingOperationRecord?.serial?.leaseExpiresAt &&
+            Date.parse(existingOperationRecord.serial.leaseExpiresAt) <=
+            Date.now(),
+        );
+        if (existingOperationRecord) {
+          const pendingClose = closingDeviceRuntimes.current.get(
+            existingOperationRecord.target.deviceId,
+          );
+          if (pendingClose) await pendingClose.catch(() => undefined);
+        }
+        const closedRuntimeId = existingOperationRecord
+          ? closedRuntimeIds.current.get(existingOperationRecord.target.deviceId)
+          : undefined;
+        const existingRuntimeWasClosed =
+          existingOperationRecord !== undefined &&
+          closedRuntimeId !== undefined &&
+          (closedRuntimeId === existingOperationRecord.runtimeId ||
+            (closedRuntimeId === LEGACY_CLOSED_RUNTIME &&
+              existingOperationRecord.runtimeId === undefined));
+        const reusableLease =
+          existingOperationRecord?.serial?.source === "devd" &&
+          existingOperationRecord.serial.baseUrl === baseUrl &&
+          existingOperationRecord.serial.leaseId &&
+          !existingLeaseExpired &&
+          rememberedDeviceId === selectedDevice.id &&
+          !existingRuntimeWasClosed
+            ? {
+                lease_id: existingOperationRecord.serial.leaseId,
+                expires_at: existingOperationRecord.serial.leaseExpiresAt ?? "",
+                heartbeat_interval_ms:
+                  existingOperationRecord.serial.heartbeatIntervalMs ?? 2000,
+                lease_ttl_ms: existingOperationRecord.serial.leaseTtlMs ?? 8000,
+              }
+            : null;
+        let lease: DevdLeaseSnapshot;
+        if (reusableLease) {
+          lease = reusableLease;
+        } else {
+          try {
+            lease = await createDevdWebLease(baseUrl, selectedDevice.id);
+          } catch (error) {
+            if (
+              !existingOperationRecord ||
+              existingOperationRecord.serial?.source !== "devd" ||
+              toErrorEnvelope(error).code !== "device_lease_conflict"
+            )
+              throw error;
+            if (
+              operationContext &&
+              !currentDeviceOperation(
+                operationContext.deviceId,
+                operationContext.token,
+              )
+            )
+              return staleAddDeviceResult();
+            existingRuntimeSnapshot = captureDeviceRuntime(
+              existingOperationRecord.target.deviceId,
+            );
+            const closedRuntime = await closeDeviceRuntime(
+              existingOperationRecord.target.deviceId,
+              existingOperationRecord,
+            );
+            existingRuntimeSnapshot = closedRuntime;
+            existingRuntimeClosed = true;
+            if (
+              operationContext &&
+              !currentDeviceOperation(
+                operationContext.deviceId,
+                operationContext.token,
+              )
+            ) {
+              markClosedRuntimeUnavailable(
+                existingOperationRecord,
+                existingRuntimeSnapshot,
+              );
+              return staleAddDeviceResult();
+            }
+            lease = await createDevdWebLease(baseUrl, selectedDevice.id);
+          }
+        }
+        if (!reusableLease) {
+          pendingLeaseKey =
+            operationContext?.deviceId ??
+            existingOperationRecord?.target.deviceId ??
+            `pending:${baseUrl}:${selectedDevice.id}:${++pendingDevdLeaseSequence}`;
+          let releasePromise: Promise<void> | null = null;
+          pendingLease = {
+            release: async () => {
+              if (!releasePromise)
+                releasePromise = releaseDevdWebLease(
+                  baseUrl,
+                  lease.lease_id,
+                )
+                  .then(() => undefined)
+                  .catch((error) => {
+                    releasePromise = null;
+                    throw error;
+                  });
+              await releasePromise;
+            },
+          };
+          pendingDevdLeases.current.set(pendingLeaseKey, pendingLease);
+        }
         const result = await probeDevice(
           baseUrl,
           lease.lease_id,
           bridgeAuth ? { bridgeAuth: true } : undefined,
         );
+        assertProbeResultIdentity(
+          result,
+          existingOperationRecord?.target.deviceId ?? result.identity.device_id,
+        );
         const firmwareMatch = await findFirmwareArtifactForIdentity(
           result.identity,
         );
         if (!firmwareMatch && !input.ignoreFirmwareMismatch) {
-          await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
-            () => undefined,
-          );
-          pendingLeaseId = null;
+          if (!reusableLease) await releasePendingLease().catch(() => undefined);
           return {
             ok: false,
             error: firmwareMismatchError(result.identity),
@@ -901,23 +1826,149 @@ export function DeviceRegistryProvider({
           serialProtocol: session.protocol,
         };
         const record = recordFromDevdProbe(target, result, session, lease);
+        if (
+          operationContext &&
+          (operationContext.deviceId !== result.identity.device_id ||
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            ))
+        ) {
+          if (!reusableLease) await releasePendingLease().catch(() => undefined);
+        }
+        if (
+          operationContext &&
+          (operationContext.deviceId !== result.identity.device_id ||
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            ))
+        )
+          return staleAddDeviceResult();
+        const existingRecord = records.find(
+          (candidate) => candidate.target.deviceId === result.identity.device_id,
+        );
+        if (
+          existingRecord &&
+          existingRecord.target.deviceId !== existingOperationRecord?.target.deviceId
+        ) {
+          const closedRuntime = await closeDeviceRuntime(
+            result.identity.device_id,
+            existingRecord,
+          );
+          if (
+            operationContext &&
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            )
+          ) {
+            await releasePendingLease().catch(() => undefined);
+            markClosedRuntimeUnavailable(existingRecord, closedRuntime);
+            return staleAddDeviceResult();
+          }
+        }
+        if (existingOperationRecord && !existingRuntimeClosed && !reusableLease) {
+          existingRuntimeSnapshot = captureDeviceRuntime(
+            existingOperationRecord.target.deviceId,
+          );
+          const closedRuntime = await closeDeviceRuntime(
+            existingOperationRecord.target.deviceId,
+            existingOperationRecord,
+          );
+          existingRuntimeSnapshot = closedRuntime;
+          existingRuntimeClosed = true;
+          if (
+            operationContext &&
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            )
+          ) {
+            await releasePendingLease().catch(() => undefined);
+            markClosedRuntimeUnavailable(
+              existingOperationRecord,
+              closedRuntime,
+            );
+            return staleAddDeviceResult();
+          }
+        }
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        ) {
+          if (!reusableLease) await releasePendingLease().catch(() => undefined);
+          return staleAddDeviceResult();
+        }
         startDevdLeaseHeartbeat(record);
-        pendingLeaseId = null;
+        clearPendingLease();
+        invalidateDeviceReads(result.identity.device_id);
         setRecords((current) => upsertRecord(current, record));
         return { ok: true, record };
       } catch (error) {
-        if (pendingLeaseId)
-          await releaseDevdWebLease(baseUrl, pendingLeaseId).catch(
-            () => undefined,
+        await releasePendingLease().catch(() => undefined);
+        const operationStillCurrent =
+          !operationContext ||
+          currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
           );
+        if (
+          existingRuntimeClosed &&
+          existingOperationRecord &&
+          operationStillCurrent
+        ) {
+          const restored = await restoreDevdRuntime(
+            existingOperationRecord,
+            operationContext,
+          );
+          const operationStillCurrentAfterRestore =
+            !operationContext ||
+            currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            );
+          if (!restored && operationStillCurrentAfterRestore)
+            markDeviceRuntimeUnavailable(
+              existingOperationRecord,
+              toErrorEnvelope(error),
+              operationContext,
+            );
+        }
+        if (
+          !operationStillCurrent ||
+          (operationContext &&
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            ))
+        ) {
+          if (existingRuntimeClosed && existingOperationRecord)
+            markClosedRuntimeUnavailable(
+              existingOperationRecord,
+              existingRuntimeSnapshot,
+            );
+          return staleAddDeviceResult();
+        }
         return { ok: false, error: toErrorEnvelope(error) };
+      } finally {
+        releaseUnscopedDevdAdd?.();
       }
     },
-    [],
+    [
+      closeDeviceRuntime,
+      currentDeviceOperation,
+      invalidateDeviceReads,
+      records,
+    ],
   );
 
   const confirmDevdCompanionLan = useCallback(
     async (deviceId: string, devdBaseUrl: string): Promise<AddDeviceResult> => {
+      const operationToken = invalidateDeviceReads(deviceId);
       try {
         const updated = await bindDevdCompanionLan(deviceId, {}, devdBaseUrl);
         const companion = updated.binding?.lan_companion;
@@ -953,6 +2004,20 @@ export function DeviceRegistryProvider({
         }
         const logicalDeviceId =
           updated.binding?.logical_device_id ?? result.identity.device_id;
+        if (logicalDeviceId !== result.identity.device_id)
+          throw new Error(
+            `LAN companion resolved to unexpected device ${result.identity.device_id}`,
+          );
+        assertProbeResultIdentity(result, logicalDeviceId);
+        const logicalOperationToken =
+          logicalDeviceId === deviceId
+            ? operationToken
+            : invalidateDeviceReads(logicalDeviceId);
+        if (
+          !currentDeviceOperation(deviceId, operationToken) ||
+          !currentDeviceOperation(logicalDeviceId, logicalOperationToken)
+        )
+          return staleAddDeviceResult();
         const target: DeviceTarget = {
           deviceId: logicalDeviceId,
           baseUrl: successfulBaseUrl,
@@ -983,6 +2048,25 @@ export function DeviceRegistryProvider({
           "online",
           result.identity.capabilities.sse ? "idle" : "polling",
         );
+        if (
+          !currentDeviceOperation(deviceId, operationToken) ||
+          !currentDeviceOperation(logicalDeviceId, logicalOperationToken)
+        )
+          return staleAddDeviceResult();
+        const previous = records.find(
+          (candidate) => candidate.target.deviceId === logicalDeviceId,
+        );
+        const previousRuntimeSnapshot = previous
+          ? await closeDeviceRuntime(logicalDeviceId, previous)
+          : undefined;
+        if (
+          !currentDeviceOperation(deviceId, operationToken) ||
+          !currentDeviceOperation(logicalDeviceId, logicalOperationToken)
+        ) {
+          if (previous)
+            markClosedRuntimeUnavailable(previous, previousRuntimeSnapshot);
+          return staleAddDeviceResult();
+        }
         let mergedRecord = record;
         setRecords((current) => {
           const existing = current.find(
@@ -1014,11 +2098,12 @@ export function DeviceRegistryProvider({
         return { ok: false, error: toErrorEnvelope(error) };
       }
     },
-    [],
+    [closeDeviceRuntime, currentDeviceOperation, invalidateDeviceReads, records],
   );
 
   const dismissDevdCompanionLan = useCallback(
     async (deviceId: string, devdBaseUrl: string): Promise<AddDeviceResult> => {
+      invalidateDeviceReads(deviceId);
       try {
         const updated = await clearDevdCompanionLan(deviceId, devdBaseUrl);
         const logicalDeviceId =
@@ -1045,7 +2130,7 @@ export function DeviceRegistryProvider({
         return { ok: false, error: toErrorEnvelope(error) };
       }
     },
-    [records],
+    [invalidateDeviceReads],
   );
 
   const connectUsbSerialDevice = useCallback(
@@ -1054,6 +2139,7 @@ export function DeviceRegistryProvider({
         AddDeviceInput,
         "alias" | "location" | "ignoreFirmwareMismatch"
       > = {},
+      operationContext?: DeviceOperationContext,
     ): Promise<AddDeviceResult> => {
       if (!isWebSerialSupported()) {
         return {
@@ -1066,9 +2152,49 @@ export function DeviceRegistryProvider({
           },
         };
       }
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      )
+        return staleAddDeviceResult();
 
       let openedTransport: WebSerialTransport | null = null;
+      const operationPreviousRecord = operationContext
+        ? records.find(
+            (candidate) =>
+              candidate.target.deviceId === operationContext.deviceId,
+          )
+        : undefined;
+      let previousRuntimeClosed = false;
+      let previousRuntimeSnapshot: DeviceRuntimeSnapshot | undefined;
       try {
+        if (operationPreviousRecord) {
+          previousRuntimeSnapshot = captureDeviceRuntime(
+            operationPreviousRecord.target.deviceId,
+          );
+          const closedRuntime = await closeDeviceRuntime(
+            operationPreviousRecord.target.deviceId,
+            operationPreviousRecord,
+          );
+          previousRuntimeSnapshot = closedRuntime;
+          previousRuntimeClosed = true;
+          if (
+            operationContext &&
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            )
+          ) {
+            markClosedRuntimeUnavailable(
+              operationPreviousRecord,
+              previousRuntimeSnapshot,
+            );
+            return staleAddDeviceResult();
+          }
+        }
         let transportRef: WebSerialTransport | null = null;
         const pendingLogs: SerialLogEntry[] = [];
         const pendingTrace: SerialTraceEntry[] = [];
@@ -1168,8 +2294,6 @@ export function DeviceRegistryProvider({
           },
           serialProtocol: hello.protocol,
         };
-        serialSessions.current.set(identity.device_id, transport);
-        openedTransport = null;
         const decoderArtifact =
           firmwareMatch?.source === "github_release"
             ? await findBundledFirmwareArtifact(identity)
@@ -1177,6 +2301,46 @@ export function DeviceRegistryProvider({
         const bundledElfPath = decoderArtifact
           ? firmwareArtifactElfPath(decoderArtifact)
           : null;
+        if (
+          operationContext &&
+          (operationContext.deviceId !== identity.device_id ||
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            ))
+        ) {
+          await transport.close().catch(() => undefined);
+          openedTransport = null;
+          return staleAddDeviceResult();
+        }
+        const identityPreviousRecord = records.find(
+          (candidate) => candidate.target.deviceId === identity.device_id,
+        );
+        if (
+          identityPreviousRecord &&
+          identityPreviousRecord !== operationPreviousRecord
+        ) {
+          const closedRuntime = await closeDeviceRuntime(
+            identity.device_id,
+            identityPreviousRecord,
+          );
+          if (
+            operationContext &&
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            )
+          ) {
+            await transport.close().catch(() => undefined);
+            openedTransport = null;
+            markClosedRuntimeUnavailable(
+              identityPreviousRecord,
+              closedRuntime,
+            );
+            return staleAddDeviceResult();
+          }
+        }
+        serialSessions.current.set(identity.device_id, transport);
         transport.setDefmtDecoder(
           bundledElfPath
             ? (frame) =>
@@ -1186,6 +2350,18 @@ export function DeviceRegistryProvider({
                 })
             : null,
         );
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        ) {
+          serialSessions.current.delete(identity.device_id);
+          await transport.close().catch(() => undefined);
+          openedTransport = null;
+          return staleAddDeviceResult();
+        }
         const record = recordFromSerialProbe(
           target,
           {
@@ -1233,25 +2409,90 @@ export function DeviceRegistryProvider({
           ],
           pendingTrace,
         );
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        ) {
+          serialSessions.current.delete(identity.device_id);
+          await transport.close().catch(() => undefined);
+          openedTransport = null;
+          return staleAddDeviceResult();
+        }
+        invalidateDeviceReads(identity.device_id);
         setRecords((current) => upsertRecord(current, record));
+        openedTransport = null;
         return { ok: true, record };
       } catch (error) {
         await openedTransport?.close().catch(() => undefined);
+        const operationStillCurrent =
+          !operationContext ||
+          currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          );
+        if (
+          previousRuntimeClosed &&
+          operationPreviousRecord &&
+          operationStillCurrent
+        ) {
+          const restored = await restorePreviousRuntime(
+            operationPreviousRecord,
+            operationContext,
+          );
+          if (
+            !restored &&
+            (!operationContext ||
+              currentDeviceOperation(
+                operationContext.deviceId,
+                operationContext.token,
+              ))
+          )
+            markDeviceRuntimeUnavailable(
+              operationPreviousRecord,
+              errorFromSerialFailure(error),
+              operationContext,
+            );
+        }
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        ) {
+          if (previousRuntimeClosed && operationPreviousRecord)
+            markClosedRuntimeUnavailable(
+              operationPreviousRecord,
+              previousRuntimeSnapshot,
+            );
+          return staleAddDeviceResult();
+        }
         return { ok: false, error: errorFromSerialFailure(error) };
       }
     },
-    [setRecordError],
+    [
+      closeDeviceRuntime,
+      currentDeviceOperation,
+      invalidateDeviceReads,
+      records,
+      setRecordError,
+    ],
   );
 
   const attachMockUsbSerialDevice = useCallback((): AddDeviceResult => {
     const record = makeMockUsbSerialRecord();
+    invalidateDeviceReads(record.target.deviceId);
     setRecords((current) => upsertRecord(current, record));
     return { ok: true, record };
-  }, []);
+  }, [invalidateDeviceReads]);
 
   const stageDeviceRecord = useCallback((record: DeviceRecord) => {
+    invalidateDeviceReads(record.target.deviceId);
     setRecords((current) => upsertRecord(current, record));
-  }, []);
+  }, [invalidateDeviceReads]);
 
   const rememberDiscoveredChannels = useCallback(
     (devdBaseUrl: string, devices: DevdDevice[]) => {
@@ -1283,24 +2524,58 @@ export function DeviceRegistryProvider({
         discoveryByDeviceId.set(logicalDeviceId, current);
       }
       if (discoveryByDeviceId.size === 0) return;
+      for (const record of recordsRef.current) {
+        const incoming = discoveryByDeviceId.get(record.target.deviceId);
+        if (!incoming) continue;
+        const currentHttp = record.target.rememberedChannels?.http;
+        const nextHttp = incoming.http;
+        const currentDevd = record.target.rememberedChannels?.devd;
+        const nextDevd = incoming.devd;
+        const activeDevdLease =
+          record.serial?.source === "devd" && Boolean(record.serial.leaseId);
+        const devdBindingChanged =
+          Boolean(nextDevd) &&
+          (currentDevd?.baseUrl !== nextDevd?.baseUrl ||
+            currentDevd?.devdDeviceId !== nextDevd?.devdDeviceId);
+        if (
+          nextHttp &&
+          currentHttp?.baseUrl !== nextHttp.baseUrl
+        ) {
+          invalidateDeviceReads(record.target.deviceId);
+        }
+        if (devdBindingChanged && !activeDevdLease)
+          invalidateDeviceReads(record.target.deviceId);
+      }
       setRecords((current) =>
         current.map((record) => {
           const memory = discoveryByDeviceId.get(record.target.deviceId);
           if (!memory) return record;
+          const currentDevd = record.target.rememberedChannels?.devd;
+          const activeDevdLease =
+            record.serial?.source === "devd" && Boolean(record.serial.leaseId);
+          const nextDevd = memory.devd;
+          const devdBindingChanged =
+            Boolean(nextDevd) &&
+            (currentDevd?.baseUrl !== nextDevd?.baseUrl ||
+              currentDevd?.devdDeviceId !== nextDevd?.devdDeviceId);
+          const nextMemory =
+            activeDevdLease && devdBindingChanged
+              ? { ...memory, devd: undefined }
+              : memory;
           return {
             ...record,
             target: {
               ...record.target,
               rememberedChannels: mergeRememberedChannels(
                 record.target.rememberedChannels,
-                memory,
+                nextMemory,
               ),
             },
           };
         }),
       );
     },
-    [],
+    [invalidateDeviceReads],
   );
 
   const connectKnownDeviceChannel = useCallback(
@@ -1309,6 +2584,8 @@ export function DeviceRegistryProvider({
       transport: DeviceChannelTransport,
       options: Pick<AddDeviceInput, "ignoreFirmwareMismatch"> = {},
     ): Promise<AddDeviceResult> => {
+      const operationToken = invalidateDeviceReads(deviceId);
+      const operationContext = { deviceId, token: operationToken };
       const record = records.find(
         (candidate) => candidate.target.deviceId === deviceId,
       );
@@ -1327,13 +2604,20 @@ export function DeviceRegistryProvider({
       if (transport === "http") {
         const baseUrls = rememberedHttpBaseUrls(record);
         if (baseUrls.length === 0) return unavailableChannelError("http");
+        const rememberedHttp = record.target.rememberedChannels?.http;
         let lastResult: AddDeviceResult | null = null;
         for (const baseUrl of baseUrls) {
           const result = await addDevice({
             target: baseUrl,
             alias: record.target.alias,
             location: record.target.location,
-          });
+            rememberedHttpBaseUrl: baseUrl,
+            rememberedHttpMdnsHost: rememberedHttp?.mdnsHost,
+            rememberedHttpFallbackBaseUrl:
+              baseUrl === rememberedHttp?.baseUrl
+                ? rememberedHttp?.fallbackBaseUrl
+                : rememberedHttp?.baseUrl,
+          }, operationContext);
           if (result.ok) return result;
           lastResult = result;
         }
@@ -1361,22 +2645,30 @@ export function DeviceRegistryProvider({
           alias: record.target.alias,
           location: record.target.location,
           ignoreFirmwareMismatch: options.ignoreFirmwareMismatch,
-        });
+        }, operationContext);
       }
 
       return connectUsbSerialDevice({
         alias: record.target.alias,
         location: record.target.location,
         ignoreFirmwareMismatch: options.ignoreFirmwareMismatch,
-      });
+      }, operationContext);
     },
-    [addDevice, addDevdDevice, connectUsbSerialDevice, records],
+    [
+      addDevice,
+      addDevdDevice,
+      connectUsbSerialDevice,
+      invalidateDeviceReads,
+      records,
+    ],
   );
 
   const disconnectUsbSerialDevice = useCallback(async (deviceId: string) => {
+    const operationToken = invalidateDeviceReads(deviceId);
     const session = serialSessions.current.get(deviceId);
     serialSessions.current.delete(deviceId);
     await session?.close();
+    if (!currentDeviceOperation(deviceId, operationToken)) return;
     setRecords((current) =>
       current.map((record) =>
         record.target.deviceId === deviceId
@@ -1392,16 +2684,17 @@ export function DeviceRegistryProvider({
           : record,
       ),
     );
-  }, []);
+  }, [currentDeviceOperation, invalidateDeviceReads]);
 
   const prepareWebSerialFlashPort = useCallback(
     async (deviceId: string): Promise<SerialPortLike | null> => {
+      invalidateDeviceReads(deviceId);
       const session = serialSessions.current.get(deviceId);
       if (!session) return null;
       serialSessions.current.delete(deviceId);
       return session.releasePort();
     },
-    [],
+    [invalidateDeviceReads],
   );
 
   const sendWifiConfig = useCallback(
@@ -1414,6 +2707,7 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      const operationToken = invalidateDeviceReads(deviceId);
       if (record.target.mock) {
         onProgress?.({
           phase: "connected",
@@ -1424,6 +2718,9 @@ export function DeviceRegistryProvider({
             last_error: null,
           },
         });
+        if (!currentDeviceOperation(deviceId, operationToken))
+          return staleDeviceOperationResult();
+        invalidateDeviceReads(deviceId);
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
@@ -1451,7 +2748,9 @@ export function DeviceRegistryProvider({
             phase: "saving",
             message: "Writing WiFi credentials over LAN",
           });
-          const { status, settings } = await withRememberedHttpFallback(
+          const {
+            value: { status, settings },
+          } = await withRememberedHttpFallback(
             record,
             async (httpBaseUrl) => {
               await sendDeviceWifiConfig(httpBaseUrl, input);
@@ -1462,10 +2761,15 @@ export function DeviceRegistryProvider({
               const status = await waitForHttpWifiConnected(
                 httpBaseUrl,
                 input.ssid,
+                deviceId,
                 onProgress,
               );
               const settings = await getSettings(httpBaseUrl);
               return { status, settings };
+            },
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
             },
           );
           const message = wifiConnectedMessage(input.ssid, status.network);
@@ -1474,6 +2778,9 @@ export function DeviceRegistryProvider({
             message,
             network: status.network,
           });
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1484,11 +2791,16 @@ export function DeviceRegistryProvider({
           return { ok: true, message, network: status.network };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
       if (selectedTransport === "devd") {
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
+          return unavailableCommandChannel("devd");
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
@@ -1511,14 +2823,25 @@ export function DeviceRegistryProvider({
           const settings = leaseId
             ? null
             : await getDevdDeviceSettings(devdBaseUrl, devdDeviceId);
-          if (leaseId)
-            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+          if (leaseId) {
+            if (
+              !(await updateDevdSerialSnapshot(
+                record.target.deviceId,
+                devdBaseUrl,
+                operationToken,
+              ))
+            )
+              return staleDeviceOperationResult();
+          }
           const message = wifiConnectedMessage(input.ssid, applyResult.network);
           onProgress?.({
             phase: applyResult.network.ipv4 ? "connected" : "ip",
             message,
             network: applyResult.network,
           });
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1544,7 +2867,7 @@ export function DeviceRegistryProvider({
           return { ok: true, message, network: applyResult.network };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
@@ -1571,6 +2894,9 @@ export function DeviceRegistryProvider({
           message,
           network: status.network,
         });
+        if (!currentDeviceOperation(deviceId, operationToken))
+          return staleDeviceOperationResult();
+        invalidateDeviceReads(deviceId);
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
@@ -1589,11 +2915,16 @@ export function DeviceRegistryProvider({
         return { ok: true, message, network: status.network };
       } catch (error) {
         const envelope = errorFromSerialFailure(error);
-        setSerialCommandError(deviceId, envelope);
+        setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
         return { ok: false, error: envelope };
       }
     },
-    [records, setSerialCommandError],
+    [
+      currentDeviceOperation,
+      invalidateDeviceReads,
+      records,
+      setSerialCommandError,
+    ],
   );
 
   const clearWifiConfig = useCallback(
@@ -1605,12 +2936,16 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      const operationToken = invalidateDeviceReads(deviceId);
       if (record.target.mock) {
         onProgress?.({
           phase: "disabled",
           message: "WiFi credentials cleared and WiFi disconnected",
           network: { state: "disabled", ipv4: null, last_error: null },
         });
+        if (!currentDeviceOperation(deviceId, operationToken))
+          return staleDeviceOperationResult();
+        invalidateDeviceReads(deviceId);
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
@@ -1635,20 +2970,30 @@ export function DeviceRegistryProvider({
             phase: "clearing",
             message: "Clearing WiFi credentials over LAN",
           });
-          const { status, settings } = await withRememberedHttpFallback(
+          const {
+            value: { status, settings },
+          } = await withRememberedHttpFallback(
             record,
             async (httpBaseUrl) => {
               await clearDeviceWifiConfig(httpBaseUrl);
               const status = await waitForHttpWifiDisabled(
                 httpBaseUrl,
+                deviceId,
                 onProgress,
               );
               const settings = await getSettings(httpBaseUrl);
               return { status, settings };
             },
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
+            },
           );
           const message = wifiDisabledMessage(status.network);
           onProgress?.({ phase: "disabled", message, network: status.network });
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1659,11 +3004,16 @@ export function DeviceRegistryProvider({
           return { ok: true, message, network: status.network };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
       if (selectedTransport === "devd") {
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
+          return unavailableCommandChannel("devd");
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
@@ -1681,14 +3031,25 @@ export function DeviceRegistryProvider({
           const settings = leaseId
             ? null
             : await getDevdDeviceSettings(devdBaseUrl, devdDeviceId);
-          if (leaseId)
-            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+          if (leaseId) {
+            if (
+              !(await updateDevdSerialSnapshot(
+                record.target.deviceId,
+                devdBaseUrl,
+                operationToken,
+              ))
+            )
+              return staleDeviceOperationResult();
+          }
           const message = wifiDisabledMessage(applyResult.network);
           onProgress?.({
             phase: "disabled",
             message,
             network: applyResult.network,
           });
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1711,7 +3072,7 @@ export function DeviceRegistryProvider({
           return { ok: true, message, network: applyResult.network };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
@@ -1726,6 +3087,9 @@ export function DeviceRegistryProvider({
         const status = await waitForSerialWifiDisabled(session, onProgress);
         const message = wifiDisabledMessage(status.network);
         onProgress?.({ phase: "disabled", message, network: status.network });
+        if (!currentDeviceOperation(deviceId, operationToken))
+          return staleDeviceOperationResult();
+        invalidateDeviceReads(deviceId);
         setRecords((current) =>
           current.map((candidate) =>
             candidate.target.deviceId === deviceId
@@ -1741,11 +3105,11 @@ export function DeviceRegistryProvider({
         return { ok: true, message, network: status.network };
       } catch (error) {
         const envelope = errorFromSerialFailure(error);
-        setSerialCommandError(deviceId, envelope);
+        setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
         return { ok: false, error: envelope };
       }
     },
-    [records, setSerialCommandError],
+    [currentDeviceOperation, invalidateDeviceReads, records, setSerialCommandError],
   );
 
   const setSerialLogLevel = useCallback(
@@ -1757,19 +3121,27 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      const operationToken = invalidateDeviceReads(deviceId);
       const selectedTransport = resolvePreferredTransport(
         record,
         serialSessions.current,
       );
       if (selectedTransport === "http") {
         try {
-          const settings = await withRememberedHttpFallback(
+          const { value: settings } = await withRememberedHttpFallback(
             record,
             async (httpBaseUrl) => {
               await setDeviceLogLevel(httpBaseUrl, level);
               return getSettings(httpBaseUrl);
             },
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
+            },
           );
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1785,13 +3157,23 @@ export function DeviceRegistryProvider({
           return { ok: true };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
       if (selectedTransport === "devd") {
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
+          return unavailableCommandChannel("devd");
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
+          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -1802,12 +3184,23 @@ export function DeviceRegistryProvider({
             level,
           );
           if (leaseId) {
-            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+            if (
+              !(await updateDevdSerialSnapshot(
+                record.target.deviceId,
+                devdBaseUrl,
+                operationToken,
+              ))
+            )
+              return staleDeviceOperationResult();
+            return { ok: true };
           } else {
             const settings = await getDevdDeviceSettings(
               devdBaseUrl,
               devdDeviceId,
             );
+            if (!currentDeviceOperation(deviceId, operationToken))
+              return staleDeviceOperationResult();
+            invalidateDeviceReads(deviceId);
             setRecords((current) =>
               current.map((candidate) =>
                 candidate.target.deviceId === deviceId
@@ -1824,7 +3217,7 @@ export function DeviceRegistryProvider({
           }
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       } else if (!record.target.mock) {
@@ -1834,10 +3227,13 @@ export function DeviceRegistryProvider({
           await session.setLogLevel(level);
         } catch (error) {
           const envelope = errorFromSerialFailure(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
+      if (!currentDeviceOperation(deviceId, operationToken))
+        return staleDeviceOperationResult();
+      invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
@@ -1852,7 +3248,7 @@ export function DeviceRegistryProvider({
       );
       return { ok: true };
     },
-    [records, setSerialCommandError],
+    [currentDeviceOperation, invalidateDeviceReads, records, setSerialCommandError],
   );
 
   const setManualChargePrefs = useCallback(
@@ -1864,19 +3260,27 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      const operationToken = invalidateDeviceReads(deviceId);
       const selectedTransport = resolvePreferredTransport(
         record,
         serialSessions.current,
       );
       if (selectedTransport === "http") {
         try {
-          const settings = await withRememberedHttpFallback(
+          const { value: settings } = await withRememberedHttpFallback(
             record,
             async (httpBaseUrl) => {
               await setDeviceManualChargePrefs(httpBaseUrl, prefs);
               return getSettings(httpBaseUrl);
             },
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
+            },
           );
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -1892,13 +3296,18 @@ export function DeviceRegistryProvider({
           return { ok: true };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
+          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -1909,12 +3318,22 @@ export function DeviceRegistryProvider({
             prefs,
           );
           if (leaseId) {
-            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+            if (
+              !(await updateDevdSerialSnapshot(
+                record.target.deviceId,
+                devdBaseUrl,
+                operationToken,
+              ))
+            )
+              return staleDeviceOperationResult();
           } else {
             const settings = await getDevdDeviceSettings(
               devdBaseUrl,
               devdDeviceId,
             );
+            if (!currentDeviceOperation(deviceId, operationToken))
+              return staleDeviceOperationResult();
+            invalidateDeviceReads(deviceId);
             setRecords((current) =>
               current.map((candidate) =>
                 candidate.target.deviceId === deviceId
@@ -1931,7 +3350,7 @@ export function DeviceRegistryProvider({
           }
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       } else if (!record.target.mock) {
@@ -1941,10 +3360,13 @@ export function DeviceRegistryProvider({
           await session.setManualChargePrefs(prefs);
         } catch (error) {
           const envelope = errorFromSerialFailure(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
+      if (!currentDeviceOperation(deviceId, operationToken))
+        return staleDeviceOperationResult();
+      invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
@@ -1959,7 +3381,7 @@ export function DeviceRegistryProvider({
       );
       return { ok: true };
     },
-    [records, setSerialCommandError],
+    [currentDeviceOperation, invalidateDeviceReads, records, setSerialCommandError],
   );
 
   const refreshChargeControlDetail = useCallback(
@@ -1968,47 +3390,45 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+  const selectedTransport = record.target.mock
+        ? (record.target.transport ?? "http")
+        : resolvePreferredTransport(record, serialSessions.current);
+      const readRequest = beginDeviceRead(
+        deviceId,
+        selectedTransport,
+        selectedTransport === "http"
+          ? rememberedHttpBaseUrl(record) ?? undefined
+          : undefined,
+      );
       if (record.target.mock) {
-        const detail = await getDeviceChargeControl(record.target.baseUrl);
-        setRecords((current) =>
-          current.map((candidate) =>
-            candidate.target.deviceId === deviceId
-              ? patchSerialStatusRecord(
-                  candidate,
-                  chargeControlPatchFromDetail(detail),
-                  "manual_charge",
-                  "Charge control detail refreshed",
-                )
-              : candidate,
-          ),
+        const detail = await getDeviceChargeControl(
+          record.target.baseUrl,
+          undefined,
+          { expectedDeviceId: record.target.deviceId },
+        );
+        markDeviceReadSuccess(
+          readRequest,
+          chargeControlPatchFromDetail(detail),
         );
         return { ok: true, detail };
       }
-      const selectedTransport = resolvePreferredTransport(
-        record,
-        serialSessions.current,
-      );
       if (selectedTransport === "http") {
         try {
-          const detail = await withRememberedHttpFallback(record, (httpBaseUrl) =>
-            getDeviceChargeControl(httpBaseUrl),
+          const { value: detail } = await withRememberedHttpFallback(
+            record,
+            (httpBaseUrl) =>
+              getDeviceChargeControl(httpBaseUrl, undefined, {
+                expectedDeviceId: record.target.deviceId,
+              }),
           );
-          setRecords((current) =>
-            current.map((candidate) =>
-              candidate.target.deviceId === deviceId
-                ? patchSerialStatusRecord(
-                    candidate,
-                    chargeControlPatchFromDetail(detail),
-                    "manual_charge",
-                    "Charge control detail refreshed",
-                  )
-                : candidate,
-            ),
+          markDeviceReadSuccess(
+            readRequest,
+            chargeControlPatchFromDetail(detail),
           );
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "read", readRequest);
           return {
             ok: false,
             error: envelope,
@@ -2025,22 +3445,14 @@ export function DeviceRegistryProvider({
             devdBaseUrl,
             devdDeviceId,
           );
-          setRecords((current) =>
-            current.map((candidate) =>
-              candidate.target.deviceId === deviceId
-                ? patchSerialStatusRecord(
-                    candidate,
-                    chargeControlPatchFromDetail(detail),
-                    "manual_charge",
-                    "Charge control detail refreshed",
-                  )
-                : candidate,
-            ),
+          markDeviceReadSuccess(
+            readRequest,
+            chargeControlPatchFromDetail(detail),
           );
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "read", readRequest);
           return {
             ok: false,
             error: envelope,
@@ -2052,22 +3464,14 @@ export function DeviceRegistryProvider({
       if (!session) return serialCommandUnavailable();
       try {
         const detail = await session.requestChargeControl();
-        setRecords((current) =>
-          current.map((candidate) =>
-            candidate.target.deviceId === deviceId
-              ? patchSerialStatusRecord(
-                  candidate,
-                  chargeControlPatchFromDetail(detail),
-                  "manual_charge",
-                  "Charge control detail refreshed",
-                )
-              : candidate,
-          ),
+        markDeviceReadSuccess(
+          readRequest,
+          chargeControlPatchFromDetail(detail),
         );
         return { ok: true, detail };
       } catch (error) {
         const envelope = errorFromSerialFailure(error);
-        setSerialCommandError(deviceId, envelope);
+        setSerialCommandError(deviceId, envelope, "read", readRequest);
         return {
           ok: false,
           error: envelope,
@@ -2075,7 +3479,7 @@ export function DeviceRegistryProvider({
         };
       }
     },
-    [records, setSerialCommandError],
+    [markDeviceReadSuccess, records, setSerialCommandError],
   );
 
   const previewManualCharge = useCallback(
@@ -2088,26 +3492,40 @@ export function DeviceRegistryProvider({
       );
       if (!record) return serialCommandUnavailable();
       const input = manualChargePreviewInput(prefs);
+  const selectedTransport = record.target.mock
+        ? (record.target.transport ?? "http")
+        : resolvePreferredTransport(record, serialSessions.current);
+      const readRequest = beginDeviceRead(
+        deviceId,
+        selectedTransport,
+        selectedTransport === "http"
+          ? rememberedHttpBaseUrl(record) ?? undefined
+          : undefined,
+      );
       if (record.target.mock) {
         const detail = await previewDeviceChargeControl(
           record.target.baseUrl,
           input,
+          undefined,
+          { expectedDeviceId: record.target.deviceId },
         );
+        markDeviceReadSuccess(readRequest);
         return { ok: true, detail };
       }
-      const selectedTransport = resolvePreferredTransport(
-        record,
-        serialSessions.current,
-      );
       if (selectedTransport === "http") {
         try {
-          const detail = await withRememberedHttpFallback(record, (httpBaseUrl) =>
-            previewDeviceChargeControl(httpBaseUrl, input),
+          const { value: detail } = await withRememberedHttpFallback(
+            record,
+            (httpBaseUrl) =>
+              previewDeviceChargeControl(httpBaseUrl, input, undefined, {
+                expectedDeviceId: record.target.deviceId,
+              }),
           );
+          markDeviceReadSuccess(readRequest);
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "read", readRequest);
           return {
             ok: false,
             error: envelope,
@@ -2126,10 +3544,11 @@ export function DeviceRegistryProvider({
             devdLeaseIdForRecord(record),
             input,
           );
+          markDeviceReadSuccess(readRequest);
           return { ok: true, detail };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "read", readRequest);
           return {
             ok: false,
             error: envelope,
@@ -2141,10 +3560,11 @@ export function DeviceRegistryProvider({
       if (!session) return serialCommandUnavailable();
       try {
         const detail = await session.previewChargeControl(input);
+        markDeviceReadSuccess(readRequest);
         return { ok: true, detail };
       } catch (error) {
         const envelope = errorFromSerialFailure(error);
-        setSerialCommandError(deviceId, envelope);
+        setSerialCommandError(deviceId, envelope, "read", readRequest);
         return {
           ok: false,
           error: envelope,
@@ -2152,7 +3572,7 @@ export function DeviceRegistryProvider({
         };
       }
     },
-    [records, setSerialCommandError],
+    [markDeviceReadSuccess, records, setSerialCommandError],
   );
 
   const controlManualCharge = useCallback(
@@ -2164,6 +3584,7 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      const operationToken = invalidateDeviceReads(deviceId);
       const selectedTransport = resolvePreferredTransport(
         record,
         serialSessions.current,
@@ -2176,10 +3597,20 @@ export function DeviceRegistryProvider({
           : "Manual charge stopped";
       if (selectedTransport === "http") {
         try {
-          const detail = await withRememberedHttpFallback(
+          const { value: detail } = await withRememberedHttpFallback(
             record,
-            (httpBaseUrl) => setDeviceManualChargeControl(httpBaseUrl, input),
+            (httpBaseUrl) =>
+              setDeviceManualChargeControl(httpBaseUrl, input, {
+                expectedDeviceId: record.target.deviceId,
+              }),
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
+            },
           );
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2196,6 +3627,8 @@ export function DeviceRegistryProvider({
         } catch (error) {
           const envelope = toErrorEnvelope(error);
           const detail = chargeControlDetailFromErrorDetails(envelope.details);
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
           if (detail) {
             setRecords((current) =>
               current.map((candidate) =>
@@ -2210,13 +3643,18 @@ export function DeviceRegistryProvider({
               ),
             );
           }
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope, detail };
         }
       }
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
+          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -2226,6 +3664,9 @@ export function DeviceRegistryProvider({
             leaseId,
             input,
           );
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2242,6 +3683,8 @@ export function DeviceRegistryProvider({
         } catch (error) {
           const envelope = toErrorEnvelope(error);
           const detail = chargeControlDetailFromErrorDetails(envelope.details);
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
           if (detail) {
             setRecords((current) =>
               current.map((candidate) =>
@@ -2256,7 +3699,7 @@ export function DeviceRegistryProvider({
               ),
             );
           }
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope, detail };
         }
       }
@@ -2265,6 +3708,9 @@ export function DeviceRegistryProvider({
         if (!session) return serialCommandUnavailable();
         try {
           const detail = await session.controlManualCharge(input);
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2281,6 +3727,8 @@ export function DeviceRegistryProvider({
         } catch (error) {
           const envelope = errorFromSerialFailure(error);
           const detail = chargeControlDetailFromErrorDetails(envelope.details);
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
           if (detail) {
             setRecords((current) =>
               current.map((candidate) =>
@@ -2295,11 +3743,18 @@ export function DeviceRegistryProvider({
               ),
             );
           }
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope, detail };
         }
       }
-      const detail = await getDeviceChargeControl(record.target.baseUrl);
+      const detail = await getDeviceChargeControl(
+        record.target.baseUrl,
+        undefined,
+        { expectedDeviceId: record.target.deviceId },
+      );
+      if (!currentDeviceOperation(deviceId, operationToken))
+        return staleDeviceOperationResult();
+      invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
@@ -2314,7 +3769,12 @@ export function DeviceRegistryProvider({
       );
       return { ok: true, message: successMessage, detail };
     },
-    [records, setSerialCommandError],
+    [
+      currentDeviceOperation,
+      invalidateDeviceReads,
+      records,
+      setSerialCommandError,
+    ],
   );
 
   const setAdvancedPower = useCallback(
@@ -2326,19 +3786,27 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      const operationToken = invalidateDeviceReads(deviceId);
       const selectedTransport = resolvePreferredTransport(
         record,
         serialSessions.current,
       );
       if (selectedTransport === "http") {
         try {
-          const settings = await withRememberedHttpFallback(
+          const { value: settings } = await withRememberedHttpFallback(
             record,
             async (httpBaseUrl) => {
               await setDeviceAdvancedPower(httpBaseUrl, advancedPower);
               return getSettings(httpBaseUrl);
             },
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
+            },
           );
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2354,13 +3822,18 @@ export function DeviceRegistryProvider({
           return { ok: true };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
+          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -2371,13 +3844,23 @@ export function DeviceRegistryProvider({
             advancedPower,
           );
           if (leaseId) {
-            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+            if (
+              !(await updateDevdSerialSnapshot(
+                record.target.deviceId,
+                devdBaseUrl,
+                operationToken,
+              ))
+            )
+              return staleDeviceOperationResult();
             return { ok: true };
           } else {
             const settings = await getDevdDeviceSettings(
               devdBaseUrl,
               devdDeviceId,
             );
+            if (!currentDeviceOperation(deviceId, operationToken))
+              return staleDeviceOperationResult();
+            invalidateDeviceReads(deviceId);
             setRecords((current) =>
               current.map((candidate) =>
                 candidate.target.deviceId === deviceId
@@ -2394,7 +3877,7 @@ export function DeviceRegistryProvider({
           }
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       } else if (!record.target.mock) {
@@ -2403,6 +3886,9 @@ export function DeviceRegistryProvider({
         try {
           await session.setAdvancedPower(advancedPower);
           const settings = await session.requestSettings();
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2418,10 +3904,13 @@ export function DeviceRegistryProvider({
           return { ok: true };
         } catch (error) {
           const envelope = errorFromSerialFailure(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
+      if (!currentDeviceOperation(deviceId, operationToken))
+        return staleDeviceOperationResult();
+      invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
@@ -2436,7 +3925,12 @@ export function DeviceRegistryProvider({
       );
       return { ok: true };
     },
-    [records, setSerialCommandError],
+    [
+      currentDeviceOperation,
+      invalidateDeviceReads,
+      records,
+      setSerialCommandError,
+    ],
   );
 
   const resetAdvancedPower = useCallback(
@@ -2445,19 +3939,27 @@ export function DeviceRegistryProvider({
         (candidate) => candidate.target.deviceId === deviceId,
       );
       if (!record) return serialCommandUnavailable();
+      const operationToken = invalidateDeviceReads(deviceId);
       const selectedTransport = resolvePreferredTransport(
         record,
         serialSessions.current,
       );
       if (selectedTransport === "http") {
         try {
-          const settings = await withRememberedHttpFallback(
+          const { value: settings } = await withRememberedHttpFallback(
             record,
             async (httpBaseUrl) => {
               await resetDeviceAdvancedPower(httpBaseUrl);
               return getSettings(httpBaseUrl);
             },
+            {
+              allowFallback: false,
+              beforeOperation: () => currentDeviceOperation(deviceId, operationToken),
+            },
           );
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2473,13 +3975,18 @@ export function DeviceRegistryProvider({
           return { ok: true };
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
       if (selectedTransport === "devd") {
         const devdBaseUrl = devdBaseUrlForRecord(record);
         if (devdBaseUrl === null) return unavailableCommandChannel("devd");
+        if (
+          !isDevdWriteAvailable(record) ||
+          closingDeviceRuntimes.current.has(deviceId)
+        )
+          return unavailableCommandChannel("devd");
         const devdDeviceId = devdDeviceIdForRecord(record) ?? record.target.deviceId;
         try {
           const leaseId = devdLeaseIdForRecord(record);
@@ -2489,13 +3996,23 @@ export function DeviceRegistryProvider({
             leaseId,
           );
           if (leaseId) {
-            await updateDevdSerialSnapshot(record.target.deviceId, devdBaseUrl);
+            if (
+              !(await updateDevdSerialSnapshot(
+                record.target.deviceId,
+                devdBaseUrl,
+                operationToken,
+              ))
+            )
+              return staleDeviceOperationResult();
             return { ok: true };
           } else {
             const settings = await getDevdDeviceSettings(
               devdBaseUrl,
               devdDeviceId,
             );
+            if (!currentDeviceOperation(deviceId, operationToken))
+              return staleDeviceOperationResult();
+            invalidateDeviceReads(deviceId);
             setRecords((current) =>
               current.map((candidate) =>
                 candidate.target.deviceId === deviceId
@@ -2512,7 +4029,7 @@ export function DeviceRegistryProvider({
           }
         } catch (error) {
           const envelope = toErrorEnvelope(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       } else if (!record.target.mock) {
@@ -2521,6 +4038,9 @@ export function DeviceRegistryProvider({
         try {
           await session.resetAdvancedPower();
           const settings = await session.requestSettings();
+          if (!currentDeviceOperation(deviceId, operationToken))
+            return staleDeviceOperationResult();
+          invalidateDeviceReads(deviceId);
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === deviceId
@@ -2536,10 +4056,13 @@ export function DeviceRegistryProvider({
           return { ok: true };
         } catch (error) {
           const envelope = errorFromSerialFailure(error);
-          setSerialCommandError(deviceId, envelope);
+          setSerialCommandError(deviceId, envelope, "command", undefined, operationToken);
           return { ok: false, error: envelope };
         }
       }
+      if (!currentDeviceOperation(deviceId, operationToken))
+        return staleDeviceOperationResult();
+      invalidateDeviceReads(deviceId);
       setRecords((current) =>
         current.map((candidate) =>
           candidate.target.deviceId === deviceId
@@ -2558,7 +4081,7 @@ export function DeviceRegistryProvider({
       );
       return { ok: true };
     },
-    [records, setSerialCommandError],
+    [currentDeviceOperation, invalidateDeviceReads, records, setSerialCommandError],
   );
 
   function handleSerialFrame(frame: SerialFrame, deviceId: string | null) {
@@ -2596,13 +4119,13 @@ export function DeviceRegistryProvider({
     setRecords((current) =>
       current.map((record) =>
         record.target.deviceId === deviceId && record.serial?.connected
-          ? {
-              ...record,
-              status: frame.status,
-              connectionState: "online",
-              streamState: "streaming",
-              error: null,
-              lastUpdated: new Date().toISOString(),
+              ? {
+                  ...record,
+                  status: frame.status,
+                  connectionState: "online",
+                  streamState: "streaming",
+                  ...liveStatusErrorState(record),
+                  lastUpdated: new Date().toISOString(),
             }
           : record,
       ),
@@ -2660,7 +4183,7 @@ export function DeviceRegistryProvider({
                 : record.network,
               connectionState: "online",
               streamState: "streaming",
-              error: null,
+              ...liveStatusErrorState(record),
               lastUpdated: new Date().toISOString(),
             }
           : record,
@@ -2668,7 +4191,18 @@ export function DeviceRegistryProvider({
     );
   }
 
-  async function updateDevdSerialSnapshot(deviceId: string, baseUrl: string) {
+  async function updateDevdSerialSnapshot(
+    deviceId: string,
+    baseUrl: string,
+    operationToken?: number,
+    readRequest?: DeviceReadRequest,
+  ): Promise<boolean> {
+    if (
+      operationToken !== undefined &&
+      !currentDeviceOperation(deviceId, operationToken)
+    )
+      return false;
+    if (readRequest && !currentDeviceRead(readRequest)) return false;
     const record = records.find(
       (candidate) => candidate.target.deviceId === deviceId,
     );
@@ -2678,9 +4212,25 @@ export function DeviceRegistryProvider({
       ...DEVD_SERIAL_SESSION_LIMITS,
       leaseId,
     });
+    if (
+      operationToken !== undefined &&
+      !currentDeviceOperation(deviceId, operationToken)
+    )
+      return false;
+    if (readRequest && !currentDeviceRead(readRequest)) return false;
     setRecords((current) =>
       current.map((record) =>
-        record.target.deviceId === deviceId
+        record.target.deviceId === deviceId &&
+        record.target.transport === "devd" &&
+        record.serial?.source === "devd" &&
+        record.serial.baseUrl === baseUrl &&
+        record.serial.leaseId === leaseId &&
+        (!readRequest ||
+          canApplyDeviceRead(
+            record,
+            readRequest,
+            deviceReadGenerations.current.get(readRequest.deviceId),
+          ))
           ? mergeDevdSerial(record, baseUrl, session, {
               lease_id: leaseId,
               expires_at: record.serial?.leaseExpiresAt ?? "",
@@ -2690,21 +4240,85 @@ export function DeviceRegistryProvider({
           : record,
       ),
     );
+    return true;
   }
 
-  function startDevdLeaseHeartbeat(record: DeviceRecord) {
+  function startDevdLeaseHeartbeat(
+    record: DeviceRecord,
+    operationContext?: DeviceOperationContext,
+  ): DevdLeaseHeartbeatControl {
     const leaseId = record.serial?.leaseId;
     const baseUrl = record.serial?.baseUrl ?? "";
-    if (!leaseId) return;
+    if (!leaseId)
+      return {
+        markCommitted: () => undefined,
+        release: () => Promise.resolve(),
+        releaseIfOwned: () => undefined,
+        stopIfOwned: () => undefined,
+      };
     const existing = devdLeaseHeartbeats.current.get(record.target.deviceId);
     if (existing !== undefined) window.clearInterval(existing);
     const intervalMs = Math.max(
       1000,
       Math.min(record.serial?.heartbeatIntervalMs ?? 2000, 5000),
     );
-    const heartbeat = window.setInterval(() => {
+    let heartbeat: number | undefined;
+    let committed = !operationContext;
+    let releasePromise: Promise<void> | undefined;
+    const stopIfOwned = () => {
+      if (
+        heartbeat === undefined ||
+        devdLeaseHeartbeats.current.get(record.target.deviceId) !== heartbeat
+      )
+        return;
+      window.clearInterval(heartbeat);
+      devdLeaseHeartbeats.current.delete(record.target.deviceId);
+    };
+    const isOwned = () =>
+      heartbeat !== undefined &&
+      devdLeaseHeartbeats.current.get(record.target.deviceId) === heartbeat;
+    const release = (): Promise<void> => {
+      if (releasePromise) return releasePromise;
+      const nextRelease = releaseDevdWebLease(baseUrl, leaseId)
+        .then(() => undefined)
+        .catch((error) => {
+          releasePromise = undefined;
+          throw error;
+        });
+      releasePromise = nextRelease;
+      return nextRelease;
+    };
+    const control: DevdLeaseHeartbeatControl = {
+      markCommitted: () => {
+        committed = true;
+      },
+      release,
+      stopIfOwned,
+      releaseIfOwned: () => {
+        if (
+          heartbeat === undefined ||
+          devdLeaseHeartbeats.current.get(record.target.deviceId) !== heartbeat
+        )
+          return;
+        stopIfOwned();
+        void release().catch(() => undefined);
+      },
+    };
+    heartbeat = window.setInterval(() => {
+      if (
+        operationContext &&
+        !committed &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      ) {
+        control.releaseIfOwned();
+        return;
+      }
       void heartbeatDevdWebLease(baseUrl, leaseId)
         .then((lease) => {
+          if (!isOwned()) return;
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === record.target.deviceId &&
@@ -2728,32 +4342,351 @@ export function DeviceRegistryProvider({
           );
         })
         .catch((error) => {
+          if (!isOwned()) return;
           const envelope = toErrorEnvelope(error);
+          const leaseInvalid = isDevdLeaseInvalidError(envelope);
+          if (leaseInvalid) {
+            control.stopIfOwned();
+            invalidateDeviceReads(record.target.deviceId);
+          }
           setRecords((current) =>
             current.map((candidate) =>
               candidate.target.deviceId === record.target.deviceId &&
               candidate.serial?.leaseId === leaseId
                 ? {
                     ...candidate,
+                    connectionState: leaseInvalid
+                      ? "error"
+                      : candidate.connectionState,
                     streamState: "error",
                     error: envelope,
+                    errorSource: "transport",
+                    commandError: candidate.commandError,
                     lastUpdated: new Date().toISOString(),
+                    serial: leaseInvalid
+                      ? {
+                          ...candidate.serial,
+                          connected: false,
+                          leaseId: undefined,
+                          leaseExpiresAt: undefined,
+                        }
+                      : candidate.serial,
                   }
                 : candidate,
             ),
           );
-        });
+      });
     }, intervalMs);
     devdLeaseHeartbeats.current.set(record.target.deviceId, heartbeat);
+    return control;
+  }
+
+  async function restorePreviousRuntime(
+    record: DeviceRecord,
+    operationContext?: DeviceOperationContext,
+  ): Promise<boolean> {
+    if (record.serial?.source === "devd" || record.target.transport === "devd")
+      return restoreDevdRuntime(record, operationContext);
+    if ((record.target.transport ?? "http") === "http")
+      return restoreHttpRuntime(record, operationContext);
+    return false;
+  }
+
+  async function restoreHttpRuntime(
+    record: DeviceRecord,
+    operationContext?: DeviceOperationContext,
+  ): Promise<boolean> {
+    if (
+      operationContext &&
+      !currentDeviceOperation(
+        operationContext.deviceId,
+        operationContext.token,
+      )
+    )
+      return false;
+    try {
+      const {
+        value: { nextTarget, result },
+      } = await withRememberedHttpFallback(
+        record,
+        async (baseUrl) => {
+          const nextTarget =
+            baseUrl === record.target.baseUrl
+              ? { ...record.target, transport: "http" as const }
+              : {
+                  ...record.target,
+                  baseUrl,
+                  transport: "http" as const,
+                };
+          const bridgeAuth = await resolveBridgeAuthState(nextTarget);
+          const result = await probeDevice(
+            baseUrl,
+            undefined,
+            bridgeAuth ? { bridgeAuth: true } : undefined,
+          );
+          assertProbeResultIdentity(result, record.target.deviceId);
+          return {
+            nextTarget: promoteRememberedHttpEndpoint(
+              bridgeAuth ? { ...nextTarget, bridgeAuth: true } : nextTarget,
+              baseUrl,
+            ),
+            result,
+          };
+        },
+        {
+          beforeOperation: () =>
+            !operationContext ||
+            currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            ),
+        },
+      );
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      )
+        return false;
+      const streamState = result.identity.capabilities.sse
+        ? "idle"
+        : "polling";
+      setRecords((current) => {
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        )
+          return current;
+        return upsertRecord(
+          current,
+          recordFromProbe(nextTarget, result, "online", streamState),
+        );
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function markClosedRuntimeUnavailable(
+    record: DeviceRecord,
+    runtimeSnapshot?: DeviceRuntimeSnapshot,
+  ) {
+    const deviceId = record.target.deviceId;
+    setRecords((current) => {
+      const replacedRuntime =
+        (runtimeSnapshot?.serialSession !== undefined &&
+          serialSessions.current.get(deviceId) !== undefined &&
+          serialSessions.current.get(deviceId) !== runtimeSnapshot.serialSession) ||
+        (runtimeSnapshot?.stream !== undefined &&
+          streams.current.get(deviceId) !== undefined &&
+          streams.current.get(deviceId) !== runtimeSnapshot.stream) ||
+        (runtimeSnapshot?.devdStream !== undefined &&
+          devdStreams.current.get(deviceId) !== undefined &&
+          devdStreams.current.get(deviceId) !== runtimeSnapshot.devdStream) ||
+        (runtimeSnapshot?.heartbeat !== undefined &&
+          devdLeaseHeartbeats.current.get(deviceId) !== undefined &&
+          devdLeaseHeartbeats.current.get(deviceId) !== runtimeSnapshot.heartbeat);
+      if (replacedRuntime) return current;
+      if (
+        serialSessions.current.has(deviceId) ||
+        streams.current.has(deviceId) ||
+        devdStreams.current.has(deviceId) ||
+        devdLeaseHeartbeats.current.has(deviceId)
+      )
+        return current;
+      return current.map((candidate) =>
+        candidate.target.deviceId === deviceId
+          ? markClosedRuntimeUnavailableRecord(candidate, record)
+          : candidate,
+      );
+    });
+  }
+
+  function markDeviceRuntimeUnavailable(
+    record: DeviceRecord,
+    error: NonNullable<DeviceRecord["error"]>,
+    operationContext?: DeviceOperationContext,
+  ) {
+    if (
+      operationContext &&
+      !currentDeviceOperation(
+        operationContext.deviceId,
+        operationContext.token,
+      )
+    )
+      return;
+    const operation = invalidateDeviceReads(record.target.deviceId);
+    setRecords((current) => {
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operation,
+        )
+      )
+        return current;
+      return current.map((candidate) =>
+        candidate.target.deviceId === record.target.deviceId
+          ? {
+              ...candidate,
+              connectionState: error.retryable ? "offline" : "error",
+              streamState: "error",
+              error,
+              errorSource: "transport",
+              serial:
+                candidate.serial?.source === "devd"
+                  ? {
+                      ...candidate.serial,
+                      connected: false,
+                      leaseId: undefined,
+                      leaseExpiresAt: undefined,
+                    }
+                  : candidate.serial?.source === "web_serial"
+                    ? { ...candidate.serial, connected: false }
+                    : candidate.serial,
+              lastUpdated: new Date().toISOString(),
+            }
+          : candidate,
+      );
+    });
+  }
+
+  async function restoreDevdRuntime(
+    record: DeviceRecord,
+    operationContext?: DeviceOperationContext,
+  ): Promise<boolean> {
+    const channel = rememberedDevdChannel(record);
+    const baseUrl = record.serial?.baseUrl ?? channel?.baseUrl;
+    const devdDeviceId = channel?.devdDeviceId;
+    if (baseUrl === undefined || !devdDeviceId) return false;
+    if (
+      operationContext &&
+      !currentDeviceOperation(
+        operationContext.deviceId,
+        operationContext.token,
+      )
+    )
+      return false;
+
+    let lease: DevdWebLease | null = null;
+    try {
+      lease = await createDevdWebLease(baseUrl, devdDeviceId);
+      const bridgeAuth =
+        record.target.bridgeAuth || bridgeAuthToken(baseUrl) !== null;
+      const result = await probeDevice(
+        baseUrl,
+        lease.lease_id,
+        bridgeAuth ? { bridgeAuth: true } : undefined,
+      );
+      assertProbeResultIdentity(result, record.target.deviceId);
+      if (result.identity.device_id !== record.target.deviceId)
+        throw new Error("devd runtime restoration resolved a different device");
+      const session = await getDevdSerialSession(baseUrl, {
+        ...DEVD_SERIAL_SESSION_LIMITS,
+        leaseId: lease.lease_id,
+      });
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      ) {
+        await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
+          () => undefined,
+        );
+        return false;
+      }
+      const target: DeviceTarget = {
+        ...record.target,
+        baseUrl,
+        transport: "devd",
+        preferredTransport: "devd",
+        bridgeAuth: bridgeAuth || undefined,
+        rememberedChannels: mergeRememberedChannels(
+          record.target.rememberedChannels,
+          {
+            devd: {
+              baseUrl,
+              devdDeviceId,
+              seenAt: new Date().toISOString(),
+              transport: "usb",
+            },
+          },
+        ),
+        serialProtocol: session.protocol,
+      };
+      const restored = recordFromDevdProbe(target, result, session, lease);
+      const heartbeatControl = startDevdLeaseHeartbeat(
+        restored,
+        operationContext,
+      );
+      const pendingLease = {
+        release: async () => {
+          heartbeatControl.stopIfOwned();
+          await heartbeatControl.release();
+        },
+      };
+      pendingDevdLeases.current.set(record.target.deviceId, pendingLease);
+      setRecords((current) => {
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        )
+          return current;
+        if (pendingDevdLeases.current.get(record.target.deviceId) === pendingLease)
+          pendingDevdLeases.current.delete(record.target.deviceId);
+        heartbeatControl.markCommitted();
+        return upsertRecord(current, restored);
+      });
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      ) {
+        if (pendingDevdLeases.current.get(record.target.deviceId) === pendingLease)
+          void pendingLease
+            .release()
+            .then(() => {
+              if (
+                pendingDevdLeases.current.get(record.target.deviceId) ===
+                pendingLease
+              )
+                pendingDevdLeases.current.delete(record.target.deviceId);
+            })
+            .catch(() => undefined);
+        return false;
+      }
+      return true;
+    } catch {
+      if (lease)
+        await releaseDevdWebLease(baseUrl, lease.lease_id).catch(
+          () => undefined,
+        );
+      return false;
+    }
   }
 
   const removeDevice = useCallback(
     (deviceId: string) => {
+      invalidateDeviceReads(deviceId);
       const record = records.find(
         (candidate) => candidate.target.deviceId === deviceId,
       );
       streams.current.get(deviceId)?.close();
       streams.current.delete(deviceId);
+      streamBaseUrls.current.delete(deviceId);
       devdStreams.current.get(deviceId)?.close();
       devdStreams.current.delete(deviceId);
       const heartbeat = devdLeaseHeartbeats.current.get(deviceId);
@@ -2770,13 +4703,15 @@ export function DeviceRegistryProvider({
         });
       }
     },
-    [records],
+    [invalidateDeviceReads, records],
   );
 
   const setDemoSeed = useCallback((seed: DemoSeed) => {
     if (!seedRef.current) return;
+    for (const record of records) invalidateDeviceReads(record.target.deviceId);
     for (const stream of streams.current.values()) stream.close();
     streams.current.clear();
+    streamBaseUrls.current.clear();
     for (const stream of devdStreams.current.values()) stream.close();
     devdStreams.current.clear();
     for (const heartbeat of devdLeaseHeartbeats.current.values())
@@ -2788,12 +4723,14 @@ export function DeviceRegistryProvider({
     seedRef.current = seed;
     setActiveDemoSeed(seed);
     setRecords(makeMockRecords(seed));
-  }, [records]);
+  }, [invalidateDeviceReads, records]);
 
   const resetDemo = useCallback(() => {
     if (!seedRef.current) return;
+    for (const record of records) invalidateDeviceReads(record.target.deviceId);
     for (const stream of streams.current.values()) stream.close();
     streams.current.clear();
+    streamBaseUrls.current.clear();
     for (const stream of devdStreams.current.values()) stream.close();
     devdStreams.current.clear();
     for (const heartbeat of devdLeaseHeartbeats.current.values())
@@ -2805,7 +4742,7 @@ export function DeviceRegistryProvider({
     seedRef.current = DEFAULT_DEMO_SEED;
     setActiveDemoSeed(DEFAULT_DEMO_SEED);
     setRecords(makeMockRecords(DEFAULT_DEMO_SEED));
-  }, [records]);
+  }, [invalidateDeviceReads, records]);
 
   const getSerialAlerts = useCallback(async (deviceId: string): Promise<ActiveAlertsSnapshot> => {
     const session = serialSessions.current.get(deviceId);
@@ -2981,13 +4918,21 @@ function recordFromStoredTarget(target: DeviceTarget): DeviceRecord {
   };
 }
 
+function newDeviceRuntimeId(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function")
+    return globalThis.crypto.randomUUID();
+  return `runtime-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 function recordFromProbe(
   target: DeviceTarget,
   result: ProbeResult,
   connectionState: DeviceRecord["connectionState"],
   streamState: DeviceRecord["streamState"],
+  runtimeId?: string,
 ): DeviceRecord {
   return {
+    runtimeId: runtimeId ?? newDeviceRuntimeId(),
     target,
     identity: result.identity,
     network: result.network,
@@ -3031,6 +4976,7 @@ function recordFromSerialProbe(
   trace: SerialTraceEntry[] = [],
 ): DeviceRecord {
   return {
+    runtimeId: newDeviceRuntimeId(),
     target,
     identity: result.identity,
     network: result.network,
@@ -3075,8 +5021,10 @@ function recordFromDevdDeviceSnapshot(
   status: UpsStatus | null,
   settings: DeviceSettings,
   session: Pick<DevdSerialSession, "connected" | "protocol" | "logs" | "trace">,
+  runtimeId?: string,
 ): DeviceRecord {
   return {
+    runtimeId: runtimeId ?? newDeviceRuntimeId(),
     target,
     identity,
     network: identity.network,
@@ -3104,6 +5052,13 @@ function mergeDevdSerial(
   session: DevdSerialSession,
   lease?: DevdLeaseSnapshot,
 ): DeviceRecord {
+  const liveError = session.connected
+    ? liveStatusErrorState(record)
+    : {
+        error: record.error,
+        errorSource: record.errorSource,
+        commandError: record.commandError,
+      };
   return {
     ...record,
     target: {
@@ -3124,7 +5079,7 @@ function mergeDevdSerial(
       serialProtocol: session.protocol,
     },
     connectionState: session.connected ? "online" : record.connectionState,
-    error: session.connected ? null : record.error,
+    ...liveError,
     lastUpdated: new Date().toISOString(),
     status: session.status ?? record.status,
     settings: session.settings,
@@ -3232,7 +5187,11 @@ function mergeDeviceRecord(
           serialProtocol:
             incoming.target.serialProtocol ?? existing.target.serialProtocol,
         },
-    serial: incoming.serial ?? existing.serial,
+    serial:
+      incoming.target.transport === "http" &&
+      existing.target.transport !== "http"
+        ? incoming.serial
+        : incoming.serial ?? existing.serial,
     settings: incoming.settings ?? existing.settings,
     status: incoming.status ?? existing.status,
     chargeControlDetail:
@@ -3244,14 +5203,106 @@ function mergeDeviceRecord(
       existing.connectionState === "online"
         ? "online"
         : incoming.connectionState,
-    streamState:
-      incoming.streamState === "streaming" ||
-      existing.streamState === "streaming"
-        ? "streaming"
-        : incoming.streamState,
-    error: incoming.error ?? existing.error,
+    streamState: incoming.streamState,
+    error: mergedRecordError(existing, incoming),
+    errorSource: mergedRecordErrorSource(existing, incoming),
+    commandError:
+      incoming.commandError !== undefined
+        ? incoming.commandError
+        : existing.commandError,
     lastUpdated: incoming.lastUpdated ?? existing.lastUpdated,
   };
+}
+
+function mergedRecordError(
+  existing: DeviceRecord,
+  incoming: DeviceRecord,
+): DeviceRecord["error"] {
+  if (incoming.error !== null) return incoming.error;
+  if (existing.errorSource === "command")
+    return existing.error ?? existing.commandError ?? null;
+  return incoming.commandError ?? null;
+}
+
+function mergedRecordErrorSource(
+  existing: DeviceRecord,
+  incoming: DeviceRecord,
+): DeviceRecord["errorSource"] {
+  if (incoming.error !== null) return incoming.errorSource;
+  if (
+    existing.errorSource === "command" &&
+    (existing.error || existing.commandError)
+  )
+    return "command";
+  return incoming.commandError ? "command" : undefined;
+}
+
+function liveStatusErrorState(
+  record: DeviceRecord,
+): Pick<DeviceRecord, "error" | "errorSource" | "commandError"> {
+  if (record.errorSource === "command") {
+    return {
+      error: record.error,
+      errorSource: record.errorSource,
+      commandError: record.commandError,
+    };
+  }
+  if (record.errorSource === "read") {
+    return {
+      error: record.error,
+      errorSource: record.errorSource,
+      commandError: record.commandError,
+    };
+  }
+  if (record.error && record.errorSource !== "transport") {
+    return {
+      error: record.error,
+      errorSource: record.errorSource,
+      commandError: record.commandError,
+    };
+  }
+  return {
+    error: record.commandError ?? null,
+    errorSource: record.commandError ? "command" : undefined,
+    commandError: record.commandError,
+  };
+}
+
+function staleDeviceOperationResult(): CommandResult {
+  return {
+    ok: false,
+    error: {
+      code: "device_operation_superseded",
+      message: "The device connection changed before the operation completed",
+      retryable: true,
+      details: null,
+    },
+  };
+}
+
+function staleAddDeviceResult(): AddDeviceResult {
+  return {
+    ok: false,
+    error: staleAddDeviceError(),
+  };
+}
+
+function staleAddDeviceError(): NonNullable<DeviceRecord["error"]> {
+  return {
+    code: "device_operation_superseded",
+    message: "The device connection changed before the operation completed",
+    retryable: true,
+    details: null,
+  };
+}
+
+export function isDevdLeaseInvalidError(
+  error: DeviceRecord["error"],
+): boolean {
+  return (
+    error?.code === "web_session_expired" ||
+    error?.code === "web_session_required"
+  );
 }
 
 function isDevdSerial(
@@ -3322,6 +5373,17 @@ function devdLeaseIdForRecord(record: DeviceRecord): string | null {
     : null;
 }
 
+export function isDevdWriteAvailable(record: DeviceRecord): boolean {
+  const devdChannel = record.target.rememberedChannels?.devd;
+  if (devdChannel?.transport === "lan")
+    return devdBaseUrlForRecord(record) !== null;
+  return Boolean(
+    record.serial?.source === "devd" &&
+      record.serial.connected &&
+      record.serial.leaseId,
+  );
+}
+
 function isDirectLanRecord(record: DeviceRecord): boolean {
   return (record.target.transport ?? "http") === "http";
 }
@@ -3330,7 +5392,7 @@ function rememberedHttpBaseUrl(record: DeviceRecord): string | null {
   return rememberedHttpBaseUrls(record)[0] ?? null;
 }
 
-function rememberedHttpBaseUrls(record: DeviceRecord): string[] {
+export function rememberedHttpBaseUrls(record: DeviceRecord): string[] {
   const candidates = [
     record.target.rememberedChannels?.http?.baseUrl,
     record.target.rememberedChannels?.http?.fallbackBaseUrl,
@@ -3348,15 +5410,57 @@ function rememberedHttpBaseUrls(record: DeviceRecord): string[] {
   return normalized;
 }
 
+function promoteRememberedHttpEndpoint(
+  target: DeviceTarget,
+  baseUrl: string,
+): DeviceTarget {
+  const http = target.rememberedChannels?.http;
+  if (!http || http.baseUrl === baseUrl) return target;
+  return {
+    ...target,
+    baseUrl,
+    rememberedChannels: {
+      ...target.rememberedChannels,
+      http: {
+        ...http,
+        baseUrl,
+        fallbackBaseUrl: http.baseUrl,
+      },
+    },
+  };
+}
+
 async function withRememberedHttpFallback<T>(
   record: DeviceRecord,
   operation: (baseUrl: string) => Promise<T>,
-): Promise<T> {
-  const baseUrls = rememberedHttpBaseUrls(record);
+  options: {
+    allowFallback?: boolean;
+    beforeOperation?: () => boolean;
+  } = {},
+): Promise<{ value: T; baseUrl: string }> {
+  const rememberedBaseUrls = rememberedHttpBaseUrls(record);
+  const baseUrls =
+    options.allowFallback === false
+      ? rememberedBaseUrls.slice(0, 1)
+      : rememberedBaseUrls;
   let lastError: unknown = null;
+  const expectedDeviceId = record.identity?.device_id ?? record.target.deviceId;
   for (const baseUrl of baseUrls) {
     try {
-      return await operation(baseUrl);
+      if (options.beforeOperation && !options.beforeOperation())
+        throw new Error("HTTP operation was superseded before identity validation");
+      const identity = await getIdentity(
+        baseUrl,
+        undefined,
+        record.target.bridgeAuth ? { bridgeAuth: true } : undefined,
+      );
+      if (identity.device_id !== expectedDeviceId)
+        throw new Error(
+          `HTTP endpoint resolved to unexpected device ${identity.device_id}`,
+        );
+      if (options.beforeOperation && !options.beforeOperation())
+        throw new Error("HTTP operation was superseded after identity validation");
+      return { value: await operation(baseUrl), baseUrl };
     } catch (error) {
       lastError = error;
     }
@@ -3636,6 +5740,43 @@ function firmwareMismatchError(identity: Identity): DeviceRecord["error"] {
   };
 }
 
+function assertProbeResultIdentity(result: ProbeResult, expectedDeviceId: string): void {
+  if (
+    result.identity.device_id !== expectedDeviceId ||
+    (result.status.device_id && result.status.device_id !== expectedDeviceId)
+  ) {
+    const actual =
+      result.status.device_id && result.status.device_id !== expectedDeviceId
+        ? result.status.device_id
+        : result.identity.device_id;
+    const error = new Error(
+      `HTTP endpoint resolved to unexpected device ${actual}; expected ${expectedDeviceId}`,
+    ) as Error & { envelope: ReturnType<typeof toErrorEnvelope> };
+    error.envelope = {
+      code: "device_identity_mismatch",
+      message: error.message,
+      retryable: false,
+      details: { actual, expected: expectedDeviceId },
+    };
+    throw error;
+  }
+}
+
+function assertStatusIdentity(status: UpsStatus, expectedDeviceId: string): void {
+  if (status.device_id && status.device_id !== expectedDeviceId) {
+    const error = new Error(
+      `HTTP status resolved to unexpected device ${status.device_id}; expected ${expectedDeviceId}`,
+    ) as Error & { envelope: ReturnType<typeof toErrorEnvelope> };
+    error.envelope = {
+      code: "device_identity_mismatch",
+      message: error.message,
+      retryable: false,
+      details: { actual: status.device_id, expected: expectedDeviceId },
+    };
+    throw error;
+  }
+}
+
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes)
     .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -3699,6 +5840,7 @@ function patchSerialStatusRecord(
   patch: DeviceStatusPatch,
   target: string,
   message: string,
+  clearError = true,
 ): DeviceRecord {
   const nextStatus = mergeDeviceStatus(record.status, patch);
   const nextRecord: DeviceRecord = {
@@ -3706,7 +5848,21 @@ function patchSerialStatusRecord(
     status: nextStatus,
     chargeControlDetail:
       patch.chargeControlDetail ?? record.chargeControlDetail ?? null,
-    error: null,
+    connectionState: clearError ? "online" : record.connectionState,
+    streamState: clearError
+      ? record.serial?.source === "web_serial"
+        ? "streaming"
+        : record.serial?.source === "devd"
+          ? "polling"
+          : record.streamState === "streaming"
+            ? "streaming"
+            : record.identity?.capabilities.sse
+              ? "idle"
+              : "polling"
+      : record.streamState,
+    error: clearError ? null : record.error,
+    errorSource: clearError ? undefined : record.errorSource,
+    commandError: clearError ? undefined : record.commandError,
     lastUpdated: new Date().toISOString(),
   };
   if (!record.serial) return nextRecord;
@@ -3714,6 +5870,62 @@ function patchSerialStatusRecord(
     nextRecord,
     serialLogFromFrame({ type: "log", level: "info", target, message }),
   );
+}
+
+export function recoverReadRecord(
+  record: DeviceRecord,
+  transport: DeviceChannelTransport,
+  streamActive = false,
+): DeviceRecord {
+  if (
+    transport === "devd" &&
+    record.target.rememberedChannels?.devd &&
+    !record.serial?.leaseId
+  )
+    return record;
+  if (
+    transport === "devd" &&
+    record.errorSource === "transport" &&
+    isDevdLeaseInvalidError(record.error)
+  )
+    return record;
+  const streamState =
+    transport === "serial"
+      ? "streaming"
+      : streamActive
+        ? "streaming"
+        : transport === "devd"
+          ? "polling"
+          : record.identity?.capabilities.sse
+            ? "idle"
+            : "polling";
+  return {
+    ...record,
+    connectionState: "online",
+    streamState,
+    error:
+      record.errorSource === "read" || record.errorSource === "transport"
+        ? record.commandError ?? null
+        : record.error,
+    errorSource:
+      record.errorSource === "read" || record.errorSource === "transport"
+        ? record.commandError
+          ? "command"
+          : undefined
+        : record.errorSource,
+    commandError: record.commandError,
+    lastUpdated: new Date().toISOString(),
+    serial:
+      record.serial && (transport === "serial" || transport === "devd")
+        ? {
+            ...record.serial,
+            connected:
+              transport === "serial" || Boolean(record.serial.leaseId)
+                ? true
+                : record.serial.connected,
+          }
+        : record.serial,
+  };
 }
 
 function mergeLanDeviceSnapshot(
@@ -3737,6 +5949,8 @@ function mergeLanDeviceSnapshot(
         : record.network,
     connectionState: "online",
     error: null,
+    errorSource: undefined,
+    commandError: undefined,
     lastUpdated: new Date().toISOString(),
   };
   if (!record.serial) return nextRecord;
@@ -3852,10 +6066,17 @@ async function waitForSerialWifiDisabled(
 async function waitForHttpWifiConnected(
   baseUrl: string,
   ssid: string,
+  expectedDeviceId: string,
   onProgress?: (progress: WifiProvisioningProgress) => void,
 ): Promise<UpsStatus> {
   return waitForSerialWifiState(
-    { requestStatus: () => getStatus(baseUrl) },
+    {
+      requestStatus: async () => {
+        const status = await getStatus(baseUrl);
+        assertStatusDeviceIdentity(status, expectedDeviceId);
+        return status;
+      },
+    },
     "connected",
     ssid,
     onProgress,
@@ -3864,10 +6085,17 @@ async function waitForHttpWifiConnected(
 
 async function waitForHttpWifiDisabled(
   baseUrl: string,
+  expectedDeviceId: string,
   onProgress?: (progress: WifiProvisioningProgress) => void,
 ): Promise<UpsStatus> {
   return waitForSerialWifiState(
-    { requestStatus: () => getStatus(baseUrl) },
+    {
+      requestStatus: async () => {
+        const status = await getStatus(baseUrl);
+        assertStatusDeviceIdentity(status, expectedDeviceId);
+        return status;
+      },
+    },
     "disabled",
     undefined,
     onProgress,
