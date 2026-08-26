@@ -1659,6 +1659,22 @@ export function toErrorEnvelope(error: unknown): ApiErrorEnvelope["error"] {
   };
 }
 
+export function isTransportErrorEnvelope(
+  error: ApiErrorEnvelope["error"] | null | undefined,
+): boolean {
+  const code = error?.code ?? "";
+  return (
+    code === "transport_error" ||
+    code === "unknown_error" ||
+    code === "not_found" ||
+    code === "device_not_found" ||
+    code.startsWith("http_") ||
+    code.startsWith("serial_") ||
+    code.startsWith("devd_") ||
+    code.endsWith("_channel_unavailable")
+  );
+}
+
 function isApiError(value: unknown): value is ApiErrorEnvelope["error"] {
   return Boolean(
     value &&

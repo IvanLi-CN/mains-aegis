@@ -90,7 +90,7 @@
 - stale 或 inactive 消音请求不影响新实例；一个实例消音不移除或停止任何其它活动告警。
 - CDC、LAN、devd、CLI 和 Web 对同一设备返回一致的告警状态；旧固件、offline 和 transport error 有显式结果。
 - Web 自动回读所有在线设备的权威告警；Fleet Summary 仅在 Fleet 页面显示 fleet `Critical` / `Warning` 指标，当前设备的活动告警只在该设备的 Alerts 页呈现。当前 Web App 不提供跨设备通知、全局告警图标或徽标；不得插入大型 Alert 或以 fleet 指标卡组占用设备页面首屏。瞬时刷新失败不得隐藏最后确认的活动告警，也不得允许基于过期实例执行消音。
-- 设备页面的离线、连接中和传输错误上下文必须优先于保留的旧 telemetry；记录级 transport error 同样必须显示该上下文。次级页面可显示紧凑状态提示，但不得把非在线数据标为 Live；临时设备路由在当前 discovery 快照中仍以该快照为对象权威，但临时 registry 已记录明确 connection/stream failure 时只能覆盖其失败状态；已保存记录仍随当前 discovery 恢复；在线 transport 的命令失败应保留在当前 discovery entry 上作为动作错误反馈，不得误报为连接中断。
+- 设备页面的离线、连接中和传输错误上下文必须优先于保留的旧 telemetry；记录级 transport error 同样必须显示该上下文。次级页面可显示紧凑状态提示，但不得把非在线数据标为 Live；临时设备路由在当前 discovery 快照中仍以该快照为对象权威，但临时 registry 已记录明确 connection/stream failure 时只能覆盖其失败状态；已保存记录仍随当前 discovery 恢复，恢复到 connected 时清除过期的 transport failure、stream error 与旧 telemetry；在线 transport 的命令失败应保留在当前 discovery entry 上作为动作错误反馈，不得误报为连接中断。
 - 前面板按本 spec 的矩阵导出真实 framebuffer/PNG，获批准后才连接运行时输入、触摸与按键路由。
 
 ## Visual Evidence

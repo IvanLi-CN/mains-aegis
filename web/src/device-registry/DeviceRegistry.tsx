@@ -16,6 +16,7 @@ import {
   getDevdDeviceTrace,
   getDevdSerialSession,
   getBridgeBootstrap,
+  isTransportErrorEnvelope,
   getSettings,
   heartbeatDevdWebLease,
   getStatus,
@@ -251,7 +252,30 @@ export function DeviceRegistryProvider({
             );
           }),
         );
-        if (!handledByDevd) setRecordError(deviceId, error);
+        if (!handledByDevd) {
+          const httpCommandFailure = !isTransportErrorEnvelope(error);
+          if (httpCommandFailure) {
+            setRecords((current) =>
+              current.map((record) =>
+                record.target.deviceId === deviceId &&
+                record.target.transport === "http"
+                  ? {
+                      ...record,
+                      connectionState: "online",
+                      streamState:
+                        record.streamState === "streaming"
+                          ? "streaming"
+                          : "polling",
+                      error,
+                      lastUpdated: new Date().toISOString(),
+                    }
+                  : record,
+              ),
+            );
+          } else {
+            setRecordError(deviceId, error);
+          }
+        }
         return;
       }
       const log = serialLogFromFrame({

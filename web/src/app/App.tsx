@@ -59,6 +59,7 @@ import {
   getDevdDeviceDiagSnapshot,
   getDevdDeviceAlerts,
   getDeviceAlerts,
+  isTransportErrorEnvelope,
   getIdentity,
   isHostedHttpServiceApp,
   isPublicStaticApp,
@@ -1098,6 +1099,9 @@ function deviceDefaultHref(record: DeviceRecord) {
 function hasTransportFailure(record: DeviceRecord | null | undefined): boolean {
   return Boolean(
     record &&
+      !(record.target.transport === "http" &&
+        record.error &&
+        !isTransportErrorEnvelope(record.error)) &&
       (record.connectionState === "error" ||
         record.streamState === "error" ||
         (record.connectionState === "offline" && record.error !== null)),
@@ -1121,6 +1125,16 @@ export function resolveSelectedRecord(
     return registryRecord.target.temporary && !allowTemporaryRegistry
       ? null
       : registryRecord;
+  }
+  const registryActionFailure =
+    registryRecord.target.transport === "http" &&
+    registryRecord.error &&
+    !isTransportErrorEnvelope(registryRecord.error);
+  if (
+    (hasTransportFailure(registryRecord) || registryActionFailure) &&
+    !hasTransportFailure(fleetRecord)
+  ) {
+    return fleetRecord;
   }
   if (registryRecord.target.temporary) return fleetRecord;
   if (
@@ -1951,6 +1965,12 @@ function buildFleetEntryRecord(
     !preserveTransportFailure &&
     connected &&
     hasTransportFailure(existingRecord);
+  const recoveredActionError =
+    !preserveTransportFailure &&
+    connected &&
+    existingRecord?.target.transport === "http" &&
+    Boolean(existingRecord.error) &&
+    !isTransportErrorEnvelope(existingRecord.error);
   const currentStatus = httpDevice?.status ?? devdDevice?.status ?? null;
   return {
     target,
@@ -1975,6 +1995,10 @@ function buildFleetEntryRecord(
         ? currentStatus
           ? "polling"
           : "idle"
+        : recoveredActionError
+          ? currentStatus
+            ? "polling"
+            : "idle"
         : (existingRecord?.streamState ?? "idle"),
     error: recoveredTransportFailure ? null : existingRecord?.error ?? null,
     lastUpdated: new Date().toISOString(),

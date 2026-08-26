@@ -537,6 +537,43 @@ describe("resolveSelectedRecord", () => {
     expect(fleetRecord?.streamState).toBe("idle");
     expect(fleetRecord?.status).toBeNull();
     expect(fleetRecord?.error).toBeNull();
+    expect(
+      resolveSelectedRecord(
+        "mains-aegis-a1b2c3",
+        [registryFailure],
+        [{ key: "mains-aegis-a1b2c3", record: fleetRecord!, saved: true }],
+      ),
+    ).toBe(fleetRecord);
+  });
+
+  test("keeps saved HTTP action failures on the recovered discovery entry", () => {
+    const registryActionFailure: DeviceRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      connectionState: "error",
+      streamState: "error",
+      error: {
+        code: "unsupported_operation",
+        message: "Command is not supported",
+        retryable: false,
+        details: null,
+      },
+    };
+    const fleetRecord = buildFleetEntries(
+      [registryActionFailure],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    )[0]?.record;
+
+    expect(fleetRecord?.connectionState).toBe("online");
+    expect(fleetRecord?.streamState).toBe("idle");
+    expect(fleetRecord?.error).toBe(registryActionFailure.error);
+    expect(
+      resolveSelectedRecord(
+        "mains-aegis-a1b2c3",
+        [registryActionFailure],
+        [{ key: "mains-aegis-a1b2c3", record: fleetRecord!, saved: true }],
+      ),
+    ).toBe(fleetRecord);
   });
 });
 
