@@ -59,7 +59,6 @@ import {
   getDevdDeviceDiagSnapshot,
   getDevdDeviceAlerts,
   getDeviceAlerts,
-  isTransportErrorEnvelope,
   getIdentity,
   isHostedHttpServiceApp,
   isPublicStaticApp,
@@ -1099,9 +1098,6 @@ function deviceDefaultHref(record: DeviceRecord) {
 function hasTransportFailure(record: DeviceRecord | null | undefined): boolean {
   return Boolean(
     record &&
-      !(record.target.transport === "http" &&
-        record.error &&
-        !isTransportErrorEnvelope(record.error)) &&
       (record.connectionState === "error" ||
         record.streamState === "error" ||
         (record.connectionState === "offline" && record.error !== null)),
@@ -1129,7 +1125,7 @@ export function resolveSelectedRecord(
   const registryActionFailure =
     registryRecord.target.transport === "http" &&
     registryRecord.error &&
-    !isTransportErrorEnvelope(registryRecord.error);
+    !hasTransportFailure(registryRecord);
   if (
     (hasTransportFailure(registryRecord) || registryActionFailure) &&
     !hasTransportFailure(fleetRecord)
@@ -1970,7 +1966,7 @@ function buildFleetEntryRecord(
     connected &&
     existingRecord?.target.transport === "http" &&
     Boolean(existingRecord.error) &&
-    !isTransportErrorEnvelope(existingRecord.error);
+    !hasTransportFailure(existingRecord);
   const currentStatus = httpDevice?.status ?? devdDevice?.status ?? null;
   return {
     target,

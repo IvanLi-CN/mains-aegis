@@ -245,7 +245,7 @@ async function withFetchMock<T>(
 }
 
 describe("alert mute errors", () => {
-  test("keeps retryable HTTP failures transport errors but treats HTTP 4xx as action errors", () => {
+  test("classifies retryable HTTP failures separately from non-retryable command errors", () => {
     expect(
       isTransportErrorEnvelope({
         code: "http_503",

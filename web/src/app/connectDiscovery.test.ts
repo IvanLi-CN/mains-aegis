@@ -549,8 +549,8 @@ describe("resolveSelectedRecord", () => {
   test("keeps saved HTTP action failures on the recovered discovery entry", () => {
     const registryActionFailure: DeviceRecord = {
       ...savedRecord("mains-aegis-a1b2c3"),
-      connectionState: "error",
-      streamState: "error",
+      connectionState: "online",
+      streamState: "polling",
       error: {
         code: "unsupported_operation",
         message: "Command is not supported",
