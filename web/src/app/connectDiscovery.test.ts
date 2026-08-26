@@ -448,6 +448,38 @@ describe("resolveSelectedRecord", () => {
       ),
     ).toBe(fleetRecord);
   });
+
+  test("preserves a temporary registry transport failure over an online discovery snapshot", () => {
+    const registryFailure: DeviceRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      target: {
+        ...savedRecord("mains-aegis-a1b2c3").target,
+        temporary: true,
+      },
+      connectionState: "offline",
+      streamState: "polling",
+      error: {
+        code: "transport_error",
+        message: "Failed to fetch",
+        retryable: true,
+        details: null,
+      },
+    };
+    const fleetRecord = buildFleetEntries(
+      [],
+      [lanDevice("mains-aegis-a1b2c3")],
+      "same-origin",
+    )[0]?.record;
+
+    expect(fleetRecord?.connectionState).toBe("online");
+    expect(
+      resolveSelectedRecord(
+        "mains-aegis-a1b2c3",
+        [registryFailure],
+        [{ key: "mains-aegis-a1b2c3", record: fleetRecord!, saved: false }],
+      ),
+    ).toBe(registryFailure);
+  });
 });
 
 describe("resolveOwnerFacingDevdTarget", () => {

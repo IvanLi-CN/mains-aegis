@@ -1113,7 +1113,13 @@ export function resolveSelectedRecord(
       ? null
       : registryRecord;
   }
-  if (registryRecord.target.temporary) return fleetRecord;
+  const registryHasTransportFailure =
+    registryRecord.connectionState === "error" ||
+    registryRecord.streamState === "error" ||
+    registryRecord.error !== null ||
+    registryRecord.serial?.connected === false;
+  if (registryRecord.target.temporary && !registryHasTransportFailure)
+    return fleetRecord;
   if (
     registryRecord.target.temporary &&
     !registryRecord.status &&
