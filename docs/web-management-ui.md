@@ -199,7 +199,7 @@ web/
 - Fleet 页面：Fleet Summary 显示设备数量、在线状态和跨设备告警摘要。
 - 单设备页面：内容区先显示当前能力页面标题；完整 Device Overview 只显示在 Overview。手机顶部设备条只承载 Device Context、菜单和当前路由上下文。
 - 群总览左侧导航：Fleet、Connect。
-- 单设备左侧导航：Overview、Power、Battery、Thermal、Device、Settings、API。
+- 单设备左侧导航：Overview、Alerts、Power、Battery、Thermal、Device、Firmware、Settings、API。
 - 内容区：宽屏使用 12 栅格；平板降为 2 列；手机保留顶部设备条并把侧边导航折叠为菜单。
 - 状态层级：`critical` 优先于 `warning`，`warning` 优先于 `info`，正常态只在必要位置显示。
 
