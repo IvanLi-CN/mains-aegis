@@ -1520,16 +1520,21 @@ export function DeviceRegistryProvider({
               operationContext.deviceId,
               operationContext.token,
             );
-          if (
-            !restored &&
-            operationStillCurrentAfterRestore
-          )
+          if (!restored && operationStillCurrentAfterRestore)
             markDeviceRuntimeUnavailable(
               existingOperationRecord,
               toErrorEnvelope(error),
+              operationContext,
             );
         }
-        if (!operationStillCurrent)
+        if (
+          !operationStillCurrent ||
+          (operationContext &&
+            !currentDeviceOperation(
+              operationContext.deviceId,
+              operationContext.token,
+            ))
+        )
           return staleAddDeviceResult();
         return { ok: false, error: toErrorEnvelope(error) };
       }
@@ -2003,8 +2008,17 @@ export function DeviceRegistryProvider({
             markDeviceRuntimeUnavailable(
               operationPreviousRecord,
               errorFromSerialFailure(error),
+              operationContext,
             );
         }
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        )
+          return staleAddDeviceResult();
         return { ok: false, error: errorFromSerialFailure(error) };
       }
     },
@@ -3763,12 +3777,20 @@ export function DeviceRegistryProvider({
         ? "idle"
         : "polling";
       invalidateDeviceReads(record.target.deviceId);
-      setRecords((current) =>
-        upsertRecord(
+      setRecords((current) => {
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        )
+          return current;
+        return upsertRecord(
           current,
           recordFromProbe(nextTarget, result, "online", streamState),
-        ),
-      );
+        );
+      });
       return true;
     } catch {
       return false;
@@ -3778,10 +3800,27 @@ export function DeviceRegistryProvider({
   function markDeviceRuntimeUnavailable(
     record: DeviceRecord,
     error: NonNullable<DeviceRecord["error"]>,
+    operationContext?: DeviceOperationContext,
   ) {
+    if (
+      operationContext &&
+      !currentDeviceOperation(
+        operationContext.deviceId,
+        operationContext.token,
+      )
+    )
+      return;
     invalidateDeviceReads(record.target.deviceId);
-    setRecords((current) =>
-      current.map((candidate) =>
+    setRecords((current) => {
+      if (
+        operationContext &&
+        !currentDeviceOperation(
+          operationContext.deviceId,
+          operationContext.token,
+        )
+      )
+        return current;
+      return current.map((candidate) =>
         candidate.target.deviceId === record.target.deviceId
           ? {
               ...candidate,
@@ -3803,8 +3842,8 @@ export function DeviceRegistryProvider({
               lastUpdated: new Date().toISOString(),
             }
           : candidate,
-      ),
-    );
+      );
+    });
   }
 
   async function restoreDevdRuntime(
@@ -3874,7 +3913,17 @@ export function DeviceRegistryProvider({
       const restored = recordFromDevdProbe(target, result, session, lease);
       startDevdLeaseHeartbeat(restored);
       invalidateDeviceReads(record.target.deviceId);
-      setRecords((current) => upsertRecord(current, restored));
+      setRecords((current) => {
+        if (
+          operationContext &&
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
+        )
+          return current;
+        return upsertRecord(current, restored);
+      });
       return true;
     } catch {
       if (lease)
