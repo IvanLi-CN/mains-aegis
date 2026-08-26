@@ -417,6 +417,7 @@ export function App({
     route.deviceId,
     registry.records,
     fleetEntries,
+    devdDiscovery.devdTarget === null,
   );
   const activeAlerts = useActiveAlertsSnapshot(selected);
   const [navOpen, setNavOpen] = useState(false);
@@ -1098,6 +1099,7 @@ export function resolveSelectedRecord(
   deviceId: string | null,
   records: DeviceRecord[],
   fleetEntries: FleetDeviceEntry[],
+  allowTemporaryRegistry = true,
 ) {
   if (!deviceId) return null;
   const registryRecord =
@@ -1106,7 +1108,11 @@ export function resolveSelectedRecord(
     fleetEntries.find((entry) => entry.record.target.deviceId === deviceId)
       ?.record ?? null;
   if (!registryRecord) return fleetRecord;
-  if (!fleetRecord) return registryRecord;
+  if (!fleetRecord) {
+    return registryRecord.target.temporary && !allowTemporaryRegistry
+      ? null
+      : registryRecord;
+  }
   if (
     registryRecord.target.temporary &&
     !registryRecord.status &&
@@ -1820,6 +1826,7 @@ export function buildFleetEntries(
 ): FleetDeviceEntry[] {
   const entries = new Map<string, FleetDeviceEntry>();
   for (const record of records) {
+    if (devdTarget && record.target.temporary) continue;
     entries.set(record.target.deviceId, {
       key: record.target.deviceId,
       record,
@@ -1836,7 +1843,9 @@ export function buildFleetEntries(
     entries.set(discovered.deviceId, {
       key: discovered.deviceId,
       record: mergedRecord,
-      saved: current?.saved ?? Boolean(discovered.existingRecord),
+      saved:
+        current?.saved ??
+        Boolean(discovered.existingRecord && !discovered.existingRecord.target.temporary),
     });
   }
   return Array.from(entries.values());
@@ -6491,7 +6500,7 @@ function streamPresentation(record: DeviceRecord): StreamPresentation {
     };
   }
 
-  if (record.connectionState === "error" || record.error) {
+  if (record.connectionState === "error") {
     return {
       label: "Connection error",
       detail: record.error?.message ?? `Device data unavailable${freshness}`,
@@ -6509,6 +6518,14 @@ function streamPresentation(record: DeviceRecord): StreamPresentation {
     };
   }
 
+  if (record.error) {
+    return {
+      label: "Action failed",
+      detail: record.error.message,
+      tone: "warning",
+    };
+  }
+
   if (record.streamState === "polling") {
     return {
       label: record.status ? "Live data" : "Waiting",
@@ -6521,9 +6538,11 @@ function streamPresentation(record: DeviceRecord): StreamPresentation {
 
   if (record.streamState === "streaming" || record.streamState === "idle") {
     return {
-      label: "Live",
-      detail: `${record.streamState}${freshness}`,
-      tone: "ok",
+      label: record.status ? "Live" : "Waiting",
+      detail: record.status
+        ? `${record.streamState}${freshness}`
+        : `Waiting for the first device response${freshness}`,
+      tone: record.status ? "ok" : "warning",
     };
   }
 

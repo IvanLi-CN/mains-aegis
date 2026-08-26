@@ -298,6 +298,26 @@ describe("buildFleetEntries", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.saved).toBe(false);
   });
+
+  test("does not keep a staged-only record after a current discovery snapshot loses it", () => {
+    const temporaryRecord = {
+      ...savedRecord("mains-aegis-a1b2c3"),
+      target: {
+        ...savedRecord("mains-aegis-a1b2c3").target,
+        temporary: true,
+      },
+    } satisfies DeviceRecord;
+
+    expect(buildFleetEntries([temporaryRecord], [], "same-origin")).toEqual([]);
+    expect(
+      resolveSelectedRecord(
+        "mains-aegis-a1b2c3",
+        [temporaryRecord],
+        [],
+        false,
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("resolveSelectedRecord", () => {

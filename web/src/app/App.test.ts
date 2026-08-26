@@ -301,6 +301,23 @@ describe("page presentation ownership", () => {
     expect(errorMarkup).toContain("Device refresh failed");
     expect(errorMarkup).not.toContain("Live data");
 
+    const commandErrorMarkup = renderToStaticMarkup(
+      createElement(DeviceDataContext, {
+        record: makeRecord({
+          connectionState: "online",
+          streamState: "streaming",
+          error: {
+            code: "command_failed",
+            message: "Command failed",
+            retryable: true,
+            details: null,
+          },
+        }),
+      }),
+    );
+    expect(commandErrorMarkup).toContain("Action failed");
+    expect(commandErrorMarkup).not.toContain("Connection error");
+
     expect(
       shouldShowDeviceDataContext(
         makeRecord({
@@ -315,6 +332,19 @@ describe("page presentation ownership", () => {
         }),
       ),
     ).toBe(true);
+
+    const waitingMarkup = renderToStaticMarkup(
+      createElement(DeviceDataContext, {
+        record: makeRecord({
+          connectionState: "online",
+          streamState: "streaming",
+          status: null,
+        }),
+      }),
+    );
+    expect(waitingMarkup).toContain("Waiting");
+    expect(waitingMarkup).toContain("Waiting for the first device response");
+    expect(waitingMarkup).not.toContain("Live");
   });
 
   test("keeps global notification UI out of the shared shell", () => {
