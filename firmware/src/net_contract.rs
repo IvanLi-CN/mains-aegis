@@ -1792,7 +1792,42 @@ fn render_diag_front_panel_payload<const N: usize>(buf: &mut String<N>, status: 
         status.front_panel.attention_hold,
         false,
     );
+    let _ = buf.push_str(",\"input\":");
+    if let Some(input) = status.front_panel.input {
+        render_diag_front_panel_input_payload(buf, input);
+    } else {
+        let _ = buf.push_str("null");
+    }
     let _ = buf.push('}');
+}
+
+fn render_diag_front_panel_input_payload<const N: usize>(
+    buf: &mut String<N>,
+    input: crate::net_types::FrontPanelInputDiagnosticSnapshot,
+) {
+    let _ = buf.push('{');
+    json_field_u32(buf, "tca_input_raw", input.tca_input_raw as u32, true);
+    let _ = buf.push_str("\"buttons\":{");
+    json_field_bool(buf, "up", input.up, true);
+    json_field_bool(buf, "down", input.down, true);
+    json_field_bool(buf, "left", input.left, true);
+    json_field_bool(buf, "right", input.right, true);
+    json_field_bool(buf, "center", input.center, false);
+    let _ = buf.push_str("},");
+    json_field_bool(buf, "touch", input.touch, true);
+    json_field_bool(buf, "touch_contact", input.touch_contact, true);
+    json_field_bool(buf, "ctp_irq_low", input.ctp_irq_low, true);
+    let _ = buf.push_str("\"cst816d\":{");
+    json_field_u32(buf, "gesture_raw", input.cst816d_gesture_raw as u32, true);
+    json_field_u32(buf, "finger_count", input.cst816d_finger_count as u32, true);
+    json_field_u32(buf, "raw_x", input.cst816d_raw_x as u32, true);
+    json_field_u32(buf, "raw_y", input.cst816d_raw_y as u32, true);
+    let (mapped_x, mapped_y) = input
+        .mapped_point
+        .map_or((None, None), |(x, y)| (Some(x), Some(y)));
+    json_field_opt_u16(buf, "mapped_x", mapped_x, true);
+    json_field_opt_u16(buf, "mapped_y", mapped_y, false);
+    let _ = buf.push_str("}}");
 }
 
 pub fn write_sse_event<const N: usize>(
@@ -2373,9 +2408,9 @@ mod tests {
     use crate::{
         mdns_wire::derive_device_identity,
         net_types::{
-            DerivedPowerSnapshot, DeviceSettingsSnapshot, ManualChargeSettingsSnapshot,
-            NetworkUiSummary, TpsEnableInterlockSnapshot, UpsStatusSnapshot, WifiConnectionState,
-            WifiSettingsSnapshot, WifiSnapshot,
+            DerivedPowerSnapshot, DeviceSettingsSnapshot, FrontPanelInputDiagnosticSnapshot,
+            ManualChargeSettingsSnapshot, NetworkUiSummary, TpsEnableInterlockSnapshot,
+            UpsStatusSnapshot, WifiConnectionState, WifiSettingsSnapshot, WifiSnapshot,
         },
     };
     use heapless::String;
@@ -2619,6 +2654,50 @@ mod tests {
                 .contains_key("tps_en_level"),
             "TPS_EN is inferred from THERM_KILL_N, not read from a nonexistent GPIO"
         );
+    }
+
+    #[test]
+    fn front_panel_diag_payload_exposes_cached_input_without_status_leakage() {
+        let mut body = String::<8192>::new();
+        let mut package = String::<32>::new();
+        package.push_str("front_panel.io").unwrap();
+        let packages = [package];
+        let mut status = UpsStatusSnapshot::empty();
+        status.front_panel.input = Some(FrontPanelInputDiagnosticSnapshot {
+            tca_input_raw: 0xf0,
+            up: true,
+            down: false,
+            left: false,
+            right: false,
+            center: false,
+            touch: false,
+            touch_contact: false,
+            ctp_irq_low: false,
+            cst816d_gesture_raw: 0x01,
+            cst816d_finger_count: 0,
+            cst816d_raw_x: 123,
+            cst816d_raw_y: 456,
+            mapped_point: None,
+        });
+
+        render_diag_snapshot_json(&mut body, &packages, status, DerivedPowerSnapshot::empty());
+        let diag: Value = serde_json::from_str(body.as_str()).expect("valid diagnostic JSON");
+        let input = &diag["packages"]["front_panel.io"]["payload"]["input"];
+        assert_eq!(diag["packages"]["front_panel.io"]["source"], "status_cache");
+        assert_eq!(input["tca_input_raw"], 240);
+        assert_eq!(input["buttons"]["up"], true);
+        assert_eq!(input["cst816d"]["gesture_raw"], 1);
+        assert_eq!(input["cst816d"]["raw_x"], 123);
+        assert_eq!(input["cst816d"]["mapped_x"], Value::Null);
+
+        let mut status_body = String::<4096>::new();
+        render_status_json(&mut status_body, status);
+        let status_json: Value =
+            serde_json::from_str(status_body.as_str()).expect("valid status JSON");
+        assert!(!status_json["front_panel"]
+            .as_object()
+            .expect("front_panel object")
+            .contains_key("input"));
     }
 
     #[test]

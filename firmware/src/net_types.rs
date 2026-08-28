@@ -143,6 +143,24 @@ impl NetworkUiSummary {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrontPanelInputDiagnosticSnapshot {
+    pub tca_input_raw: u8,
+    pub up: bool,
+    pub down: bool,
+    pub left: bool,
+    pub right: bool,
+    pub center: bool,
+    pub touch: bool,
+    pub touch_contact: bool,
+    pub ctp_irq_low: bool,
+    pub cst816d_gesture_raw: u8,
+    pub cst816d_finger_count: u8,
+    pub cst816d_raw_x: u16,
+    pub cst816d_raw_y: u16,
+    pub mapped_point: Option<(u16, u16)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrontPanelRuntimeSnapshot {
     pub init_state: &'static str,
     pub display_power_mode: &'static str,
@@ -151,6 +169,7 @@ pub struct FrontPanelRuntimeSnapshot {
     pub ready: bool,
     pub needs_redraw: bool,
     pub attention_hold: bool,
+    pub input: Option<FrontPanelInputDiagnosticSnapshot>,
 }
 
 impl FrontPanelRuntimeSnapshot {
@@ -163,6 +182,7 @@ impl FrontPanelRuntimeSnapshot {
             ready: false,
             needs_redraw: false,
             attention_hold: false,
+            input: None,
         }
     }
 }

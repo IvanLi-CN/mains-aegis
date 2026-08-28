@@ -5,6 +5,49 @@ use crate::front_panel_scene::{
 pub const SELF_CHECK_VARIANT: UiVariant = UiVariant::RetroC;
 pub const DASHBOARD_VARIANT: UiVariant = UiVariant::InstrumentB;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FrontPanelInputSample {
+    pub up: bool,
+    pub down: bool,
+    pub left: bool,
+    pub right: bool,
+    pub center: bool,
+    pub touch: bool,
+    pub touch_contact: bool,
+    pub touch_point: Option<(u16, u16)>,
+    pub touch_gesture_raw: u8,
+}
+
+impl FrontPanelInputSample {
+    pub const fn idle() -> Self {
+        Self {
+            up: false,
+            down: false,
+            left: false,
+            right: false,
+            center: false,
+            touch: false,
+            touch_contact: false,
+            touch_point: None,
+            touch_gesture_raw: 0,
+        }
+    }
+}
+
+pub const fn front_panel_input_is_new_activity(
+    previous: FrontPanelInputSample,
+    current: FrontPanelInputSample,
+) -> bool {
+    (current.up && !previous.up)
+        || (current.down && !previous.down)
+        || (current.left && !previous.left)
+        || (current.right && !previous.right)
+        || (current.center && !previous.center)
+        || (current.touch_contact && !previous.touch_contact)
+        || (current.touch_gesture_raw != 0
+            && current.touch_gesture_raw != previous.touch_gesture_raw)
+}
+
 pub fn dashboard_uses_frame_animation(
     variant: UiVariant,
     route: DashboardRoute,
@@ -105,6 +148,9 @@ pub const fn any_alert_button_edge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::display_power::{
+        DisplayPowerCommand, DisplayPowerController, DisplayPowerMode, DisplayPowerPolicy,
+    };
     use crate::net_types::WifiSnapshot;
     use crate::output_state::{EnabledOutputs, OutputSelector};
 
@@ -324,5 +370,100 @@ mod tests {
         assert!(any_alert_button_edge(true, false, false, false, false));
         assert!(any_alert_button_edge(false, false, false, true, false));
         assert!(any_alert_button_edge(false, false, false, false, true));
+    }
+
+    #[test]
+    fn input_activity_edges_ignore_held_levels_and_touch_motion() {
+        let idle = FrontPanelInputSample::idle();
+        let held_button = FrontPanelInputSample { up: true, ..idle };
+        assert!(front_panel_input_is_new_activity(idle, held_button));
+        assert!(!front_panel_input_is_new_activity(held_button, held_button));
+        let released_button = FrontPanelInputSample {
+            up: false,
+            ..held_button
+        };
+        assert!(!front_panel_input_is_new_activity(
+            held_button,
+            released_button
+        ));
+        assert!(front_panel_input_is_new_activity(
+            released_button,
+            held_button
+        ));
+
+        let first_touch = FrontPanelInputSample {
+            touch: true,
+            touch_contact: true,
+            touch_point: Some((10, 20)),
+            ..idle
+        };
+        assert!(front_panel_input_is_new_activity(idle, first_touch));
+        assert!(!front_panel_input_is_new_activity(
+            first_touch,
+            FrontPanelInputSample {
+                touch_point: Some((100, 120)),
+                ..first_touch
+            }
+        ));
+        assert!(!front_panel_input_is_new_activity(
+            first_touch,
+            FrontPanelInputSample {
+                touch: false,
+                touch_contact: false,
+                touch_point: None,
+                ..first_touch
+            }
+        ));
+    }
+
+    #[test]
+    fn input_activity_edges_accept_changed_nonzero_gestures_only() {
+        let idle = FrontPanelInputSample::idle();
+        let gesture_up = FrontPanelInputSample {
+            touch_gesture_raw: 0x01,
+            ..idle
+        };
+        assert!(front_panel_input_is_new_activity(idle, gesture_up));
+        assert!(!front_panel_input_is_new_activity(gesture_up, gesture_up));
+        assert!(front_panel_input_is_new_activity(
+            gesture_up,
+            FrontPanelInputSample {
+                touch_gesture_raw: 0x02,
+                ..gesture_up
+            }
+        ));
+        assert!(!front_panel_input_is_new_activity(
+            gesture_up,
+            FrontPanelInputSample {
+                touch_gesture_raw: 0,
+                ..gesture_up
+            }
+        ));
+    }
+
+    #[test]
+    fn stale_gesture_reaches_sleep() {
+        let mut power = DisplayPowerController::new(DisplayPowerPolicy::test_default(), 0);
+        let idle = FrontPanelInputSample::idle();
+        let stale_gesture = FrontPanelInputSample {
+            touch_gesture_raw: 0x01,
+            ..idle
+        };
+
+        assert!(front_panel_input_is_new_activity(idle, stale_gesture));
+        assert_eq!(
+            power.step(
+                0,
+                front_panel_input_is_new_activity(idle, stale_gesture),
+                false
+            ),
+            DisplayPowerCommand::None
+        );
+        assert!(!front_panel_input_is_new_activity(
+            stale_gesture,
+            stale_gesture
+        ));
+        assert_eq!(power.step(40_000, false, false), DisplayPowerCommand::Sleep);
+        assert_eq!(power.mode(), DisplayPowerMode::Sleeping);
     }
 }
