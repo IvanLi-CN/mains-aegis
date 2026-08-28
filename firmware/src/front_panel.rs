@@ -4,8 +4,8 @@ use crate::front_panel_logic::{
     any_alert_button_edge, cst816d_vertical_gesture_direction, dashboard_allowed,
     dashboard_enter_requires_variant_switch, dashboard_header_entry_target,
     dashboard_page_for_vertical_menu_gesture, dashboard_uses_frame_animation,
-    map_cst816d_touch_to_landscape_swapped, VerticalGestureDirection, DASHBOARD_VARIANT,
-    SELF_CHECK_VARIANT,
+    front_panel_input_is_new_activity, map_cst816d_touch_to_landscape_swapped,
+    FrontPanelInputSample, VerticalGestureDirection, DASHBOARD_VARIANT, SELF_CHECK_VARIANT,
 };
 use crate::front_panel_scene::{
     self, AlertDetailTouchTarget, AlertPreviewItem, AlertPreviewKind, AlertPreviewSeverity,
@@ -39,7 +39,9 @@ use mains_aegis_firmware::display_pipeline::{
 use mains_aegis_firmware::display_power::{
     DisplayPowerCommand, DisplayPowerController, DisplayPowerMode, DisplayPowerPolicy,
 };
-use mains_aegis_firmware::net_types::FrontPanelRuntimeSnapshot;
+use mains_aegis_firmware::net_types::{
+    FrontPanelInputDiagnosticSnapshot, FrontPanelRuntimeSnapshot,
+};
 
 // Front panel: GC9307 over SPI + slow control lines via TCA6408A (I2C2).
 // This module uses gc9307-async (crates.io) for controller init.
@@ -183,34 +185,9 @@ impl UiLifecycleEvent {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct InputSnapshot {
-    up: bool,
-    down: bool,
-    left: bool,
-    right: bool,
-    center: bool,
-    touch: bool,
-    touch_point: Option<(u16, u16)>,
-    touch_gesture_raw: u8,
-}
+type InputSnapshot = FrontPanelInputSample;
 
-impl InputSnapshot {
-    const fn idle() -> Self {
-        Self {
-            up: false,
-            down: false,
-            left: false,
-            right: false,
-            center: false,
-            touch: false,
-            touch_point: None,
-            touch_gesture_raw: 0,
-        }
-    }
-}
-
-impl InputSnapshot {
+impl FrontPanelInputSample {
     fn log_summary(self, reason: &'static str) {
         let (touch_x, touch_y) = self.touch_point.unwrap_or((0, 0));
         let touch_present = self.touch_point.is_some();
@@ -248,17 +225,10 @@ impl InputSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TouchSample {
     gesture_raw: u8,
+    finger_count: u8,
+    raw_x: u16,
+    raw_y: u16,
     point: Option<(u16, u16)>,
-}
-
-const fn input_snapshot_has_activity(snapshot: InputSnapshot) -> bool {
-    snapshot.up
-        || snapshot.down
-        || snapshot.left
-        || snapshot.right
-        || snapshot.center
-        || snapshot.touch
-        || snapshot.touch_gesture_raw != 0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -411,6 +381,7 @@ where
     next_liveness_log_at: Instant,
     next_frame_deadline: Instant,
     last_inputs: Option<InputSnapshot>,
+    latest_input_diag: Option<FrontPanelInputDiagnosticSnapshot>,
     last_logged_input_snapshot: Option<InputSnapshot>,
     center_press_started_at: Option<Instant>,
     center_long_press_fired: bool,
@@ -458,6 +429,7 @@ where
             ready: self.state == InitState::Ready,
             needs_redraw: self.needs_redraw,
             attention_hold: self.attention_hold,
+            input: self.latest_input_diag,
         }
     }
 
@@ -522,6 +494,7 @@ where
             next_liveness_log_at: Instant::now(),
             next_frame_deadline: Instant::now(),
             last_inputs: None,
+            latest_input_diag: None,
             last_logged_input_snapshot: None,
             center_press_started_at: None,
             center_long_press_fired: false,
@@ -1486,12 +1459,14 @@ where
         let mut ui_action = None;
         match self.read_inputs() {
             Ok(snapshot) => {
+                let previous_inputs = self.last_inputs.unwrap_or_else(InputSnapshot::idle);
                 let previous_power_mode = self.display_power.mode();
                 let power_command = self.display_power.step(
                     self.display_power_now_ms(),
-                    input_snapshot_has_activity(snapshot),
+                    front_panel_input_is_new_activity(previous_inputs, snapshot),
                     self.attention_hold,
                 );
+                self.publish_runtime_snapshot();
                 if let Err(e) = self.apply_display_power_command(previous_power_mode, power_command)
                 {
                     defmt::error!("ui: display_power apply failed err={=?}", e);
@@ -2016,6 +1991,7 @@ where
         let touch_sample = self.read_touch_sample();
         let touch_point = touch_sample.point;
         let touch = touch_point.is_some();
+        let touch_contact = touch_sample.finger_count != 0;
 
         if touch_irq_active && touch_point.is_none() && touch_sample.gesture_raw == 0 {
             if !self.touch_irq_stuck_hint_logged {
@@ -2038,9 +2014,26 @@ where
             right,
             center,
             touch,
+            touch_contact,
             touch_point,
             touch_gesture_raw: touch_sample.gesture_raw,
         };
+        self.latest_input_diag = Some(FrontPanelInputDiagnosticSnapshot {
+            tca_input_raw: bits,
+            up,
+            down,
+            left,
+            right,
+            center,
+            touch,
+            touch_contact,
+            ctp_irq_low: touch_irq_active,
+            cst816d_gesture_raw: touch_sample.gesture_raw,
+            cst816d_finger_count: touch_sample.finger_count,
+            cst816d_raw_x: touch_sample.raw_x,
+            cst816d_raw_y: touch_sample.raw_y,
+            mapped_point: touch_point,
+        });
         if self.last_logged_input_snapshot != Some(snapshot) {
             snapshot.log_summary("changed");
             self.last_logged_input_snapshot = Some(snapshot);
@@ -2057,24 +2050,25 @@ where
         {
             return TouchSample {
                 gesture_raw: 0,
+                finger_count: 0,
+                raw_x: 0,
+                raw_y: 0,
                 point: None,
             };
         }
 
         let gesture_raw = buf[0];
         let finger_count = buf[1] & 0x0f;
-        if finger_count == 0 {
-            return TouchSample {
-                gesture_raw,
-                point: None,
-            };
-        }
-
         let x_raw = (((buf[2] & 0x0f) as u16) << 8) | buf[3] as u16;
         let y_raw = (((buf[4] & 0x0f) as u16) << 8) | buf[5] as u16;
         TouchSample {
             gesture_raw,
-            point: Self::map_touch_to_ui(x_raw, y_raw),
+            finger_count,
+            raw_x: x_raw,
+            raw_y: y_raw,
+            point: (finger_count != 0)
+                .then(|| Self::map_touch_to_ui(x_raw, y_raw))
+                .flatten(),
         }
     }
 

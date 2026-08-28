@@ -43,14 +43,20 @@
 - `Sleeping`：空闲 `245s` 后发送 `Display OFF (0x28)` 和 `Sleep IN (0x10)`。
 - 唤醒：触摸或任意按键在非 `Awake` 状态下只负责唤醒，不透传为业务点击；从 sleep 唤醒时发送 `Sleep OUT (0x11)`，等待 `120ms` 后发送 `Display ON (0x29)`，再恢复 DBV/背光并重绘。
 - `attention_hold=true` 时立即保持/恢复 `Awake`，并把 idle 计时重置到当前时刻；解除后重新从完整阈值开始计时。
+- idle 计时只由新的输入事件重置，不由持续输入电平重置：五向按键和 CENTER 使用 false→true 边沿，触摸使用 `finger_count=0→nonzero` 接触边沿，CST816D 手势使用 nonzero 且相对上一采样值发生变化；持续按键、持续触摸（包括坐标移动）和锁存不变的手势不会延长 idle。
 - 自检页因硬件未就绪、BMS 恢复未完成或其他进入 dashboard 条件不满足而停留时，必须视为 `attention_hold=true`，避免自检页仍需用户查看/处理时进入 dim/backlight-off/sleep；进入 dashboard 后，后续自检快照阻塞条件不得继续覆盖正常 dashboard idle 熄屏。
 - `attention_hold` 只覆盖用户可处理或需要避险的状态：高温压力、低电、保护、模块故障、输出过压/过流、关断保护。USB-PD recovery、充电策略等待、单纯输入源缺失等内部恢复/状态提示不阻断熄屏。
 
 ## 验收标准
 
 - Host unit tests 使用压缩的 `30s / 35s / 40s` 时序覆盖三段状态、触摸/按键唤醒、attention hold 阻断与解除后重新计时，并断言正式默认值为 `180s / 240s / 245s`。
+- Host unit tests 必须覆盖持续按键、持续触摸、持续坐标移动和不变非零手势不会重复重置 idle；重新按下、首次触摸以及变化后的非零手势必须仍可唤醒。
 - 主固件 compile check 通过。
 - 主固件构造 `DisplayPowerController` 时必须使用正式默认时序。
+
+## Related ADRs
+
+- None
 
 ## References
 
