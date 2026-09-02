@@ -20,3 +20,15 @@ The current Web App has no cross-device notification or global alert entry.
 **Device Page**:
 A focused page for one device capability, such as Battery, Power, Alerts, Thermal, Settings, or API. It owns its route title and its capability-specific content.
 _Avoid_: Generic device detail
+
+**Install Recommendation**:
+A non-disruptive, browser-local invitation to install Mains Aegis Web. It offers a native install action only when the browser makes one available, or an iOS add-to-home-screen guide where that action is unavailable.
+_Avoid_: Automatic install, install prompt
+
+**Install Eligibility**:
+The current browser state in which Mains Aegis Web is not already installed and can either offer a native PWA installation action or an iOS installation guide.
+_Avoid_: PWA support, browser support
+
+**Demo Mode**:
+A mock-only browser view used to preview Mains Aegis management workflows without live hardware. It is not an installable product state because an installed app starts the normal management console.
+_Avoid_: Installed demo, production mode

@@ -11,6 +11,7 @@ import {
   Cable,
   CircleHelp,
   Cpu,
+  Download,
   FileDown,
   Gauge,
   GripHorizontal,
@@ -128,6 +129,12 @@ import {
   type TraceScrollAnchor,
 } from "./traceScrollAnchor";
 import { FirmwarePage as FirmwarePageView } from "./firmware-page";
+import {
+  PwaInstallPrompt,
+  usePwaInstallRecommendation,
+} from "../pwa/PwaInstallPrompt";
+import { usePwaInstall } from "../pwa/PwaInstallRuntime";
+import { usePwaUpdatePromptVisible } from "../pwa/PwaUpdateRuntime";
 
 type Route = {
   path: string;
@@ -359,6 +366,17 @@ export function App({
   const route = useRoute(initialPath);
   const searchParams = new URLSearchParams(window.location.search);
   const demoMode = registry.demoSeed !== null || isDemoQueryEnabled();
+  const pwaInstall = usePwaInstall();
+  const updatePromptVisible = usePwaUpdatePromptVisible();
+  const automaticInstallVisible = usePwaInstallRecommendation({
+    routeSection: route.section,
+    demoMode,
+    updatePromptVisible,
+    availability: pwaInstall.availability,
+    isInstalled: pwaInstall.isInstalled,
+    automaticSnoozed: pwaInstall.automaticSnoozed,
+    sessionHidden: pwaInstall.sessionHidden,
+  });
   const demoTheme = resolveDemoTheme(searchParams, demoMode);
   useEffect(() => {
     if (!demoTheme) return;
@@ -517,6 +535,14 @@ export function App({
 
   const pagePresentation = resolvePagePresentation(route.section);
   const mobileNavContext = resolveMobileNavContext(route.section, selected);
+  const installAvailable =
+    !demoMode &&
+    !pwaInstall.isInstalled &&
+    pwaInstall.availability !== "unavailable";
+  const onInstallFromNavigation = () => {
+    if (mobileNavViewport) setNavOpen(false);
+    void pwaInstall.requestInstall();
+  };
 
   return (
     <div className="app-shell">
@@ -605,6 +631,16 @@ export function App({
               label="Add device"
             />
             <ExternalNavLink href={docsHref} icon={BookOpen} label="Docs" />
+            {installAvailable ? (
+              <button
+                className="nav-link nav-command"
+                type="button"
+                onClick={onInstallFromNavigation}
+              >
+                <Download size={17} />
+                <span>Install app</span>
+              </button>
+            ) : null}
           </nav>
 
           {selected ? (
@@ -643,6 +679,16 @@ export function App({
           activeAlerts,
         )}
       </main>
+      <PwaInstallPrompt
+        availability={pwaInstall.availability}
+        visible={automaticInstallVisible}
+        onInstall={() => void pwaInstall.requestInstall()}
+        onDismiss={pwaInstall.dismissAutomaticRecommendation}
+        iosGuideOpen={pwaInstall.iosGuideOpen}
+        onIosGuideOpenChange={(open) => {
+          if (!open) pwaInstall.closeIosGuide();
+        }}
+      />
     </div>
   );
 }

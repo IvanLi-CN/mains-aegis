@@ -28,7 +28,7 @@
 - 实现设备接入页、单设备总览、电源路径、电池与 BMS、温度与保护、设备信息、API 调试页面。
 - 对接设备侧现有只读接口：`/api/v1/ping`、`/api/v1/identity`、`/api/v1/network`、`/api/v1/status` 和 status SSE。
 - 提供 mock fixtures 和正式路由 seed 场景，使无实机环境也能稳定预览、交互测试与截图验证。
-- 提供真实可安装 PWA：manifest、maskable icons、service worker app-shell precache、首开后离线恢复，以及新版本后台下载后的手动升级提示。
+- 提供真实可安装 PWA：manifest、maskable icons、service worker app-shell precache、首开后离线恢复、非打断式安装推荐，以及新版本后台下载后的手动升级提示。
 - 在现有 `web/` 管理台上新增 USB CDC / Web Serial 数据源，复用 `Identity`、`NetworkSummary`、`UpsStatus` 状态模型。
 - 使用 CLI-managed devd 作为本地 USB 控制 owner；普通 CLI 命令通过 `mains-aegis` 自动复用或按需启动 singleton IPC daemon，Web/App 通过显式 `mains-aegis daemon http` 使用同一 USB CDC 安全控制面。
 - 通过 USB CDC structured JSONL 协议支持握手、状态读取、结构化日志、安全设置与 WiFi 配网。
@@ -44,8 +44,20 @@
 - Demo 复用 Web 管理端正式路由和正式交互，仅通过 mock 数据源替换真实设备接口；截图资产默认作为 owner-facing evidence，不自动进入 PR 正文。
 - PWA 离线能力只覆盖 Web app shell、构建产物、Pages fallback、PWA 图标和 bundled static firmware artifacts；真实设备 `/api`、`/events`、LAN HTTP/SSE、USB/Web Serial 与 GitHub Release live catalog 不做离线模拟。
 - PWA 新版本使用 prompt 模式：service worker 安装阶段在后台下载新 app shell，`onNeedRefresh` 后显示非阻塞更新提示；用户点击 `Update` 并确认后才允许刷新页面并切换版本。
+- 安装推荐不自动触发浏览器原生安装框，不引入账号、远端埋点或跨设备安装状态；所有频率控制只保留在当前浏览器本地。
+- Demo Mode 不展示安装推荐或侧栏安装入口；安装后的 PWA 始终启动正常管理台，不能承诺保留 mock 场景。
 
 ## 功能规格
+
+### PWA 安装推荐
+
+- `Install Eligibility` 仅在应用尚未安装，且当前浏览器已提供原生 PWA 安装动作或可展示 iOS 安装指引时成立；应用在 standalone display mode 运行或收到原生安装成功事件后，必须停止推荐。
+- Chromium 等提供 `beforeinstallprompt` 的浏览器中，Web 必须保留该事件并抑制浏览器默认时机；只有用户点击明确的 `Install app` 命令后，才可调用原生安装框。
+- iOS 安装路径使用应用内、可关闭的说明对话框，指导用户在浏览器的分享菜单选择 `Add to Home Screen` 并确认 `Add`；不得假设特定浏览器、伪造系统 UI 或尝试自动跳转。
+- 侧栏中的 `Install app` 是命令按钮，不是指向空路由的链接。它只在 `Install Eligibility` 成立时显示，并在应用已安装或当前浏览器没有可用安装路径时隐藏。
+- Fleet 或 Connect 页面在用户完成首次交互约五秒后，才能显示非打断式底部安装推荐；侧栏入口可立即使用。安装推荐不得显示在设备操作页、固件烧录流程或对话框期间，且 PWA 更新提示优先。
+- 用户关闭安装推荐、关闭 iOS 指引或拒绝原生安装后，当前浏览器静默三十天；成功安装后不再显示。不得把打开 iOS 指引本身视为安装完成。
+- Demo Mode 必须隐藏底部安装推荐和侧栏 `Install app` 命令。
 
 ### Fleet 总览
 
@@ -153,6 +165,7 @@
 - `web/dist` 包含 `manifest.webmanifest`、`sw.js`、192px/512px maskable PNG icons；manifest 的 `start_url` / `scope` 必须同时支持 `PAGES_BASE=./` 与显式子路径部署。
 - PWA service worker precache 必须覆盖 app shell、Vite 构建产物、Pages `404.html`、相对 base 深链 navigation helper、PWA icons 和 bundled firmware static artifacts；不得把 `/api`、`/events` 或真实设备 runtime endpoints 当作离线数据缓存。
 - PWA 更新提示必须静默处理安装缓存阶段；新版本 ready 后显示非阻塞提示，点击 `Update` 先弹出确认，确认后才调用 service worker update 并刷新。
+- PWA 安装推荐只在 `Install Eligibility` 成立时出现；Chromium 原生安装框必须由用户点击触发，iOS 必须提供可关闭的手动安装指引，关闭或拒绝后本地静默三十天，且 standalone / 已安装状态不再推荐。
 - Fleet mock 页至少显示 6 台设备，覆盖 standby、assist、backup、warning、critical、offline。
 - `/connect` 能显示已保存设备，支持添加设备与探活错误显示。
 - GitHub Pages/public-static 构建默认不轮询 same-origin `/api/v1/devices`；无 hosted metadata、无显式 devd URL 时必须直接显示 browser-direct LAN 入口。
@@ -166,7 +179,7 @@
 - 单设备详情页可从 Fleet 卡片进入，并展示 power、battery、thermal、device、api 子页。
 - 在 `393x852` 的 mock-only 移动视口中，Power、Battery、Alerts、Thermal、Device、Firmware、Settings 和 API 页不得渲染 Fleet Summary 或完整 Device Overview；页面 `h1` 与首个能力内容必须在首屏可见。Overview 在其 `h1` 后保留完整 Device Overview，Fleet 在首屏保留 Fleet Summary。
 - 浏览器视觉验证覆盖 desktop Fleet、mobile Fleet、empty Fleet、large Fleet、单设备 Dashboard、USB Connect、USB structured logs 和 WiFi settings。
-- Storybook 或等价稳定预览必须覆盖：Pages direct LAN 支持态、非支持浏览器降级态、手动目标成功态、CIDR 扫描命中态，以及 PWA update prompt 的 ready、activating、offline ready、error、mobile 状态。
+- Storybook 或等价稳定预览必须覆盖：Pages direct LAN 支持态、非支持浏览器降级态、手动目标成功态、CIDR 扫描命中态，PWA update prompt 的 ready、activating、offline ready、error、mobile 状态，以及 PWA 安装推荐的原生可安装、iOS 指引、已安装/不支持隐藏、静默和移动状态。
 
 ## 文档更新
 
@@ -185,7 +198,6 @@
 
 ## Visual Evidence
 
-PR: none
 
 视觉证据由 Vite 纯前端 mock UI 生成，使用正式路由和 mock fixtures，不连接真实 UPS 设备。以下截图用于 owner review；未标记 `PR: include`，因此不默认进入 PR 正文。
 
@@ -529,3 +541,36 @@ PR: none
   evidence_note: 验证 Firmware 直接从页面标题进入版本能力内容，不渲染 Fleet Summary 或完整 Device Overview。
 
 ![Firmware page context mobile evidence](./assets/device-firmware-context-mobile.png)
+
+- source_type: storybook_canvas
+  story_id_or_title: `UPS Management/PWA Install/Native install available`
+  requested_viewport: `1280x720`
+  viewport_strategy: `storybook-viewport`
+  capture_scope: `element`
+  target_program: `mock-only`
+  scenario: native PWA installation recommendation
+  evidence_note: 验证 Chromium 原生安装推荐以非阻塞提示条展示，只有明确的 `Install` 操作触发安装动作，关闭入口保持可见。
+
+![PWA native install recommendation](./assets/pwa-install-native.png)
+
+- source_type: storybook_canvas
+  story_id_or_title: `UPS Management/PWA Install/iPhone and iPad guide`
+  requested_viewport: `1280x720`
+  viewport_strategy: `storybook-viewport`
+  capture_scope: `element`
+  target_program: `mock-only`
+  scenario: iOS Add to Home Screen guide
+  evidence_note: 验证 iPhone/iPad 路径使用可关闭的 Radix dialog，并固定展示 `Open the browser Share menu, choose Add to Home Screen, then select Add.` 三步英文指引。
+
+![PWA iOS installation guide](./assets/pwa-install-ios-guide.png)
+
+- source_type: storybook_canvas
+  story_id_or_title: `UPS Management/Fleet/Install available visual`
+  requested_viewport: `1280x720`
+  viewport_strategy: `storybook-viewport`
+  capture_scope: `browser-viewport`
+  target_program: `mock-only`
+  scenario: Fleet sidebar install command
+  evidence_note: 验证正常 Fleet app-shell 在 Docs 后展示带 Lucide 图标的语义 `Install app` 按钮；Demo story 单独验证该入口隐藏。
+
+![Fleet sidebar install command](./assets/fleet-install-sidebar.png)

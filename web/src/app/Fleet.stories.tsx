@@ -1,7 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import type { ReactNode } from "react";
 import { expect, userEvent, within } from "storybook/test";
 import { DeviceRegistryProvider } from "../device-registry/DeviceRegistry";
 import { App } from "./App";
+import { PwaInstallRuntime } from "../pwa/PwaInstallRuntime";
+import type { BeforeInstallPromptEventLike } from "../pwa/pwaInstall";
 import type { DemoSeed } from "../fixtures/mockDevices";
 
 const STORAGE_KEY = "mains-aegis-web.devices.v1";
@@ -24,6 +27,7 @@ function renderApp(
     initialDevdTarget?: string;
     forceHostedHttpServiceApp?: boolean;
     storedTargets?: unknown[];
+    nativeInstall?: boolean;
   } = {},
 ) {
   window.localStorage.removeItem(STORAGE_KEY);
@@ -44,15 +48,31 @@ function renderApp(
     "",
     `${window.location.pathname}?${params.toString()}${window.location.hash}`,
   );
+  const app = (
+    <App
+      initialPath={initialPath}
+      initialDevdTarget={options.initialDevdTarget}
+      forceHostedHttpServiceApp={options.forceHostedHttpServiceApp}
+    />
+  );
   return (
     <DeviceRegistryProvider initialDemoSeed={seed ?? undefined}>
-      <App
-        initialPath={initialPath}
-        initialDevdTarget={options.initialDevdTarget}
-        forceHostedHttpServiceApp={options.forceHostedHttpServiceApp}
-      />
+      {options.nativeInstall ? (
+        <PwaInstallStoryHarness>{app}</PwaInstallStoryHarness>
+      ) : (
+        app
+      )}
     </DeviceRegistryProvider>
   );
+}
+
+function PwaInstallStoryHarness({ children }: { children: ReactNode }) {
+  const event = {
+    preventDefault: () => undefined,
+    prompt: async () => undefined,
+    userChoice: Promise.resolve({ outcome: "accepted" as const }),
+  } as unknown as BeforeInstallPromptEventLike;
+  return <PwaInstallRuntime initialNativePrompt={event}>{children}</PwaInstallRuntime>;
 }
 
 export const Overview: Story = {
@@ -90,6 +110,9 @@ export const DemoControl: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
+      canvas.queryByRole("button", { name: "Install app" }),
+    ).not.toBeInTheDocument();
+    await expect(
       await canvas.findByRole("button", { name: "Open demo control panel" }),
     ).toBeInTheDocument();
     await userEvent.click(
@@ -108,6 +131,32 @@ export const DemoControl: Story = {
     );
     await expect(canvas.queryByText("Demo Control")).not.toBeInTheDocument();
   },
+};
+
+export const InstallAvailable: Story = {
+  name: "Install available",
+  render: () =>
+    renderApp("/", null, {
+      forceHostedHttpServiceApp: true,
+      initialDevdTarget: "mock:devd-multi",
+      nativeInstall: true,
+    }),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const installButton = await canvas.findByRole("button", { name: "Install app" });
+    await expect(installButton).toBeInTheDocument();
+    await userEvent.click(installButton);
+  },
+};
+
+export const InstallAvailableVisual: Story = {
+  name: "Install available visual",
+  render: () =>
+    renderApp("/", null, {
+      forceHostedHttpServiceApp: true,
+      initialDevdTarget: "mock:devd-multi",
+      nativeInstall: true,
+    }),
 };
 
 export const LiveDevdDiscovery: Story = {
