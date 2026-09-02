@@ -228,6 +228,14 @@ a {
   color: var(--color-ink);
 }
 
+.nav-command {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+
 .main-surface {
   min-width: 0;
   overflow-x: hidden;
@@ -964,6 +972,134 @@ a {
   margin-top: 4px;
 }
 
+.pwa-install-prompt {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 60;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  width: min(560px, calc(100vw - 32px));
+  border: 1px solid
+    color-mix(in oklch, var(--color-primary) 30%, var(--color-hairline));
+  border-radius: var(--radius-card);
+  background: var(--color-panel);
+  color: var(--color-ink);
+  box-shadow: 0 6px 8px oklch(20% 0.012 250 / 0.12);
+  padding: 10px;
+}
+
+.pwa-install-prompt.is-inline {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  width: 100%;
+}
+
+.pwa-install-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--color-primary) 10%, var(--color-panel));
+  color: var(--color-primary-strong);
+}
+
+.pwa-install-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.pwa-install-copy strong,
+.pwa-install-copy span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pwa-install-copy strong {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.pwa-install-copy span {
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.pwa-install-action {
+  white-space: nowrap;
+}
+
+.pwa-install-dismiss {
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
+}
+
+.pwa-install-dialog-overlay {
+  position: fixed;
+  z-index: 69;
+  inset: 0;
+  background: var(--color-overlay);
+}
+
+.storybook-pwa-ios-backdrop {
+  background: var(--color-primary);
+}
+
+.storybook-pwa-ios-backdrop .pwa-install-dialog-overlay {
+  background: var(--color-primary);
+  opacity: 1;
+}
+
+.pwa-install-dialog {
+  position: fixed;
+  z-index: 70;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: min(440px, calc(100vw - 32px));
+  gap: 12px;
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-card);
+  background: var(--color-panel);
+  color: var(--color-ink);
+  padding: 18px;
+}
+
+.pwa-install-dialog:focus-visible {
+  outline: 0;
+  box-shadow: var(--shadow-focus);
+}
+
+.pwa-install-dialog-title {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.pwa-install-dialog-description {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.pwa-install-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .alerts-panel {
   padding: 0;
   overflow: hidden;
@@ -1059,6 +1195,22 @@ a {
   }
 
   .pwa-update-dismiss {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .pwa-install-prompt {
+    right: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    grid-template-columns: 34px minmax(0, 1fr) auto;
+  }
+
+  .pwa-install-action {
+    grid-column: 2 / 4;
+    width: 100%;
+  }
+
+  .pwa-install-dismiss {
     grid-column: 3;
     grid-row: 1;
   }
@@ -2142,6 +2294,26 @@ a {
   padding: 24px;
 }
 
+.storybook-pwa-install-surface {
+  box-sizing: border-box;
+  display: grid;
+  width: min(680px, calc(100vw - 32px));
+  max-width: 100%;
+  min-height: 300px;
+  place-items: center;
+  background: var(--color-primary);
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.storybook-pwa-install-surface.is-mobile-story {
+  width: min(374px, calc(100vw - 16px));
+  min-height: 300px;
+  justify-items: start;
+  margin: 0;
+  padding: 24px 16px;
+}
+
 .storybook-pwa-surface.is-mobile-story {
   width: min(374px, calc(100vw - 16px));
   min-height: 220px;
@@ -2160,6 +2332,20 @@ a {
 }
 
 .storybook-pwa-surface.is-mobile-story .pwa-update-dismiss {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.storybook-pwa-install-surface.is-mobile-story .pwa-install-prompt {
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+}
+
+.storybook-pwa-install-surface.is-mobile-story .pwa-install-action {
+  grid-column: 2 / 4;
+  width: 100%;
+}
+
+.storybook-pwa-install-surface.is-mobile-story .pwa-install-dismiss {
   grid-column: 3;
   grid-row: 1;
 }

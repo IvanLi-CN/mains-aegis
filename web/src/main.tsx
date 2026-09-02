@@ -6,6 +6,7 @@ import {
   restoreSpaFallbackHash,
 } from "./app/spaFallback";
 import { DeviceRegistryProvider } from "./device-registry/DeviceRegistry";
+import { PwaInstallRuntime } from "./pwa/PwaInstallRuntime";
 import { PwaUpdateRuntime } from "./pwa/PwaUpdateRuntime";
 import "./styles/tokens.css";
 import "./styles/globals.css";
@@ -20,8 +21,11 @@ restoreSpaFallbackHash(searchParams);
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <DeviceRegistryProvider>
-      <App initialPath={initialPath} />
-      <PwaUpdateRuntime />
+      <PwaInstallRuntime>
+        <PwaUpdateRuntime>
+          <App initialPath={initialPath} />
+        </PwaUpdateRuntime>
+      </PwaInstallRuntime>
     </DeviceRegistryProvider>
   </StrictMode>,
 );

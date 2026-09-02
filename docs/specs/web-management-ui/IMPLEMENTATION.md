@@ -7,6 +7,7 @@
 - Web App 已接入 `vite-plugin-pwa`，生产构建生成 `manifest.webmanifest`、`sw.js`、PWA metadata 和 192/512 PNG maskable icons；`PAGES_BASE=./` 使用相对 `start_url` / `scope`，显式子路径部署保留对应 base。
 - PWA service worker 预缓存 app shell、Vite 构建产物、Pages fallback、PWA 图标、相对 base 深链 navigation helper 和 bundled static firmware artifacts；真实设备 `/api`、`/events`、LAN HTTP/SSE、USB/Web Serial 与 GitHub Release live catalog 不进入离线模拟缓存。
 - PWA 更新策略使用 prompt 模式：新 app shell 在后台安装并缓存完成后，Web 只显示非阻塞 `New version available` 提示；用户点击 `Update` 并通过确认对话后才调用 `updateSW(true)` 切换并刷新页面。
+- PWA 安装推荐由 `PwaInstallRuntime` 统一管理：Chromium 的 `beforeinstallprompt` 只在用户点击 `Install app` 后调用，iPhone/iPad 显示通用 Add to Home Screen 指引；Fleet/Connect 首次 click 或 Enter/Space 交互五秒后才显示底部推荐，关闭、拒绝或关闭指引后在当前浏览器静默 30 天。Demo、设备操作页、开放 dialog 和更新提示期间不显示自动推荐，侧栏入口在符合条件时仍保留。
 - `DeviceRegistry` 维护浏览器侧设备清单、localStorage 持久化、LAN 探活、settings 读取、SSE 订阅与轮询兜底，并持有当前浏览器连接内的 USB CDC `SerialPort`。
 - `DeviceRegistry` 的设备通道切换、同通道重连和 companion 确认使用操作/读取代次 fence；替换前清理旧 stream、serial session、heartbeat 与 devd Web lease，并等待租约释放后提交新记录。
 - USB CDC / Web Serial 设备使用 `serial:` target，不持久化真实 `SerialPort`；刷新后需要重新授权。
@@ -52,6 +53,7 @@
 - Storybook：已使用最新 `storybook` / `@storybook/react-vite` 10.3.6 建立 `UPS Management/Settings/WiFi Provisioning Feedback` 状态矩阵，覆盖连接失败、保存失败、清除失败、保存中、清除中与成功反馈；`UPS Management/Connect/Firmware mismatch warning` 覆盖连接前 firmware artifact 不匹配与显式忽略入口。
 - Storybook：`UPS Management/Add device` 已补齐 Pages direct LAN 支持态、非支持浏览器降级态、手动目标成功态与 CIDR 扫描命中态。
 - Storybook：`UPS Management/PWA Update` 覆盖 update ready、activating、offline ready、registration error、mobile 和 state gallery，并验证 ready 状态下点击 `Update` 会先进入确认对话。
+- Storybook：`UPS Management/PWA Install` 覆盖 native 安装、iPhone/iPad 指引、mobile、dismiss、hidden 和 state gallery；`UPS Management/Fleet/Install available` 覆盖正常 App shell 的侧栏入口，Demo 场景验证隐藏入口。
 - 本地预览：已通过端口租约启动 Vite mock-data 前端。
 - 浏览器验证：已确认 Fleet、Connect 和单设备 Dashboard 可渲染，控制台无 warn/error。
 - 浏览器验证：真实 devd 驱动的 `/connect` 已确认显示 `Bind USB` 发现动作，不再暴露旧的 `Connect devd` 样式与语义。

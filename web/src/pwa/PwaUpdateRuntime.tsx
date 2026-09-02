@@ -1,6 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   PwaUpdatePrompt,
+  shouldShowPwaUpdatePrompt,
   type PwaUpdateSnapshot,
 } from "./PwaUpdatePrompt";
 import {
@@ -10,7 +19,15 @@ import {
 
 const idleSnapshot: PwaUpdateSnapshot = { status: "idle", error: null };
 
-export function PwaUpdateRuntime() {
+const PwaUpdateVisibilityContext = createContext(false);
+
+export function PwaUpdateRuntime({
+  children,
+  onPromptVisibilityChange,
+}: {
+  children?: ReactNode;
+  onPromptVisibilityChange?: (visible: boolean) => void;
+}) {
   const [snapshot, setSnapshot] = useState<PwaUpdateSnapshot>(idleSnapshot);
   const updateServiceWorker = useRef<PwaUpdateServiceWorker | null>(null);
 
@@ -52,11 +69,23 @@ export function PwaUpdateRuntime() {
     });
   }, [snapshot.status]);
 
+  const isVisible = shouldShowPwaUpdatePrompt(snapshot.status);
+  useEffect(() => {
+    onPromptVisibilityChange?.(isVisible);
+  }, [isVisible, onPromptVisibilityChange]);
+
   return (
-    <PwaUpdatePrompt
-      snapshot={snapshot}
-      onUpdate={applyUpdate}
-      onDismiss={() => setSnapshot(idleSnapshot)}
-    />
+    <PwaUpdateVisibilityContext.Provider value={isVisible}>
+      {children}
+      <PwaUpdatePrompt
+        snapshot={snapshot}
+        onUpdate={applyUpdate}
+        onDismiss={() => setSnapshot(idleSnapshot)}
+      />
+    </PwaUpdateVisibilityContext.Provider>
   );
+}
+
+export function usePwaUpdatePromptVisible(): boolean {
+  return useContext(PwaUpdateVisibilityContext);
 }
