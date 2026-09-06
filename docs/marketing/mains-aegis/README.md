@@ -1,19 +1,25 @@
 # Mains Aegis Marketing Assets
 
-This directory intentionally ships only the two final marketing images that are needed for owner-facing use and PR review.
+This directory intentionally ships only the four final marketing images that are needed for owner-facing use and PR review.
 
 ## Final Assets
 
-The final images use the approved product render from thread `codex://threads/019f8b0e-e051-7f43-a810-1a673f8c3970` and a bright non-dark layout with product-specific English copy.
+The light assets use the approved product render from thread `codex://threads/019f8b0e-e051-7f43-a810-1a673f8c3970` and product-specific English copy. The dark assets use a `gpt-image-2` high-fidelity edit through the CVM image-generation workflow for the product studio scene, with all exterior marketing copy rendered locally for accuracy.
 
-| Asset | Dimensions | Primary use |
-| --- | ---: | --- |
-| `social-preview.png` | `1280x640` | GitHub social preview |
-| `product-poster.png` | `1600x2000` | Product poster |
+| Asset | Dimensions | Theme | Primary use |
+| --- | ---: | --- | --- |
+| `social-preview.png` | `1280x640` | Light | GitHub social preview |
+| `social-preview-dark.png` | `1280x640` | Dark | GitHub social preview on dark surfaces |
+| `product-poster.png` | `1600x2000` | Light | Product poster |
+| `product-poster-dark.png` | `1600x2000` | Dark | Product poster for dark surfaces |
 
 ![Mains Aegis social preview](./social-preview.png)
 
+![Mains Aegis dark social preview](./social-preview-dark.png)
+
 ![Mains Aegis product poster](./product-poster.png)
+
+![Mains Aegis dark product poster](./product-poster-dark.png)
 
 ## Source Record
 
