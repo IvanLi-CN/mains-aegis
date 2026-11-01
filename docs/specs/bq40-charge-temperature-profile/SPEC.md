@@ -108,9 +108,9 @@
 
 ### VER-BQ40-CTP-006
 
-- Method: Host MB44 protocol/contract tests cover the exact read and field-write frames, echoed-address readback, malformed length, mismatch, and interrupted-write cases; the target adapter uses those tested frame builders, and the persisted report records the complete pre-write snapshot.
+- Method: Host MB44 protocol/contract tests cover the exact read and field-write frames, echoed-address readback, malformed length, mismatch, and interrupted-write cases; the target adapter uses those tested frame builders, the report parser requires complete pre/post blocks plus all seven field-verification records, and the persisted report records the complete pre-write snapshot.
 - covers: `REQ-BQ40-CTP-006`
-- Pass condition: Only the seven allowlisted fields can change; every failure stops the transaction and preserves the pre-write block for rollback.
+- Pass condition: Only the seven allowlisted fields can change; every failure stops the transaction and preserves the pre-write block for rollback; incomplete or inconsistent report evidence is not accepted as PASS.
 
 ### VER-BQ40-CTP-007
 

@@ -89,9 +89,10 @@ Policy:
 - exactly seven temperature fields are allowed: T1, T2, T5, T6, T3, T4, and hysteresis
 - each MB44 write must pass echo address, returned length, raw vector, and decoded value checks
 - any transport, write, address, length, raw, or decoded mismatch stops the operation immediately
-- the monitor log must contain `bms_df_apply: ... profile=bq40_charge_temperature stage=done fields=7`
-- the monitor log must also contain one `stage=snapshot_before_hex` event with all 32 bytes of the pre-write containing block
-- `summary.json` records the outcome under `charge_temperature_apply`, including `snapshot_before_hex` for offline rollback/audit
+- the monitor log must contain `bms_df_apply: ... profile=bq40_charge_temperature stage=done fields=7` with 0x4A00/32-byte pre- and post-write metadata
+- the monitor log must contain one `stage=snapshot_before_hex` event and one `stage=final_after_hex` event, each with all 32 bytes of the containing block
+- the monitor log must contain all seven exact `stage=field_verify` records; the parser rejects missing, inconsistent, or wrong-address evidence
+- `summary.json` records the outcome under `charge_temperature_apply`, including the complete pre-write and post-write blocks and verified field names for offline rollback/audit
 - the profile does not write ChemID, calibration, protection, termination, precharge, maintenance, or current/voltage manifest fields
 - the profile image cannot be combined with ROM recovery, AFE repair, or asset repair features
 

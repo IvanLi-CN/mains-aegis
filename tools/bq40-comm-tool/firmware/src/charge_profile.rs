@@ -284,10 +284,16 @@ mod tests {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Failure {
         None,
+        SnapshotTransport,
+        SnapshotAddress,
+        SnapshotLength,
         WriteTransport(usize),
         EchoAddress(usize),
         EchoLength(usize),
         EchoRaw(usize),
+        FinalTransport,
+        FinalAddress,
+        FinalLength,
         FinalRaw,
         FinalUnrelatedRaw,
     }
@@ -374,32 +380,37 @@ mod tests {
 
         fn read_block(&mut self, address: u16) -> Result<BlockSnapshot, Self::Error> {
             self.snapshots += 1;
-            if matches!(self.failure, Failure::FinalRaw) && self.snapshots > 1 {
-                let mut snapshot = BlockSnapshot {
-                    address,
-                    declared_len: CONTAINING_BLOCK_LEN,
-                    payload_len: CONTAINING_BLOCK_LEN,
-                    payload: self.block,
-                };
-                snapshot.payload[FIELDS[0].offset as usize] ^= 0x01;
-                return Ok(snapshot);
+            if matches!(self.failure, Failure::SnapshotTransport) && self.snapshots == 1 {
+                return Err(MockError);
             }
-            if matches!(self.failure, Failure::FinalUnrelatedRaw) && self.snapshots > 1 {
-                let mut snapshot = BlockSnapshot {
-                    address,
-                    declared_len: CONTAINING_BLOCK_LEN,
-                    payload_len: CONTAINING_BLOCK_LEN,
-                    payload: self.block,
-                };
-                snapshot.payload[0] ^= 0x01;
-                return Ok(snapshot);
+            if matches!(self.failure, Failure::FinalTransport) && self.snapshots > 1 {
+                return Err(MockError);
             }
-            Ok(BlockSnapshot {
+            let mut snapshot = BlockSnapshot {
                 address,
                 declared_len: CONTAINING_BLOCK_LEN,
                 payload_len: CONTAINING_BLOCK_LEN,
                 payload: self.block,
-            })
+            };
+            if matches!(self.failure, Failure::SnapshotAddress) && self.snapshots == 1 {
+                snapshot.address = address + 1;
+            }
+            if matches!(self.failure, Failure::SnapshotLength) && self.snapshots == 1 {
+                snapshot.payload_len = CONTAINING_BLOCK_LEN - 1;
+            }
+            if matches!(self.failure, Failure::FinalAddress) && self.snapshots > 1 {
+                snapshot.address = address + 1;
+            }
+            if matches!(self.failure, Failure::FinalLength) && self.snapshots > 1 {
+                snapshot.payload_len = CONTAINING_BLOCK_LEN - 1;
+            }
+            if matches!(self.failure, Failure::FinalRaw) && self.snapshots > 1 {
+                snapshot.payload[FIELDS[0].offset as usize] ^= 0x01;
+            }
+            if matches!(self.failure, Failure::FinalUnrelatedRaw) && self.snapshots > 1 {
+                snapshot.payload[0] ^= 0x01;
+            }
+            Ok(snapshot)
         }
 
         fn write_field(
@@ -466,6 +477,24 @@ mod tests {
             let mut transport = MockTransport::new(failure);
             let error = apply_profile(&mut transport).unwrap_err();
             assert!(error.snapshot.is_some());
+            assert_eq!(transport.writes, expected_writes);
+        }
+    }
+
+    #[test]
+    fn snapshot_and_final_metadata_errors_stop_and_preserve_snapshot() {
+        for (failure, expected_error, expected_writes, snapshot_present) in [
+            (Failure::SnapshotTransport, "snapshot_transport", 0, false),
+            (Failure::SnapshotAddress, "snapshot_address", 0, true),
+            (Failure::SnapshotLength, "snapshot_length", 0, true),
+            (Failure::FinalTransport, "final_transport", 7, true),
+            (Failure::FinalAddress, "final_address", 7, true),
+            (Failure::FinalLength, "final_length", 7, true),
+        ] {
+            let mut transport = MockTransport::new(failure);
+            let error = apply_profile(&mut transport).unwrap_err();
+            assert_eq!(error.as_str(), expected_error);
+            assert_eq!(error.snapshot.is_some(), snapshot_present);
             assert_eq!(transport.writes, expected_writes);
         }
     }

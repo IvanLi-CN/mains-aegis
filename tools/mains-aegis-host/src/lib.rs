@@ -10854,7 +10854,7 @@ fn load_native_monitor_defmt_table(
     state: &AppState,
     device_id: &str,
 ) -> Result<Option<Table>, HttpError> {
-    let artifact = {
+    let (artifact, identity_verified) = {
         let guard = state.inner.lock().expect("state lock");
         let device = guard
             .devices
@@ -10866,8 +10866,18 @@ fn load_native_monitor_defmt_table(
         let Some(artifact) = guard.artifacts.get(artifact_id) else {
             return Ok(None);
         };
-        artifact.clone()
+        (
+            artifact.clone(),
+            native_monitor_defmt_identity_verified(&device.log_decode, &artifact.artifact_id),
+        )
     };
+    if !identity_verified {
+        // Never decode a live stream with a table whose build identity has
+        // not been verified against the connected device. Raw monitor lines
+        // remain available, but a mismatched ELF must not produce trusted
+        // maintenance records.
+        return Ok(None);
+    }
     let Some(elf_path) = native_monitor_defmt_elf_path(&artifact)? else {
         return Ok(None);
     };
@@ -10909,6 +10919,10 @@ fn load_native_monitor_defmt_table(
         ));
     }
     Ok(Some(table))
+}
+
+fn native_monitor_defmt_identity_verified(log_decode: &LogDecodeState, artifact_id: &str) -> bool {
+    log_decode.status == "verified" && log_decode.artifact_id.as_deref() == Some(artifact_id)
 }
 
 fn native_monitor_defmt_elf_path(
@@ -15008,6 +15022,27 @@ mod tests {
         let error = native_monitor_defmt_elf_path(&artifact).unwrap_err();
 
         assert_eq!(error.0.code, "defmt_elf_missing");
+    }
+
+    #[test]
+    fn native_monitor_defmt_requires_verified_selected_artifact_identity() {
+        let verified = LogDecodeState {
+            status: "verified".into(),
+            reason: None,
+            artifact_id: Some("artifact-a".into()),
+        };
+        assert!(native_monitor_defmt_identity_verified(
+            &verified,
+            "artifact-a"
+        ));
+        assert!(!native_monitor_defmt_identity_verified(
+            &verified,
+            "artifact-b"
+        ));
+        assert!(!native_monitor_defmt_identity_verified(
+            &LogDecodeState::default(),
+            "artifact-a"
+        ));
     }
 
     #[test]

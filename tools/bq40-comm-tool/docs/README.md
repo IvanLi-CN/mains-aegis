@@ -21,9 +21,11 @@ length `32`. Each MB44 write must pass address, length, raw-vector, and decoded-
 readback checks; the first error stops the operation. The normal firmware never performs
 this write automatically.
 
-The complete pre-write block is emitted as the machine-readable
-`stage=snapshot_before_hex` monitor event and persisted as
-`charge_temperature_apply.snapshot_before_hex` in `summary.json`. The profile image
+The complete pre-write and post-write blocks are emitted as machine-readable
+`stage=snapshot_before_hex` and `stage=final_after_hex` monitor events. The seven
+field verification records are emitted as `stage=field_verify`, and the report parser
+requires all of them before writing `verdict.pass=true`. `summary.json` persists the
+blocks and verified field names under `charge_temperature_apply`. The profile image
 cannot be combined with ROM recovery, AFE repair, or asset repair features.
 
 The former `live-df-mainboard` profile is retired and returns a migration error. ROM,

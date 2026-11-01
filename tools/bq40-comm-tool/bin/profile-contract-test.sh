@@ -56,6 +56,7 @@ for required_path in \
 done
 
 for required in \
+  "bms-rom-recover-force" \
   "bms-df-repair-afe-default" \
   "bms-rom-repair-asset-df-mainboard" \
   "bms-rom-image-r3"; do
@@ -70,6 +71,8 @@ if ! rg -q 'bms-charge-temperature-profile cannot be combined with BQ40 recovery
   echo "profile/recovery compile-time conflict guard is missing" >&2
   exit 1
 fi
+
+python3 "$SCRIPT_DIR/report-parser-test.py"
 
 if rg -n "Ma1000|ManualSpeed1A|CHG1A" \
   "$REPO_ROOT/firmware/src" \

@@ -320,7 +320,7 @@ pub struct Bq40ChargeProfileManifestEntry {
     pub voltage_mv: u16,
 }
 
-pub const BQ40_CHARGE_PROFILE_MANIFEST: [Bq40ChargeProfileManifestEntry; 4] = [
+pub const BQ40_CHARGE_PROFILE_MANIFEST: [Bq40ChargeProfileManifestEntry; 5] = [
     Bq40ChargeProfileManifestEntry {
         label: "LT",
         current_ma: 100,
@@ -332,7 +332,12 @@ pub const BQ40_CHARGE_PROFILE_MANIFEST: [Bq40ChargeProfileManifestEntry; 4] = [
         voltage_mv: 16_800,
     },
     Bq40ChargeProfileManifestEntry {
-        label: "RT/STH",
+        label: "RT",
+        current_ma: 500,
+        voltage_mv: 16_800,
+    },
+    Bq40ChargeProfileManifestEntry {
+        label: "STH",
         current_ma: 500,
         voltage_mv: 16_800,
     },
@@ -361,6 +366,22 @@ mod tests {
         assert!(bq40_project_temperature_configuration_matches(0x1E, 0x00));
         assert!(!bq40_project_temperature_configuration_matches(0x00, 0x00));
         assert!(!bq40_project_temperature_configuration_matches(0x1E, 0x01));
+    }
+
+    #[test]
+    fn charge_profile_manifest_keeps_each_bq40_temperature_band_explicit() {
+        assert_eq!(BQ40_CHARGE_PROFILE_MANIFEST[0].label, "LT");
+        assert_eq!(BQ40_CHARGE_PROFILE_MANIFEST[1].label, "STL");
+        assert_eq!(BQ40_CHARGE_PROFILE_MANIFEST[2].label, "RT");
+        assert_eq!(BQ40_CHARGE_PROFILE_MANIFEST[3].label, "STH");
+        assert_eq!(BQ40_CHARGE_PROFILE_MANIFEST[4].label, "HT");
+        assert!(BQ40_CHARGE_PROFILE_MANIFEST
+            .iter()
+            .all(|entry| entry.voltage_mv == 16_800));
+        assert_eq!(BQ40_CHARGE_PROFILE_MANIFEST[0].current_ma, 100);
+        assert!(BQ40_CHARGE_PROFILE_MANIFEST[1..]
+            .iter()
+            .all(|entry| entry.current_ma == 500));
     }
 
     #[test]

@@ -11034,17 +11034,12 @@ where
             self.bms_activation_auto_attempted = true;
             self.bms_activation_auto_force_charge_until = None;
             self.bms_activation_auto_force_charge_programmed = false;
-            if let Some(restore_chg_enabled) =
-                self.restore_bms_activation_charger_backup("auto_skip_not_needed")
-            {
-                if restore_chg_enabled {
-                    self.chg_ce.set_low();
-                    self.chg_enabled = true;
-                } else {
-                    self.chg_ce.set_high();
-                    self.chg_enabled = false;
-                }
-            }
+            let _ = self.restore_bms_activation_charger_backup("auto_skip_not_needed");
+            // A historical charger backup never authorizes a new charge
+            // enable. The next ordinary poll must re-evaluate the complete
+            // BQ40/JEITA/product gate before CE can go low again.
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
             defmt::info!(
                 "bms: activation auto_skip reason=bq40_not_err state={} trusted_evidence={=bool} last_result={}",
                 self_check_comm_state_name(self.ui_snapshot.bq40z50),
@@ -11058,17 +11053,11 @@ where
             self.bms_activation_auto_attempted = true;
             self.bms_activation_auto_force_charge_until = None;
             self.bms_activation_auto_force_charge_programmed = false;
-            if let Some(restore_chg_enabled) =
-                self.restore_bms_activation_charger_backup("auto_skip_no_input_power")
-            {
-                if restore_chg_enabled {
-                    self.chg_ce.set_low();
-                    self.chg_enabled = true;
-                } else {
-                    self.chg_ce.set_high();
-                    self.chg_enabled = false;
-                }
-            }
+            let _ = self.restore_bms_activation_charger_backup("auto_skip_no_input_power");
+            // No-input skip is still a state transition. Do not restore a
+            // historical CE-low state without a fresh ordinary charge poll.
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
             defmt::info!(
                 "bms: activation auto_skip reason=no_input_power bq40_state={} charger_state={} input_present={=?}",
                 self_check_comm_state_name(self.ui_snapshot.bq40z50),
@@ -15731,8 +15720,8 @@ where
         let (op_status, op_status_raw_len, op_status_raw_bytes) =
             read_bq40_op_status_with_raw_trace(&mut self.i2c, addr);
         let mut da_status2 = self.bms_cached_da_status2;
-        let mut bms_detail_refreshed = false;
-        if !bms_detail_refreshed && now >= self.bms_next_da_status2_refresh_at {
+        let mut bms_slow_detail_refreshed = false;
+        if now >= self.bms_next_da_status2_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             match bq40z50::read_da_status2(&mut self.i2c, addr) {
                 Ok(snapshot) => {
@@ -15747,39 +15736,38 @@ where
                 }
             }
             self.bms_next_da_status2_refresh_at = now + BMS_CHARGE_TEMP_REFRESH_PERIOD;
-            bms_detail_refreshed = true;
         }
         let mut filter_capacity = self.bms_cached_filter_capacity;
-        if !bms_detail_refreshed && now >= self.bms_next_filter_capacity_refresh_at {
+        if !bms_slow_detail_refreshed && now >= self.bms_next_filter_capacity_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             if let Ok(snapshot) = bq40z50::read_filter_capacity(&mut self.i2c, addr) {
                 filter_capacity = snapshot;
                 self.bms_cached_filter_capacity = snapshot;
             }
             self.bms_next_filter_capacity_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
-            bms_detail_refreshed = true;
+            bms_slow_detail_refreshed = true;
         }
         let mut balance_config = self.bms_cached_balance_config;
-        if !bms_detail_refreshed && now >= self.bms_next_balance_config_refresh_at {
+        if !bms_slow_detail_refreshed && now >= self.bms_next_balance_config_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             if let Ok(snapshot) = bq40z50::read_balance_config(&mut self.i2c, addr) {
                 balance_config = snapshot;
                 self.bms_cached_balance_config = snapshot;
             }
             self.bms_next_balance_config_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
-            bms_detail_refreshed = true;
+            bms_slow_detail_refreshed = true;
         }
         let mut gauging_status = self.bms_cached_gauging_status;
-        if !bms_detail_refreshed && now >= self.bms_next_gauging_status_refresh_at {
+        if !bms_slow_detail_refreshed && now >= self.bms_next_gauging_status_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             if let Ok(snapshot) = bq40z50::read_gauging_status(&mut self.i2c, addr) {
                 gauging_status = snapshot;
                 self.bms_cached_gauging_status = snapshot;
             }
             self.bms_next_gauging_status_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
-            bms_detail_refreshed = true;
+            bms_slow_detail_refreshed = true;
         }
-        if !bms_detail_refreshed && now >= self.bms_next_lock_diag_refresh_at {
+        if !bms_slow_detail_refreshed && now >= self.bms_next_lock_diag_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             let snapshot = read_bq40_lock_diag_snapshot_runtime(&mut self.i2c, addr);
             self.bms_cached_lock_diag = Some(snapshot);

@@ -44,10 +44,22 @@ CHARGE_PROFILE_APPLY_RE = re.compile(
 )
 CHARGE_PROFILE_SNAPSHOT_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    rf"profile=bq40_charge_temperature stage=snapshot_before_hex "
+    rf"profile=bq40_charge_temperature stage=(?P<stage>snapshot_before_hex|final_after_hex) "
     + " ".join(
         rf"b{index}=0x(?P<b{index}>[0-9a-fA-F]{{1,2}})" for index in range(32)
     )
+)
+CHARGE_PROFILE_DONE_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=done fields=(?P<fields>\d+) "
+    rf"snapshot_addr=0x(?P<snapshot_addr>[0-9a-fA-F]+) snapshot_len=(?P<snapshot_len>\d+) "
+    rf"final_addr=0x(?P<final_addr>[0-9a-fA-F]+) final_len=(?P<final_len>\d+)"
+)
+CHARGE_PROFILE_FIELD_VERIFY_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=field_verify field=(?P<field>[a-zA-Z0-9_]+) "
+    rf"df_addr=0x(?P<df_addr>[0-9a-fA-F]+) raw_lo=0x(?P<raw_lo>[0-9a-fA-F]{{1,2}}) "
+    rf"raw_hi=0x(?P<raw_hi>[0-9a-fA-F]{{1,2}}) decoded=0x(?P<decoded>[0-9a-fA-F]{{1,4}})"
 )
 CHARGE_PROFILE_ERROR_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
@@ -67,6 +79,31 @@ ROM_RUNTIME_STATUS_UNCONFIRMED_RE = re.compile(
     r"stage=(?:probe_rom_post_flash_runtime_status_unavailable|probe_rom_post_flash_fw_seen_status_unconfirmed|probe_rom_post_flash_fw_invalid_runtime_status_unconfirmed)\b"
 )
 ADDR16_RE = re.compile(r"addr=0x16\b")
+
+CHARGE_PROFILE_EXPECTED_FIELDS = {
+    "t1": (0x4A0B, (0xAC, 0x0A), 0x0AAC),
+    "t2": (0x4A0D, (0x42, 0x0B), 0x0B42),
+    "t5": (0x4A0F, (0x74, 0x0B), 0x0B74),
+    "t6": (0x4A11, (0x0A, 0x0C), 0x0C0A),
+    "t3": (0x4A13, (0x3C, 0x0C), 0x0C3C),
+    "t4": (0x4A15, (0x6E, 0x0C), 0x0C6E),
+    "hysteresis": (0x4A17, (0x14, 0x00), 0x0014),
+}
+
+
+def charge_profile_address_allowed(mode: str, address: int) -> bool:
+    return address in ({0x0B} if mode == "canonical" else {0x0B, 0x16})
+
+
+def charge_profile_final_vectors_match(payload_hex: Optional[str]) -> bool:
+    if payload_hex is None or len(payload_hex) != 64:
+        return False
+    payload = bytes.fromhex(payload_hex)
+    for address, raw, _decoded in CHARGE_PROFILE_EXPECTED_FIELDS.values():
+        offset = address - 0x4A00
+        if payload[offset : offset + 2] != bytes(raw):
+            return False
+    return True
 
 
 @dataclass
@@ -162,6 +199,14 @@ def main() -> int:
     charge_profile_apply_errors: Counter[str] = Counter()
     charge_profile_readback_seen = False
     charge_profile_snapshot_before_hex: Optional[str] = None
+    charge_profile_final_after_hex: Optional[str] = None
+    charge_profile_addresses: set[int] = set()
+    charge_profile_done_fields: Optional[int] = None
+    charge_profile_done_snapshot_addr: Optional[int] = None
+    charge_profile_done_snapshot_len: Optional[int] = None
+    charge_profile_done_final_addr: Optional[int] = None
+    charge_profile_done_final_len: Optional[int] = None
+    charge_profile_verified_fields: set[str] = set()
     canonical_touched_0x16 = False
     last_sample_ts: Optional[float] = None
     in_preexisting_segment = False
@@ -257,11 +302,10 @@ def main() -> int:
                 charge_profile_match = CHARGE_PROFILE_APPLY_RE.search(text)
                 if charge_profile_match and charge_profile_match.group("profile") == "bq40_charge_temperature":
                     charge_profile_apply_attempted = True
+                    charge_profile_addresses.add(int(charge_profile_match.group("addr"), 16))
                     stage = charge_profile_match.group("stage")
                     count = charge_profile_match.group("count")
                     if stage == "done":
-                        charge_profile_apply_done = True
-                        charge_profile_readback_seen = True
                         if count is not None:
                             charge_profile_apply_writes = max(
                                 charge_profile_apply_writes, int(count)
@@ -284,12 +328,65 @@ def main() -> int:
                     }:
                         charge_profile_apply_errors[stage] += 1
 
+                charge_profile_done_match = CHARGE_PROFILE_DONE_RE.search(text)
+                if charge_profile_done_match:
+                    charge_profile_apply_attempted = True
+                    charge_profile_apply_done = True
+                    charge_profile_addresses.add(
+                        int(charge_profile_done_match.group("addr"), 16)
+                    )
+                    charge_profile_done_fields = int(charge_profile_done_match.group("fields"))
+                    charge_profile_done_snapshot_addr = int(
+                        charge_profile_done_match.group("snapshot_addr"), 16
+                    )
+                    charge_profile_done_snapshot_len = int(
+                        charge_profile_done_match.group("snapshot_len")
+                    )
+                    charge_profile_done_final_addr = int(
+                        charge_profile_done_match.group("final_addr"), 16
+                    )
+                    charge_profile_done_final_len = int(
+                        charge_profile_done_match.group("final_len")
+                    )
+                    charge_profile_apply_writes = max(
+                        charge_profile_apply_writes, charge_profile_done_fields
+                    )
+
+                charge_profile_field_match = CHARGE_PROFILE_FIELD_VERIFY_RE.search(text)
+                if charge_profile_field_match:
+                    charge_profile_apply_attempted = True
+                    address = int(charge_profile_field_match.group("addr"), 16)
+                    charge_profile_addresses.add(address)
+                    field_name = charge_profile_field_match.group("field")
+                    expected = CHARGE_PROFILE_EXPECTED_FIELDS.get(field_name)
+                    actual = (
+                        int(charge_profile_field_match.group("df_addr"), 16),
+                        (
+                            int(charge_profile_field_match.group("raw_lo"), 16),
+                            int(charge_profile_field_match.group("raw_hi"), 16),
+                        ),
+                        int(charge_profile_field_match.group("decoded"), 16),
+                    )
+                    if expected is None or actual != expected:
+                        charge_profile_apply_errors["field_verify"] += 1
+                    else:
+                        charge_profile_verified_fields.add(field_name)
+
                 charge_profile_snapshot_match = CHARGE_PROFILE_SNAPSHOT_RE.search(text)
                 if charge_profile_snapshot_match:
-                    charge_profile_snapshot_before_hex = bytes(
+                    charge_profile_apply_attempted = True
+                    charge_profile_addresses.add(
+                        int(charge_profile_snapshot_match.group("addr"), 16)
+                    )
+                    payload_hex = bytes(
                         int(charge_profile_snapshot_match.group(f"b{index}"), 16)
                         for index in range(32)
                     ).hex()
+                    if charge_profile_snapshot_match.group("stage") == "snapshot_before_hex":
+                        charge_profile_snapshot_before_hex = payload_hex
+                    else:
+                        charge_profile_final_after_hex = payload_hex
+                        charge_profile_readback_seen = True
 
                 charge_profile_error_match = CHARGE_PROFILE_ERROR_RE.search(text)
                 if (
@@ -366,12 +463,35 @@ def main() -> int:
             reasons.append("charge_profile_apply_not_done")
         if charge_profile_apply_writes != 7:
             reasons.append("charge_profile_field_count_not_7")
+        if charge_profile_done_fields != 7:
+            reasons.append("charge_profile_done_evidence_invalid")
+        if charge_profile_done_snapshot_addr != 0x4A00:
+            reasons.append("charge_profile_snapshot_address_missing")
+        if charge_profile_done_snapshot_len != 32:
+            reasons.append("charge_profile_snapshot_length_missing")
+        if charge_profile_done_final_addr != 0x4A00:
+            reasons.append("charge_profile_final_address_missing")
+        if charge_profile_done_final_len != 32:
+            reasons.append("charge_profile_final_length_missing")
         if charge_profile_apply_errors:
             reasons.append("charge_profile_apply_errors")
         if not charge_profile_readback_seen:
             reasons.append("charge_profile_readback_missing")
         if charge_profile_snapshot_before_hex is None:
             reasons.append("charge_profile_snapshot_missing")
+        if not charge_profile_final_after_hex:
+            reasons.append("charge_profile_final_snapshot_missing")
+        if not charge_profile_final_vectors_match(charge_profile_final_after_hex):
+            reasons.append("charge_profile_final_vectors_mismatch")
+        if charge_profile_addresses and not all(
+            charge_profile_address_allowed(args.mode, address)
+            for address in charge_profile_addresses
+        ):
+            reasons.append("charge_profile_address_invalid")
+        if len(charge_profile_addresses) != 1:
+            reasons.append("charge_profile_address_inconsistent")
+        if set(CHARGE_PROFILE_EXPECTED_FIELDS) != charge_profile_verified_fields:
+            reasons.append("charge_profile_field_verification_missing")
 
     verdict_pass = len(reasons) == 0
     verdict_reason = "ok" if verdict_pass else ";".join(reasons)
@@ -400,6 +520,9 @@ def main() -> int:
             "errors": dict(sorted(charge_profile_apply_errors.items())),
             "readback_seen": charge_profile_readback_seen,
             "snapshot_before_hex": charge_profile_snapshot_before_hex,
+            "final_after_hex": charge_profile_final_after_hex,
+            "addresses": [f"0x{address:02x}" for address in sorted(charge_profile_addresses)],
+            "verified_fields": sorted(charge_profile_verified_fields),
         },
         "verdict": {
             "pass": verdict_pass,
@@ -438,6 +561,8 @@ def main() -> int:
         f"- rom_image: `{fmt_cfg_str(run_config['rom_image'])}`",
         f"- repair_profile: `{fmt_cfg_str(run_config['repair_profile'])}`",
         f"- charge_temperature_snapshot_before_hex: `{fmt_cfg_str(summary['charge_temperature_apply']['snapshot_before_hex'])}`",
+        f"- charge_temperature_final_after_hex: `{fmt_cfg_str(summary['charge_temperature_apply']['final_after_hex'])}`",
+        f"- charge_temperature_verified_fields: `{', '.join(summary['charge_temperature_apply']['verified_fields']) or 'none'}`",
         "",
         "## Poll Errors",
         "",
