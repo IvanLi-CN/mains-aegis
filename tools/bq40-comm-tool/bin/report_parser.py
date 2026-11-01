@@ -22,6 +22,8 @@ PREEXISTING_END_EVENT = "preexisting_segment_end"
 
 LOG_LEVEL_PREFIX = r"(?:\[[A-Z ]+\]\s+)?"
 
+CHARGE_PROFILE_PREFIX_RE = re.compile(rf"^{LOG_LEVEL_PREFIX}bms_df_apply:")
+
 SAMPLE_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"temp_c_x10=(?P<temp>-?\d+) voltage_mv=(?P<voltage>\d+) "
@@ -46,6 +48,23 @@ CHARGE_PROFILE_APPLY_ANY_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=(?P<profile>[^\s]+) stage=(?P<stage>[^\s]+)"
 )
+
+
+def charge_profile_evidence_shape_is_valid(text: str) -> bool:
+    """Require every apparent profile event to use the complete key=value grammar."""
+    prefix = CHARGE_PROFILE_PREFIX_RE.match(text)
+    if prefix is None:
+        return False
+    tokens = text[prefix.end() :].strip().split()
+    if len(tokens) < 3:
+        return False
+    if re.fullmatch(r"addr=0x[0-9a-fA-F]+", tokens[0]) is None:
+        return False
+    if re.fullmatch(r"profile=\S+", tokens[1]) is None:
+        return False
+    if re.fullmatch(r"stage=\S+", tokens[2]) is None:
+        return False
+    return all(re.fullmatch(r"[a-zA-Z0-9_]+=[^\s]+", token) for token in tokens[3:])
 CHARGE_PROFILE_SNAPSHOT_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=bq40_charge_temperature stage=(?P<stage>snapshot_before_hex|final_after_hex) "
@@ -294,6 +313,17 @@ def main() -> int:
         print(f"monitor file not found: {monitor_file}", file=sys.stderr)
         return 3
 
+    is_charge_profile_requested = args.repair_profile == "bq40-charge-temperature"
+
+    def mark_malformed_charge_profile_evidence(kind: str) -> None:
+        nonlocal charge_profile_apply_attempted
+        nonlocal charge_profile_sequence_error
+        nonlocal charge_profile_unknown_stage
+        charge_profile_apply_attempted = True
+        charge_profile_sequence_error = True
+        charge_profile_unknown_stage = True
+        charge_profile_apply_errors[kind] += 1
+
     try:
         with monitor_file.open("r", encoding="utf-8") as fh:
             for line in fh:
@@ -303,6 +333,13 @@ def main() -> int:
                 try:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
+                    if is_charge_profile_requested and "bms_df_apply:" in line:
+                        mark_malformed_charge_profile_evidence("malformed_json")
+                    continue
+
+                if not isinstance(entry, dict):
+                    if is_charge_profile_requested and "bms_df_apply:" in line:
+                        mark_malformed_charge_profile_evidence("malformed_entry")
                     continue
 
                 if entry.get("src") == "meta":
@@ -339,10 +376,23 @@ def main() -> int:
 
                 text = entry.get("text", "")
                 if not isinstance(text, str):
+                    if is_charge_profile_requested and "text" in entry:
+                        mark_malformed_charge_profile_evidence("malformed_text")
                     continue
+                is_charge_profile_evidence = "bms_df_apply:" in text
+                if (
+                    is_charge_profile_requested
+                    and is_charge_profile_evidence
+                    and not charge_profile_evidence_shape_is_valid(text)
+                ):
+                    mark_malformed_charge_profile_evidence("malformed_evidence")
                 key = dedupe_key(entry, text)
                 if key is not None:
-                    if key in seen_entries:
+                    # Ordinary monitor telemetry can be duplicated when a session tail is
+                    # reattached. Profile evidence is an audit stream: silently dropping an
+                    # identical event would turn a duplicate write/readback record into a false
+                    # pass, so let the sequence validator reject it explicitly.
+                    if key in seen_entries and not is_charge_profile_evidence:
                         continue
                     seen_entries.add(key)
 
@@ -583,8 +633,6 @@ def main() -> int:
     except OSError as exc:
         print(f"failed to read monitor file: {exc}", file=sys.stderr)
         return 4
-
-    is_charge_profile_requested = args.repair_profile == "bq40-charge-temperature"
 
     reasons: list[str] = []
     if samples_total == 0 and not (

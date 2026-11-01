@@ -86,6 +86,17 @@ def duplicate_field_evidence_log() -> list[str]:
     return lines
 
 
+def duplicate_timestamp_field_evidence_log() -> list[str]:
+    timestamp = "2026-11-02T00:00:00.000Z"
+    lines = []
+    for line in successful_log():
+        entry = json.loads(line)
+        entry["ts"] = timestamp
+        lines.append(json.dumps(entry))
+    lines.insert(-1, lines[2])
+    return lines
+
+
 def reordered_field_evidence_log() -> list[str]:
     lines = successful_log()
     lines[2], lines[3] = lines[3], lines[2]
@@ -135,6 +146,52 @@ def malformed_profile_log() -> list[str]:
         log(
             "bms_df_apply: addr=0xb profile=bq40_charge_temperature-typo "
             "stage=done fields=7"
+        ),
+    )
+    return lines
+
+
+def malformed_json_log() -> list[str]:
+    lines = successful_log()
+    lines.insert(
+        -1,
+        '{"text":"bms_df_apply: addr=0xb profile=bq40_charge_temperature '
+        'stage=done"',
+    )
+    return lines
+
+
+def malformed_text_log() -> list[str]:
+    lines = successful_log()
+    lines.insert(
+        -1,
+        json.dumps(
+            {
+                "text": {
+                    "bms_df_apply": "addr=0xb profile=bq40_charge_temperature stage=done"
+                }
+            }
+        ),
+    )
+    return lines
+
+
+def missing_stage_log() -> list[str]:
+    lines = successful_log()
+    lines.insert(
+        -1,
+        log("bms_df_apply: addr=0xb profile=bq40_charge_temperature"),
+    )
+    return lines
+
+
+def trailing_garbage_log() -> list[str]:
+    lines = successful_log()
+    lines.insert(
+        -1,
+        log(
+            "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
+            "stage=done fields=7 trailing"
         ),
     )
     return lines
@@ -223,6 +280,11 @@ def main() -> None:
         summary = json.loads((root / "report" / "summary.json").read_text())
         assert "charge_profile_evidence_sequence_invalid" in summary["verdict"]["reason"]
 
+        bad = run_parser(duplicate_timestamp_field_evidence_log(), root)
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_evidence_sequence_invalid" in summary["verdict"]["reason"]
+
         bad = run_parser(reordered_field_evidence_log(), root)
         assert bad.returncode == 20
         summary = json.loads((root / "report" / "summary.json").read_text())
@@ -247,6 +309,20 @@ def main() -> None:
         assert bad.returncode == 20
         summary = json.loads((root / "report" / "summary.json").read_text())
         assert "charge_profile_unknown_stage" in summary["verdict"]["reason"]
+
+        for malformed_log in (
+            malformed_json_log(),
+            malformed_text_log(),
+            missing_stage_log(),
+            trailing_garbage_log(),
+        ):
+            bad = run_parser(malformed_log, root)
+            assert bad.returncode == 20
+            summary = json.loads((root / "report" / "summary.json").read_text())
+            assert (
+                "charge_profile_evidence_sequence_invalid"
+                in summary["verdict"]["reason"]
+            )
 
         bad = run_parser(ordinary_sample_log(), root, action="verify")
         assert bad.returncode == 20

@@ -522,7 +522,7 @@ LT 的 Low/Med/High 电流字段全部使用 `100mA`；STL、RT、STH、HT 的 L
 1. `Rsense=1 mΩ (1206, ≥1W)`（已定）；待定：具体料号（`TCR ≤ 50 ppm/°C`）、Kelvin 取样细节落板与 OC/SC 门限协同定标
 2. CHG/DSG 主功率 MOSFET 料号、数量与散热结构
 3. 预充电路径（PCHG）器件（P-MOS 与门极网络等，除 R1 外；R1 已定为 `2×150 Ω 2512` 串联）
-4. 温度：NTC、安装归属、`T1..T6/Hysteresis` 和 `0–45°C` 充电策略均已定，见 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md)；后续仅需实现与验证。
+4. 温度：NTC、安装归属、`T1..T6/Hysteresis` 和 `0–45°C` 充电策略均已固化并已接入固件、维护工具和项目文档，见 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md) 与 [`IMPLEMENTATION.md`](specs/bq40-charge-temperature-profile/IMPLEMENTATION.md)；剩余工作仅是按既定边界执行离线/硬件验证，不能借此扩大 profile 写入范围。
 5. Pack 连接器 pinout 与 ESD/EMI 方案
 6. 二次保护触发指标：`BQ296100` → `AO3400A` → `CLM` heater 的电压/电流/触发时间
 

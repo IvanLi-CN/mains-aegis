@@ -92,7 +92,7 @@
   ./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --probe-mode strict --repair-profile bq40-charge-temperature
   ```
 - 写入前保存完整 `0x4A00`/`32` containing block；只允许七个温度字段。
-- profile image 必须使用已有 strict BQ40 identity probe；`mac-only` 只用于诊断，不能进入写入路径。
+- profile image 必须同时通过 `ManufacturerName()` 的 Texas 证据和 `DeviceName()` 的 BQ40 证据；`mac-only` 只用于诊断，不能进入写入路径。
 - 每项必须通过 MB44 echo、length、raw 和 decoded readback；任何错误立即停止。
 - 这条路径不写 ChemID、calibration、protection、termination、precharge 或 maintenance 字段，也不依赖 live DF capture。
 - `live-df-mainboard` 已退役，继续使用旧名称会返回迁移错误；不能回退到 25-field writer。

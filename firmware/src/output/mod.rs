@@ -4163,6 +4163,7 @@ pub struct PowerManager<'d, I2C> {
     bms_err_streak: u16,
     bms_cached_da_status2: Option<bq40z50::DaStatus2>,
     bms_cached_da_status2_at_ms: Option<u64>,
+    bms_temperature_configuration_ok: Option<bool>,
     bq40_charge_request: Option<charge_temperature::Bq40ChargeRequest>,
     bq40_charge_request_observed: bool,
     bq40_charge_request_next_poll_at: Instant,
@@ -4970,6 +4971,7 @@ where
             bms_err_streak: 0,
             bms_cached_da_status2: None,
             bms_cached_da_status2_at_ms: None,
+            bms_temperature_configuration_ok: None,
             bq40_charge_request: None,
             bq40_charge_request_observed: false,
             bq40_charge_request_next_poll_at: now,
@@ -6639,6 +6641,9 @@ where
         &self,
         now_ms: u64,
     ) -> charge_temperature::ChargeTemperatureDecision {
+        if self.bms_temperature_configuration_ok == Some(false) {
+            return charge_temperature::ChargeTemperatureDecision::no_charge();
+        }
         let Some(observed_at_ms) = self.bms_cached_da_status2_at_ms else {
             return charge_temperature::ChargeTemperatureDecision::no_charge();
         };
@@ -6662,6 +6667,9 @@ where
     /// evidence as product charging. The charger-side JEITA NTC remains an
     /// independent hardware interlock at the call site.
     fn bq40_activation_wake_gate(&self, now_ms: u64) -> bool {
+        if self.bms_temperature_configuration_ok == Some(false) {
+            return false;
+        }
         let temperature = self
             .bms_cached_da_status2_at_ms
             .is_some()
@@ -6746,6 +6754,7 @@ where
     fn reset_bms_detail_mac_cache(&mut self, now: Instant) {
         self.bms_cached_da_status2 = None;
         self.bms_cached_da_status2_at_ms = None;
+        self.bms_temperature_configuration_ok = None;
         self.bq40_charge_request = None;
         // The request observation latch is cleared only on PowerManager
         // initialization, not on a transient BQ40 detail-cache reset.
@@ -15805,8 +15814,47 @@ where
                     da_status2 = None;
                     self.bms_cached_da_status2 = None;
                     self.bms_cached_da_status2_at_ms = None;
+                    self.bms_temperature_configuration_ok = None;
                 }
             }
+            let temperature_enable = bq40z50::read_data_flash_u8(
+                &mut self.i2c,
+                addr,
+                bq40z50::data_flash::TEMPERATURE_ENABLE,
+            )
+            .ok()
+            .flatten();
+            let temperature_mode = bq40z50::read_data_flash_u8(
+                &mut self.i2c,
+                addr,
+                bq40z50::data_flash::TEMPERATURE_MODE,
+            )
+            .ok()
+            .flatten();
+            let temperature_configuration_ok = match (temperature_enable, temperature_mode) {
+                (Some(enable), Some(mode)) => {
+                    charge_temperature::bq40_project_temperature_configuration_matches(enable, mode)
+                }
+                _ => false,
+            };
+            if self.bms_temperature_configuration_ok != Some(temperature_configuration_ok) {
+                if temperature_configuration_ok {
+                    defmt::info!(
+                        "bms: charge_temperature_config verified temperature_enable=0x{=u8:x} temperature_mode=0x{=u8:x}",
+                        temperature_enable.unwrap_or(0),
+                        temperature_mode.unwrap_or(0),
+                    );
+                } else {
+                    defmt::error!(
+                        "bms: charge_temperature_config invalid temperature_enable={=?} temperature_mode={=?} expected_enable=0x{=u8:x} expected_mode=0x{=u8:x} charge_allowed=false",
+                        temperature_enable,
+                        temperature_mode,
+                        charge_temperature::BQ40_PROJECT_TEMPERATURE_ENABLE,
+                        charge_temperature::BQ40_PROJECT_TEMPERATURE_MODE,
+                    );
+                }
+            }
+            self.bms_temperature_configuration_ok = Some(temperature_configuration_ok);
             self.bms_next_da_status2_refresh_at = now + BMS_CHARGE_TEMP_REFRESH_PERIOD;
         }
         let mut filter_capacity = self.bms_cached_filter_capacity;

@@ -27,7 +27,8 @@ field verification records are emitted as `stage=field_verify`, and the report p
 requires all of them before writing `verdict.pass=true`. `summary.json` persists the
 blocks and verified field names under `charge_temperature_apply`. The profile image
 cannot be combined with ROM recovery, AFE repair, or asset repair features. The profile
-image also requires the existing strict BQ40 identity probe; the diagnostic-only
+image also requires the existing strict BQ40 identity probe with both the Texas manufacturer
+and BQ40 device-name evidence; the diagnostic-only
 `mac-only` probe is rejected before the writer image is built or run.
 
 The former `live-df-mainboard` profile is retired and returns a migration error. ROM,

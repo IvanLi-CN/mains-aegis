@@ -5729,9 +5729,9 @@ where
                 false
             }
         };
-        if !(mfg_ok || dev_ok) {
+        if !(mfg_ok && dev_ok) {
             defmt::error!(
-                "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=identity_error reason=name_evidence_missing",
+                "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=identity_error reason=manufacturer_and_device_evidence_required",
                 addr,
             );
             self.bms_charge_temperature_profile_failed = true;
@@ -6064,7 +6064,13 @@ where
         self.bms_last_working_info_at = None;
         #[cfg(feature = "bms-charge-temperature-profile")]
         {
-            let now = Instant::now();
+            // The maintenance writer is non-atomic with respect to the gauge's Data Flash.
+            // Hold CE high before identity, security, snapshot, or field-write traffic even
+            // when this tool was configured to keep the 200mA wake current alive.
+            self.set_charge_mode(BootChargeMode::Off);
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
+            self.chg_next_retry_at = Some(now + BMS_POLL_PERIOD);
             if self.maybe_apply_bq40_charge_temperature_profile(addr, now) {
                 self.set_charge_mode(BootChargeMode::Off);
                 self.charger_allowed = false;
@@ -7500,12 +7506,17 @@ where
             } else {
                 None
             };
-            let name_ok = dev_name
+            let device_name_ok = dev_name
                 .map(|name| ascii_contains_case_insensitive(name, b"bq40"))
-                .unwrap_or(false)
-                || mfg_name
-                    .map(|name| ascii_contains_case_insensitive(name, b"texas"))
-                    .unwrap_or(false);
+                .unwrap_or(false);
+            let manufacturer_name_ok = mfg_name
+                .map(|name| ascii_contains_case_insensitive(name, b"texas"))
+                .unwrap_or(false);
+            let name_ok = if cfg!(feature = "bms-charge-temperature-profile") {
+                device_name_ok && manufacturer_name_ok
+            } else {
+                device_name_ok || manufacturer_name_ok
+            };
             let accept_snapshot_without_name = !read_name_blocks;
 
             match read_bms_snapshot_strict(

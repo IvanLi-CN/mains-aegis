@@ -61,7 +61,7 @@
 ### REQ-BQ40-CTP-006
 
 - A future Data Flash writer MUST use an explicit semantic profile and an allowlist containing only `T1`, `T2`, `T5`, `T6`, `T3`, `T4`, and `Hysteresis` for this topic.
-- The charge-temperature writer MUST use the existing strict BQ40 identity probe, including `ManufacturerName()` / `DeviceName()` evidence. The diagnostic-only `mac-only` probe MUST be rejected before a profile image can write Data Flash.
+- The charge-temperature writer MUST use the existing strict BQ40 identity probe with both `ManufacturerName()` containing `Texas` and `DeviceName()` containing `BQ40` evidence. The diagnostic-only `mac-only` probe MUST be rejected before a profile image can write Data Flash.
 - Before writing, it MUST save the complete containing Data Flash block. After writing, it MUST verify the address echo, block length, every target raw value, and every decoded semantic value.
 - The writer MUST treat the operation as non-atomic and MUST stop on transport error, write failure, or readback mismatch. A profile failure in the maintenance firmware MUST latch `CE` high and terminate the maintenance charge flow. It MUST NOT silently fall back to the existing broad 25-field `bq40-comm-tool` baseline.
 - The normal `mains-aegis` runtime MUST NOT automatically write BQ40 Data Flash.
