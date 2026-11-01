@@ -57,6 +57,10 @@ expect_exit_with_text 12 \
   "monitor file not found" \
   "$SCRIPT_DIR/run.sh" verify --monitor-file /tmp/mains-aegis-missing-charge-profile-log --repair-profile bq40-charge-temperature
 
+expect_exit_with_text 17 \
+  "Invalid --repair-profile" \
+  "$SCRIPT_DIR/run.sh" verify --monitor-file /tmp/mains-aegis-missing-charge-profile-log --repair-profile asset-df-mainboard
+
 for required_path in \
   "$REPO_ROOT/firmware/src" \
   "$REPO_ROOT/web/src" \

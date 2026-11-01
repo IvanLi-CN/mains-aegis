@@ -259,6 +259,16 @@ if [[ "$subcommand" == "apply-df" && "$probe_mode" == "mac-only" ]]; then
   exit 24
 fi
 
+if [[ "$subcommand" == "verify" ]]; then
+  case "$repair_profile" in
+    none|bq40-charge-temperature) ;;
+    *)
+      echo "Invalid --repair-profile: $repair_profile" >&2
+      exit 17
+      ;;
+  esac
+fi
+
 if [[ "$subcommand" == "recover" ]]; then
   if [[ "$recover_policy" == "never" ]]; then
     # --recover never explicitly disables ROM work; do not force the full post-flash
