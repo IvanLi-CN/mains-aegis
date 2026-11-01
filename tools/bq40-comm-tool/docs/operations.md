@@ -85,8 +85,10 @@ gauge enters the working state; ordinary BMS polling never writes Data Flash.
 Policy:
 - `apply-df` is app-mode only; it rejects `--recover` and `--rom-image`
 - `--repair-profile bq40-charge-temperature` is mandatory for this subcommand
+- the profile is canonical-only; `dual-diag` is diagnostic/recovery-only and is rejected before build, write, or offline verification
 - the profile requires the existing strict BQ40 identity probe (`ManufacturerName()` containing `Texas` and `DeviceName()` containing `BQ40`); `--probe-mode mac-only` is diagnostic-only and is rejected
 - the maintenance image repeats the identity read immediately before the Data Flash writer, so a numeric-only wake-window hit cannot authorize a write
+- the audit stream must prove the ordered `CE high/charger disabled`, dual identity, and Full Access gates before snapshot/write evidence can pass offline verification
 - the writer first snapshots the complete containing block at `0x4A00`, length `32`
 - exactly seven temperature fields are allowed: T1, T2, T5, T6, T3, T4, and hysteresis
 - each MB44 write must pass echo address, returned length, raw vector, and decoded value checks

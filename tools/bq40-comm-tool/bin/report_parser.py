@@ -42,11 +42,11 @@ POLL_RETRY_RE = re.compile(
 CHARGE_PROFILE_APPLY_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=(?P<profile>[a-zA-Z0-9_]+) stage=(?P<stage>[a-zA-Z0-9_]+)"
-    rf"(?: .*?(?:writes|fields)=(?P<count>\d+))?"
+    rf"(?:\s.*)?$"
 )
 CHARGE_PROFILE_APPLY_ANY_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    rf"profile=(?P<profile>[^\s]+) stage=(?P<stage>[^\s]+)"
+    rf"profile=(?P<profile>[^\s]+) stage=(?P<stage>[^\s]+)(?:\s.*)?$"
 )
 
 
@@ -64,29 +64,123 @@ def charge_profile_evidence_shape_is_valid(text: str) -> bool:
         return False
     if re.fullmatch(r"stage=\S+", tokens[2]) is None:
         return False
-    return all(re.fullmatch(r"[a-zA-Z0-9_]+=[^\s]+", token) for token in tokens[3:])
+    stage = tokens[2].split("=", 1)[1]
+    tail = tokens[3:]
+
+    def matches(patterns: tuple[str, ...]) -> bool:
+        return len(tail) == len(patterns) and all(
+            re.fullmatch(pattern, token) is not None
+            for pattern, token in zip(patterns, tail)
+        )
+
+    if stage in {"snapshot_before_hex", "final_after_hex"}:
+        return len(tail) == 32 and all(
+            re.fullmatch(rf"b{index}=0x[0-9a-fA-F]{{1,2}}", token) is not None
+            for index, token in enumerate(tail)
+        )
+    if stage == "field_verify":
+        return matches(
+            (
+                r"field=[a-zA-Z0-9_]+",
+                r"df_addr=0x[0-9a-fA-F]+",
+                r"raw_lo=0x[0-9a-fA-F]{1,2}",
+                r"raw_hi=0x[0-9a-fA-F]{1,2}",
+                r"decoded=0x[0-9a-fA-F]{1,4}",
+            )
+        )
+    if stage == "done":
+        return matches(
+            (
+                r"fields=\d+",
+                r"snapshot_addr=0x[0-9a-fA-F]+",
+                r"snapshot_len=\d+",
+                r"final_addr=0x[0-9a-fA-F]+",
+                r"final_len=\d+",
+            )
+        )
+    if stage in {
+        "security_unseal_0414",
+        "security_unseal_3672",
+        "security_full_access_ffff_1",
+        "security_full_access_ffff_2",
+    }:
+        return matches((r"write=ok",))
+    if stage == "charge_disabled":
+        return matches((r"ce_high=true", r"charger_enabled=false"))
+    if stage == "identity_verified":
+        return matches((r"manufacturer=texas", r"device=bq40"))
+    if stage == "security_after":
+        return matches((r"op=0x[0-9a-fA-F]+", r"sec=\S+"))
+    if stage in {
+        "identity_mfg_error",
+        "identity_device_error",
+        "security_error",
+        "snapshot_transport",
+        "snapshot_address",
+        "snapshot_length",
+        "write_transport",
+        "echo_address",
+        "echo_length",
+        "echo_raw",
+        "echo_decoded",
+        "final_transport",
+        "final_address",
+        "final_length",
+        "final_raw",
+        "final_decoded",
+    }:
+        return matches((r"err=\S+",))
+    if stage == "identity_error":
+        return matches((r"reason=\S+",))
+    if stage == "error":
+        return matches((r"error=\S+",))
+    if stage == "halt":
+        return matches((r"reason=profile_failed", r"charger_enabled=false"))
+
+    # Unknown stages are rejected semantically below. Keep their shape check
+    # conservative so a bare stage can still produce the explicit unknown-stage
+    # reason, while arbitrary trailing text cannot be mistaken for evidence.
+    return all(re.fullmatch(r"[a-zA-Z0-9_]+=[^\s]+", token) for token in tail)
+
+
 CHARGE_PROFILE_SNAPSHOT_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=bq40_charge_temperature stage=(?P<stage>snapshot_before_hex|final_after_hex) "
     + " ".join(
         rf"b{index}=0x(?P<b{index}>[0-9a-fA-F]{{1,2}})" for index in range(32)
     )
+    + r"$"
 )
 CHARGE_PROFILE_DONE_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=bq40_charge_temperature stage=done fields=(?P<fields>\d+) "
     rf"snapshot_addr=0x(?P<snapshot_addr>[0-9a-fA-F]+) snapshot_len=(?P<snapshot_len>\d+) "
-    rf"final_addr=0x(?P<final_addr>[0-9a-fA-F]+) final_len=(?P<final_len>\d+)"
+    rf"final_addr=0x(?P<final_addr>[0-9a-fA-F]+) final_len=(?P<final_len>\d+)$"
 )
 CHARGE_PROFILE_FIELD_VERIFY_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=bq40_charge_temperature stage=field_verify field=(?P<field>[a-zA-Z0-9_]+) "
     rf"df_addr=0x(?P<df_addr>[0-9a-fA-F]+) raw_lo=0x(?P<raw_lo>[0-9a-fA-F]{{1,2}}) "
-    rf"raw_hi=0x(?P<raw_hi>[0-9a-fA-F]{{1,2}}) decoded=0x(?P<decoded>[0-9a-fA-F]{{1,4}})"
+    rf"raw_hi=0x(?P<raw_hi>[0-9a-fA-F]{{1,2}}) decoded=0x(?P<decoded>[0-9a-fA-F]{{1,4}})$"
 )
 CHARGE_PROFILE_ERROR_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    rf"profile=(?P<profile>[a-zA-Z0-9_]+) stage=error error=(?P<error>[a-zA-Z0-9_]+)"
+    rf"profile=(?P<profile>[a-zA-Z0-9_]+) stage=error error=(?P<error>[a-zA-Z0-9_]+)$"
+)
+CHARGE_PROFILE_CE_DISABLED_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=charge_disabled "
+    rf"ce_high=(?P<ce_high>true|false) charger_enabled=(?P<charger_enabled>true|false)$"
+)
+CHARGE_PROFILE_IDENTITY_VERIFIED_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=identity_verified "
+    rf"manufacturer=(?P<manufacturer>[a-zA-Z0-9_]+) device=(?P<device>[a-zA-Z0-9_]+)$"
+)
+CHARGE_PROFILE_SECURITY_AFTER_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=security_after "
+    rf"op=0x(?P<op>[0-9a-fA-F]+) sec=(?P<sec>[a-zA-Z0-9_]+)$"
 )
 ROM_DETECTED_RE = re.compile(
     r"stage=(?:rom_mode_detected(?:_after_enter|_post_flash)?|wake_window_rom_entered|wake_window_rom_signature)\b"
@@ -122,6 +216,8 @@ CHARGE_PROFILE_KNOWN_STAGES = {
     "security_full_access_ffff_1",
     "security_full_access_ffff_2",
     "security_after",
+    "charge_disabled",
+    "identity_verified",
     "security_error",
     "identity_mfg_error",
     "identity_device_error",
@@ -145,7 +241,7 @@ CHARGE_PROFILE_KNOWN_STAGES = {
 
 
 def charge_profile_address_allowed(mode: str, address: int) -> bool:
-    return address in ({0x0B} if mode == "canonical" else {0x0B, 0x16})
+    return mode == "canonical" and address == 0x0B
 
 
 def charge_profile_final_vectors_match(payload_hex: Optional[str]) -> bool:
@@ -254,6 +350,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
+    if args.repair_profile == "bq40-charge-temperature" and args.mode != "canonical":
+        print(
+            "bq40-charge-temperature profile verification requires canonical mode; "
+            "dual-diag is diagnostic-only",
+            file=sys.stderr,
+        )
+        return 24
+
     monitor_file = Path(args.monitor_file).expanduser().resolve()
     report_out = Path(args.report_out).expanduser().resolve()
     report_out.mkdir(parents=True, exist_ok=True)
@@ -291,6 +395,13 @@ def main() -> int:
     charge_profile_field_order: list[str] = []
     charge_profile_sequence_error = False
     charge_profile_unknown_stage = False
+    charge_profile_ce_disabled = False
+    charge_profile_identity_verified = False
+    charge_profile_full_access_verified = False
+    charge_profile_security_stages_seen: set[str] = set()
+    charge_profile_ce_disabled_count = 0
+    charge_profile_identity_verified_count = 0
+    charge_profile_security_after_count = 0
     canonical_touched_0x16 = False
     last_sample_ts: Optional[float] = None
     in_preexisting_segment = False
@@ -443,12 +554,62 @@ def main() -> int:
                     charge_profile_apply_attempted = True
                     charge_profile_addresses.add(int(charge_profile_match.group("addr"), 16))
                     stage = charge_profile_match.group("stage")
-                    count = charge_profile_match.group("count")
-                    if stage == "snapshot_before_hex":
+                    if stage == "charge_disabled":
+                        charge_profile_ce_disabled_count += 1
+                        gate_match = CHARGE_PROFILE_CE_DISABLED_RE.search(text)
+                        if (
+                            charge_profile_ce_disabled_count != 1
+                            or gate_match is None
+                            or gate_match.group("ce_high") != "true"
+                            or gate_match.group("charger_enabled") != "false"
+                        ):
+                            charge_profile_sequence_error = True
+                        else:
+                            charge_profile_ce_disabled = True
+                    elif stage == "identity_verified":
+                        charge_profile_identity_verified_count += 1
+                        identity_match = CHARGE_PROFILE_IDENTITY_VERIFIED_RE.search(text)
+                        if (
+                            not charge_profile_ce_disabled
+                            or charge_profile_identity_verified_count != 1
+                            or identity_match is None
+                            or identity_match.group("manufacturer") != "texas"
+                            or identity_match.group("device") != "bq40"
+                        ):
+                            charge_profile_sequence_error = True
+                        else:
+                            charge_profile_identity_verified = True
+                    elif stage in {
+                        "security_unseal_0414",
+                        "security_unseal_3672",
+                        "security_full_access_ffff_1",
+                        "security_full_access_ffff_2",
+                    }:
+                        if (
+                            not charge_profile_identity_verified
+                            or stage in charge_profile_security_stages_seen
+                        ):
+                            charge_profile_sequence_error = True
+                        charge_profile_security_stages_seen.add(stage)
+                    elif stage == "security_after":
+                        charge_profile_security_after_count += 1
+                        security_match = CHARGE_PROFILE_SECURITY_AFTER_RE.search(text)
+                        if (
+                            not charge_profile_identity_verified
+                            or charge_profile_security_after_count != 1
+                            or len(charge_profile_security_stages_seen) != 4
+                            or security_match is None
+                            or security_match.group("sec") != "full_access"
+                        ):
+                            charge_profile_sequence_error = True
+                        else:
+                            charge_profile_full_access_verified = True
+                    elif stage == "snapshot_before_hex":
                         if (
                             charge_profile_snapshot_before_count != 0
                             or charge_profile_final_after_count != 0
                             or charge_profile_done_count != 0
+                            or not charge_profile_full_access_verified
                         ):
                             charge_profile_sequence_error = True
                         charge_profile_snapshot_before_count += 1
@@ -457,6 +618,7 @@ def main() -> int:
                             charge_profile_snapshot_before_count != 1
                             or charge_profile_final_after_count != 0
                             or charge_profile_done_count != 0
+                            or not charge_profile_full_access_verified
                         ):
                             charge_profile_sequence_error = True
                         charge_profile_final_after_count += 1
@@ -465,6 +627,7 @@ def main() -> int:
                             charge_profile_snapshot_before_count != 1
                             or charge_profile_final_after_count != 1
                             or charge_profile_done_count != 0
+                            or not charge_profile_full_access_verified
                         ):
                             charge_profile_sequence_error = True
                     elif stage == "done":
@@ -475,10 +638,6 @@ def main() -> int:
                         ):
                             charge_profile_sequence_error = True
                         charge_profile_done_count += 1
-                        if count is not None:
-                            charge_profile_apply_writes = max(
-                                charge_profile_apply_writes, int(count)
-                            )
                     elif stage in {
                         "security_error",
                         "identity_mfg_error",
@@ -644,6 +803,12 @@ def main() -> int:
     if args.mode == "canonical" and canonical_touched_0x16:
         reasons.append("canonical_mode_touched_0x16")
     if is_charge_profile_requested:
+        if not charge_profile_ce_disabled:
+            reasons.append("charge_profile_ce_disabled_evidence_missing")
+        if not charge_profile_identity_verified:
+            reasons.append("charge_profile_identity_evidence_missing")
+        if not charge_profile_full_access_verified:
+            reasons.append("charge_profile_full_access_evidence_missing")
         if not charge_profile_apply_done:
             reasons.append("charge_profile_apply_not_done")
         if charge_profile_apply_writes != 7:
@@ -711,6 +876,9 @@ def main() -> int:
         "charge_temperature_apply": {
             "attempted": charge_profile_apply_attempted,
             "done": charge_profile_apply_done,
+            "ce_disabled": charge_profile_ce_disabled,
+            "identity_verified": charge_profile_identity_verified,
+            "full_access_verified": charge_profile_full_access_verified,
             "writes": charge_profile_apply_writes,
             "errors": dict(sorted(charge_profile_apply_errors.items())),
             "readback_seen": charge_profile_readback_seen,

@@ -259,6 +259,11 @@ if [[ "$subcommand" == "apply-df" && "$probe_mode" == "mac-only" ]]; then
   exit 24
 fi
 
+if [[ "$repair_profile" == "bq40-charge-temperature" && "$mode" != "canonical" ]]; then
+  echo "--repair-profile bq40-charge-temperature requires canonical mode; dual-diag is diagnostic-only" >&2
+  exit 24
+fi
+
 if [[ "$subcommand" == "verify" ]]; then
   case "$repair_profile" in
     none|bq40-charge-temperature) ;;

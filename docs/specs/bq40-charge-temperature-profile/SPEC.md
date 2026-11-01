@@ -5,7 +5,7 @@
 ## Context and Scope
 
 - Context: The project uses `BQ40Z50-R2` as the battery monitor/protection controller and `BQ25792` as the charger. Both devices must apply one conservative, reviewable temperature policy to an EVE INR21700/50E 4S1P pack.
-- In scope: cell-temperature boundaries, BQ40 Data Flash temperature fields, BQ40 temperature-dependent charge-current/voltage profiles, BQ25792 JEITA coordination, and the safe read/write boundary for a future maintenance writer.
+- In scope: cell-temperature boundaries, BQ40 Data Flash temperature fields, BQ40 temperature-dependent charge-current/voltage profiles, BQ25792 JEITA coordination, and the safe read/write boundary for the explicit maintenance writer.
 - Out of scope: a new ChemID characterization, pack learning, protection-threshold retuning, or any physical-device operation. The implementation mapping is recorded in `IMPLEMENTATION.md` and is part of this contract's acceptance surface.
 
 ## Terms and Interfaces
@@ -60,10 +60,11 @@
 
 ### REQ-BQ40-CTP-006
 
-- A future Data Flash writer MUST use an explicit semantic profile and an allowlist containing only `T1`, `T2`, `T5`, `T6`, `T3`, `T4`, and `Hysteresis` for this topic.
-- The charge-temperature writer MUST use the existing strict BQ40 identity probe with both `ManufacturerName()` containing `Texas` and `DeviceName()` containing `BQ40` evidence. The diagnostic-only `mac-only` probe MUST be rejected before a profile image can write Data Flash.
+- The Data Flash writer MUST use an explicit semantic profile and an allowlist containing only `T1`, `T2`, `T5`, `T6`, `T3`, `T4`, and `Hysteresis` for this topic.
+- The charge-temperature writer MUST use canonical addressing and the existing strict BQ40 identity probe with both `ManufacturerName()` containing `Texas` and `DeviceName()` containing `BQ40` evidence. The diagnostic-only `mac-only` and `dual-diag` modes MUST be rejected before a profile image can write or verify Data Flash.
 - Before writing, it MUST save the complete containing Data Flash block. After writing, it MUST verify the address echo, block length, every target raw value, and every decoded semantic value.
 - The writer MUST treat the operation as non-atomic and MUST stop on transport error, write failure, or readback mismatch. A profile failure in the maintenance firmware MUST latch `CE` high and terminate the maintenance charge flow. It MUST NOT silently fall back to the existing broad 25-field `bq40-comm-tool` baseline.
+- The audit stream MUST prove the ordered pre-write gates `CE high/charger disabled`, both identity evidence, and Full Access before accepting snapshot, field, and completion evidence.
 - The normal `mains-aegis` runtime MUST NOT automatically write BQ40 Data Flash.
 - The current/voltage table in the profile manifest is a static policy and validation record only; it MUST NOT become a live Data Flash writer target.
 - covers: `VER-BQ40-CTP-006`
@@ -109,7 +110,7 @@
 
 ### VER-BQ40-CTP-006
 
-- Method: Host MB44 protocol/contract tests cover the exact read and field-write frames, echoed-address readback, malformed length, mismatch, and interrupted-write cases; the target adapter uses those tested frame builders, the profile build requires the strict identity probe, the report parser requires complete pre/post blocks plus all seven field-verification records, and the persisted report records the complete pre-write snapshot.
+- Method: Host MB44 protocol/contract tests cover the exact read and field-write frames, echoed-address readback, malformed length, mismatch, and interrupted-write cases; the target adapter uses those tested frame builders, the profile build requires the strict canonical identity probe, the report parser requires ordered CE/identity/Full Access gates plus complete pre/post blocks and all seven field-verification records, and the persisted report records the complete pre-write snapshot.
 - covers: `REQ-BQ40-CTP-006`
 - Pass condition: Only the seven allowlisted fields can change; the report parser compares every non-allowlisted byte between the complete pre-write and post-write blocks and rejects unknown stages, reordered, duplicated, or incomplete evidence whenever the explicit profile is requested; every failure stops the transaction and preserves the pre-write block for rollback; incomplete or inconsistent report evidence is not accepted as PASS.
 

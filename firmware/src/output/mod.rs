@@ -6641,7 +6641,9 @@ where
         &self,
         now_ms: u64,
     ) -> charge_temperature::ChargeTemperatureDecision {
-        if self.bms_temperature_configuration_ok == Some(false) {
+        if !charge_temperature::bq40_temperature_configuration_verified(
+            self.bms_temperature_configuration_ok,
+        ) {
             return charge_temperature::ChargeTemperatureDecision::no_charge();
         }
         let Some(observed_at_ms) = self.bms_cached_da_status2_at_ms else {
@@ -6667,7 +6669,9 @@ where
     /// evidence as product charging. The charger-side JEITA NTC remains an
     /// independent hardware interlock at the call site.
     fn bq40_activation_wake_gate(&self, now_ms: u64) -> bool {
-        if self.bms_temperature_configuration_ok == Some(false) {
+        if !charge_temperature::bq40_temperature_configuration_verified(
+            self.bms_temperature_configuration_ok,
+        ) {
             return false;
         }
         let temperature = self

@@ -5692,6 +5692,11 @@ where
             return false;
         }
 
+        defmt::info!(
+            "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=charge_disabled ce_high=true charger_enabled=false",
+            addr,
+        );
+
         // The wake-window and post-recovery paths deliberately use a numeric-only probe to
         // bring the gauge out of sleep. Before any Data Flash write, repeat the identity probe
         // here so every writer entry point is bound to the existing BQ40 identity evidence.
@@ -5738,6 +5743,10 @@ where
             self.bms_next_poll_at = now + BMS_POLL_PERIOD;
             return true;
         }
+        defmt::info!(
+            "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=identity_verified manufacturer=texas device=bq40",
+            addr,
+        );
 
         if let Err(err) = self.require_bms_full_access(addr) {
             defmt::warn!(

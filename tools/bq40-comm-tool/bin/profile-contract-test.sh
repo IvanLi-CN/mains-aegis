@@ -53,9 +53,21 @@ expect_exit_with_text 24 \
   "requires the strict identity probe" \
   "$SCRIPT_DIR/run.sh" apply-df --probe-mode mac-only --repair-profile bq40-charge-temperature
 
+expect_exit_with_text 24 \
+  "requires canonical mode" \
+  "$SCRIPT_DIR/build.sh" --mode dual-diag --recover never --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 24 \
+  "requires canonical mode" \
+  "$SCRIPT_DIR/run.sh" apply-df --mode dual-diag --repair-profile bq40-charge-temperature
+
 expect_exit_with_text 12 \
   "monitor file not found" \
   "$SCRIPT_DIR/run.sh" verify --monitor-file /tmp/mains-aegis-missing-charge-profile-log --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 24 \
+  "requires canonical mode" \
+  "$SCRIPT_DIR/run.sh" verify --mode dual-diag --monitor-file /tmp/mains-aegis-missing-charge-profile-log --repair-profile bq40-charge-temperature
 
 expect_exit_with_text 17 \
   "Invalid --repair-profile" \

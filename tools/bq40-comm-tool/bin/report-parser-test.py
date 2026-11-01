@@ -40,13 +40,41 @@ def successful_log() -> list[str]:
     lines = [
         log(
             "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
-            f"stage=snapshot_before_hex {before}"
+            "stage=charge_disabled ce_high=true charger_enabled=false"
         ),
         log(
             "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
-            f"stage=final_after_hex {after}"
+            "stage=identity_verified manufacturer=texas device=bq40"
         ),
     ]
+    for stage in (
+        "security_unseal_0414",
+        "security_unseal_3672",
+        "security_full_access_ffff_1",
+        "security_full_access_ffff_2",
+    ):
+        lines.append(
+            log(
+                "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
+                f"stage={stage} write=ok"
+            )
+        )
+    lines.extend(
+        [
+            log(
+                "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
+                "stage=security_after op=0xffffffff sec=full_access"
+            ),
+            log(
+                "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
+                f"stage=snapshot_before_hex {before}"
+            ),
+            log(
+                "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
+                f"stage=final_after_hex {after}"
+            ),
+        ]
+    )
     for name, (address, raw_lo, raw_hi, decoded) in FIELD_VALUES.items():
         lines.append(
             log(
@@ -82,7 +110,8 @@ def reordered_evidence_log() -> list[str]:
 
 def duplicate_field_evidence_log() -> list[str]:
     lines = successful_log()
-    lines.insert(-1, lines[2])
+    field_line = next(line for line in lines if "field=t1" in line)
+    lines.insert(-1, field_line)
     return lines
 
 
@@ -93,13 +122,16 @@ def duplicate_timestamp_field_evidence_log() -> list[str]:
         entry = json.loads(line)
         entry["ts"] = timestamp
         lines.append(json.dumps(entry))
-    lines.insert(-1, lines[2])
+    field_line = next(line for line in lines if "field=t1" in line)
+    lines.insert(-1, field_line)
     return lines
 
 
 def reordered_field_evidence_log() -> list[str]:
     lines = successful_log()
-    lines[2], lines[3] = lines[3], lines[2]
+    t1_index = next(index for index, line in enumerate(lines) if "field=t1" in line)
+    t2_index = next(index for index, line in enumerate(lines) if "field=t2" in line)
+    lines[t1_index], lines[t2_index] = lines[t2_index], lines[t1_index]
     return lines
 
 
@@ -191,10 +223,20 @@ def trailing_garbage_log() -> list[str]:
         -1,
         log(
             "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
-            "stage=done fields=7 trailing"
+            "stage=done fields=7 trailing=garbage"
         ),
     )
     return lines
+
+
+def missing_gate_evidence_log() -> list[str]:
+    return [
+        line
+        for line in successful_log()
+        if "stage=charge_disabled" not in line
+        and "stage=identity_verified" not in line
+        and "stage=security_" not in line
+    ]
 
 
 def ordinary_sample_log() -> list[str]:
@@ -208,7 +250,10 @@ def ordinary_sample_log() -> list[str]:
 
 
 def run_parser(
-    log_lines: list[str], root: Path, action: str = "apply-df"
+    log_lines: list[str],
+    root: Path,
+    action: str = "apply-df",
+    mode: str = "canonical",
 ) -> subprocess.CompletedProcess[str]:
     monitor = root / "monitor.jsonl"
     report = root / "report"
@@ -220,7 +265,7 @@ def run_parser(
             "--action",
             action,
             "--mode",
-            "canonical",
+            mode,
             "--duration-sec",
             "1",
             "--monitor-file",
@@ -323,6 +368,15 @@ def main() -> None:
                 "charge_profile_evidence_sequence_invalid"
                 in summary["verdict"]["reason"]
             )
+
+        bad = run_parser(missing_gate_evidence_log(), root)
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_identity_evidence_missing" in summary["verdict"]["reason"]
+
+        bad = run_parser(successful_log(), root, mode="dual-diag")
+        assert bad.returncode == 24
+        assert "requires canonical mode" in bad.stderr
 
         bad = run_parser(ordinary_sample_log(), root, action="verify")
         assert bad.returncode == 20

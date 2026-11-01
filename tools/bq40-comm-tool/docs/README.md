@@ -24,12 +24,13 @@ this write automatically.
 The complete pre-write and post-write blocks are emitted as machine-readable
 `stage=snapshot_before_hex` and `stage=final_after_hex` monitor events. The seven
 field verification records are emitted as `stage=field_verify`, and the report parser
-requires all of them before writing `verdict.pass=true`. `summary.json` persists the
-blocks and verified field names under `charge_temperature_apply`. The profile image
-cannot be combined with ROM recovery, AFE repair, or asset repair features. The profile
-image also requires the existing strict BQ40 identity probe with both the Texas manufacturer
-and BQ40 device-name evidence; the diagnostic-only
-`mac-only` probe is rejected before the writer image is built or run.
+requires the ordered `CE high/charger disabled`, dual identity, Full Access, complete
+blocks, and all seven field records before writing `verdict.pass=true`. `summary.json`
+persists the blocks, gate evidence, and verified field names under
+`charge_temperature_apply`. The profile image is canonical-only and cannot be combined
+with ROM recovery, AFE repair, asset repair, `dual-diag`, or `mac-only`; it also requires
+the existing strict BQ40 identity probe with both the Texas manufacturer and BQ40
+device-name evidence before the writer image is built or run.
 
 The former `live-df-mainboard` profile is retired and returns a migration error. ROM,
 AFE, and `asset-df-mainboard` recovery paths retain their existing semantics and are not

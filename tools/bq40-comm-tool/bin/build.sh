@@ -157,6 +157,11 @@ if [[ "$repair_profile" == "bq40-charge-temperature" && "$probe_mode" == "mac-on
   exit 24
 fi
 
+if [[ "$repair_profile" == "bq40-charge-temperature" && "$mode" != "canonical" ]]; then
+  echo "--repair-profile bq40-charge-temperature requires canonical mode; dual-diag is diagnostic-only" >&2
+  exit 24
+fi
+
 artifact_features=$(IFS=, ; echo "${features[*]}")
 
 if [[ "$recover" != "never" && "$mode" != "dual-diag" ]]; then
