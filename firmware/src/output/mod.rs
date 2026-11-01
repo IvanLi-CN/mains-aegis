@@ -6595,16 +6595,19 @@ where
 
         let Some(addr) = self.bms_addr else {
             self.bq40_charge_request = None;
-            self.bq40_charge_request_observed = false;
             return;
         };
 
         let current_ma = bq40z50::read_charging_current_ma(&mut self.i2c, addr);
         let voltage_mv = bq40z50::read_charging_voltage_mv(&mut self.i2c, addr);
         let observed_at_ms = self.fan_now_ms();
+        self.bq40_charge_request_observed = charge_temperature::latch_bq40_charge_request_observed(
+            self.bq40_charge_request_observed,
+            current_ma.is_ok(),
+            voltage_mv.is_ok(),
+        );
         match (current_ma, voltage_mv) {
             (Ok(current_ma), Ok(voltage_mv)) => {
-                self.bq40_charge_request_observed = true;
                 let request = charge_temperature::Bq40ChargeRequest {
                     current_ma,
                     voltage_mv,
@@ -6735,14 +6738,17 @@ where
         self.charge_policy_derate.reset();
         self.charge_policy_output_load.reset();
         self.bq40_charge_request = None;
-        self.bq40_charge_request_observed = false;
+        // Keep request observation latched across snapshot failures. An
+        // observed request followed by transport loss must not reopen the
+        // fixed activation-wake fallback.
     }
 
     fn reset_bms_detail_mac_cache(&mut self, now: Instant) {
         self.bms_cached_da_status2 = None;
         self.bms_cached_da_status2_at_ms = None;
         self.bq40_charge_request = None;
-        self.bq40_charge_request_observed = false;
+        // The request observation latch is cleared only on PowerManager
+        // initialization, not on a transient BQ40 detail-cache reset.
         self.bq40_charge_request_next_poll_at = now;
         self.bms_cached_filter_capacity = None;
         self.bms_cached_balance_config = None;

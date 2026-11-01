@@ -223,6 +223,17 @@ pub const fn activation_wake_charge_allowed(
     )
 }
 
+/// Latch any successfully read half of the BQ40 current/voltage request. A
+/// partial read is still safety evidence; a later transport failure must not
+/// reopen the fixed activation-wake fallback.
+pub const fn latch_bq40_charge_request_observed(
+    previously_observed: bool,
+    current_read_succeeded: bool,
+    voltage_read_succeeded: bool,
+) -> bool {
+    previously_observed || current_read_succeeded || voltage_read_succeeded
+}
+
 pub const fn evaluate_cell_temperature_k_x10(temp_k_x10: Option<u16>) -> ChargeTemperatureDecision {
     match temp_k_x10 {
         Some(temp_k_x10) if temp_k_x10 < TEMP_ZERO_K_X10 => ChargeTemperatureDecision::no_charge(),
@@ -410,6 +421,7 @@ mod tests {
             true,
             Some(request)
         ));
+        assert!(!activation_wake_charge_allowed(100, None, None, true, None));
         assert!(activation_wake_charge_allowed(
             100,
             Some(100),
@@ -447,6 +459,14 @@ mod tests {
             true,
             Some(invalid)
         ));
+    }
+
+    #[test]
+    fn partial_bq40_request_read_latches_safety_evidence() {
+        assert!(latch_bq40_charge_request_observed(false, true, false));
+        assert!(latch_bq40_charge_request_observed(false, false, true));
+        assert!(latch_bq40_charge_request_observed(true, false, false));
+        assert!(!latch_bq40_charge_request_observed(false, false, false));
     }
 
     #[test]

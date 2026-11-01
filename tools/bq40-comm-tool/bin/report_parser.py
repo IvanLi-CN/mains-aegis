@@ -89,6 +89,33 @@ CHARGE_PROFILE_EXPECTED_FIELDS = {
     "t4": (0x4A15, (0x6E, 0x0C), 0x0C6E),
     "hysteresis": (0x4A17, (0x14, 0x00), 0x0014),
 }
+CHARGE_PROFILE_KNOWN_STAGES = {
+    "snapshot_before_hex",
+    "final_after_hex",
+    "field_verify",
+    "done",
+    "security_unseal_0414",
+    "security_unseal_3672",
+    "security_full_access_ffff_1",
+    "security_full_access_ffff_2",
+    "security_after",
+    "security_error",
+    "snapshot_transport",
+    "snapshot_address",
+    "snapshot_length",
+    "write_transport",
+    "echo_address",
+    "echo_length",
+    "echo_raw",
+    "echo_decoded",
+    "final_transport",
+    "final_address",
+    "final_length",
+    "final_raw",
+    "final_decoded",
+    "error",
+    "halt",
+}
 
 
 def charge_profile_address_allowed(mode: str, address: int) -> bool:
@@ -235,7 +262,9 @@ def main() -> int:
     charge_profile_final_after_count = 0
     charge_profile_done_count = 0
     charge_profile_field_verify_counts: Counter[str] = Counter()
+    charge_profile_field_order: list[str] = []
     charge_profile_sequence_error = False
+    charge_profile_unknown_stage = False
     canonical_touched_0x16 = False
     last_sample_ts: Optional[float] = None
     in_preexisting_segment = False
@@ -384,8 +413,14 @@ def main() -> int:
                         "final_length",
                         "final_raw",
                         "final_decoded",
+                        "error",
+                        "halt",
                     }:
                         charge_profile_apply_errors[stage] += 1
+                    elif stage not in CHARGE_PROFILE_KNOWN_STAGES:
+                        charge_profile_unknown_stage = True
+                        charge_profile_sequence_error = True
+                        charge_profile_apply_errors["unknown_stage"] += 1
 
                 charge_profile_done_match = CHARGE_PROFILE_DONE_RE.search(text)
                 if charge_profile_done_match:
@@ -418,8 +453,14 @@ def main() -> int:
                     charge_profile_addresses.add(address)
                     field_name = charge_profile_field_match.group("field")
                     charge_profile_field_verify_counts[field_name] += 1
-                    if charge_profile_field_verify_counts[field_name] != 1:
+                    expected_field_order = tuple(CHARGE_PROFILE_EXPECTED_FIELDS)
+                    if (
+                        charge_profile_field_verify_counts[field_name] != 1
+                        or len(charge_profile_field_order) >= len(expected_field_order)
+                        or field_name != expected_field_order[len(charge_profile_field_order)]
+                    ):
                         charge_profile_sequence_error = True
+                    charge_profile_field_order.append(field_name)
                     expected = CHARGE_PROFILE_EXPECTED_FIELDS.get(field_name)
                     actual = (
                         int(charge_profile_field_match.group("df_addr"), 16),
@@ -509,18 +550,18 @@ def main() -> int:
         print(f"failed to read monitor file: {exc}", file=sys.stderr)
         return 4
 
-    is_charge_profile_apply = (
-        args.action == "apply-df" and args.repair_profile == "bq40-charge-temperature"
-    )
+    is_charge_profile_requested = args.repair_profile == "bq40-charge-temperature"
 
     reasons: list[str] = []
-    if samples_total == 0 and not (is_charge_profile_apply and charge_profile_apply_done):
+    if samples_total == 0 and not (
+        is_charge_profile_requested and charge_profile_apply_done
+    ):
         reasons.append("no_bms_samples")
-    if max_streak < 10 and not is_charge_profile_apply:
+    if max_streak < 10 and not is_charge_profile_requested:
         reasons.append("max_valid_streak_lt_10")
     if args.mode == "canonical" and canonical_touched_0x16:
         reasons.append("canonical_mode_touched_0x16")
-    if is_charge_profile_apply:
+    if is_charge_profile_requested:
         if not charge_profile_apply_done:
             reasons.append("charge_profile_apply_not_done")
         if charge_profile_apply_writes != 7:
@@ -551,6 +592,10 @@ def main() -> int:
             reasons.append("charge_profile_non_allowlisted_bytes_changed")
         if charge_profile_sequence_error:
             reasons.append("charge_profile_evidence_sequence_invalid")
+        if charge_profile_unknown_stage:
+            reasons.append("charge_profile_unknown_stage")
+        if charge_profile_field_order != list(CHARGE_PROFILE_EXPECTED_FIELDS):
+            reasons.append("charge_profile_field_order_invalid")
         if charge_profile_addresses and not all(
             charge_profile_address_allowed(args.mode, address)
             for address in charge_profile_addresses
@@ -592,7 +637,9 @@ def main() -> int:
             "snapshot_before_count": charge_profile_snapshot_before_count,
             "final_after_count": charge_profile_final_after_count,
             "done_count": charge_profile_done_count,
+            "field_order": charge_profile_field_order,
             "evidence_sequence_error": charge_profile_sequence_error,
+            "unknown_stage": charge_profile_unknown_stage,
             "addresses": [f"0x{address:02x}" for address in sorted(charge_profile_addresses)],
             "verified_fields": sorted(charge_profile_verified_fields),
         },

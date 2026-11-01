@@ -86,7 +86,37 @@ def duplicate_field_evidence_log() -> list[str]:
     return lines
 
 
-def run_parser(log_lines: list[str], root: Path) -> subprocess.CompletedProcess[str]:
+def reordered_field_evidence_log() -> list[str]:
+    lines = successful_log()
+    lines[2], lines[3] = lines[3], lines[2]
+    return lines
+
+
+def unknown_stage_log() -> list[str]:
+    lines = successful_log()
+    lines.insert(
+        -1,
+        log(
+            "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
+            "stage=unexpected"
+        ),
+    )
+    return lines
+
+
+def ordinary_sample_log() -> list[str]:
+    return [
+        log(
+            "bms: addr=0xb temp_c_x10=250 voltage_mv=14600 "
+            "current_ma=500 soc_pct=50 status=0x0"
+        )
+        for _ in range(10)
+    ]
+
+
+def run_parser(
+    log_lines: list[str], root: Path, action: str = "apply-df"
+) -> subprocess.CompletedProcess[str]:
     monitor = root / "monitor.jsonl"
     report = root / "report"
     monitor.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
@@ -95,7 +125,7 @@ def run_parser(log_lines: list[str], root: Path) -> subprocess.CompletedProcess[
             "python3",
             str(SCRIPT),
             "--action",
-            "apply-df",
+            action,
             "--mode",
             "canonical",
             "--duration-sec",
@@ -156,6 +186,21 @@ def main() -> None:
         assert bad.returncode == 20
         summary = json.loads((root / "report" / "summary.json").read_text())
         assert "charge_profile_evidence_sequence_invalid" in summary["verdict"]["reason"]
+
+        bad = run_parser(reordered_field_evidence_log(), root)
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_field_order_invalid" in summary["verdict"]["reason"]
+
+        bad = run_parser(unknown_stage_log(), root)
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_unknown_stage" in summary["verdict"]["reason"]
+
+        bad = run_parser(ordinary_sample_log(), root, action="verify")
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_apply_not_done" in summary["verdict"]["reason"]
 
     print("report parser contract: ok")
 
