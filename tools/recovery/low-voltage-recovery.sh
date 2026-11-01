@@ -237,9 +237,13 @@ validate_diag_snapshot() {
   local out="$2"
   python_json "$diag_json" "$require_recovery_state" "$out" <<'PY'
 import json, sys
-diag = json.loads(sys.argv[1])
-packages = diag.get("packages", {})
 errors = []
+raw_diag = json.loads(sys.argv[1])
+if not isinstance(raw_diag, dict):
+    errors.append("diag response is not an object")
+    packages = {}
+else:
+    packages = raw_diag.get("packages", {})
 if not isinstance(packages, dict):
     errors.append("diag.packages is missing or not an object")
     derived_payload = {}
@@ -259,6 +263,15 @@ out = sys.argv[3]
 charger = diag.get("charger", {})
 bms = diag.get("bms", {})
 policy = diag.get("policy", {})
+if not isinstance(charger, dict):
+    errors.append("derived.power.payload.charger is not an object")
+    charger = {}
+if not isinstance(bms, dict):
+    errors.append("derived.power.payload.bms is not an object")
+    bms = {}
+if not isinstance(policy, dict):
+    errors.append("derived.power.payload.policy is not an object")
+    policy = {}
 if charger.get("vbat_lowv_pct_x10") != 714:
     errors.append(f"charger.vbat_lowv_pct_x10={charger.get('vbat_lowv_pct_x10')!r}, expected 714")
 if charger.get("iprechg_ma") != 120:

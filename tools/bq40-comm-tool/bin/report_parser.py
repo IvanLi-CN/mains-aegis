@@ -368,6 +368,7 @@ def main() -> int:
                 charge_profile_any_match = CHARGE_PROFILE_APPLY_ANY_RE.search(text)
                 if charge_profile_any_match:
                     any_profile = charge_profile_any_match.group("profile")
+                    any_stage = charge_profile_any_match.group("stage")
                     if any_profile != "bq40_charge_temperature":
                         charge_profile_apply_attempted = True
                         charge_profile_addresses.add(
@@ -376,7 +377,11 @@ def main() -> int:
                         charge_profile_sequence_error = True
                         charge_profile_unknown_stage = True
                         charge_profile_apply_errors["unknown_profile"] += 1
-                    elif charge_profile_match is None:
+                    elif (
+                        charge_profile_match is None
+                        or charge_profile_match.group("profile") != any_profile
+                        or charge_profile_match.group("stage") != any_stage
+                    ):
                         charge_profile_apply_attempted = True
                         charge_profile_addresses.add(
                             int(charge_profile_any_match.group("addr"), 16)

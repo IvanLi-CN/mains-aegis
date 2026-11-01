@@ -116,6 +116,18 @@ def malformed_stage_log() -> list[str]:
     return lines
 
 
+def malformed_known_stage_log() -> list[str]:
+    lines = successful_log()
+    lines.insert(
+        -1,
+        log(
+            "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
+            "stage=done-typo fields=7"
+        ),
+    )
+    return lines
+
+
 def malformed_profile_log() -> list[str]:
     lines = successful_log()
     lines.insert(
@@ -222,6 +234,11 @@ def main() -> None:
         assert "charge_profile_unknown_stage" in summary["verdict"]["reason"]
 
         bad = run_parser(malformed_stage_log(), root)
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_unknown_stage" in summary["verdict"]["reason"]
+
+        bad = run_parser(malformed_known_stage_log(), root)
         assert bad.returncode == 20
         summary = json.loads((root / "report" / "summary.json").read_text())
         assert "charge_profile_unknown_stage" in summary["verdict"]["reason"]
