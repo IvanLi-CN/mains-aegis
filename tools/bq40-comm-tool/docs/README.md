@@ -31,7 +31,9 @@ persists the blocks, gate evidence, and verified field names under
 with ROM recovery, non-R2 ROM images, AFE repair, asset repair, `dual-diag`, or `mac-only`; it
 is accepted by offline verification only for `apply-df` or `verify` actions, and it also requires
 the existing strict BQ40 identity probe with both the Texas manufacturer and BQ40
-device-name evidence before the writer image is built or run.
+device-name evidence before the writer image is built or run. Offline `report.sh` parsing
+also enforces `strict`/`r2` provenance for `apply-df`; `verify` accepts no live-run provenance
+flags and validates the Full Access operation-status bits.
 
 The former `live-df-mainboard` profile is retired and returns a migration error. ROM,
 AFE, and `asset-df-mainboard` recovery paths retain their existing semantics and are not

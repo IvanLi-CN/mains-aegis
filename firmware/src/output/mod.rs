@@ -6672,7 +6672,7 @@ where
     /// evidence as product charging. The charger-side JEITA NTC remains an
     /// independent hardware interlock at the call site.
     fn bq40_activation_wake_gate(&self, now_ms: u64) -> bool {
-        if !charge_temperature::bq40_temperature_configuration_verified(
+        if !charge_temperature::bq40_activation_temperature_configuration_allows(
             self.bms_temperature_configuration_ok,
         ) {
             return false;

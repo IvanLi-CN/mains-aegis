@@ -96,6 +96,8 @@ Policy:
 - the monitor log must contain `bms_df_apply: ... profile=bq40_charge_temperature stage=done fields=7` with 0x4A00/32-byte pre- and post-write metadata
 - the monitor log must contain one `stage=snapshot_before_hex` event and one `stage=final_after_hex` event, each with all 32 bytes of the containing block
 - the monitor log must contain all seven exact `stage=field_verify` records; the parser rejects missing, inconsistent, wrong-address, unknown-stage, or reordered evidence
+- offline `report.sh` parsing keeps the same provenance boundary as `run.sh`: `apply-df` evidence requires `--probe-mode strict --rom-image r2`, while `verify` rejects live-run provenance flags
+- the Full Access evidence must contain the BQ40 operation-status Full Access bits, not only the decoded `sec=full_access` label
 - any profile failure latches the temporary maintenance image fail-closed across transport loss; rerun the explicit maintenance command to establish a new retry boundary
 - `summary.json` records the outcome under `charge_temperature_apply`, including the complete pre-write and post-write blocks and verified field names for offline rollback/audit
 - the profile does not write ChemID, calibration, protection, termination, precharge, maintenance, or current/voltage manifest fields

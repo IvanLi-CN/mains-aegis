@@ -85,6 +85,10 @@ pub const fn bq40_temperature_configuration_verified(value: Option<bool>) -> boo
     }
 }
 
+pub const fn bq40_activation_temperature_configuration_allows(value: Option<bool>) -> bool {
+    !matches!(value, Some(false))
+}
+
 pub const fn is_temperature_fresh(now_ms: u64, observed_at_ms: u64) -> bool {
     now_ms.saturating_sub(observed_at_ms) <= CHARGE_TEMPERATURE_MAX_AGE_MS
 }
@@ -413,6 +417,15 @@ mod tests {
         assert!(bq40_temperature_configuration_verified(Some(true)));
         assert!(!bq40_temperature_configuration_verified(Some(false)));
         assert!(!bq40_temperature_configuration_verified(None));
+    }
+
+    #[test]
+    fn activation_wake_allows_unknown_configuration_until_bq40_is_observed() {
+        assert!(bq40_activation_temperature_configuration_allows(None));
+        assert!(bq40_activation_temperature_configuration_allows(Some(true)));
+        assert!(!bq40_activation_temperature_configuration_allows(Some(
+            false
+        )));
     }
 
     #[test]

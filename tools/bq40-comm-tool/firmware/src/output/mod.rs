@@ -1309,15 +1309,23 @@ fn log_bms_charge_temperature_snapshot(addr: u8, stage: &'static str, payload: [
 }
 
 #[cfg(feature = "bms-charge-temperature-profile")]
-fn log_bms_charge_temperature_field_verification(addr: u8, field: charge_profile::Field) {
+fn log_bms_charge_temperature_field_verification(
+    addr: u8,
+    field: charge_profile::Field,
+    observed: charge_profile::BlockSnapshot,
+) {
+    let offset = field.offset as usize;
+    let raw_lo = observed.payload[offset];
+    let raw_hi = observed.payload[offset + 1];
+    let decoded = u16::from_le_bytes([raw_lo, raw_hi]);
     defmt::info!(
         "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=field_verify field={} df_addr=0x{=u16:x} raw_lo=0x{=u8:x} raw_hi=0x{=u8:x} decoded=0x{=u16:x}",
         addr,
         field.name,
         field.address,
-        field.raw[0],
-        field.raw[1],
-        field.decoded(),
+        raw_lo,
+        raw_hi,
+        decoded,
     );
 }
 
@@ -5780,7 +5788,11 @@ where
                     report.final_snapshot.payload,
                 );
                 for field in charge_profile::FIELDS {
-                    log_bms_charge_temperature_field_verification(addr, field);
+                    log_bms_charge_temperature_field_verification(
+                        addr,
+                        field,
+                        report.final_snapshot,
+                    );
                 }
                 defmt::info!(
                     "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=done fields={=u8} snapshot_addr=0x{=u16:x} snapshot_len={=u8} final_addr=0x{=u16:x} final_len={=u8}",

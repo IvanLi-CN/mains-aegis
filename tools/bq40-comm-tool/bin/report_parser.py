@@ -368,6 +368,26 @@ def main() -> int:
         )
         return 24
 
+    if args.repair_profile == "bq40-charge-temperature":
+        if args.action == "apply-df" and (
+            args.probe_mode != "strict" or args.rom_image != "r2"
+        ):
+            print(
+                "bq40-charge-temperature apply-df verification requires strict probe "
+                "and r2 ROM provenance",
+                file=sys.stderr,
+            )
+            return 24
+        if args.action == "verify" and any(
+            value is not None
+            for value in (args.force_min_charge, args.probe_mode, args.rom_image)
+        ):
+            print(
+                "bq40-charge-temperature verify does not accept live run provenance flags",
+                file=sys.stderr,
+            )
+            return 24
+
     monitor_file = Path(args.monitor_file).expanduser().resolve()
     report_out = Path(args.report_out).expanduser().resolve()
     report_out.mkdir(parents=True, exist_ok=True)
@@ -613,6 +633,11 @@ def main() -> int:
                         ):
                             charge_profile_sequence_error = True
                         else:
+                            op = int(security_match.group("op"), 16)
+                            if ((op >> 8) & 0x3) != 0b01:
+                                charge_profile_sequence_error = True
+                                charge_profile_apply_errors["full_access_op"] += 1
+                                continue
                             charge_profile_full_access_verified = True
                     elif stage == "snapshot_before_hex":
                         if (

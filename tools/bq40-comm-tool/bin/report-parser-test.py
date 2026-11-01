@@ -63,7 +63,7 @@ def successful_log() -> list[str]:
         [
             log(
                 "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
-                "stage=security_after op=0xffffffff sec=full_access"
+                "stage=security_after op=0x00000100 sec=full_access"
             ),
             log(
                 "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
@@ -254,27 +254,41 @@ def run_parser(
     root: Path,
     action: str = "apply-df",
     mode: str = "canonical",
+    probe_mode: str | None = None,
+    rom_image: str | None = None,
+    force_min_charge: str | None = None,
+    include_provenance: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     monitor = root / "monitor.jsonl"
     report = root / "report"
     monitor.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+    args = [
+        "python3",
+        str(SCRIPT),
+        "--action",
+        action,
+        "--mode",
+        mode,
+        "--duration-sec",
+        "1",
+        "--monitor-file",
+        str(monitor),
+        "--repair-profile",
+        "bq40-charge-temperature",
+        "--report-out",
+        str(report),
+    ]
+    if include_provenance and action == "apply-df":
+        probe_mode = "strict" if probe_mode is None else probe_mode
+        rom_image = "r2" if rom_image is None else rom_image
+    if probe_mode is not None:
+        args.extend(["--probe-mode", probe_mode])
+    if rom_image is not None:
+        args.extend(["--rom-image", rom_image])
+    if force_min_charge is not None:
+        args.extend(["--force-min-charge", force_min_charge])
     return subprocess.run(
-        [
-            "python3",
-            str(SCRIPT),
-            "--action",
-            action,
-            "--mode",
-            mode,
-            "--duration-sec",
-            "1",
-            "--monitor-file",
-            str(monitor),
-            "--repair-profile",
-            "bq40-charge-temperature",
-            "--report-out",
-            str(report),
-        ],
+        args,
         check=False,
         capture_output=True,
         text=True,
@@ -284,7 +298,12 @@ def run_parser(
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="mains-aegis-report-parser-") as temp:
         root = Path(temp)
-        good = run_parser(successful_log(), root)
+        good = run_parser(
+            successful_log(),
+            root,
+            probe_mode="strict",
+            rom_image="r2",
+        )
         assert good.returncode == 0, good.stderr + good.stdout
         summary = json.loads((root / "report" / "summary.json").read_text())
         assert summary["verdict"]["pass"] is True
@@ -377,6 +396,39 @@ def main() -> None:
         bad = run_parser(successful_log(), root, mode="dual-diag")
         assert bad.returncode == 24
         assert "requires canonical mode" in bad.stderr
+
+        for kwargs, expected_text in (
+            ({"probe_mode": "mac-only", "rom_image": "r2"}, "strict probe"),
+            ({"probe_mode": "strict", "rom_image": "r3"}, "r2 ROM provenance"),
+            ({"include_provenance": False}, "strict probe"),
+        ):
+            bad = run_parser(successful_log(), root, **kwargs)
+            assert bad.returncode == 24
+            assert expected_text in bad.stderr
+
+        bad = run_parser(
+            successful_log(),
+            root,
+            action="verify",
+            probe_mode="strict",
+            rom_image="r2",
+        )
+        assert bad.returncode == 24
+        assert "does not accept live run provenance flags" in bad.stderr
+
+        invalid_full_access_op = [
+            line.replace("op=0x00000100", "op=0x00000000")
+            for line in successful_log()
+        ]
+        bad = run_parser(
+            invalid_full_access_op,
+            root,
+            probe_mode="strict",
+            rom_image="r2",
+        )
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_evidence_sequence_invalid" in summary["verdict"]["reason"]
 
         for invalid_action in ("diagnose", "recover"):
             bad = run_parser(successful_log(), root, action=invalid_action)
