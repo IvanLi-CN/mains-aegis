@@ -58,6 +58,7 @@ pub fn publish_status_snapshot(snapshot: SelfCheckUiSnapshot) {
 pub fn build_status_snapshot(snapshot: SelfCheckUiSnapshot) -> UpsStatusSnapshot {
     UpsStatusSnapshot {
         mode: mode_slug(snapshot.mode),
+        host_power_profile: snapshot.host_power_profile,
         requested_outputs: outputs_slug(snapshot.requested_outputs),
         active_outputs: outputs_slug(snapshot.active_outputs),
         recoverable_outputs: outputs_slug(snapshot.recoverable_outputs),

@@ -5,10 +5,10 @@ use heapless::String;
 use crate::{
     mdns_wire::DeviceIdentity,
     net_types::{
-        format_ipv4, Bq40CoreDiagSnapshot, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot,
-        DerivedPowerSnapshot, DeviceSettingsSnapshot, DiagReadError, DiagReadU16, DiagReadU8,
-        Ina3221DiagSnapshot, Tmp112DiagSnapshot, Tps55288DiagSnapshot, UpsStatusSnapshot,
-        WifiSnapshot, API_VERSION, DIAG_READ_ERROR_CAP,
+        format_ipv4, Bq40CoreDiagSnapshot, ChargingStatusTraceSnapshot, DerivedPowerBmsSnapshot,
+        DerivedPowerChargerSnapshot, DerivedPowerSnapshot, DeviceSettingsSnapshot, DiagReadError,
+        DiagReadU16, DiagReadU8, Ina3221DiagSnapshot, Tmp112DiagSnapshot, Tps55288DiagSnapshot,
+        UpsStatusSnapshot, WifiSnapshot, API_VERSION, DIAG_READ_ERROR_CAP,
     },
 };
 
@@ -293,6 +293,9 @@ pub fn render_status_json_with_device_id<const N: usize>(
         json_field_str(buf, "device_id", device_id, true);
     }
     json_field_str(buf, "mode", status.mode, true);
+    let _ = buf.push_str("\"host\":{");
+    json_field_opt_str(buf, "power_profile", status.host_power_profile, false);
+    let _ = buf.push_str("},");
     let _ = buf.push_str("\"input\":{");
     json_field_str(buf, "source", status.input_source, true);
     json_field_opt_bool(buf, "mains_present", status.mains_present, true);
@@ -499,6 +502,9 @@ pub fn render_compact_status_json<const N: usize>(buf: &mut String<N>, status: U
     buf.clear();
     let _ = buf.push('{');
     json_field_str(buf, "mode", status.mode, true);
+    let _ = buf.push_str("\"host\":{");
+    json_field_opt_str(buf, "power_profile", status.host_power_profile, false);
+    let _ = buf.push_str("},");
     let _ = buf.push_str("\"input\":{");
     json_field_str(buf, "source", status.input_source, true);
     json_field_opt_bool(buf, "mains_present", status.mains_present, true);
@@ -897,6 +903,7 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
         true,
     );
     json_field_opt_u32(buf, "gauging_status", diag.bms.gauging_status, true);
+    render_charging_status_trace(buf, diag.bms.charging_status_trace, true);
     json_field_opt_u32(buf, "op_status", diag.bms.op_status, true);
     json_field_opt_u8(buf, "op_status_raw_len", diag.bms.op_status_raw_len, true);
     json_field_opt_u8_array(
@@ -956,7 +963,22 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
     json_field_opt_bool(buf, "charging_inhibit", diag.bms.charging_inhibit, true);
     json_field_opt_bool(buf, "charging_suspend", diag.bms.charging_suspend, true);
     json_field_opt_bool(buf, "charging_hv", diag.bms.charging_hv, true);
+    json_field_opt_u8(buf, "update_status", diag.bms.update_status, true);
     json_field_opt_u16(buf, "current_at_eoc_ma", diag.bms.current_at_eoc_ma, true);
+    json_field_opt_u16(
+        buf,
+        "no_valid_charge_term",
+        diag.bms.no_valid_charge_term,
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "last_valid_charge_term",
+        diag.bms.last_valid_charge_term,
+        true,
+    );
+    json_field_opt_u16(buf, "no_of_qmax_updates", diag.bms.no_of_qmax_updates, true);
+    json_field_opt_u16(buf, "no_of_ra_updates", diag.bms.no_of_ra_updates, true);
     json_field_opt_u16(buf, "da_configuration", diag.bms.da_configuration, true);
     json_field_opt_u16(buf, "power_config", diag.bms.power_config, true);
     json_field_opt_bool(buf, "emshut_en", diag.bms.emshut_en, true);
@@ -1197,6 +1219,48 @@ fn render_diag_mcu_runtime_payload<const N: usize>(
     let _ = buf.push('}');
 }
 
+fn render_charging_status_trace<const N: usize>(
+    buf: &mut String<N>,
+    trace: ChargingStatusTraceSnapshot,
+    trailing_comma: bool,
+) {
+    let _ = buf.push_str("\"charging_status_trace\":{");
+    json_field_opt_u32(buf, "value", trace.value, true);
+    json_field_opt_str(buf, "selected_source", trace.selected_source, true);
+    json_field_opt_u8(buf, "raw_declared_len", trace.raw_declared_len, true);
+    json_field_opt_u8(buf, "raw_payload_len", trace.raw_payload_len, true);
+    json_field_opt_u8_array(
+        buf,
+        "raw_payload",
+        trace.raw_payload.as_ref().map(|bytes| &bytes[..]),
+        true,
+    );
+    json_field_opt_str(buf, "pec_status", trace.pec_status, true);
+    json_field_opt_u8(buf, "pec_declared_len", trace.pec_declared_len, true);
+    json_field_opt_u8(buf, "pec_payload_len", trace.pec_payload_len, true);
+    json_field_opt_u8(buf, "pec_prefix_len", trace.pec_prefix_len, true);
+    json_field_opt_u8_array(
+        buf,
+        "pec_prefix",
+        trace.pec_prefix.as_ref().map(|bytes| &bytes[..]),
+        true,
+    );
+    json_field_opt_str(buf, "plain_status", trace.plain_status, true);
+    json_field_opt_u8(buf, "plain_declared_len", trace.plain_declared_len, true);
+    json_field_opt_u8(buf, "plain_payload_len", trace.plain_payload_len, true);
+    json_field_opt_u8(buf, "plain_prefix_len", trace.plain_prefix_len, true);
+    json_field_opt_u8_array(
+        buf,
+        "plain_prefix",
+        trace.plain_prefix.as_ref().map(|bytes| &bytes[..]),
+        false,
+    );
+    let _ = buf.push('}');
+    if trailing_comma {
+        let _ = buf.push(',');
+    }
+}
+
 fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowerBmsSnapshot) {
     let _ = buf.push('{');
     json_field_opt_u8(buf, "addr", bms.addr, true);
@@ -1213,6 +1277,7 @@ fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowe
     json_field_opt_u32(buf, "manufacturing_status", bms.manufacturing_status, true);
     json_field_opt_u32(buf, "gauging_status", bms.gauging_status, true);
     json_field_opt_u32(buf, "charging_status", bms.charging_status, true);
+    render_charging_status_trace(buf, bms.charging_status_trace, true);
     json_field_opt_u32(buf, "op_status", bms.op_status, true);
     json_field_opt_u8(buf, "op_status_raw_len", bms.op_status_raw_len, true);
     json_field_opt_u8_array(
@@ -1267,7 +1332,17 @@ fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowe
     json_field_opt_bool(buf, "charging_inhibit", bms.charging_inhibit, true);
     json_field_opt_bool(buf, "charging_suspend", bms.charging_suspend, true);
     json_field_opt_bool(buf, "charging_hv", bms.charging_hv, true);
+    json_field_opt_u8(buf, "update_status", bms.update_status, true);
     json_field_opt_u16(buf, "current_at_eoc_ma", bms.current_at_eoc_ma, true);
+    json_field_opt_u16(buf, "no_valid_charge_term", bms.no_valid_charge_term, true);
+    json_field_opt_u16(
+        buf,
+        "last_valid_charge_term",
+        bms.last_valid_charge_term,
+        true,
+    );
+    json_field_opt_u16(buf, "no_of_qmax_updates", bms.no_of_qmax_updates, true);
+    json_field_opt_u16(buf, "no_of_ra_updates", bms.no_of_ra_updates, true);
     json_field_opt_u16(buf, "da_configuration", bms.da_configuration, true);
     json_field_opt_u16(buf, "power_config", bms.power_config, true);
     json_field_opt_bool(buf, "emshut_en", bms.emshut_en, true);
@@ -2484,6 +2559,7 @@ mod tests {
         let mut body = String::<2048>::new();
         let mut status = UpsStatusSnapshot::empty();
         status.mode = "backup";
+        status.host_power_profile = Some("power_saver");
         status.input_source = "dcin";
         status.input_pressure_state = "limited";
         status.input_pressure_score_pct = Some(88);
@@ -2522,6 +2598,9 @@ mod tests {
         });
         render_status_json(&mut body, status);
         assert!(body.as_str().contains("\"mode\":\"backup\""));
+        assert!(body
+            .as_str()
+            .contains("\"host\":{\"power_profile\":\"power_saver\"}"));
         assert!(body.as_str().contains("\"source\":\"dcin\""));
         assert!(body.as_str().contains("\"pressure_state\":\"limited\""));
         assert!(body.as_str().contains("\"pressure_score_pct\":88"));
@@ -2595,6 +2674,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("compact status JSON should be valid: {error}: {body}"));
         assert!(body.len() < body.capacity());
         assert!(body.as_str().contains("\"mode\":\"supplement\""));
+        assert!(body.as_str().contains("\"host\":{\"power_profile\":null}"));
         assert!(body.as_str().contains("\"vin_vbus_mv\":11920"));
         assert!(body.as_str().contains("\"vin_iin_ma\":2900"));
         assert!(body.as_str().contains("\"tps_total_iout_ma\":840"));

@@ -7,7 +7,7 @@ use crate::{
     net_contract::write_json_string_escaped,
     net_types::{
         validate_advanced_power_settings, AdvancedPowerSettingsSnapshot,
-        AdvancedPowerValidationError,
+        AdvancedPowerValidationError, HostPowerProfile,
     },
 };
 
@@ -55,6 +55,7 @@ pub enum UsbCdcRequest {
     GetDiagSnapshot(DiagSnapshotRequest),
     RecoverBmsDischargeAuthorization,
     SetLogLevel(LogLevel),
+    SetHostPowerProfile(Option<HostPowerProfile>),
     SetManualChargePrefs(ManualChargePrefsCommand),
     PreviewChargeControl(ManualChargePrefsCommand),
     ControlManualCharge(ManualChargeControlCommand),
@@ -208,6 +209,7 @@ pub enum UsbCdcProtocolError {
     UnsafeOperation,
     InvalidConfirmation,
     InvalidLogLevel,
+    InvalidHostPowerProfile,
     InvalidManualChargePrefs,
     InvalidManualChargeControl,
     InvalidAdvancedPowerSettings,
@@ -228,6 +230,7 @@ impl UsbCdcProtocolError {
             Self::UnsafeOperation => "unsafe_operation",
             Self::InvalidConfirmation => "invalid_confirmation",
             Self::InvalidLogLevel => "invalid_log_level",
+            Self::InvalidHostPowerProfile => "invalid_host_power_profile",
             Self::InvalidManualChargePrefs => "invalid_manual_charge_prefs",
             Self::InvalidManualChargeControl => "invalid_manual_charge_control",
             Self::InvalidAdvancedPowerSettings => "invalid_advanced_power_settings",
@@ -248,6 +251,9 @@ impl UsbCdcProtocolError {
             Self::UnsafeOperation => "requested operation is outside the safe USB control surface",
             Self::InvalidConfirmation => "confirmation token does not authorize this operation",
             Self::InvalidLogLevel => "log level must be error, warn, info, debug, or trace",
+            Self::InvalidHostPowerProfile => {
+                "host power profile must be power_saver, balanced, performance, or null"
+            }
             Self::InvalidManualChargePrefs => "manual charge prefs are outside the safe set",
             Self::InvalidManualChargeControl => {
                 "manual charge control action must be start or stop"
@@ -422,7 +428,7 @@ pub fn render_hello_json<const N: usize>(
     let _ = buf.push_str(r#""protocol":""#);
     let _ = buf.push_str(PROTOCOL_NAME);
     let _ = buf.push_str(
-        r#"","framing":"jsonl","capabilities":{"status":true,"structured_logs":true,"settings":true,"wifi_config":true,"psk_echo":false},"identity":"#,
+        r#"","framing":"jsonl","capabilities":{"status":true,"structured_logs":true,"settings":true,"wifi_config":true,"psk_echo":false,"host_power_profile":true},"identity":"#,
     );
     let _ = buf.push_str(identity_json);
     let _ = buf.push('}');
@@ -675,6 +681,9 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
                 json_string_field::<16>(line, "level")?.ok_or(UsbCdcProtocolError::MissingField)?;
             Ok(UsbCdcRequest::SetLogLevel(parse_log_level(level.as_str())?))
         }
+        "set_host_power_profile" => Ok(UsbCdcRequest::SetHostPowerProfile(
+            parse_host_power_profile(line)?,
+        )),
         "set_manual_charge_prefs" => Ok(UsbCdcRequest::SetManualChargePrefs(
             parse_manual_charge_prefs(line)?,
         )),
@@ -704,6 +713,22 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
         }
         _ => Err(UsbCdcProtocolError::UnsupportedOperation),
     }
+}
+
+fn parse_host_power_profile(line: &str) -> Result<Option<HostPowerProfile>, UsbCdcProtocolError> {
+    let Some(value_offset) = json_value_offset(line, "profile") else {
+        return Err(UsbCdcProtocolError::MissingField);
+    };
+    let bytes = line.as_bytes();
+    if bytes[value_offset..].starts_with(b"null") {
+        validate_json_number_terminator(bytes, value_offset + 4)?;
+        return Ok(None);
+    }
+    let profile =
+        json_string_field::<16>(line, "profile")?.ok_or(UsbCdcProtocolError::MissingField)?;
+    HostPowerProfile::parse(profile.as_str())
+        .map(Some)
+        .ok_or(UsbCdcProtocolError::InvalidHostPowerProfile)
 }
 
 pub fn parse_http_mute_alert_request(
@@ -1259,6 +1284,48 @@ mod tests {
     }
 
     #[test]
+    fn parses_host_power_profile_updates_and_clear() {
+        assert_eq!(
+            parse_frame(
+                r#"{"type":"request","request_id":"req-profile","op":"set_host_power_profile","profile":"power_saver"}"#,
+            )
+            .unwrap(),
+            UsbCdcFrame::Request {
+                request_id: String::try_from("req-profile").unwrap(),
+                op: UsbCdcRequest::SetHostPowerProfile(Some(HostPowerProfile::PowerSaver)),
+            }
+        );
+        assert_eq!(
+            parse_frame(
+                r#"{"type":"request","request_id":"req-clear","op":"set_host_power_profile","profile":null}"#,
+            )
+            .unwrap(),
+            UsbCdcFrame::Request {
+                request_id: String::try_from("req-clear").unwrap(),
+                op: UsbCdcRequest::SetHostPowerProfile(None),
+            }
+        );
+        let err = parse_frame(
+            r#"{"type":"request","request_id":"req-invalid","op":"set_host_power_profile","profile":"turbo"}"#,
+        )
+        .unwrap_err();
+        assert_eq!(err, UsbCdcProtocolError::InvalidHostPowerProfile);
+        let err = parse_frame(
+            r#"{"type":"request","request_id":"req-invalid-null","op":"set_host_power_profile","profile":nullish}"#,
+        )
+        .unwrap_err();
+        assert_eq!(err, UsbCdcProtocolError::InvalidJson);
+    }
+
+    #[test]
+    fn hello_advertises_host_power_profile_capability() {
+        let mut frame = String::<512>::new();
+        render_hello_json(&mut frame, Some("req-hello"), "{}");
+        let parsed: serde_json::Value = serde_json::from_str(frame.as_str()).unwrap();
+        assert_eq!(parsed["capabilities"]["host_power_profile"], true);
+    }
+
+    #[test]
     fn parses_diag_snapshot_request_over_usb_cdc() {
         let frame = parse_frame(
             r#"{"type":"request","request_id":"req-diag","op":"get_diag_snapshot","packages":["bq40.manufacturing","bq25792.regs"]}"#,
@@ -1504,6 +1571,26 @@ mod tests {
                 manufacturing_status: Some(0),
                 gauging_status: Some(0),
                 charging_status: Some(0),
+                charging_status_trace: crate::net_types::ChargingStatusTraceSnapshot {
+                    value: Some(0),
+                    selected_source: Some("pec"),
+                    raw_declared_len: Some(4),
+                    raw_payload_len: Some(4),
+                    raw_payload: Some([
+                        1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0,
+                    ]),
+                    pec_status: Some("ok"),
+                    pec_declared_len: Some(4),
+                    pec_payload_len: Some(4),
+                    pec_prefix_len: Some(4),
+                    pec_prefix: Some([4, 1, 2, 3, 0, 0]),
+                    plain_status: Some("not_attempted"),
+                    plain_declared_len: Some(0),
+                    plain_payload_len: Some(0),
+                    plain_prefix_len: Some(0),
+                    plain_prefix: Some([0, 0, 0, 0, 0, 0]),
+                },
                 op_status: Some(0),
                 op_status_raw_len: Some(4),
                 op_status_raw_bytes: Some([0x83, 0x49, 0x00, 0x00]),
@@ -1512,7 +1599,7 @@ mod tests {
                 afe_latch_status: Some(0x00),
                 afe_cell_balance_status: Some(0x00),
                 afe_chg_fet: Some(true),
-                afe_dsg_fet: Some(true),
+                afe_dsg_fet: Some(false),
                 emshut: Some(false),
                 pres: Some(true),
                 xchg: Some(true),
@@ -1521,7 +1608,7 @@ mod tests {
                 op_dsg_fet: Some(true),
                 op_pchg_fet: Some(false),
                 chg_fet: Some(true),
-                dsg_fet: Some(true),
+                dsg_fet: Some(false),
                 pchg_fet: Some(false),
                 discharge_path_contradiction: Some(false),
                 discharge_path_contradiction_reason: None,
@@ -1540,7 +1627,12 @@ mod tests {
                 charging_inhibit: Some(false),
                 charging_suspend: Some(false),
                 charging_hv: Some(false),
+                update_status: Some(7),
                 current_at_eoc_ma: Some(150),
+                no_valid_charge_term: Some(8),
+                last_valid_charge_term: Some(9),
+                no_of_qmax_updates: Some(10),
+                no_of_ra_updates: Some(11),
                 da_configuration: Some(0x0024),
                 power_config: Some(0x000c),
                 emshut_en: Some(true),
@@ -1577,6 +1669,16 @@ mod tests {
         assert!(body
             .as_str()
             .contains("\"op_status_raw_bytes\":[131,73,0,0]"));
+        assert!(body
+            .as_str()
+            .contains("\"charging_status_trace\":{\"value\":0"));
+        assert!(body.as_str().contains("\"update_status\":7"));
+        assert!(body.as_str().contains("\"no_valid_charge_term\":8"));
+        assert!(body.as_str().contains("\"no_of_qmax_updates\":10"));
+        assert!(body.as_str().contains("\"no_of_ra_updates\":11"));
+        assert!(body.as_str().contains("\"op_dsg_fet\":true"));
+        assert!(body.as_str().contains("\"afe_dsg_fet\":false"));
+        assert!(body.as_str().contains("\"dsg_fet\":false"));
         assert!(body.as_str().contains("\"emshut_exit_vpack\":true"));
         assert!(body.as_str().contains("\"derived.power\""));
         assert!(body.as_str().ends_with("}}"));

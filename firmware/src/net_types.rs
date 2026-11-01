@@ -8,6 +8,32 @@ pub const SERVICE_TYPE: &str = "_mains-aegis-ups._tcp.local";
 pub const HOSTNAME_PREFIX: &str = "mains-aegis-";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostPowerProfile {
+    PowerSaver,
+    Balanced,
+    Performance,
+}
+
+impl HostPowerProfile {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PowerSaver => "power_saver",
+            Self::Balanced => "balanced",
+            Self::Performance => "performance",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "power_saver" => Some(Self::PowerSaver),
+            "balanced" => Some(Self::Balanced),
+            "performance" => Some(Self::Performance),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WifiConnectionState {
     Disabled,
     Idle,
@@ -593,6 +619,47 @@ impl AdvancedPowerSettingsSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChargingStatusTraceSnapshot {
+    pub value: Option<u32>,
+    pub selected_source: Option<&'static str>,
+    pub raw_declared_len: Option<u8>,
+    pub raw_payload_len: Option<u8>,
+    pub raw_payload: Option<[u8; 32]>,
+    pub pec_status: Option<&'static str>,
+    pub pec_declared_len: Option<u8>,
+    pub pec_payload_len: Option<u8>,
+    pub pec_prefix_len: Option<u8>,
+    pub pec_prefix: Option<[u8; 6]>,
+    pub plain_status: Option<&'static str>,
+    pub plain_declared_len: Option<u8>,
+    pub plain_payload_len: Option<u8>,
+    pub plain_prefix_len: Option<u8>,
+    pub plain_prefix: Option<[u8; 6]>,
+}
+
+impl ChargingStatusTraceSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            value: None,
+            selected_source: None,
+            raw_declared_len: None,
+            raw_payload_len: None,
+            raw_payload: None,
+            pec_status: None,
+            pec_declared_len: None,
+            pec_payload_len: None,
+            pec_prefix_len: None,
+            pec_prefix: None,
+            plain_status: None,
+            plain_declared_len: None,
+            plain_payload_len: None,
+            plain_prefix_len: None,
+            plain_prefix: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AdvancedPowerU16CapabilitySnapshot {
     pub default: u16,
     pub min: u16,
@@ -824,6 +891,7 @@ impl DeviceSettingsSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UpsStatusSnapshot {
     pub mode: &'static str,
+    pub host_power_profile: Option<&'static str>,
     pub requested_outputs: &'static str,
     pub active_outputs: &'static str,
     pub recoverable_outputs: &'static str,
@@ -1467,6 +1535,7 @@ pub struct DerivedPowerBmsSnapshot {
     pub manufacturing_status: Option<u32>,
     pub gauging_status: Option<u32>,
     pub charging_status: Option<u32>,
+    pub charging_status_trace: ChargingStatusTraceSnapshot,
     pub op_status: Option<u32>,
     pub op_status_raw_len: Option<u8>,
     pub op_status_raw_bytes: Option<[u8; 4]>,
@@ -1503,7 +1572,12 @@ pub struct DerivedPowerBmsSnapshot {
     pub charging_inhibit: Option<bool>,
     pub charging_suspend: Option<bool>,
     pub charging_hv: Option<bool>,
+    pub update_status: Option<u8>,
     pub current_at_eoc_ma: Option<u16>,
+    pub no_valid_charge_term: Option<u16>,
+    pub last_valid_charge_term: Option<u16>,
+    pub no_of_qmax_updates: Option<u16>,
+    pub no_of_ra_updates: Option<u16>,
     pub da_configuration: Option<u16>,
     pub power_config: Option<u16>,
     pub emshut_en: Option<bool>,
@@ -1534,6 +1608,7 @@ impl DerivedPowerBmsSnapshot {
             manufacturing_status: None,
             gauging_status: None,
             charging_status: None,
+            charging_status_trace: ChargingStatusTraceSnapshot::empty(),
             op_status: None,
             op_status_raw_len: None,
             op_status_raw_bytes: None,
@@ -1570,7 +1645,12 @@ impl DerivedPowerBmsSnapshot {
             charging_inhibit: None,
             charging_suspend: None,
             charging_hv: None,
+            update_status: None,
             current_at_eoc_ma: None,
+            no_valid_charge_term: None,
+            last_valid_charge_term: None,
+            no_of_qmax_updates: None,
+            no_of_ra_updates: None,
             da_configuration: None,
             power_config: None,
             emshut_en: None,
@@ -1585,6 +1665,7 @@ impl UpsStatusSnapshot {
     pub const fn empty() -> Self {
         Self {
             mode: "standby",
+            host_power_profile: None,
             requested_outputs: "none",
             active_outputs: "none",
             recoverable_outputs: "none",
