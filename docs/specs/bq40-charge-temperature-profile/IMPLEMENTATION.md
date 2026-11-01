@@ -22,6 +22,7 @@
 - Markdown links and field references: `rg -n "bq40-charge-temperature-profile|T1|T2|T3|T4|T5|T6|0x4A0B|0x4A15" docs`
 - Topic contract: `bun /Users/ivan/Projects/Ivan/agent-toolkit/bin/spec_contract_check.ts --path docs/specs/bq40-charge-temperature-profile/SPEC.md`
 - Writer contract: `just bq40-charge-profile-test`
+- BQ40 maintenance firmware feature: `cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-charge-temperature-profile`
 - Firmware host tests: `just firmware-host-test`
 
 ## Coverage / rollout summary

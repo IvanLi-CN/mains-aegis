@@ -188,6 +188,24 @@ pub fn apply_profile<T: Transport>(transport: &mut T) -> Result<ApplyReport, App
     {
         return Err(ApplyError::new(ApplyErrorKind::FinalLength, Some(snapshot)));
     }
+    for (index, (&before, &after)) in snapshot
+        .payload
+        .iter()
+        .zip(final_snapshot.payload.iter())
+        .enumerate()
+    {
+        let expected = FIELDS.iter().find_map(|field| {
+            let offset = field.offset as usize;
+            match index.checked_sub(offset) {
+                Some(0) => Some(field.raw[0]),
+                Some(1) => Some(field.raw[1]),
+                _ => None,
+            }
+        });
+        if after != expected.unwrap_or(before) {
+            return Err(ApplyError::new(ApplyErrorKind::FinalRaw, Some(snapshot)));
+        }
+    }
     for field in FIELDS {
         let offset = field.offset as usize;
         if final_snapshot.payload[offset..offset + 2] != field.raw {
@@ -227,6 +245,7 @@ mod tests {
         EchoLength(usize),
         EchoRaw(usize),
         FinalRaw,
+        FinalUnrelatedRaw,
     }
 
     struct MockTransport {
@@ -273,6 +292,16 @@ mod tests {
                     payload: self.block,
                 };
                 snapshot.payload[FIELDS[0].offset as usize] ^= 0x01;
+                return Ok(snapshot);
+            }
+            if matches!(self.failure, Failure::FinalUnrelatedRaw) && self.snapshots > 1 {
+                let mut snapshot = BlockSnapshot {
+                    address,
+                    declared_len: CONTAINING_BLOCK_LEN,
+                    payload_len: CONTAINING_BLOCK_LEN,
+                    payload: self.block,
+                };
+                snapshot.payload[0] ^= 0x01;
                 return Ok(snapshot);
             }
             Ok(BlockSnapshot {
@@ -354,6 +383,19 @@ mod tests {
     #[test]
     fn final_containing_block_mismatch_stops_after_all_writes() {
         let mut transport = MockTransport::new(Failure::FinalRaw);
+        assert!(matches!(
+            apply_profile(&mut transport),
+            Err(ApplyError {
+                kind: ApplyErrorKind::FinalRaw,
+                snapshot: Some(_),
+            })
+        ));
+        assert_eq!(transport.writes, 7);
+    }
+
+    #[test]
+    fn final_containing_block_unrelated_mismatch_stops_after_all_writes() {
+        let mut transport = MockTransport::new(Failure::FinalUnrelatedRaw);
         assert!(matches!(
             apply_profile(&mut transport),
             Err(ApplyError {

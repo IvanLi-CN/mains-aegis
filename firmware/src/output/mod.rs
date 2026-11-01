@@ -15613,10 +15613,17 @@ where
         let mut bms_detail_refreshed = false;
         if !bms_detail_refreshed && now >= self.bms_next_da_status2_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
-            if let Ok(snapshot) = bq40z50::read_da_status2(&mut self.i2c, addr) {
-                da_status2 = snapshot;
-                self.bms_cached_da_status2 = snapshot;
-                self.bms_cached_da_status2_at_ms = Some(self.fan_now_ms());
+            match bq40z50::read_da_status2(&mut self.i2c, addr) {
+                Ok(snapshot) => {
+                    da_status2 = snapshot;
+                    self.bms_cached_da_status2 = snapshot;
+                    self.bms_cached_da_status2_at_ms = Some(self.fan_now_ms());
+                }
+                Err(_) => {
+                    da_status2 = None;
+                    self.bms_cached_da_status2 = None;
+                    self.bms_cached_da_status2_at_ms = None;
+                }
             }
             self.bms_next_da_status2_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
             bms_detail_refreshed = true;

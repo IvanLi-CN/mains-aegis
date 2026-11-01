@@ -85,6 +85,7 @@ firmware-host-test:
 bq40-charge-profile-test:
     rustc --edition=2021 --test tools/bq40-comm-tool/firmware/src/charge_profile.rs -o /tmp/mains-aegis-bq40-charge-profile-test
     /tmp/mains-aegis-bq40-charge-profile-test
+    cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-charge-temperature-profile
     bash tools/bq40-comm-tool/bin/profile-contract-test.sh
 
 # Check ESP firmware.
