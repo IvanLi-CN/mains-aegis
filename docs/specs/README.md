@@ -75,4 +75,4 @@ Spec 不使用 ID。`Implementation` 只保留轻量摘要；详细状态写入�
 | BQ40Z50 BMS bring-up (SMBus poll + fault expectations) | archived | [complete](bq40z50-bms-bringup/IMPLEMENTATION.md) | [SPEC](bq40z50-bms-bringup/SPEC.md) | - | Migrated from the retired planning catalog. |
 | TMP112A 过温告警输出：Comparator 模式保持输出 | archived | [complete](tps-tmp112-alert-overtemp-hold/IMPLEMENTATION.md) | [SPEC](tps-tmp112-alert-overtemp-hold/SPEC.md) | - | Migrated from the retired planning catalog. |
 | 主动告警逐实例消音 | active | [current](active-alert-muting/IMPLEMENTATION.md) | [SPEC](active-alert-muting/SPEC.md) | - | 固件权威的当前告警实例消音、跨端合同与前面板审批门禁 |
-| BQ40 charge-temperature profile | active | [current](bq40-charge-temperature-profile/IMPLEMENTATION.md) | [SPEC](bq40-charge-temperature-profile/SPEC.md) | - | EVE INR21700/50E 4S1P 的 `0–45°C` 电芯充电窗口、BQ40 T1～T6 编码、`100mA/500mA` 策略与 BQ25792 JEITA 协同 |
+| BQ40 charge-temperature profile | active | [current](bq40-charge-temperature-profile/IMPLEMENTATION.md) | [SPEC](bq40-charge-temperature-profile/SPEC.md) | - | EVE INR21700/50E 4S1P 的 `0–45°C` 电芯充电窗口、TS2/TS3/TS4 最高温、BQ40 SBS request gate、`100mA/500mA` 策略与 BQ25792 JEITA 协同 |

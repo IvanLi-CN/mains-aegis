@@ -345,6 +345,8 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
 
 LT 的 Low/Med/High 电流字段全部使用 `100mA`；STL、RT、STH、HT 的 Low/Med/High 电流字段全部使用 `500mA`；各允许温区的充电电压字段全部使用 `16800mV`。本 profile 不修改 BQ40 的 precharge、maintenance-charge 或 termination Data Flash 字段。
 
+主固件每秒刷新一次 SBS `ChargingCurrent()`/`ChargingVoltage()`（`0x14/0x15`），并将有效、未过期的 BQ40 请求作为 BQ25792 的安全上限；读失败、零值、越界或超过 `1s` 的请求均禁充。activation/recovery 的固定 `200mA` 只用于唤醒睡眠 gauge，不是产品充电后门：它必须先通过 BQ25792 JEITA 的 `15–45°C` 正常窗口；若已有 BQ40 温度/请求缓存，还必须通过新鲜正常温度和新鲜有效请求，且 wake 目标不超过请求值。activation 完成后只恢复寄存器，`CE` 保持禁充，下一次普通轮询重新执行完整门控。
+
 ### 5.4 首版 Golden DF 基线（主板固定项）
 
 以下字段作为本项目首版 `BQ40Z50-R2` 主板基线。含义、推荐值与常见可选项需在文档中固定，避免后续 bring-up / recover 反复刷写。

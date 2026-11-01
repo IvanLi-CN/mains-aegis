@@ -179,6 +179,18 @@ pub const fn encode_jeita_ntc_control_1() -> u8 {
     (ntc_control1::TS_COOL_15C << 6) | (ntc_control1::TS_WARM_45C << 4)
 }
 
+/// Return whether the charger-side JEITA state is in the normal 15–45°C
+/// window. Activation may use a small wake current only under this hardware
+/// interlock; any asserted cold/cool/warm/hot status keeps CE disabled.
+pub const fn jeita_normal_window_allows_charge(
+    ts_cold: bool,
+    ts_cool: bool,
+    ts_warm: bool,
+    ts_hot: bool,
+) -> bool {
+    !ts_cold && !ts_cool && !ts_warm && !ts_hot
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct JeitaProfileState {
     pub ntc_control_0: u8,
@@ -1054,6 +1066,25 @@ mod tests {
             | encode_jeita_ntc_control_1();
         assert_eq!(ntc_control_1_after, 0x9e);
         assert_eq!(ntc_control_1_after & 0x0e, ntc_control_1_before & 0x0e);
+    }
+
+    #[test]
+    fn activation_wake_requires_the_normal_jeita_window() {
+        assert!(jeita_normal_window_allows_charge(
+            false, false, false, false
+        ));
+        assert!(!jeita_normal_window_allows_charge(
+            true, false, false, false
+        ));
+        assert!(!jeita_normal_window_allows_charge(
+            false, true, false, false
+        ));
+        assert!(!jeita_normal_window_allows_charge(
+            false, false, true, false
+        ));
+        assert!(!jeita_normal_window_allows_charge(
+            false, false, false, true
+        ));
     }
 
     #[test]

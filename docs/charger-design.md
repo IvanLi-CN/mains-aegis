@@ -113,6 +113,8 @@ min(runtime_policy_target, BQ40_ChargingCurrent/Voltage)
 
 BQ40 profile 的字段地址、编码和温度区间以 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md) 为准。
 
+activation/recovery 的 `200mA` wake 仅是维护态唤醒电流，不属于普通 UI、USB 或 backup 产品充电。它必须同时满足 BQ25792 `TS_COLD/TS_COOL/TS_WARM/TS_HOT` 全部未置位；若 BQ40 已经提供请求或温度缓存，还必须使用新鲜有效请求与 `15–45°C` 正常温度证据，wake 的 `ICHG/VREG` 取不超过请求的值。恢复完成后 charger register image 可以恢复，但 `CE` 必须保持高电平，直到下一次普通轮询重新通过温度、BQ40 请求、CurrentAtEOC、PD 和产品策略门控。
+
 下面的输入功率估算仅保留为 BQ25792 器件能力背景；当前产品 profile 不启用 `1A/2A`，不会因为输入功率充足而自动提高到这些档位。
 
 输入功率约束要点（决定“2A 是否跑得满”）：

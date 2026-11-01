@@ -64,6 +64,20 @@ pub const BQ40_REQUEST_MAX_VOLTAGE_MV: u16 = 16_800;
 pub const BQ40_REQUEST_MAX_AGE_MS: u64 = 1_000;
 pub const CHARGE_TEMPERATURE_MAX_AGE_MS: u64 = 1_000;
 
+/// The already-selected BQ40 project configuration that gives DA_STATUS2
+/// TS1..TS4 their board/cell meaning. The charge profile does not write these
+/// fields; they are a design-time prerequisite for interpreting the vectors.
+pub const BQ40_PROJECT_TEMPERATURE_ENABLE: u8 = 0x1E;
+pub const BQ40_PROJECT_TEMPERATURE_MODE: u8 = 0x00;
+
+pub const fn bq40_project_temperature_configuration_matches(
+    temperature_enable: u8,
+    temperature_mode: u8,
+) -> bool {
+    temperature_enable == BQ40_PROJECT_TEMPERATURE_ENABLE
+        && temperature_mode == BQ40_PROJECT_TEMPERATURE_MODE
+}
+
 pub const fn is_temperature_fresh(now_ms: u64, observed_at_ms: u64) -> bool {
     now_ms.saturating_sub(observed_at_ms) <= CHARGE_TEMPERATURE_MAX_AGE_MS
 }
@@ -174,6 +188,35 @@ pub const fn runtime_charge_target(
         return None;
     };
     clamp_policy_to_bq40_request(policy_current_ma, policy_voltage_mv, temperature, request)
+}
+
+/// Gate the exceptional activation wake current. With no BQ40 observation at
+/// all, the caller may rely on the independent charger-side JEITA interlock to
+/// wake a sleeping gauge. Once either a request or a temperature observation
+/// exists, both fresh request and fresh normal-band temperature evidence are
+/// required.
+pub const fn activation_wake_charge_allowed(
+    now_ms: u64,
+    temperature_observed_at_ms: Option<u64>,
+    temperature: Option<ChargeTemperatureDecision>,
+    request: Option<Bq40ChargeRequest>,
+) -> bool {
+    if temperature_observed_at_ms.is_none() && request.is_none() {
+        return true;
+    }
+    let Some(request) = request else {
+        return false;
+    };
+    if !request.is_fresh(now_ms) {
+        return false;
+    }
+    matches!(
+        temperature,
+        Some(ChargeTemperatureDecision {
+            band: ChargeTemperatureBand::Normal,
+            ..
+        })
+    )
 }
 
 pub const fn evaluate_cell_temperature_k_x10(temp_k_x10: Option<u16>) -> ChargeTemperatureDecision {
@@ -311,6 +354,48 @@ mod tests {
             Some(2_900)
         );
         assert_eq!(max_cell_temperature_k_x10([2_700, 0, 2_900, 2_850]), None);
+    }
+
+    #[test]
+    fn project_temperature_configuration_is_explicit() {
+        assert!(bq40_project_temperature_configuration_matches(0x1E, 0x00));
+        assert!(!bq40_project_temperature_configuration_matches(0x00, 0x00));
+        assert!(!bq40_project_temperature_configuration_matches(0x1E, 0x01));
+    }
+
+    #[test]
+    fn activation_wake_gate_only_allows_missing_bq40_evidence() {
+        let request = Bq40ChargeRequest {
+            current_ma: 500,
+            voltage_mv: 16_800,
+            observed_at_ms: 100,
+        };
+        assert!(activation_wake_charge_allowed(100, None, None, None));
+        assert!(!activation_wake_charge_allowed(100, Some(100), None, None));
+        assert!(!activation_wake_charge_allowed(
+            100,
+            None,
+            None,
+            Some(request)
+        ));
+        assert!(activation_wake_charge_allowed(
+            100,
+            Some(100),
+            Some(ChargeTemperatureDecision::normal()),
+            Some(request)
+        ));
+        assert!(!activation_wake_charge_allowed(
+            100,
+            Some(100),
+            Some(ChargeTemperatureDecision::low()),
+            Some(request)
+        ));
+        assert!(!activation_wake_charge_allowed(
+            1_101,
+            Some(100),
+            Some(ChargeTemperatureDecision::normal()),
+            Some(request)
+        ));
     }
 
     #[test]

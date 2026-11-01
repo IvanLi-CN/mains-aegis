@@ -6604,6 +6604,24 @@ where
         charge_temperature::evaluate_cell_temperature_k_x10(Some(max_cell_temp_k_x10))
     }
 
+    /// Activation may use the fixed wake current only when there is no BQ40
+    /// safety evidence yet. Once either a request or a temperature sample has
+    /// been observed, the wake path must use the same fresh, normal-band BQ40
+    /// evidence as product charging. The charger-side JEITA NTC remains an
+    /// independent hardware interlock at the call site.
+    fn bq40_activation_wake_gate(&self, now_ms: u64) -> bool {
+        let temperature = self
+            .bms_cached_da_status2_at_ms
+            .is_some()
+            .then(|| self.bq40_charge_temperature_decision(now_ms));
+        charge_temperature::activation_wake_charge_allowed(
+            now_ms,
+            self.bms_cached_da_status2_at_ms,
+            temperature,
+            self.bq40_charge_request,
+        )
+    }
+
     fn fan_temps_ready(&self) -> bool {
         self.ui_snapshot.tmp_a != SelfCheckCommState::Pending
             || self.ui_snapshot.tmp_b != SelfCheckCommState::Pending
@@ -11620,13 +11638,12 @@ where
         if let Some(chg_enabled) = self.restore_bms_activation_charger_backup(reason) {
             restore_chg_enabled = chg_enabled;
         }
-        if result == BmsResultKind::Success && restore_chg_enabled {
-            self.chg_ce.set_low();
-            self.chg_enabled = true;
-        } else {
-            self.chg_ce.set_high();
-            self.chg_enabled = false;
-        }
+        // Restoring the pre-activation register image is not permission to
+        // resume physical charging. Keep CE high; the next ordinary charger
+        // poll must re-evaluate BQ40 temperature/request freshness, JEITA,
+        // CurrentAtEOC, and the product policy before enabling CE again.
+        self.chg_ce.set_high();
+        self.chg_enabled = false;
         self.bms_activation_deadline = None;
         self.bms_activation_phase = BmsActivationPhase::WakeProbe;
         self.bms_activation_started_at = None;
@@ -13905,7 +13922,23 @@ where
         };
         let normal_allow_charge =
             charge_policy_decision.map_or(false, |decision| decision.allow_charge);
-        let force_allow_charge = (activation_force_charge || auto_force_charge) && can_enable;
+        let force_charge_requested = activation_force_charge || auto_force_charge;
+        let force_charge_jeita_allowed =
+            bq25792::jeita_normal_window_allows_charge(ts_cold, ts_cool, ts_warm, ts_hot);
+        let force_charge_bq40_allowed = self.bq40_activation_wake_gate(charge_policy_now_ms);
+        let force_allow_charge = force_charge_requested
+            && can_enable
+            && force_charge_jeita_allowed
+            && force_charge_bq40_allowed;
+        let force_charge_blocked = force_charge_requested && !force_allow_charge;
+        let force_charge_voltage_mv = self
+            .bq40_charge_request
+            .map(|request| request.voltage_mv.min(BMS_ACTIVATION_FORCE_VREG_MV))
+            .unwrap_or(BMS_ACTIVATION_FORCE_VREG_MV);
+        let force_charge_current_ma = self
+            .bq40_charge_request
+            .map(|request| request.current_ma.min(BMS_ACTIVATION_FORCE_ICHG_MA))
+            .unwrap_or(BMS_ACTIVATION_FORCE_ICHG_MA);
         if self.manual_charge_runtime.loopback_override
             && self.manual_charge_runtime.loopback_override_mode != Some(self.ui_snapshot.mode)
         {
@@ -13946,15 +13979,18 @@ where
                 esp_println::println!("backup_usb_charge: latched reason={}", reason.notice());
             }
         }
-        let mut allow_charge =
-            if usb_pd_unsafe_latched || activation_force_charge_off || !usb_pd_charge_gate_ready {
-                false
-            } else {
-                (normal_allow_charge && self.cfg.charger_enabled)
-                    || activation_normal_hold_charge
-                    || boot_diag_hold_charge
-                    || force_allow_charge
-            };
+        let mut allow_charge = if usb_pd_unsafe_latched
+            || activation_force_charge_off
+            || !usb_pd_charge_gate_ready
+            || force_charge_blocked
+        {
+            false
+        } else {
+            (normal_allow_charge && self.cfg.charger_enabled)
+                || activation_normal_hold_charge
+                || boot_diag_hold_charge
+                || force_allow_charge
+        };
 
         let policy_state = charge_policy_decision.map(|decision| decision.state);
         let mut policy_target_ichg_ma =
@@ -13969,6 +14005,8 @@ where
             "FAULT"
         } else if !usb_pd_charge_gate_ready {
             "WAIT"
+        } else if force_charge_blocked {
+            "LOCK"
         } else if force_allow_charge {
             "WAKE"
         } else if activation_force_charge_off {
@@ -13984,6 +14022,8 @@ where
             "unsafe_source_latched"
         } else if !usb_pd_charge_gate_ready {
             "usb_pd_wait_stable_input"
+        } else if force_charge_blocked {
+            "activation_force_charge_safety_interlock"
         } else if force_allow_charge {
             "activation_force_charge"
         } else if activation_force_charge_off {
@@ -14009,7 +14049,18 @@ where
             activation_force_charge,
         );
 
-        if manual_stop_hold_blocks_charge {
+        if force_charge_blocked {
+            allow_charge = false;
+            policy_target_ichg_ma = None;
+            policy_status_text = "LOCK";
+            policy_notice_text = if !force_charge_jeita_allowed {
+                "activation_force_charge_bq25792_jeita_blocked"
+            } else if !force_charge_bq40_allowed {
+                "activation_force_charge_bq40_gate_blocked"
+            } else {
+                "activation_force_charge_safety_interlock"
+            };
+        } else if manual_stop_hold_blocks_charge {
             allow_charge = false;
             policy_target_ichg_ma = None;
             if !matches!(
@@ -14021,7 +14072,7 @@ where
             }
             policy_notice_text =
                 manual_charge_stop_notice(self.manual_charge_runtime.last_stop_reason);
-        } else if !activation_pending && !force_allow_charge && !auto_force_charge {
+        } else if !activation_pending && !force_allow_charge && !force_charge_requested {
             let manual_blocked = !self.cfg.charger_enabled
                 || !can_enable
                 || !usb_pd_charge_gate_ready
@@ -14192,7 +14243,27 @@ where
             policy_notice_text = runtime_charge_override.policy_notice_text;
             policy_detail_status_text = runtime_charge_override.policy_status_text;
         }
-        let mut policy_target_vreg_mv = allow_charge.then_some(CHARGE_POLICY_VREG_MV);
+        if force_charge_blocked {
+            // Later input/backup policy layers must not reopen a denied
+            // activation wake request or leave its normal target behind.
+            allow_charge = false;
+            policy_target_ichg_ma = None;
+            effective_policy_target_ichg_ma = None;
+            policy_status_text = "LOCK";
+            policy_detail_status_text = "LOCK";
+            policy_notice_text = if !force_charge_jeita_allowed {
+                "activation_force_charge_bq25792_jeita_blocked"
+            } else if !force_charge_bq40_allowed {
+                "activation_force_charge_bq40_gate_blocked"
+            } else {
+                "activation_force_charge_safety_interlock"
+            };
+        }
+        let mut policy_target_vreg_mv = if force_charge_blocked {
+            None
+        } else {
+            allow_charge.then_some(CHARGE_POLICY_VREG_MV)
+        };
         if allow_charge && !force_allow_charge && !auto_force_charge && !activation_pending {
             let temperature_decision = self.bq40_charge_temperature_decision(charge_policy_now_ms);
             if !temperature_decision.allows_charge() {
@@ -14400,10 +14471,7 @@ where
                     return;
                 }
 
-                match bq25792::set_charge_voltage_limit_mv(
-                    &mut self.i2c,
-                    BMS_ACTIVATION_FORCE_VREG_MV,
-                ) {
+                match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, force_charge_voltage_mv) {
                     Ok(v) => applied_vreg_mv = Some(decode_voltage_mv(v)),
                     Err(e) => {
                         self.mark_charger_poll_failed(now);
@@ -14415,10 +14483,7 @@ where
                     }
                 }
 
-                match bq25792::set_charge_current_limit_ma(
-                    &mut self.i2c,
-                    BMS_ACTIVATION_FORCE_ICHG_MA,
-                ) {
+                match bq25792::set_charge_current_limit_ma(&mut self.i2c, force_charge_current_ma) {
                     Ok(v) => applied_ichg_ma = Some(decode_cur_ma(v)),
                     Err(e) => {
                         self.mark_charger_poll_failed(now);
@@ -15069,17 +15134,12 @@ where
                 && self.bms_activation_state != BmsActivationState::Pending
                 && !activation_force_charge
             {
-                if let Some(restore_chg_enabled) =
-                    self.restore_bms_activation_charger_backup("auto_force_charge_complete")
-                {
-                    if restore_chg_enabled {
-                        self.chg_ce.set_low();
-                        self.chg_enabled = true;
-                    } else {
-                        self.chg_ce.set_high();
-                        self.chg_enabled = false;
-                    }
-                }
+                let _ = self.restore_bms_activation_charger_backup("auto_force_charge_complete");
+                // The restored historical CE state is intentionally ignored.
+                // A subsequent ordinary poll is the only path allowed to
+                // re-enable the charger after the diagnostic wake hold.
+                self.chg_ce.set_high();
+                self.chg_enabled = false;
             }
             self.bms_activation_auto_force_charge_programmed = false;
         }

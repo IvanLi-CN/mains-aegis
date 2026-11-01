@@ -342,6 +342,18 @@ const BMS_ROM_INFO_LAYOUT_TAG: &str = if cfg!(feature = "bms-rom-full-info") {
 compile_error!("Select at most one BQ ROM image feature");
 #[cfg(all(feature = "bms-rom-full-info", feature = "bms-rom-image-r5"))]
 compile_error!("bms-rom-image-r5 currently supports only stock-sparse info writes");
+#[cfg(all(
+    feature = "bms-charge-temperature-profile",
+    any(
+        feature = "bms-dual-probe-diag",
+        feature = "bms-rom-recover-force",
+        feature = "bms-df-repair-afe-default",
+        feature = "bms-rom-repair-asset-df-mainboard"
+    )
+))]
+compile_error!(
+    "bms-charge-temperature-profile cannot be combined with BQ40 recovery or repair features"
+);
 #[cfg(feature = "bms-rom-image-r5")]
 const BMS_ROM_FLASH_IMAGE_TAG: &str = "bq40z50-r5-v5.05-build96";
 #[cfg(all(not(feature = "bms-rom-image-r5"), feature = "bms-rom-image-r3"))]
@@ -1230,9 +1242,67 @@ where
 }
 
 #[cfg(feature = "bms-charge-temperature-profile")]
+fn write_bms_charge_profile_field_once<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    df_addr: u16,
+    raw: [u8; 2],
+) -> Result<(), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    let frame = charge_profile::build_mb44_field_write_request(df_addr, raw);
+    i2c.write(addr, &frame)
+        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    spin_delay(BMS_MAC_WRITE_SETTLE);
+    Ok(())
+}
+
+#[cfg(feature = "bms-charge-temperature-profile")]
 struct Bq40ChargeTemperatureTransport<'a, I2C> {
     i2c: &'a mut I2C,
     addr: u8,
+}
+
+#[cfg(feature = "bms-charge-temperature-profile")]
+fn log_bms_charge_temperature_snapshot(addr: u8, stage: &'static str, payload: [u8; 32]) {
+    defmt::info!(
+        "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage={} b0=0x{=u8:x} b1=0x{=u8:x} b2=0x{=u8:x} b3=0x{=u8:x} b4=0x{=u8:x} b5=0x{=u8:x} b6=0x{=u8:x} b7=0x{=u8:x} b8=0x{=u8:x} b9=0x{=u8:x} b10=0x{=u8:x} b11=0x{=u8:x} b12=0x{=u8:x} b13=0x{=u8:x} b14=0x{=u8:x} b15=0x{=u8:x} b16=0x{=u8:x} b17=0x{=u8:x} b18=0x{=u8:x} b19=0x{=u8:x} b20=0x{=u8:x} b21=0x{=u8:x} b22=0x{=u8:x} b23=0x{=u8:x} b24=0x{=u8:x} b25=0x{=u8:x} b26=0x{=u8:x} b27=0x{=u8:x} b28=0x{=u8:x} b29=0x{=u8:x} b30=0x{=u8:x} b31=0x{=u8:x}",
+        addr,
+        stage,
+        payload[0],
+        payload[1],
+        payload[2],
+        payload[3],
+        payload[4],
+        payload[5],
+        payload[6],
+        payload[7],
+        payload[8],
+        payload[9],
+        payload[10],
+        payload[11],
+        payload[12],
+        payload[13],
+        payload[14],
+        payload[15],
+        payload[16],
+        payload[17],
+        payload[18],
+        payload[19],
+        payload[20],
+        payload[21],
+        payload[22],
+        payload[23],
+        payload[24],
+        payload[25],
+        payload[26],
+        payload[27],
+        payload[28],
+        payload[29],
+        payload[30],
+        payload[31],
+    );
 }
 
 #[cfg(feature = "bms-charge-temperature-profile")]
@@ -1271,13 +1341,7 @@ where
         address: u16,
         raw: [u8; 2],
     ) -> Result<charge_profile::BlockSnapshot, Self::Error> {
-        write_bms_df_bytes_via_mb44_once(
-            self.i2c,
-            self.addr,
-            address,
-            &raw,
-            BmsDfWriteVia::Direct,
-        )?;
+        write_bms_charge_profile_field_once(self.i2c, self.addr, address, raw)?;
         self.snapshot(address)
     }
 }
@@ -5633,6 +5697,11 @@ where
             Ok(report) => {
                 self.bms_charge_temperature_profile_applied = true;
                 self.bms_charge_temperature_snapshot = Some(report.snapshot.payload);
+                log_bms_charge_temperature_snapshot(
+                    addr,
+                    "snapshot_before_hex",
+                    report.snapshot.payload,
+                );
                 defmt::info!(
                     "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=done fields={=u8} snapshot_addr=0x{=u16:x} snapshot_len={=u8}",
                     addr,
@@ -5643,8 +5712,14 @@ where
                 false
             }
             Err(err) => {
-                self.bms_charge_temperature_snapshot =
-                    err.snapshot.map(|snapshot| snapshot.payload);
+                self.bms_charge_temperature_snapshot = err.snapshot.map(|snapshot| {
+                    log_bms_charge_temperature_snapshot(
+                        addr,
+                        "snapshot_before_hex",
+                        snapshot.payload,
+                    );
+                    snapshot.payload
+                });
                 defmt::warn!(
                     "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=error error={}",
                     addr,

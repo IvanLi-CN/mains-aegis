@@ -18,12 +18,14 @@ EVE INR21700/50E 4S1P 的电芯温度策略曾同时出现在 BQ40 Data Flash、
 4. BQ25792 使用项目已选的 10kΩ@25°C/β3380 NTC、RTS1=5.23kΩ、RTS2=30.1kΩ、`TS_COOL=15°C`、`TS_WARM=45°C`、`TS_IGNORE=0`。低温 JEITA 不再二次降流，高温 JEITA Suspend。低电流模式使用 `ITERM=40mA` 并关闭 `EN_TERM`；正常模式继续沿用 `CurrentAtEOC`。
 5. 维护工具使用显式 `bq40-charge-temperature` profile。writer 只允许七个温度字段，写前保存 `0x4A00` 的完整 32-byte containing block，之后逐项执行 MB44 echo、length、raw、decoded 校验；任何错误立即停止。主固件运行时不自动写 Data Flash。
 6. 普通 UI/USB 只保留 100mA 和 500mA；外部 1A 请求拒绝，旧持久化 1000mA 状态加载时归一到 500mA。ROM repair、AFE repair 和 asset recovery 保持既有语义。
+7. activation/recovery 的固定 200mA wake 是独立维护状态，不属于产品充电例外：只有 BQ25792 JEITA 处于 `15–45°C` 正常窗口时才允许；若已有 BQ40 请求或温度缓存，则还必须通过新鲜有效请求与正常温度带门控，并按请求限制 wake 电流/电压。activation 完成或 auto wake hold 结束后只恢复 charger 寄存器，保持 `CE=HIGH`，由下一次普通轮询重新决定是否充电。
 
 ## 后果
 
 - 充电决策有一个可测试的纯策略层，固件和维护工具可以共享稳定的向量与边界语义。
 - BQ40 请求或温度缓存异常会导致禁充，可能降低可用性，但不会在缺少安全证据时继续充电。
 - 维护 writer 是非原子操作；完整快照保留用于人工回滚和审计，不自动恢复无关 golden 字段。
+- 完整的写前 containing block 快照会同时进入维护日志和 `summary.json`，便于离线审计和人工回滚；运行时不自动写 Data Flash。
 - ChemID、learning、calibration、protection 和 termination 仍需独立 golden-image 流程，不由本 ADR 推导。
 
 ## 实现索引

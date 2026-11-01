@@ -42,6 +42,13 @@ CHARGE_PROFILE_APPLY_RE = re.compile(
     rf"profile=(?P<profile>[a-zA-Z0-9_]+) stage=(?P<stage>[a-zA-Z0-9_]+)"
     rf"(?: .*?(?:writes|fields)=(?P<count>\d+))?"
 )
+CHARGE_PROFILE_SNAPSHOT_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=snapshot_before_hex "
+    + " ".join(
+        rf"b{index}=0x(?P<b{index}>[0-9a-fA-F]{{1,2}})" for index in range(32)
+    )
+)
 CHARGE_PROFILE_ERROR_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=(?P<profile>[a-zA-Z0-9_]+) stage=error error=(?P<error>[a-zA-Z0-9_]+)"
@@ -154,6 +161,7 @@ def main() -> int:
     charge_profile_apply_writes = 0
     charge_profile_apply_errors: Counter[str] = Counter()
     charge_profile_readback_seen = False
+    charge_profile_snapshot_before_hex: Optional[str] = None
     canonical_touched_0x16 = False
     last_sample_ts: Optional[float] = None
     in_preexisting_segment = False
@@ -276,6 +284,13 @@ def main() -> int:
                     }:
                         charge_profile_apply_errors[stage] += 1
 
+                charge_profile_snapshot_match = CHARGE_PROFILE_SNAPSHOT_RE.search(text)
+                if charge_profile_snapshot_match:
+                    charge_profile_snapshot_before_hex = bytes(
+                        int(charge_profile_snapshot_match.group(f"b{index}"), 16)
+                        for index in range(32)
+                    ).hex()
+
                 charge_profile_error_match = CHARGE_PROFILE_ERROR_RE.search(text)
                 if (
                     charge_profile_error_match
@@ -355,6 +370,8 @@ def main() -> int:
             reasons.append("charge_profile_apply_errors")
         if not charge_profile_readback_seen:
             reasons.append("charge_profile_readback_missing")
+        if charge_profile_snapshot_before_hex is None:
+            reasons.append("charge_profile_snapshot_missing")
 
     verdict_pass = len(reasons) == 0
     verdict_reason = "ok" if verdict_pass else ";".join(reasons)
@@ -382,6 +399,7 @@ def main() -> int:
             "writes": charge_profile_apply_writes,
             "errors": dict(sorted(charge_profile_apply_errors.items())),
             "readback_seen": charge_profile_readback_seen,
+            "snapshot_before_hex": charge_profile_snapshot_before_hex,
         },
         "verdict": {
             "pass": verdict_pass,
@@ -419,6 +437,7 @@ def main() -> int:
         f"- probe_mode: `{fmt_cfg_str(run_config['probe_mode'])}`",
         f"- rom_image: `{fmt_cfg_str(run_config['rom_image'])}`",
         f"- repair_profile: `{fmt_cfg_str(run_config['repair_profile'])}`",
+        f"- charge_temperature_snapshot_before_hex: `{fmt_cfg_str(summary['charge_temperature_apply']['snapshot_before_hex'])}`",
         "",
         "## Poll Errors",
         "",

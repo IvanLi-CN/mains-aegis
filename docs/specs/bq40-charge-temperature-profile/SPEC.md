@@ -48,12 +48,14 @@
 - The BQ25792 target MUST be no greater than both the runtime policy target and the BQ40 request. A zero or invalid BQ40 request MUST produce an explicit no-charge state.
 - In the `100mA` mode, BQ25792 `ITERM` MUST be `40mA` and `EN_TERM` MUST remain disabled according to the existing low-current recovery behavior. Normal-mode termination policy MUST remain the existing BQ40 `CurrentAtEOC`-aligned path and is not part of the T1–T6 profile.
 - BQ25792 low-temperature JEITA MUST not apply a second current multiplier; `JEITA_ISETC` is `100%` because BQ40 already requests `100mA`. `TS_COOL=15°C`, `TS_WARM=45°C`, `TS_IGNORE=0`, and high-temperature JEITA behavior MUST suspend charging.
+- Activation/recovery wake charging is a separate maintenance state, not a product-charge override. Its fixed wake target MUST be blocked unless the BQ25792 JEITA state is in the normal `15–45°C` window. If any BQ40 request or temperature observation exists, the wake state MUST additionally require a fresh valid request and fresh normal-band BQ40 temperature evidence; when a request exists, the wake current and voltage MUST be clamped to it. After activation, restoring the saved charger registers MUST leave `CE` high until an ordinary poll re-evaluates the full product-charge gate.
 - covers: `VER-BQ40-CTP-004`
 
 ### REQ-BQ40-CTP-005
 
 - The hardware temperature model MUST use `10kΩ@25°C`, `β=3380` for BQ40 `TS1`–`TS4` and for the separate BQ25792 charger NTC.
 - The BQ40 mapping MUST keep `TS1` as board/cell-profile input and `TS2`–`TS4` as cell-temperature inputs. The BQ25792 NTC MUST remain electrically separate, using `RTS1=5.23kΩ` and `RTS2=30.1kΩ`.
+- The selected BQ40 project configuration is `Temperature Enable=0x1E` and `Temperature Mode=0x00`; the charge-temperature writer MUST NOT modify these mapping fields.
 - covers: `VER-BQ40-CTP-005`
 
 ### REQ-BQ40-CTP-006
@@ -94,7 +96,7 @@
 
 ### VER-BQ40-CTP-004
 
-- Method: Firmware host-side policy tests with mocked BQ40 `0x14/0x15` responses and BQ25792 register state.
+- Method: Host tests for the pure runtime policy seams cover mocked BQ40 `0x14/0x15` request values, freshness, temperature gating, activation wake gating, termination policy, and BQ25792 register encoders; the target build compiles the production orchestration path.
 - covers: `REQ-BQ40-CTP-004`
 - Pass condition: BQ25792 never exceeds the BQ40 request, invalid/zero requests block charging, and `100mA` mode uses `ITERM=40mA` with termination disabled.
 
@@ -106,7 +108,7 @@
 
 ### VER-BQ40-CTP-006
 
-- Method: MB44 transport mock covering write, echoed-address readback, malformed length, mismatch, and interrupted-write cases.
+- Method: Host MB44 protocol/contract tests cover the exact read and field-write frames, echoed-address readback, malformed length, mismatch, and interrupted-write cases; the target adapter uses those tested frame builders, and the persisted report records the complete pre-write snapshot.
 - covers: `REQ-BQ40-CTP-006`
 - Pass condition: Only the seven allowlisted fields can change; every failure stops the transaction and preserves the pre-write block for rollback.
 

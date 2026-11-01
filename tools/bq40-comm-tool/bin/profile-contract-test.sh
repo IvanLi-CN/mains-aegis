@@ -65,6 +65,12 @@ for required in \
   fi
 done
 
+if ! rg -q 'bms-charge-temperature-profile cannot be combined with BQ40 recovery or repair features' \
+  "$TOOL_ROOT/firmware/src/output/mod.rs"; then
+  echo "profile/recovery compile-time conflict guard is missing" >&2
+  exit 1
+fi
+
 if rg -n "Ma1000|ManualSpeed1A|CHG1A" \
   "$REPO_ROOT/firmware/src" \
   "$REPO_ROOT/web/src" \

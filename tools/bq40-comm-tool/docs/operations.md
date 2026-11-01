@@ -90,8 +90,10 @@ Policy:
 - each MB44 write must pass echo address, returned length, raw vector, and decoded value checks
 - any transport, write, address, length, raw, or decoded mismatch stops the operation immediately
 - the monitor log must contain `bms_df_apply: ... profile=bq40_charge_temperature stage=done fields=7`
-- `summary.json` records the outcome under `charge_temperature_apply`
+- the monitor log must also contain one `stage=snapshot_before_hex` event with all 32 bytes of the pre-write containing block
+- `summary.json` records the outcome under `charge_temperature_apply`, including `snapshot_before_hex` for offline rollback/audit
 - the profile does not write ChemID, calibration, protection, termination, precharge, maintenance, or current/voltage manifest fields
+- the profile image cannot be combined with ROM recovery, AFE repair, or asset repair features
 
 Locked vectors are the little-endian 0.1 K values `AC 0A`, `42 0B`, `74 0B`, `0A 0C`,
 `3C 0C`, `6E 0C`, and `14 00`. The static current/voltage manifest is 100mA/16800mV

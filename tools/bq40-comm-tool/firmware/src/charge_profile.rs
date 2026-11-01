@@ -22,6 +22,14 @@ pub const fn build_mb44_read_request(address: u16) -> [u8; 4] {
     [0x44, 0x02, address_le[0], address_le[1]]
 }
 
+/// Build the direct HPE=0 MB44 write used for one allowlisted two-byte field.
+/// Keeping this frame in the pure contract module lets the target adapter and
+/// host tests exercise the same address/length/raw-byte geometry.
+pub const fn build_mb44_field_write_request(address: u16, raw: [u8; 2]) -> [u8; 6] {
+    let address_le = address.to_le_bytes();
+    [0x44, 0x04, address_le[0], address_le[1], raw[0], raw[1]]
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Field {
     pub name: &'static str,
@@ -295,6 +303,10 @@ mod tests {
     fn mb44_request_and_plain_response_use_the_expected_frame() {
         let address = CONTAINING_BLOCK_ADDRESS;
         assert_eq!(build_mb44_read_request(address), [0x44, 0x02, 0x00, 0x4A]);
+        assert_eq!(
+            build_mb44_field_write_request(0x4A0B, [0xAC, 0x0A]),
+            [0x44, 0x04, 0x0B, 0x4A, 0xAC, 0x0A]
+        );
 
         let mut response = [0u8; MB44_RESPONSE_LEN];
         response[0] = MB44_DECLARED_LEN_WITH_ADDRESS;

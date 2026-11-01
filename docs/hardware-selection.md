@@ -63,7 +63,7 @@
 
 | 子项 | 选型状态 | 说明 |
 |---|---|---|
-| NTC 规格 | 已定 | BQ40 `TS1~TS4` 使用 `10 kΩ@25°C(103), β=3380`；`TS1` 为板侧点，`TS2~TS4` 为电芯间点；BQ25792 使用独立同曲线 NTC |
+| NTC / 温度映射 | 已定 | BQ40 `TS1~TS4` 使用 `10 kΩ@25°C(103), β=3380`；`Temperature Enable=0x1E`、`Temperature Mode=0x00`；`TS1` 为板侧点，`TS2~TS4` 为电芯间点；BQ25792 使用独立同曲线 NTC，`RTS1=5.23kΩ`、`RTS2=30.1kΩ`，JEITA `15–45°C` |
 | PTC 安全检测 | 已定 | 启用 `PTC/PTCEN`，使用 `Murata PRF18BA103QB1RB` 或同等规格，作为高于正常温控关断的最后一道安全闩锁 |
 
 ### 2.5 均衡（cell balancing）

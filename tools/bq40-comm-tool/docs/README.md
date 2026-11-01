@@ -21,6 +21,11 @@ length `32`. Each MB44 write must pass address, length, raw-vector, and decoded-
 readback checks; the first error stops the operation. The normal firmware never performs
 this write automatically.
 
+The complete pre-write block is emitted as the machine-readable
+`stage=snapshot_before_hex` monitor event and persisted as
+`charge_temperature_apply.snapshot_before_hex` in `summary.json`. The profile image
+cannot be combined with ROM recovery, AFE repair, or asset repair features.
+
 The former `live-df-mainboard` profile is retired and returns a migration error. ROM,
 AFE, and `asset-df-mainboard` recovery paths retain their existing semantics and are not
 aliases for this profile.
