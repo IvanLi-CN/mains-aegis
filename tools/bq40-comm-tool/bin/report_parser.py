@@ -106,6 +106,30 @@ def charge_profile_final_vectors_match(payload_hex: Optional[str]) -> bool:
     return True
 
 
+def charge_profile_non_allowlisted_bytes_unchanged(
+    before_hex: Optional[str], after_hex: Optional[str]
+) -> bool:
+    if (
+        before_hex is None
+        or after_hex is None
+        or len(before_hex) != 64
+        or len(after_hex) != 64
+    ):
+        return False
+    before = bytes.fromhex(before_hex)
+    after = bytes.fromhex(after_hex)
+    allowlisted_offsets = {
+        offset
+        for address, _raw, _decoded in CHARGE_PROFILE_EXPECTED_FIELDS.values()
+        for offset in (address - 0x4A00, address - 0x4A00 + 1)
+    }
+    return all(
+        before[offset] == after[offset]
+        for offset in range(32)
+        if offset not in allowlisted_offsets
+    )
+
+
 @dataclass
 class Sample:
     addr: int
@@ -483,6 +507,10 @@ def main() -> int:
             reasons.append("charge_profile_final_snapshot_missing")
         if not charge_profile_final_vectors_match(charge_profile_final_after_hex):
             reasons.append("charge_profile_final_vectors_mismatch")
+        if not charge_profile_non_allowlisted_bytes_unchanged(
+            charge_profile_snapshot_before_hex, charge_profile_final_after_hex
+        ):
+            reasons.append("charge_profile_non_allowlisted_bytes_changed")
         if charge_profile_addresses and not all(
             charge_profile_address_allowed(args.mode, address)
             for address in charge_profile_addresses

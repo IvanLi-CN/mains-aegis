@@ -13860,7 +13860,13 @@ where
             status3,
         );
 
-        let can_enable = input_present && !ts_cold && !ts_hot && !usb_pd_unsafe_latched;
+        let can_enable = charger_enable_safety_gate(
+            input_present,
+            vbat_present,
+            ts_cold,
+            ts_hot,
+            usb_pd_unsafe_latched,
+        );
         let activation_probe_without_charge = activation_pending
             && self.bms_activation_phase == BmsActivationPhase::ProbeWithoutCharge;
         let activation_normal_hold_charge = false;
@@ -13954,10 +13960,16 @@ where
         let force_charge_jeita_allowed =
             bq25792::jeita_normal_window_allows_charge(ts_cold, ts_cool, ts_warm, ts_hot);
         let force_charge_bq40_allowed = self.bq40_activation_wake_gate(charge_policy_now_ms);
-        let force_allow_charge = force_charge_requested
-            && can_enable
-            && force_charge_jeita_allowed
-            && force_charge_bq40_allowed;
+        let force_allow_charge = activation_force_charge_allows_ce(
+            force_charge_requested,
+            input_present,
+            vbat_present,
+            ts_cold,
+            ts_hot,
+            usb_pd_unsafe_latched,
+            force_charge_jeita_allowed,
+            force_charge_bq40_allowed,
+        );
         let force_charge_blocked = force_charge_requested && !force_allow_charge;
         let force_charge_voltage_mv = self
             .bq40_charge_request

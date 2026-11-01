@@ -65,6 +65,15 @@ def successful_log() -> list[str]:
     return lines
 
 
+def non_allowlisted_byte_change_log() -> list[str]:
+    lines = successful_log()
+    for index, line in enumerate(lines):
+        if "stage=final_after_hex" in line:
+            lines[index] = line.replace("b0=0xa5", "b0=0xa6")
+            break
+    return lines
+
+
 def run_parser(log_lines: list[str], root: Path) -> subprocess.CompletedProcess[str]:
     monitor = root / "monitor.jsonl"
     report = root / "report"
@@ -116,6 +125,15 @@ def main() -> None:
         assert bad.returncode == 20
         summary = json.loads((root / "report" / "summary.json").read_text())
         assert "charge_profile_address_invalid" in summary["verdict"]["reason"]
+
+        bad = run_parser(non_allowlisted_byte_change_log(), root)
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert summary["verdict"]["pass"] is False
+        assert (
+            "charge_profile_non_allowlisted_bytes_changed"
+            in summary["verdict"]["reason"]
+        )
 
     print("report parser contract: ok")
 

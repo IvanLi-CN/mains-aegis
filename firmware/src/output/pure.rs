@@ -642,6 +642,38 @@ pub(super) fn bq25792_effective_vbat_present(
     }
 }
 
+pub(super) const fn charger_enable_safety_gate(
+    input_present: bool,
+    vbat_present: bool,
+    ts_cold: bool,
+    ts_hot: bool,
+    usb_pd_unsafe_latched: bool,
+) -> bool {
+    input_present && vbat_present && !ts_cold && !ts_hot && !usb_pd_unsafe_latched
+}
+
+pub(super) const fn activation_force_charge_allows_ce(
+    force_charge_requested: bool,
+    input_present: bool,
+    vbat_present: bool,
+    ts_cold: bool,
+    ts_hot: bool,
+    usb_pd_unsafe_latched: bool,
+    force_charge_jeita_allowed: bool,
+    force_charge_bq40_allowed: bool,
+) -> bool {
+    force_charge_requested
+        && charger_enable_safety_gate(
+            input_present,
+            vbat_present,
+            ts_cold,
+            ts_hot,
+            usb_pd_unsafe_latched,
+        )
+        && force_charge_jeita_allowed
+        && force_charge_bq40_allowed
+}
+
 pub(super) const fn usb_pd_demand_charging_enabled(
     runtime_allow_charge: Option<bool>,
     charger_enabled: bool,
@@ -4257,6 +4289,16 @@ mod tests {
             Some(16_243),
             Some(true),
             bq25792_effective_vbat_present(Some(false), Some(1_280))
+        ));
+    }
+
+    #[test]
+    fn activation_force_charge_without_vbat_keeps_ce_high() {
+        assert!(!activation_force_charge_allows_ce(
+            true, true, false, false, false, false, true, true,
+        ));
+        assert!(activation_force_charge_allows_ce(
+            true, true, true, false, false, false, true, true,
         ));
     }
 
