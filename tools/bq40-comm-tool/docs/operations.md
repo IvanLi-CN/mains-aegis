@@ -86,6 +86,7 @@ Policy:
 - `apply-df` is app-mode only; it rejects `--recover` and `--rom-image`
 - `--repair-profile bq40-charge-temperature` is mandatory for this subcommand
 - the profile requires the existing strict BQ40 identity probe (`ManufacturerName()` or `DeviceName()` evidence); `--probe-mode mac-only` is diagnostic-only and is rejected
+- the maintenance image repeats the identity read immediately before the Data Flash writer, so a numeric-only wake-window hit cannot authorize a write
 - the writer first snapshots the complete containing block at `0x4A00`, length `32`
 - exactly seven temperature fields are allowed: T1, T2, T5, T6, T3, T4, and hysteresis
 - each MB44 write must pass echo address, returned length, raw vector, and decoded value checks
@@ -93,6 +94,7 @@ Policy:
 - the monitor log must contain `bms_df_apply: ... profile=bq40_charge_temperature stage=done fields=7` with 0x4A00/32-byte pre- and post-write metadata
 - the monitor log must contain one `stage=snapshot_before_hex` event and one `stage=final_after_hex` event, each with all 32 bytes of the containing block
 - the monitor log must contain all seven exact `stage=field_verify` records; the parser rejects missing, inconsistent, wrong-address, unknown-stage, or reordered evidence
+- any profile failure latches the temporary maintenance image fail-closed across transport loss; rerun the explicit maintenance command to establish a new retry boundary
 - `summary.json` records the outcome under `charge_temperature_apply`, including the complete pre-write and post-write blocks and verified field names for offline rollback/audit
 - the profile does not write ChemID, calibration, protection, termination, precharge, maintenance, or current/voltage manifest fields
 - the profile image cannot be combined with ROM recovery, AFE repair, or asset repair features

@@ -239,16 +239,26 @@ validate_diag_snapshot() {
 import json, sys
 diag = json.loads(sys.argv[1])
 packages = diag.get("packages", {})
-if isinstance(packages, dict):
-    derived = packages.get("derived.power", {})
-    if isinstance(derived, dict) and isinstance(derived.get("payload"), dict):
-        diag = derived["payload"]
+errors = []
+if not isinstance(packages, dict):
+    errors.append("diag.packages is missing or not an object")
+    derived_payload = {}
+else:
+    derived = packages.get("derived.power")
+    if not isinstance(derived, dict):
+        errors.append('diag.packages["derived.power"] is missing or not an object')
+        derived_payload = {}
+    elif not isinstance(derived.get("payload"), dict):
+        errors.append('diag.packages["derived.power"].payload is missing or not an object')
+        derived_payload = {}
+    else:
+        derived_payload = derived["payload"]
+diag = derived_payload
 require_recovery = sys.argv[2] == "true"
 out = sys.argv[3]
 charger = diag.get("charger", {})
 bms = diag.get("bms", {})
 policy = diag.get("policy", {})
-errors = []
 if charger.get("vbat_lowv_pct_x10") != 714:
     errors.append(f"charger.vbat_lowv_pct_x10={charger.get('vbat_lowv_pct_x10')!r}, expected 714")
 if charger.get("iprechg_ma") != 120:

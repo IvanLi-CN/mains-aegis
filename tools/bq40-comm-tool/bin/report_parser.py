@@ -42,6 +42,10 @@ CHARGE_PROFILE_APPLY_RE = re.compile(
     rf"profile=(?P<profile>[a-zA-Z0-9_]+) stage=(?P<stage>[a-zA-Z0-9_]+)"
     rf"(?: .*?(?:writes|fields)=(?P<count>\d+))?"
 )
+CHARGE_PROFILE_APPLY_ANY_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=(?P<profile>[^\s]+) stage=(?P<stage>[^\s]+)"
+)
 CHARGE_PROFILE_SNAPSHOT_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=bq40_charge_temperature stage=(?P<stage>snapshot_before_hex|final_after_hex) "
@@ -100,6 +104,9 @@ CHARGE_PROFILE_KNOWN_STAGES = {
     "security_full_access_ffff_2",
     "security_after",
     "security_error",
+    "identity_mfg_error",
+    "identity_device_error",
+    "identity_error",
     "snapshot_transport",
     "snapshot_address",
     "snapshot_length",
@@ -358,6 +365,25 @@ def main() -> int:
                     rom_runtime_status_unconfirmed = True
 
                 charge_profile_match = CHARGE_PROFILE_APPLY_RE.search(text)
+                charge_profile_any_match = CHARGE_PROFILE_APPLY_ANY_RE.search(text)
+                if charge_profile_any_match:
+                    any_profile = charge_profile_any_match.group("profile")
+                    if any_profile != "bq40_charge_temperature":
+                        charge_profile_apply_attempted = True
+                        charge_profile_addresses.add(
+                            int(charge_profile_any_match.group("addr"), 16)
+                        )
+                        charge_profile_sequence_error = True
+                        charge_profile_unknown_stage = True
+                        charge_profile_apply_errors["unknown_profile"] += 1
+                    elif charge_profile_match is None:
+                        charge_profile_apply_attempted = True
+                        charge_profile_addresses.add(
+                            int(charge_profile_any_match.group("addr"), 16)
+                        )
+                        charge_profile_sequence_error = True
+                        charge_profile_unknown_stage = True
+                        charge_profile_apply_errors["malformed_evidence"] += 1
                 if charge_profile_match and charge_profile_match.group("profile") == "bq40_charge_temperature":
                     charge_profile_apply_attempted = True
                     charge_profile_addresses.add(int(charge_profile_match.group("addr"), 16))
@@ -400,6 +426,9 @@ def main() -> int:
                             )
                     elif stage in {
                         "security_error",
+                        "identity_mfg_error",
+                        "identity_device_error",
+                        "identity_error",
                         "snapshot_transport",
                         "snapshot_address",
                         "snapshot_length",

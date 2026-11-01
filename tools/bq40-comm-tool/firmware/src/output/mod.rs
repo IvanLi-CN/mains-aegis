@@ -5692,6 +5692,53 @@ where
             return false;
         }
 
+        // The wake-window and post-recovery paths deliberately use a numeric-only probe to
+        // bring the gauge out of sleep. Before any Data Flash write, repeat the identity probe
+        // here so every writer entry point is bound to the existing BQ40 identity evidence.
+        let mut mfg_buf = [0u8; 32];
+        let mut dev_buf = [0u8; 32];
+        let mfg_ok = match read_ascii_block_checked(
+            &mut self.i2c,
+            addr,
+            bq40z50::cmd::MANUFACTURER_NAME,
+            &mut mfg_buf,
+        ) {
+            Ok(name) => ascii_contains_case_insensitive(name, b"texas"),
+            Err(err) => {
+                defmt::warn!(
+                    "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=identity_mfg_error err={}",
+                    addr,
+                    err,
+                );
+                false
+            }
+        };
+        let dev_ok = match read_ascii_block_checked(
+            &mut self.i2c,
+            addr,
+            bq40z50::cmd::DEVICE_NAME,
+            &mut dev_buf,
+        ) {
+            Ok(name) => ascii_contains_case_insensitive(name, b"bq40"),
+            Err(err) => {
+                defmt::warn!(
+                    "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=identity_device_error err={}",
+                    addr,
+                    err,
+                );
+                false
+            }
+        };
+        if !(mfg_ok || dev_ok) {
+            defmt::error!(
+                "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=identity_error reason=name_evidence_missing",
+                addr,
+            );
+            self.bms_charge_temperature_profile_failed = true;
+            self.bms_next_poll_at = now + BMS_POLL_PERIOD;
+            return true;
+        }
+
         if let Err(err) = self.require_bms_full_access(addr) {
             defmt::warn!(
                 "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=security_error err={}",
@@ -7468,7 +7515,12 @@ where
                 &mut self.bms_pattern_tracker,
             ) {
                 Ok(snapshot) => {
-                    if name_ok || !self.cfg.bms_strict_validation || accept_snapshot_without_name {
+                    let profile_identity_required =
+                        cfg!(feature = "bms-charge-temperature-profile");
+                    if name_ok
+                        || (!profile_identity_required && !self.cfg.bms_strict_validation)
+                        || accept_snapshot_without_name
+                    {
                         self.bms_weak_pass_votes = 0;
                         if !quiet {
                             defmt::info!(
@@ -9864,8 +9916,10 @@ where
                         #[cfg(feature = "bms-charge-temperature-profile")]
                         {
                             // The next discovery is a new binding even when the gauge reuses
-                            // the same address. Keep a failed profile latched fail-closed, but
-                            // require a fresh successful apply for a replacement gauge.
+                            // the same address. Keep a failed apply latched across transport loss:
+                            // a gauge that disappeared after a partial Data Flash write is not
+                            // proven to be a replacement, and retrying would violate the writer's
+                            // fail-stop contract. A fresh tool process is the retry boundary.
                             self.bms_charge_temperature_profile_applied = false;
                             self.bms_charge_temperature_snapshot = None;
                         }
