@@ -655,7 +655,7 @@ pub(super) const fn charger_enable_safety_gate(
 pub(super) const fn activation_force_charge_allows_ce(
     force_charge_requested: bool,
     input_present: bool,
-    vbat_present: bool,
+    status_vbat_present: bool,
     ts_cold: bool,
     ts_hot: bool,
     usb_pd_unsafe_latched: bool,
@@ -665,7 +665,7 @@ pub(super) const fn activation_force_charge_allows_ce(
     force_charge_requested
         && charger_enable_safety_gate(
             input_present,
-            vbat_present,
+            status_vbat_present,
             ts_cold,
             ts_hot,
             usb_pd_unsafe_latched,

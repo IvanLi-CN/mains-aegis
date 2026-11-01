@@ -231,6 +231,11 @@ def main() -> int:
     charge_profile_done_final_addr: Optional[int] = None
     charge_profile_done_final_len: Optional[int] = None
     charge_profile_verified_fields: set[str] = set()
+    charge_profile_snapshot_before_count = 0
+    charge_profile_final_after_count = 0
+    charge_profile_done_count = 0
+    charge_profile_field_verify_counts: Counter[str] = Counter()
+    charge_profile_sequence_error = False
     canonical_touched_0x16 = False
     last_sample_ts: Optional[float] = None
     in_preexisting_segment = False
@@ -329,7 +334,37 @@ def main() -> int:
                     charge_profile_addresses.add(int(charge_profile_match.group("addr"), 16))
                     stage = charge_profile_match.group("stage")
                     count = charge_profile_match.group("count")
-                    if stage == "done":
+                    if stage == "snapshot_before_hex":
+                        if (
+                            charge_profile_snapshot_before_count != 0
+                            or charge_profile_final_after_count != 0
+                            or charge_profile_done_count != 0
+                        ):
+                            charge_profile_sequence_error = True
+                        charge_profile_snapshot_before_count += 1
+                    elif stage == "final_after_hex":
+                        if (
+                            charge_profile_snapshot_before_count != 1
+                            or charge_profile_final_after_count != 0
+                            or charge_profile_done_count != 0
+                        ):
+                            charge_profile_sequence_error = True
+                        charge_profile_final_after_count += 1
+                    elif stage == "field_verify":
+                        if (
+                            charge_profile_snapshot_before_count != 1
+                            or charge_profile_final_after_count != 1
+                            or charge_profile_done_count != 0
+                        ):
+                            charge_profile_sequence_error = True
+                    elif stage == "done":
+                        if (
+                            charge_profile_snapshot_before_count != 1
+                            or charge_profile_final_after_count != 1
+                            or charge_profile_done_count != 0
+                        ):
+                            charge_profile_sequence_error = True
+                        charge_profile_done_count += 1
                         if count is not None:
                             charge_profile_apply_writes = max(
                                 charge_profile_apply_writes, int(count)
@@ -382,6 +417,9 @@ def main() -> int:
                     address = int(charge_profile_field_match.group("addr"), 16)
                     charge_profile_addresses.add(address)
                     field_name = charge_profile_field_match.group("field")
+                    charge_profile_field_verify_counts[field_name] += 1
+                    if charge_profile_field_verify_counts[field_name] != 1:
+                        charge_profile_sequence_error = True
                     expected = CHARGE_PROFILE_EXPECTED_FIELDS.get(field_name)
                     actual = (
                         int(charge_profile_field_match.group("df_addr"), 16),
@@ -511,6 +549,8 @@ def main() -> int:
             charge_profile_snapshot_before_hex, charge_profile_final_after_hex
         ):
             reasons.append("charge_profile_non_allowlisted_bytes_changed")
+        if charge_profile_sequence_error:
+            reasons.append("charge_profile_evidence_sequence_invalid")
         if charge_profile_addresses and not all(
             charge_profile_address_allowed(args.mode, address)
             for address in charge_profile_addresses
@@ -549,6 +589,10 @@ def main() -> int:
             "readback_seen": charge_profile_readback_seen,
             "snapshot_before_hex": charge_profile_snapshot_before_hex,
             "final_after_hex": charge_profile_final_after_hex,
+            "snapshot_before_count": charge_profile_snapshot_before_count,
+            "final_after_count": charge_profile_final_after_count,
+            "done_count": charge_profile_done_count,
+            "evidence_sequence_error": charge_profile_sequence_error,
             "addresses": [f"0x{address:02x}" for address in sorted(charge_profile_addresses)],
             "verified_fields": sorted(charge_profile_verified_fields),
         },

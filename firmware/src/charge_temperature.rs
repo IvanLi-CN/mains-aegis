@@ -199,10 +199,14 @@ pub const fn activation_wake_charge_allowed(
     now_ms: u64,
     temperature_observed_at_ms: Option<u64>,
     temperature: Option<ChargeTemperatureDecision>,
+    request_observed: bool,
     request: Option<Bq40ChargeRequest>,
 ) -> bool {
-    if temperature_observed_at_ms.is_none() && request.is_none() {
+    if temperature_observed_at_ms.is_none() && !request_observed {
         return true;
+    }
+    if !request_observed {
+        return false;
     }
     let Some(request) = request else {
         return false;
@@ -391,31 +395,57 @@ mod tests {
             voltage_mv: 16_800,
             observed_at_ms: 100,
         };
-        assert!(activation_wake_charge_allowed(100, None, None, None));
-        assert!(!activation_wake_charge_allowed(100, Some(100), None, None));
+        assert!(activation_wake_charge_allowed(100, None, None, false, None));
+        assert!(!activation_wake_charge_allowed(
+            100,
+            Some(100),
+            None,
+            false,
+            None
+        ));
         assert!(!activation_wake_charge_allowed(
             100,
             None,
             None,
+            true,
             Some(request)
         ));
         assert!(activation_wake_charge_allowed(
             100,
             Some(100),
             Some(ChargeTemperatureDecision::normal()),
+            true,
             Some(request)
         ));
         assert!(!activation_wake_charge_allowed(
             100,
             Some(100),
             Some(ChargeTemperatureDecision::low()),
+            true,
             Some(request)
         ));
         assert!(!activation_wake_charge_allowed(
             1_101,
             Some(100),
             Some(ChargeTemperatureDecision::normal()),
+            true,
             Some(request)
+        ));
+    }
+
+    #[test]
+    fn invalid_observed_request_blocks_activation_wake() {
+        let invalid = Bq40ChargeRequest {
+            current_ma: 0,
+            voltage_mv: 0,
+            observed_at_ms: 100,
+        };
+        assert!(!activation_wake_charge_allowed(
+            100,
+            None,
+            None,
+            true,
+            Some(invalid)
         ));
     }
 

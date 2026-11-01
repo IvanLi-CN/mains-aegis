@@ -45,10 +45,10 @@
 ### REQ-BQ40-CTP-004
 
 - The main firmware MUST treat the BQ40 `ChargingCurrent()` and `ChargingVoltage()` values as temperature-policy upper bounds and MUST refresh them at least once per second when charging.
-- The BQ25792 target MUST be no greater than both the runtime policy target and the BQ40 request. A zero or invalid BQ40 request MUST produce an explicit no-charge state.
+- The BQ25792 target MUST be no greater than both the runtime policy target and the BQ40 request. A read failure, zero, invalid, or stale BQ40 request MUST produce an explicit no-charge state.
 - In the `100mA` mode, BQ25792 `ITERM` MUST be `40mA` and `EN_TERM` MUST remain disabled according to the existing low-current recovery behavior. Normal-mode termination policy MUST remain the existing BQ40 `CurrentAtEOC`-aligned path and is not part of the T1–T6 profile.
 - BQ25792 low-temperature JEITA MUST not apply a second current multiplier; `JEITA_ISETC` is `100%` because BQ40 already requests `100mA`. `TS_COOL=15°C`, `TS_WARM=45°C`, `TS_IGNORE=0`, and high-temperature JEITA behavior MUST suspend charging.
-- Activation/recovery wake charging is a separate maintenance state, not a product-charge override. Its fixed wake target MUST be blocked unless the BQ25792 reports `VBAT_PRESENT_STAT=1` and its JEITA state is in the normal `15–45°C` window. If any BQ40 request or temperature observation exists, the wake state MUST additionally require a fresh valid request and fresh normal-band BQ40 temperature evidence; when a request exists, the wake current and voltage MUST be clamped to it. After activation, restoring the saved charger registers MUST leave `CE` high until an ordinary poll re-evaluates the full product-charge gate.
+- Activation/recovery wake charging is a separate maintenance state, not a product-charge override. Its fixed wake target MUST be blocked unless the BQ25792 reports `VBAT_PRESENT_STAT=1` and its JEITA state is in the normal `15–45°C` window. If any BQ40 request value has been observed, including zero or invalid values, or any temperature observation exists, the wake state MUST additionally require a fresh valid request and fresh normal-band BQ40 temperature evidence; a read failure after an observed request MUST remain a no-charge condition. When a request exists, the wake current and voltage MUST be clamped to it. After activation, restoring the saved charger registers MUST leave `CE` high until an ordinary poll re-evaluates the full product-charge gate.
 - covers: `VER-BQ40-CTP-004`
 
 ### REQ-BQ40-CTP-005
@@ -62,7 +62,7 @@
 
 - A future Data Flash writer MUST use an explicit semantic profile and an allowlist containing only `T1`, `T2`, `T5`, `T6`, `T3`, `T4`, and `Hysteresis` for this topic.
 - Before writing, it MUST save the complete containing Data Flash block. After writing, it MUST verify the address echo, block length, every target raw value, and every decoded semantic value.
-- The writer MUST treat the operation as non-atomic and MUST stop on transport error, write failure, or readback mismatch. It MUST NOT silently fall back to the existing broad 25-field `bq40-comm-tool` baseline.
+- The writer MUST treat the operation as non-atomic and MUST stop on transport error, write failure, or readback mismatch. A profile failure in the maintenance firmware MUST latch `CE` high and terminate the maintenance charge flow. It MUST NOT silently fall back to the existing broad 25-field `bq40-comm-tool` baseline.
 - The normal `mains-aegis` runtime MUST NOT automatically write BQ40 Data Flash.
 - The current/voltage table in the profile manifest is a static policy and validation record only; it MUST NOT become a live Data Flash writer target.
 - covers: `VER-BQ40-CTP-006`
@@ -110,7 +110,7 @@
 
 - Method: Host MB44 protocol/contract tests cover the exact read and field-write frames, echoed-address readback, malformed length, mismatch, and interrupted-write cases; the target adapter uses those tested frame builders, the report parser requires complete pre/post blocks plus all seven field-verification records, and the persisted report records the complete pre-write snapshot.
 - covers: `REQ-BQ40-CTP-006`
-- Pass condition: Only the seven allowlisted fields can change; the report parser compares every non-allowlisted byte between the complete pre-write and post-write blocks; every failure stops the transaction and preserves the pre-write block for rollback; incomplete or inconsistent report evidence is not accepted as PASS.
+- Pass condition: Only the seven allowlisted fields can change; the report parser compares every non-allowlisted byte between the complete pre-write and post-write blocks and rejects reordered, duplicated, or incomplete evidence; every failure stops the transaction and preserves the pre-write block for rollback; incomplete or inconsistent report evidence is not accepted as PASS.
 
 ### VER-BQ40-CTP-007
 

@@ -6012,7 +6012,17 @@ where
         #[cfg(feature = "bms-charge-temperature-profile")]
         {
             let now = Instant::now();
-            let _ = self.maybe_apply_bq40_charge_temperature_profile(addr, now);
+            if self.maybe_apply_bq40_charge_temperature_profile(addr, now) {
+                self.set_charge_mode(BootChargeMode::Off);
+                self.charger_allowed = false;
+                self.chg_ce.set_high();
+                self.chg_enabled = false;
+                self.chg_next_retry_at = Some(now + BMS_POLL_PERIOD);
+                defmt::error!(
+                    "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=halt reason=profile_failed charger_enabled=false",
+                    addr,
+                );
+            }
         }
         defmt::warn!(
             "bms_flow: stage={} addr=0x{=u8:x} charge_mode={}",
@@ -7895,6 +7905,14 @@ where
 
     fn maybe_poll_charger(&mut self, irq: &IrqSnapshot) {
         let now = Instant::now();
+        #[cfg(feature = "bms-charge-temperature-profile")]
+        if self.bms_charge_temperature_profile_failed {
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
+            self.charger_allowed = false;
+            self.chg_next_retry_at = Some(now + BMS_POLL_PERIOD);
+            return;
+        }
         if self.bms_post_flash_resume_addr.is_some() {
             let started_at = self.bms_post_flash_resume_started_at.unwrap_or(now);
             // Keep the charger configuration stable during the post-flash boot quiet window.

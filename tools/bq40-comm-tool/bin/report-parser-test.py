@@ -74,6 +74,18 @@ def non_allowlisted_byte_change_log() -> list[str]:
     return lines
 
 
+def reordered_evidence_log() -> list[str]:
+    lines = successful_log()
+    lines[0], lines[1] = lines[1], lines[0]
+    return lines
+
+
+def duplicate_field_evidence_log() -> list[str]:
+    lines = successful_log()
+    lines.insert(-1, lines[2])
+    return lines
+
+
 def run_parser(log_lines: list[str], root: Path) -> subprocess.CompletedProcess[str]:
     monitor = root / "monitor.jsonl"
     report = root / "report"
@@ -134,6 +146,16 @@ def main() -> None:
             "charge_profile_non_allowlisted_bytes_changed"
             in summary["verdict"]["reason"]
         )
+
+        bad = run_parser(reordered_evidence_log(), root)
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_evidence_sequence_invalid" in summary["verdict"]["reason"]
+
+        bad = run_parser(duplicate_field_evidence_log(), root)
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_evidence_sequence_invalid" in summary["verdict"]["reason"]
 
     print("report parser contract: ok")
 

@@ -72,6 +72,20 @@ if ! rg -q 'bms-charge-temperature-profile cannot be combined with BQ40 recovery
   exit 1
 fi
 
+if incompatible_output=$(
+  cd "$TOOL_ROOT/firmware"
+  cargo +esp check --features bms-charge-temperature-profile,bms-rom-recover-force 2>&1
+); then
+  echo "profile/recovery feature combination unexpectedly compiled" >&2
+  printf '%s\n' "$incompatible_output" >&2
+  exit 1
+fi
+if [[ "$incompatible_output" != *"bms-charge-temperature-profile cannot be combined with BQ40 recovery or repair features"* ]]; then
+  echo "profile/recovery compile-time conflict was not enforced by cargo" >&2
+  printf '%s\n' "$incompatible_output" >&2
+  exit 1
+fi
+
 python3 "$SCRIPT_DIR/report-parser-test.py"
 
 if rg -n "Ma1000|ManualSpeed1A|CHG1A" \

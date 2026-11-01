@@ -4164,6 +4164,7 @@ pub struct PowerManager<'d, I2C> {
     bms_cached_da_status2: Option<bq40z50::DaStatus2>,
     bms_cached_da_status2_at_ms: Option<u64>,
     bq40_charge_request: Option<charge_temperature::Bq40ChargeRequest>,
+    bq40_charge_request_observed: bool,
     bq40_charge_request_next_poll_at: Instant,
     bms_cached_filter_capacity: Option<bq40z50::FilterCapacity>,
     bms_cached_balance_config: Option<bq40z50::BalanceConfig>,
@@ -4970,6 +4971,7 @@ where
             bms_cached_da_status2: None,
             bms_cached_da_status2_at_ms: None,
             bq40_charge_request: None,
+            bq40_charge_request_observed: false,
             bq40_charge_request_next_poll_at: now,
             bms_cached_filter_capacity: None,
             bms_cached_balance_config: None,
@@ -6593,6 +6595,7 @@ where
 
         let Some(addr) = self.bms_addr else {
             self.bq40_charge_request = None;
+            self.bq40_charge_request_observed = false;
             return;
         };
 
@@ -6601,6 +6604,7 @@ where
         let observed_at_ms = self.fan_now_ms();
         match (current_ma, voltage_mv) {
             (Ok(current_ma), Ok(voltage_mv)) => {
+                self.bq40_charge_request_observed = true;
                 let request = charge_temperature::Bq40ChargeRequest {
                     current_ma,
                     voltage_mv,
@@ -6663,6 +6667,7 @@ where
             now_ms,
             self.bms_cached_da_status2_at_ms,
             temperature,
+            self.bq40_charge_request_observed,
             self.bq40_charge_request,
         )
     }
@@ -6730,12 +6735,14 @@ where
         self.charge_policy_derate.reset();
         self.charge_policy_output_load.reset();
         self.bq40_charge_request = None;
+        self.bq40_charge_request_observed = false;
     }
 
     fn reset_bms_detail_mac_cache(&mut self, now: Instant) {
         self.bms_cached_da_status2 = None;
         self.bms_cached_da_status2_at_ms = None;
         self.bq40_charge_request = None;
+        self.bq40_charge_request_observed = false;
         self.bq40_charge_request_next_poll_at = now;
         self.bms_cached_filter_capacity = None;
         self.bms_cached_balance_config = None;
@@ -13963,7 +13970,7 @@ where
         let force_allow_charge = activation_force_charge_allows_ce(
             force_charge_requested,
             input_present,
-            vbat_present,
+            status_vbat_present,
             ts_cold,
             ts_hot,
             usb_pd_unsafe_latched,
