@@ -41,6 +41,20 @@ expect_exit_with_text 20 \
   "apply-df requires --repair-profile bq40-charge-temperature" \
   "$SCRIPT_DIR/run.sh" apply-df --repair-profile none
 
+expect_exit_with_text 21 \
+  "cannot be combined with --recover if-rom" \
+  "$SCRIPT_DIR/build.sh" --mode dual-diag --recover if-rom --repair-profile bq40-charge-temperature
+
+for required_path in \
+  "$REPO_ROOT/firmware/src" \
+  "$REPO_ROOT/web/src" \
+  "$TOOL_ROOT/firmware/src"; do
+  if [[ ! -d "$required_path" ]]; then
+    echo "required contract path is missing: $required_path" >&2
+    exit 1
+  fi
+done
+
 for required in \
   "bms-df-repair-afe-default" \
   "bms-rom-repair-asset-df-mainboard" \

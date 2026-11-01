@@ -870,13 +870,7 @@ where
     // The project BQ40 configuration has HPE=0. The charge-temperature
     // profile therefore uses one direct MB44 request and one plain response;
     // transport/address/length errors are terminal for the current apply.
-    let df_addr_le = df_addr.to_le_bytes();
-    let request = [
-        bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
-        0x02,
-        df_addr_le[0],
-        df_addr_le[1],
-    ];
+    let request = charge_profile::build_mb44_read_request(df_addr);
     i2c.write(addr, &request)
         .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
     spin_delay(BMS_MAC_WRITE_SETTLE);
@@ -889,21 +883,18 @@ where
     )
     .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
 
-    if response[0] != BMS_DF_REPLY_LEN_WITH_ADDR {
-        return Err(bq40z50::BmsDiagError::BadBlockLen);
-    }
-    let echoed_addr = u16::from_le_bytes([response[1], response[2]]);
-    if echoed_addr != df_addr {
-        return Err(bq40z50::BmsDiagError::BadRange);
-    }
-
-    let mut compact = bq40z50::BlockReadRaw {
-        declared_len: 32,
-        payload_len: 32,
-        payload: [0u8; 32],
+    let snapshot = charge_profile::decode_plain_mb44_block(df_addr, &response).map_err(
+        |error| match error {
+            charge_profile::BlockReadDecodeError::Length => bq40z50::BmsDiagError::BadBlockLen,
+            charge_profile::BlockReadDecodeError::Address => bq40z50::BmsDiagError::BadRange,
+        },
+    )?;
+    let compact = bq40z50::BlockReadRaw {
+        declared_len: snapshot.declared_len,
+        payload_len: snapshot.payload_len,
+        payload: snapshot.payload,
     };
-    compact.payload.copy_from_slice(&response[3..35]);
-    Ok((echoed_addr, compact))
+    Ok((snapshot.address, compact))
 }
 
 #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]

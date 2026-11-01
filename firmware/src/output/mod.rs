@@ -111,6 +111,7 @@ const BMS_ROM_MODE_SIGNATURE: u16 = 0x9002;
 const BMS_DEVICE_TYPE_BQ40Z50: u16 = 0x4500;
 const BMS_ACTIVATION_WORD_GAP: Duration = Duration::from_millis(2);
 const BMS_DETAIL_MAC_REFRESH_PERIOD: Duration = Duration::from_secs(8);
+const BMS_CHARGE_TEMP_REFRESH_PERIOD: Duration = Duration::from_secs(1);
 const BMS_DETAIL_MAC_REFRESH_STAGGER: Duration = Duration::from_secs(2);
 const BMS_DETAIL_BALANCE_CONFIG_REFRESH_STAGGER: Duration = Duration::from_secs(4);
 const BMS_DETAIL_GAUGING_STATUS_REFRESH_STAGGER: Duration = Duration::from_secs(6);
@@ -6589,8 +6590,7 @@ where
         let Some(observed_at_ms) = self.bms_cached_da_status2_at_ms else {
             return charge_temperature::ChargeTemperatureDecision::no_charge();
         };
-        if now_ms.saturating_sub(observed_at_ms) > BMS_DETAIL_MAC_REFRESH_PERIOD.as_millis() as u64
-        {
+        if !charge_temperature::is_temperature_fresh(now_ms, observed_at_ms) {
             return charge_temperature::ChargeTemperatureDecision::no_charge();
         }
         let Some(da_status2) = self.bms_cached_da_status2 else {
@@ -11611,11 +11611,16 @@ where
                 BmsResultKind::NotDetected => 5,
             },
         );
+        // Keep the physical charger disabled while restoring register state.
+        // A failed activation must never re-enable charging merely because the
+        // pre-activation backup had CE asserted.
+        self.chg_ce.set_high();
+        self.chg_enabled = false;
         let mut restore_chg_enabled = false;
         if let Some(chg_enabled) = self.restore_bms_activation_charger_backup(reason) {
             restore_chg_enabled = chg_enabled;
         }
-        if restore_chg_enabled {
+        if result == BmsResultKind::Success && restore_chg_enabled {
             self.chg_ce.set_low();
             self.chg_enabled = true;
         } else {
@@ -14199,20 +14204,13 @@ where
                 policy_detail_status_text = "TEMP";
                 policy_notice_text = "bq40_cell_temperature_no_charge";
             } else {
-                let request = self
-                    .bq40_charge_request
-                    .filter(|request| request.is_fresh(charge_policy_now_ms));
-                let policy_current_ma = policy_target_ichg_ma
-                    .or(effective_policy_target_ichg_ma)
-                    .unwrap_or(0);
-                let target = request.and_then(|request| {
-                    charge_temperature::clamp_policy_to_bq40_request(
-                        policy_current_ma,
-                        CHARGE_POLICY_VREG_MV,
-                        temperature_decision,
-                        request,
-                    )
-                });
+                let target = charge_temperature::runtime_charge_target(
+                    charge_policy_now_ms,
+                    temperature_decision,
+                    self.bq40_charge_request,
+                    policy_target_ichg_ma.or(effective_policy_target_ichg_ma),
+                    CHARGE_POLICY_VREG_MV,
+                );
                 if let Some(target) = target {
                     policy_target_ichg_ma = Some(target.current_ma);
                     effective_policy_target_ichg_ma = Some(
@@ -14240,21 +14238,22 @@ where
         let mut applied_vbat_lowv_pct_x10: Option<u16> = None;
         let mut applied_iprechg_ma: Option<u16> = None;
         let mut applied_iterm_ma: Option<u16> = None;
-        let policy_low_current_charge = allow_charge
-            && !force_allow_charge
-            && !auto_force_charge
-            && !activation_pending
-            && effective_policy_target_ichg_ma.is_some_and(|target_ma| target_ma <= 100);
         let current_at_eoc_ma = self
             .bms_cached_lock_diag
             .and_then(|diag| diag.current_at_eoc_ma)
             .and_then(bq25792::valid_termination_current_ma);
-        if allow_charge
+        let termination_policy = bq25792::charge_termination_policy(
+            allow_charge && !force_allow_charge && !auto_force_charge && !activation_pending,
+            effective_policy_target_ichg_ma,
+            current_at_eoc_ma,
+        );
+        if matches!(
+            termination_policy,
+            bq25792::ChargeTerminationPolicy::Blocked
+        ) && allow_charge
             && !force_allow_charge
             && !auto_force_charge
             && !activation_pending
-            && !policy_low_current_charge
-            && current_at_eoc_ma.is_none()
         {
             allow_charge = false;
             policy_target_ichg_ma = None;
@@ -14264,14 +14263,23 @@ where
             policy_detail_status_text = "LOCK";
             policy_notice_text = "bq40_current_at_eoc_unavailable";
         }
+        let termination_policy = bq25792::charge_termination_policy(
+            allow_charge && !force_allow_charge && !auto_force_charge && !activation_pending,
+            effective_policy_target_ichg_ma,
+            current_at_eoc_ma,
+        );
+        let policy_low_current_charge = matches!(
+            termination_policy,
+            bq25792::ChargeTerminationPolicy::LowCurrent
+        );
         let requested_policy_target_ichg_ma = policy_target_ichg_ma;
-        let policy_term_target_ma = if force_allow_charge || auto_force_charge || activation_pending
-        {
-            None
-        } else if policy_low_current_charge {
-            Some(CHARGE_POLICY_100MA_ITERM_MA)
-        } else {
-            current_at_eoc_ma
+        let policy_term_target_ma = match termination_policy {
+            bq25792::ChargeTerminationPolicy::LowCurrent => Some(CHARGE_POLICY_100MA_ITERM_MA),
+            bq25792::ChargeTerminationPolicy::Normal { current_at_eoc_ma } => {
+                Some(current_at_eoc_ma)
+            }
+            bq25792::ChargeTerminationPolicy::NotApplicable
+            | bq25792::ChargeTerminationPolicy::Blocked => None,
         };
 
         fn decode_voltage_mv(reg: u16) -> u16 {
@@ -15080,6 +15088,8 @@ where
     }
 
     fn mark_charger_poll_failed(&mut self, now: Instant) {
+        self.chg_ce.set_high();
+        self.chg_enabled = false;
         if self.bms_activation_state == BmsActivationState::Pending {
             self.finish_bms_activation(BmsResultKind::NotDetected, "charger_poll_failed");
         }
@@ -15121,7 +15131,10 @@ where
     }
 
     fn maybe_poll_bms(&mut self, irq: &IrqSnapshot) -> bool {
-        const POLL_PERIOD: Duration = Duration::from_secs(2);
+        // Charge-temperature safety owns the cell-temperature freshness
+        // window, so the monitoring poll must not leave DA_STATUS2 stale for
+        // longer than one second between refresh opportunities.
+        const POLL_PERIOD: Duration = BMS_CHARGE_TEMP_REFRESH_PERIOD;
         const INT_MIN_INTERVAL: Duration = Duration::from_millis(100);
 
         let now = Instant::now();
@@ -15673,7 +15686,7 @@ where
                     self.bms_cached_da_status2_at_ms = None;
                 }
             }
-            self.bms_next_da_status2_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
+            self.bms_next_da_status2_refresh_at = now + BMS_CHARGE_TEMP_REFRESH_PERIOD;
             bms_detail_refreshed = true;
         }
         let mut filter_capacity = self.bms_cached_filter_capacity;

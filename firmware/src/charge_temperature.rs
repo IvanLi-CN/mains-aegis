@@ -62,6 +62,11 @@ pub const BQ40_REQUEST_MAX_CURRENT_MA: u16 = 5_000;
 pub const BQ40_REQUEST_MIN_VOLTAGE_MV: u16 = 3_000;
 pub const BQ40_REQUEST_MAX_VOLTAGE_MV: u16 = 16_800;
 pub const BQ40_REQUEST_MAX_AGE_MS: u64 = 1_000;
+pub const CHARGE_TEMPERATURE_MAX_AGE_MS: u64 = 1_000;
+
+pub const fn is_temperature_fresh(now_ms: u64, observed_at_ms: u64) -> bool {
+    now_ms.saturating_sub(observed_at_ms) <= CHARGE_TEMPERATURE_MAX_AGE_MS
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Bq40ChargeRequest {
@@ -147,6 +152,28 @@ pub const fn clamp_policy_to_bq40_request(
         temperature_voltage_mv
     };
     clamp_target_to_bq40_request(policy_current_ma, policy_voltage_mv, request)
+}
+
+/// Resolve the live charger target from the temperature policy and the most
+/// recent BQ40 request. The runtime deliberately fails closed when the
+/// request is absent, invalid, or older than the one-second request window.
+pub const fn runtime_charge_target(
+    now_ms: u64,
+    temperature: ChargeTemperatureDecision,
+    request: Option<Bq40ChargeRequest>,
+    policy_current_ma: Option<u16>,
+    policy_voltage_mv: u16,
+) -> Option<ChargeTarget> {
+    let Some(request) = request else {
+        return None;
+    };
+    if !request.is_fresh(now_ms) {
+        return None;
+    }
+    let Some(policy_current_ma) = policy_current_ma else {
+        return None;
+    };
+    clamp_policy_to_bq40_request(policy_current_ma, policy_voltage_mv, temperature, request)
 }
 
 pub const fn evaluate_cell_temperature_k_x10(temp_k_x10: Option<u16>) -> ChargeTemperatureDecision {
@@ -398,5 +425,98 @@ mod tests {
                 voltage_mv: 16_800,
             })
         );
+    }
+
+    #[test]
+    fn runtime_target_fails_closed_for_stale_invalid_or_blocked_inputs() {
+        let request = Bq40ChargeRequest {
+            current_ma: 500,
+            voltage_mv: 16_800,
+            observed_at_ms: 1_000,
+        };
+        assert_eq!(
+            runtime_charge_target(
+                2_000,
+                ChargeTemperatureDecision::normal(),
+                Some(request),
+                Some(500),
+                16_800,
+            ),
+            Some(ChargeTarget {
+                current_ma: 500,
+                voltage_mv: 16_800,
+            })
+        );
+        assert_eq!(
+            runtime_charge_target(
+                2_001,
+                ChargeTemperatureDecision::normal(),
+                Some(request),
+                Some(500),
+                16_800,
+            ),
+            None
+        );
+        assert_eq!(
+            runtime_charge_target(
+                1_000,
+                ChargeTemperatureDecision::no_charge(),
+                Some(request),
+                Some(500),
+                16_800,
+            ),
+            None
+        );
+        assert_eq!(
+            runtime_charge_target(
+                1_000,
+                ChargeTemperatureDecision::normal(),
+                Some(request),
+                None,
+                16_800,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn runtime_target_clamps_low_and_normal_modes() {
+        let request = Bq40ChargeRequest {
+            current_ma: 5_000,
+            voltage_mv: 16_800,
+            observed_at_ms: 0,
+        };
+        assert_eq!(
+            runtime_charge_target(
+                1_000,
+                ChargeTemperatureDecision::low(),
+                Some(request),
+                Some(500),
+                16_800,
+            ),
+            Some(ChargeTarget {
+                current_ma: 100,
+                voltage_mv: 16_800,
+            })
+        );
+        assert_eq!(
+            runtime_charge_target(
+                1_000,
+                ChargeTemperatureDecision::normal(),
+                Some(request),
+                Some(500),
+                16_800,
+            ),
+            Some(ChargeTarget {
+                current_ma: 500,
+                voltage_mv: 16_800,
+            })
+        );
+    }
+
+    #[test]
+    fn temperature_cache_expires_after_one_second() {
+        assert!(is_temperature_fresh(1_000, 0));
+        assert!(!is_temperature_fresh(1_001, 0));
     }
 }

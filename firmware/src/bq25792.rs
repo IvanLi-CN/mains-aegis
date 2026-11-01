@@ -1139,6 +1139,28 @@ mod tests {
     }
 
     #[test]
+    fn charge_termination_policy_separates_low_normal_and_blocked_modes() {
+        assert_eq!(
+            charge_termination_policy(true, Some(100), None),
+            ChargeTerminationPolicy::LowCurrent
+        );
+        assert_eq!(
+            charge_termination_policy(true, Some(500), Some(200)),
+            ChargeTerminationPolicy::Normal {
+                current_at_eoc_ma: 200
+            }
+        );
+        assert_eq!(
+            charge_termination_policy(true, Some(500), None),
+            ChargeTerminationPolicy::Blocked
+        );
+        assert_eq!(
+            charge_termination_policy(false, Some(500), None),
+            ChargeTerminationPolicy::NotApplicable
+        );
+    }
+
+    #[test]
     fn set_termination_current_writes_low_field_msb_first() {
         let mut i2c = RegisterWordI2c::new([0xab, 0x03]);
 
@@ -1375,6 +1397,38 @@ pub const fn valid_termination_current_ma(raw_ma: u16) -> Option<u16> {
         None
     } else {
         Some(align_termination_current_ma(raw_ma))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChargeTerminationPolicy {
+    NotApplicable,
+    LowCurrent,
+    Normal { current_at_eoc_ma: u16 },
+    Blocked,
+}
+
+/// Select the termination behavior for a managed runtime charge request.
+/// Low-current charging owns a fixed 40 mA taper value and disables EN_TERM;
+/// normal charging must have a valid BQ40 CurrentAtEOC value before it may
+/// enable termination. Non-managed flows leave the existing behavior alone.
+pub const fn charge_termination_policy(
+    managed_charge: bool,
+    target_ichg_ma: Option<u16>,
+    current_at_eoc_ma: Option<u16>,
+) -> ChargeTerminationPolicy {
+    if !managed_charge {
+        return ChargeTerminationPolicy::NotApplicable;
+    }
+    let Some(target_ichg_ma) = target_ichg_ma else {
+        return ChargeTerminationPolicy::NotApplicable;
+    };
+    if target_ichg_ma <= 100 {
+        return ChargeTerminationPolicy::LowCurrent;
+    }
+    match current_at_eoc_ma {
+        Some(current_at_eoc_ma) => ChargeTerminationPolicy::Normal { current_at_eoc_ma },
+        None => ChargeTerminationPolicy::Blocked,
     }
 }
 

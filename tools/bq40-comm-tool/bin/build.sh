@@ -147,6 +147,11 @@ case "$repair_profile" in
     ;;
 esac
 
+if [[ "$repair_profile" == "bq40-charge-temperature" && "$recover" != "never" ]]; then
+  echo "--repair-profile bq40-charge-temperature cannot be combined with --recover $recover" >&2
+  exit 21
+fi
+
 artifact_features=$(IFS=, ; echo "${features[*]}")
 
 if [[ "$recover" != "never" && "$mode" != "dual-diag" ]]; then

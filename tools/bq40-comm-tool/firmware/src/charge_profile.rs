@@ -8,6 +8,19 @@
 pub const CONTAINING_BLOCK_ADDRESS: u16 = 0x4A00;
 pub const CONTAINING_BLOCK_LEN: u8 = 32;
 pub const FIELD_COUNT: usize = 7;
+pub const MB44_RESPONSE_LEN: usize = 35;
+pub const MB44_DECLARED_LEN_WITH_ADDRESS: u8 = 34;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockReadDecodeError {
+    Length,
+    Address,
+}
+
+pub const fn build_mb44_read_request(address: u16) -> [u8; 4] {
+    let address_le = address.to_le_bytes();
+    [0x44, 0x02, address_le[0], address_le[1]]
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Field {
@@ -48,6 +61,29 @@ pub struct BlockSnapshot {
     pub declared_len: u8,
     pub payload_len: u8,
     pub payload: [u8; CONTAINING_BLOCK_LEN as usize],
+}
+
+/// Decode the plain HPE=0 MB44 response used by the charge-temperature
+/// profile. The response is a length byte, echoed address, and 32-byte block.
+pub fn decode_plain_mb44_block(
+    address: u16,
+    response: &[u8],
+) -> Result<BlockSnapshot, BlockReadDecodeError> {
+    if response.len() != MB44_RESPONSE_LEN || response[0] != MB44_DECLARED_LEN_WITH_ADDRESS {
+        return Err(BlockReadDecodeError::Length);
+    }
+    let echoed_address = u16::from_le_bytes([response[1], response[2]]);
+    if echoed_address != address {
+        return Err(BlockReadDecodeError::Address);
+    }
+    let mut payload = [0u8; CONTAINING_BLOCK_LEN as usize];
+    payload.copy_from_slice(&response[3..MB44_RESPONSE_LEN]);
+    Ok(BlockSnapshot {
+        address: echoed_address,
+        declared_len: CONTAINING_BLOCK_LEN,
+        payload_len: CONTAINING_BLOCK_LEN,
+        payload,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -253,6 +289,48 @@ mod tests {
         writes: usize,
         snapshots: usize,
         failure: Failure,
+    }
+
+    #[test]
+    fn mb44_request_and_plain_response_use_the_expected_frame() {
+        let address = CONTAINING_BLOCK_ADDRESS;
+        assert_eq!(build_mb44_read_request(address), [0x44, 0x02, 0x00, 0x4A]);
+
+        let mut response = [0u8; MB44_RESPONSE_LEN];
+        response[0] = MB44_DECLARED_LEN_WITH_ADDRESS;
+        response[1..3].copy_from_slice(&address.to_le_bytes());
+        for (index, byte) in response[3..].iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        let snapshot = decode_plain_mb44_block(address, &response).unwrap();
+        assert_eq!(snapshot.address, address);
+        assert_eq!(snapshot.declared_len, CONTAINING_BLOCK_LEN);
+        assert_eq!(snapshot.payload_len, CONTAINING_BLOCK_LEN);
+        assert_eq!(snapshot.payload[0], 0);
+        assert_eq!(snapshot.payload[31], 31);
+    }
+
+    #[test]
+    fn mb44_decoder_rejects_short_bad_length_and_wrong_echo() {
+        assert_eq!(
+            decode_plain_mb44_block(CONTAINING_BLOCK_ADDRESS, &[0; 34]),
+            Err(BlockReadDecodeError::Length)
+        );
+
+        let mut bad_length = [0u8; MB44_RESPONSE_LEN];
+        bad_length[0] = MB44_DECLARED_LEN_WITH_ADDRESS - 1;
+        assert_eq!(
+            decode_plain_mb44_block(CONTAINING_BLOCK_ADDRESS, &bad_length),
+            Err(BlockReadDecodeError::Length)
+        );
+
+        let mut bad_address = [0u8; MB44_RESPONSE_LEN];
+        bad_address[0] = MB44_DECLARED_LEN_WITH_ADDRESS;
+        bad_address[1..3].copy_from_slice(&0x4A01u16.to_le_bytes());
+        assert_eq!(
+            decode_plain_mb44_block(CONTAINING_BLOCK_ADDRESS, &bad_address),
+            Err(BlockReadDecodeError::Address)
+        );
     }
 
     impl MockTransport {
