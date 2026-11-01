@@ -302,6 +302,7 @@ pub enum SbsWordReadError<E> {
     PecMismatch,
 }
 
+#[cfg(test)]
 fn read_sbs_u16_with_pec<I2C>(
     i2c: &mut I2C,
     addr: u8,
@@ -322,6 +323,20 @@ where
     }
 
     Ok(u16::from_le_bytes([buf[0], buf[1]]))
+}
+
+fn read_sbs_u16_plain<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    sbscmd: u8,
+) -> Result<u16, SbsWordReadError<I2C::Error>>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let mut buf = [0u8; 2];
+    i2c.write_read(addr, &[sbscmd], &mut buf)
+        .map_err(SbsWordReadError::I2c)?;
+    Ok(u16::from_le_bytes(buf))
 }
 
 pub fn read_u16<I2C>(i2c: &mut I2C, addr: u8, sbscmd: u8) -> Result<u16, I2C::Error>
@@ -351,7 +366,11 @@ pub fn read_charging_current_ma<I2C>(
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    read_sbs_u16_with_pec(i2c, addr, cmd::CHARGING_CURRENT)
+    // The project BQ40 golden configuration has HPE=0, so these typed SBS
+    // reads must use the plain two-byte response. PEC validation remains an
+    // explicit helper for devices whose configuration enables HPE; a failed
+    // PEC read must never silently fall back to a different frame shape.
+    read_sbs_u16_plain(i2c, addr, cmd::CHARGING_CURRENT)
 }
 
 pub fn read_charging_voltage_mv<I2C>(
@@ -361,7 +380,7 @@ pub fn read_charging_voltage_mv<I2C>(
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    read_sbs_u16_with_pec(i2c, addr, cmd::CHARGING_VOLTAGE)
+    read_sbs_u16_plain(i2c, addr, cmd::CHARGING_VOLTAGE)
 }
 
 pub const MAX_BLOCK_PAYLOAD_LEN: usize = 32;
@@ -1270,26 +1289,12 @@ mod tests {
     fn charging_limits_have_typed_sbs_reads_and_raw_little_endian_values() {
         let addr = I2C_ADDRESS_PRIMARY;
         let current_bytes = [0xF4, 0x01];
-        let current_pec = crc8_smbus(&[
-            addr << 1,
-            cmd::CHARGING_CURRENT,
-            (addr << 1) | 1,
-            current_bytes[0],
-            current_bytes[1],
-        ]);
         let voltage_bytes = [0xA0, 0x41];
-        let voltage_pec = crc8_smbus(&[
-            addr << 1,
-            cmd::CHARGING_VOLTAGE,
-            (addr << 1) | 1,
-            voltage_bytes[0],
-            voltage_bytes[1],
-        ]);
         let mut i2c = ScriptedI2c::new([
             Step::Write(addr, vec![cmd::CHARGING_CURRENT]),
-            Step::Read(addr, vec![current_bytes[0], current_bytes[1], current_pec]),
+            Step::Read(addr, vec![current_bytes[0], current_bytes[1]]),
             Step::Write(addr, vec![cmd::CHARGING_VOLTAGE]),
-            Step::Read(addr, vec![voltage_bytes[0], voltage_bytes[1], voltage_pec]),
+            Step::Read(addr, vec![voltage_bytes[0], voltage_bytes[1]]),
         ]);
 
         assert_eq!(read_charging_current_ma(&mut i2c, addr).unwrap(), 500);
@@ -1316,7 +1321,7 @@ mod tests {
         ]);
 
         assert!(matches!(
-            read_charging_current_ma(&mut i2c, addr),
+            read_sbs_u16_with_pec(&mut i2c, addr, cmd::CHARGING_CURRENT),
             Err(SbsWordReadError::PecMismatch)
         ));
     }

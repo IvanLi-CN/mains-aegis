@@ -12,7 +12,7 @@
 
 - `REQ-BQ40-CTP-001` / `002`: `firmware/src/charge_temperature.rs` 固化 TS2/TS3/TS4 最大值、边界判定和七个 little-endian vectors；host tests 覆盖 `<0°C`、`0°C`、`15°C`、`45°C` 和 `45–55°C`。
 - `REQ-BQ40-CTP-003`: 同一模块提供 LT/normal 静态 manifest；BQ40 current/voltage 只作为策略记录，不进入 writer allowlist。
-- `REQ-BQ40-CTP-004`: `firmware/src/output/mod.rs` 每秒最多刷新 SBS `0x14/0x15`，对温度、请求有效性、请求新鲜度和 runtime target 做 min clamp；低电流路径保持 `ITERM=40mA` 与 `EN_TERM=0`，正常路径保持 `CurrentAtEOC`。
+- `REQ-BQ40-CTP-004`: `firmware/src/output/mod.rs` 每秒最多刷新 SBS `0x14/0x15`，对温度、请求有效性、请求新鲜度和 runtime target 做 min clamp；低电流路径先关闭 `EN_TERM` 再写入 `ITERM=40mA`，正常路径保持 `CurrentAtEOC`。因项目 HPE=0，`ChargingCurrent/ChargingVoltage` 使用明确的两字节 SBS 读取，PEC helper 不做隐式帧回退。
 - `REQ-BQ40-CTP-005`: `firmware/src/bq25792.rs` 固化 10kΩ/β3380、5.23kΩ/30.1kΩ、15°C/45°C JEITA 编码，并保留 BHOT/BCOLD 无关位。
 - `REQ-BQ40-CTP-006`: `tools/bq40-comm-tool/firmware/src/charge_profile.rs` 实现七字段 allowlist、0x4A00/32-byte 快照、MB44 echo/length/raw/decoded fail-stop contract；逐字段 readback 按 echoed address 的 payload 起点校验，最终 containing block 按字段 offset 校验；成功与失败都保留写前完整 block；`bq40-charge-temperature` 是唯一温度 profile，旧 `live-df-mainboard` 明确迁移失败。
 - `REQ-BQ40-CTP-007`: `4S1P`、`5000mAh`、`14600mV` 与 `16800mV` 已纳入设计口径；ChemID 和非温度保护字段仍由独立 golden-image/化学匹配流程管理。
@@ -20,7 +20,7 @@
 ## Verification Commands
 
 - Markdown links and field references: `rg -n "bq40-charge-temperature-profile|T1|T2|T3|T4|T5|T6|0x4A0B|0x4A15" docs`
-- Topic contract: `bun /Users/ivan/Projects/Ivan/agent-toolkit/bin/spec_contract_check.ts --path docs/specs/bq40-charge-temperature-profile/SPEC.md`
+- Topic contract: set `AGENT_TOOLKIT_ROOT` to a checkout of the public `agent-toolkit` repository, then run `just spec-contract-check` (the checker receives the repository root explicitly).
 - Writer contract: `just bq40-charge-profile-test`
 - BQ40 maintenance firmware feature: `cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-charge-temperature-profile`
 - Firmware host tests: `just firmware-host-test`

@@ -68,4 +68,25 @@ if rg -n "ma_1000" \
   exit 1
 fi
 
+poll_writer_refs=$(awk '
+  /^    fn maybe_poll_bms/ { in_poll = 1; next }
+  in_poll && /^    fn / { exit }
+  in_poll && /maybe_apply_bq40_charge_temperature_profile/ { print }
+' "$TOOL_ROOT/firmware/src/output/mod.rs")
+if [[ -n "$poll_writer_refs" ]]; then
+  echo "charge-temperature Data Flash writer is still reachable from ordinary BMS polling" >&2
+  printf '%s\n' "$poll_writer_refs" >&2
+  exit 1
+fi
+
+profile_transport=$(awk '
+  /struct Bq40ChargeTemperatureTransport/ { in_profile = 1 }
+  in_profile && /^fn read_bms_block_u32/ { exit }
+  in_profile { print }
+' "$TOOL_ROOT/firmware/src/output/mod.rs")
+if [[ "$profile_transport" == *"read_bms_df_block_via_mb44"* ]]; then
+  echo "charge-temperature profile transport still uses retrying MB44 block reads" >&2
+  exit 1
+fi
+
 echo "bq40 profile shell contract: ok"

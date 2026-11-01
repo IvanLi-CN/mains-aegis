@@ -88,6 +88,10 @@ bq40-charge-profile-test:
     cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-charge-temperature-profile
     bash tools/bq40-comm-tool/bin/profile-contract-test.sh
 
+# Validate the canonical topic specification through the public agent-toolkit checker.
+spec-contract-check:
+    bash scripts/spec-contract-check.sh
+
 # Check ESP firmware.
 firmware-check:
     cd firmware && cargo +esp check
@@ -178,5 +182,5 @@ flash-current-real-hil-19v device confirm: host-tools-build
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --real
 
 # Run the standard local validation set.
-check: web-check host-test firmware-host-test bq40-charge-profile-test firmware-check
+check: web-check host-test firmware-host-test bq40-charge-profile-test spec-contract-check firmware-check
     git diff --check

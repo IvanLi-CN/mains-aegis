@@ -14283,6 +14283,28 @@ where
         }
 
         if !force_allow_charge && !auto_force_charge && !activation_pending {
+            // Disable termination before programming the 40 mA low-current
+            // setting. This prevents the charger from observing a transient
+            // termination-enabled state with the low-current ITERM value.
+            if policy_low_current_charge && (applied_ctrl0 & bq25792::ctrl0::EN_TERM) != 0 {
+                let ctrl0_without_term = applied_ctrl0 & !bq25792::ctrl0::EN_TERM;
+                match bq25792::write_u8(
+                    &mut self.i2c,
+                    bq25792::reg::CHARGER_CONTROL_0,
+                    ctrl0_without_term,
+                ) {
+                    Ok(()) => applied_ctrl0 = ctrl0_without_term,
+                    Err(e) => {
+                        self.mark_charger_poll_failed(now);
+                        defmt::error!(
+                            "charger: bq25792 err stage=ctrl0_disable_term err={}",
+                            i2c_error_kind(e)
+                        );
+                        return;
+                    }
+                }
+            }
+
             match bq25792::set_precharge_control(
                 &mut self.i2c,
                 bq25792::VBAT_LOWV_71P4,
@@ -15258,6 +15280,7 @@ where
                             Some(now + self.cfg.retry_backoff)
                         };
                         self.clear_bms_charge_policy_inputs();
+                        self.mark_charger_poll_failed(now);
                         if self.should_hold_no_battery_result() {
                             self.hold_no_battery_result_audio_state();
                         } else {
@@ -15320,6 +15343,7 @@ where
                             Some(now + self.cfg.retry_backoff)
                         };
                         self.clear_bms_charge_policy_inputs();
+                        self.mark_charger_poll_failed(now);
                         if self.should_hold_no_battery_result() {
                             self.hold_no_battery_result_audio_state();
                         } else {

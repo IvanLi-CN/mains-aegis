@@ -866,6 +866,55 @@ mod tests {
     use core::convert::Infallible;
     use std::vec::Vec;
 
+    struct RegisterByteI2c {
+        values: [u8; 256],
+        selected_reg: Option<u8>,
+        writes: Vec<Vec<u8>>,
+    }
+
+    impl RegisterByteI2c {
+        fn new(values: &[(u8, u8)]) -> Self {
+            let mut registers = [0u8; 256];
+            for &(reg, value) in values {
+                registers[reg as usize] = value;
+            }
+            Self {
+                values: registers,
+                selected_reg: None,
+                writes: Vec::new(),
+            }
+        }
+    }
+
+    impl embedded_hal::i2c::ErrorType for RegisterByteI2c {
+        type Error = Infallible;
+    }
+
+    impl embedded_hal::i2c::I2c for RegisterByteI2c {
+        fn transaction(
+            &mut self,
+            _address: u8,
+            operations: &mut [embedded_hal::i2c::Operation<'_>],
+        ) -> Result<(), Self::Error> {
+            for operation in operations {
+                match operation {
+                    embedded_hal::i2c::Operation::Read(buffer) => {
+                        let reg = self.selected_reg.unwrap_or_default();
+                        buffer.fill(self.values[reg as usize]);
+                    }
+                    embedded_hal::i2c::Operation::Write(bytes) => {
+                        self.selected_reg = bytes.first().copied();
+                        self.writes.push(bytes.to_vec());
+                        if bytes.len() == 2 {
+                            self.values[bytes[0] as usize] = bytes[1];
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
     struct RegisterWordI2c {
         read_bytes: [u8; 2],
         writes: Vec<Vec<u8>>,
@@ -1005,6 +1054,26 @@ mod tests {
             | encode_jeita_ntc_control_1();
         assert_eq!(ntc_control_1_after, 0x9e);
         assert_eq!(ntc_control_1_after & 0x0e, ntc_control_1_before & 0x0e);
+    }
+
+    #[test]
+    fn ensure_eve_jeita_profile_updates_selected_registers_and_preserves_unrelated_bits() {
+        let mut i2c =
+            RegisterByteI2c::new(&[(reg::NTC_CONTROL_0, 0x81), (reg::NTC_CONTROL_1, 0x8f)]);
+
+        let state = ensure_eve_jeita_profile(&mut i2c).unwrap();
+
+        assert_eq!(state.ntc_control_0, 0x07);
+        assert_eq!(state.ntc_control_1, 0x9e);
+        assert_eq!(
+            i2c.writes,
+            [
+                std::vec![reg::NTC_CONTROL_0],
+                std::vec![reg::NTC_CONTROL_0, 0x07],
+                std::vec![reg::NTC_CONTROL_1],
+                std::vec![reg::NTC_CONTROL_1, 0x9e],
+            ]
+        );
     }
 
     #[test]

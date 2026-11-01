@@ -1,0 +1,40 @@
+name: spec-contract
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "docs/specs/**"
+      - "docs/adr/**"
+      - "scripts/spec-contract-check.sh"
+      - ".github/workflows/spec-contract.yml"
+  pull_request:
+    paths:
+      - "docs/specs/**"
+      - "docs/adr/**"
+      - "scripts/spec-contract-check.sh"
+      - ".github/workflows/spec-contract.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  canonical-topic-spec:
+    name: Canonical topic spec contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Checkout agent-toolkit validator
+        uses: actions/checkout@v6
+        with:
+          repository: IvanLi-CN/agent-toolkit
+          ref: 167e608388b156c1a672002ff935aa36c9202a52
+          path: .tmp/agent-toolkit
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+      - name: Validate canonical topic spec
+        env:
+          AGENT_TOOLKIT_ROOT: ${{ github.workspace }}/.tmp/agent-toolkit
+        run: bash scripts/spec-contract-check.sh

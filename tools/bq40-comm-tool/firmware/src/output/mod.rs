@@ -858,6 +858,54 @@ where
     Err(last_err)
 }
 
+#[cfg(feature = "bms-charge-temperature-profile")]
+fn read_bms_charge_profile_block_once<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    df_addr: u16,
+) -> Result<(u16, bq40z50::BlockReadRaw), bq40z50::BmsDiagError>
+where
+    I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
+{
+    // The project BQ40 configuration has HPE=0. The charge-temperature
+    // profile therefore uses one direct MB44 request and one plain response;
+    // transport/address/length errors are terminal for the current apply.
+    let df_addr_le = df_addr.to_le_bytes();
+    let request = [
+        bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS,
+        0x02,
+        df_addr_le[0],
+        df_addr_le[1],
+    ];
+    i2c.write(addr, &request)
+        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    spin_delay(BMS_MAC_WRITE_SETTLE);
+
+    let mut response = [0u8; 35];
+    i2c.write_read(
+        addr,
+        &[bq40z50::cmd::MANUFACTURER_BLOCK_ACCESS],
+        &mut response,
+    )
+    .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+
+    if response[0] != BMS_DF_REPLY_LEN_WITH_ADDR {
+        return Err(bq40z50::BmsDiagError::BadBlockLen);
+    }
+    let echoed_addr = u16::from_le_bytes([response[1], response[2]]);
+    if echoed_addr != df_addr {
+        return Err(bq40z50::BmsDiagError::BadRange);
+    }
+
+    let mut compact = bq40z50::BlockReadRaw {
+        declared_len: 32,
+        payload_len: 32,
+        payload: [0u8; 32],
+    };
+    compact.payload.copy_from_slice(&response[3..35]);
+    Ok((echoed_addr, compact))
+}
+
 #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
 fn patch_bms_df_section1_mainboard(section1: &mut [u8], calibration: BmsDfCalibrationPreservation) {
     let base = 0x4000u16;
@@ -1205,7 +1253,8 @@ impl<'a, I2C> Bq40ChargeTemperatureTransport<'a, I2C> {
     where
         I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
     {
-        let (echoed_address, raw) = read_bms_df_block_via_mb44(self.i2c, self.addr, address)?;
+        let (echoed_address, raw) =
+            read_bms_charge_profile_block_once(self.i2c, self.addr, address)?;
         Ok(charge_profile::BlockSnapshot {
             address: echoed_address,
             declared_len: raw.declared_len,
@@ -5871,6 +5920,11 @@ where
         self.bms_exit_exercise_reported = false;
         self.clear_post_flash_resume();
         self.bms_last_working_info_at = None;
+        #[cfg(feature = "bms-charge-temperature-profile")]
+        {
+            let now = Instant::now();
+            let _ = self.maybe_apply_bq40_charge_temperature_profile(addr, now);
+        }
         defmt::warn!(
             "bms_flow: stage={} addr=0x{=u8:x} charge_mode={}",
             self.bms_startup_stage.as_str(),
@@ -9083,10 +9137,6 @@ where
                                 }
                             }
                         }
-                    }
-                    #[cfg(feature = "bms-charge-temperature-profile")]
-                    if self.maybe_apply_bq40_charge_temperature_profile(addr, now) {
-                        return true;
                     }
                     let df_cell_gain =
                         read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_CELL_GAIN)
