@@ -32,7 +32,8 @@ jobs:
           filters: |
             firmware:
               - "firmware/**"
-              - "tools/bq40-comm-tool/firmware/**"
+              - "tools/bq40-comm-tool/**"
+              - "Justfile"
               - ".gitmodules"
               - "tps55288"
               - "ina3221-async"
@@ -74,6 +75,14 @@ jobs:
         run: |
           cd tools/bq40-comm-tool/firmware
           cargo +esp check --features bms-charge-temperature-profile
+
+      - name: bq40 charge profile contract gate
+        if: steps.changes.outputs.firmware == 'true'
+        run: |
+          rustc --edition=2021 --test tools/bq40-comm-tool/firmware/src/charge_profile.rs \
+            -o /tmp/mains-aegis-bq40-charge-profile-test
+          /tmp/mains-aegis-bq40-charge-profile-test
+          bash tools/bq40-comm-tool/bin/profile-contract-test.sh
 
       - name: cargo build release web_serial artifact
         if: steps.changes.outputs.firmware == 'true'
