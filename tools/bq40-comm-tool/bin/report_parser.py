@@ -37,16 +37,14 @@ POLL_RETRY_RE = re.compile(
     rf"stage=poll_snapshot_retry_(?P<result>ok|fail) first_err=(?P<first>[a-zA-Z0-9_]+)"
     rf"(?: retry_err=(?P<retry>[a-zA-Z0-9_]+))?"
 )
-LIVE_DF_APPLY_RE = re.compile(
+CHARGE_PROFILE_APPLY_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=(?P<profile>[a-zA-Z0-9_]+) stage=(?P<stage>[a-zA-Z0-9_]+)"
     rf"(?: .*?(?:writes|fields)=(?P<count>\d+))?"
 )
-BMS_DF_CFG_RE = re.compile(
-    rf"{LOG_LEVEL_PREFIX}bms_df_cfg: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    rf".*?\bfet_options=0x(?P<fet_options>[0-9a-fA-F]+)\b"
-    rf".*?\bprot_cfg=0x(?P<prot_cfg>[0-9a-fA-F]+)\b"
-    rf".*?\bcuv_recovery=0x(?P<cuv_recovery>[0-9a-fA-F]+)\b"
+CHARGE_PROFILE_ERROR_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=(?P<profile>[a-zA-Z0-9_]+) stage=error error=(?P<error>[a-zA-Z0-9_]+)"
 )
 ROM_DETECTED_RE = re.compile(
     r"stage=(?:rom_mode_detected(?:_after_enter|_post_flash)?|wake_window_rom_entered|wake_window_rom_signature)\b"
@@ -125,7 +123,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rom-image", choices=["r2", "r3", "r5"])
     parser.add_argument(
         "--repair-profile",
-        choices=["none", "afe-default", "live-df-mainboard", "asset-df-mainboard"],
+        choices=["none", "afe-default", "bq40-charge-temperature", "asset-df-mainboard"],
         required=True,
     )
     parser.add_argument("--report-out", required=True)
@@ -151,15 +149,11 @@ def main() -> int:
     rom_fw_seen = False
     rom_fw_invalid_runtime = False
     rom_runtime_status_unconfirmed = False
-    live_df_apply_attempted = False
-    live_df_apply_done = False
-    live_df_apply_applied = False
-    live_df_apply_writes = 0
-    live_df_apply_errors: Counter[str] = Counter()
-    live_df_readback_seen = False
-    live_df_readback_fet_options: Optional[int] = None
-    live_df_readback_prot_cfg: Optional[int] = None
-    live_df_readback_cuv_recovery: Optional[int] = None
+    charge_profile_apply_attempted = False
+    charge_profile_apply_done = False
+    charge_profile_apply_writes = 0
+    charge_profile_apply_errors: Counter[str] = Counter()
+    charge_profile_readback_seen = False
     canonical_touched_0x16 = False
     last_sample_ts: Optional[float] = None
     in_preexisting_segment = False
@@ -252,40 +246,43 @@ def main() -> int:
                 if ROM_RUNTIME_STATUS_UNCONFIRMED_RE.search(text):
                     rom_runtime_status_unconfirmed = True
 
-                live_df_match = LIVE_DF_APPLY_RE.search(text)
-                if live_df_match and live_df_match.group("profile") == "live_df_mainboard":
-                    live_df_apply_attempted = True
-                    stage = live_df_match.group("stage")
-                    count = live_df_match.group("count")
-                    if stage == "field_written":
-                        live_df_apply_applied = True
-                        live_df_apply_writes += 1
-                    elif stage == "done":
-                        live_df_apply_done = True
+                charge_profile_match = CHARGE_PROFILE_APPLY_RE.search(text)
+                if charge_profile_match and charge_profile_match.group("profile") == "bq40_charge_temperature":
+                    charge_profile_apply_attempted = True
+                    stage = charge_profile_match.group("stage")
+                    count = charge_profile_match.group("count")
+                    if stage == "done":
+                        charge_profile_apply_done = True
+                        charge_profile_readback_seen = True
                         if count is not None:
-                            live_df_apply_writes = max(live_df_apply_writes, int(count))
-                        if live_df_apply_writes > 0:
-                            live_df_apply_applied = True
+                            charge_profile_apply_writes = max(
+                                charge_profile_apply_writes, int(count)
+                            )
                     elif stage in {
-                        "read_err",
-                        "write_err",
-                        "verify_err",
-                        "verify_mismatch",
-                        "field_failed",
-                        "reset_err",
+                        "security_error",
+                        "snapshot_transport",
+                        "snapshot_address",
+                        "snapshot_length",
+                        "write_transport",
+                        "echo_address",
+                        "echo_length",
+                        "echo_raw",
+                        "echo_decoded",
+                        "final_transport",
+                        "final_address",
+                        "final_length",
+                        "final_raw",
+                        "final_decoded",
                     }:
-                        live_df_apply_errors[stage] += 1
+                        charge_profile_apply_errors[stage] += 1
 
-                bms_df_cfg_match = BMS_DF_CFG_RE.search(text)
-                if bms_df_cfg_match and int(bms_df_cfg_match.group("addr"), 16) in allowed_addrs:
-                    live_df_readback_seen = True
-                    live_df_readback_fet_options = int(
-                        bms_df_cfg_match.group("fet_options"), 16
-                    )
-                    live_df_readback_prot_cfg = int(bms_df_cfg_match.group("prot_cfg"), 16)
-                    live_df_readback_cuv_recovery = int(
-                        bms_df_cfg_match.group("cuv_recovery"), 16
-                    )
+                charge_profile_error_match = CHARGE_PROFILE_ERROR_RE.search(text)
+                if (
+                    charge_profile_error_match
+                    and charge_profile_error_match.group("profile") == "bq40_charge_temperature"
+                ):
+                    charge_profile_apply_attempted = True
+                    charge_profile_apply_errors[charge_profile_error_match.group("error")] += 1
 
                 err_match = POLL_ERR_RE.search(text)
                 if err_match:
@@ -338,32 +335,26 @@ def main() -> int:
         print(f"failed to read monitor file: {exc}", file=sys.stderr)
         return 4
 
-    is_live_df_mainboard_apply = (
-        args.action == "apply-df" and args.repair_profile == "live-df-mainboard"
-    )
-    live_df_readback_matches = (
-        live_df_readback_seen
-        and live_df_readback_fet_options == 0x19
-        and live_df_readback_prot_cfg == 0x00
-        and live_df_readback_cuv_recovery == 0x09F6
+    is_charge_profile_apply = (
+        args.action == "apply-df" and args.repair_profile == "bq40-charge-temperature"
     )
 
     reasons: list[str] = []
-    if samples_total == 0 and not (is_live_df_mainboard_apply and live_df_readback_matches):
+    if samples_total == 0 and not (is_charge_profile_apply and charge_profile_apply_done):
         reasons.append("no_bms_samples")
-    if max_streak < 10 and not is_live_df_mainboard_apply:
+    if max_streak < 10 and not is_charge_profile_apply:
         reasons.append("max_valid_streak_lt_10")
     if args.mode == "canonical" and canonical_touched_0x16:
         reasons.append("canonical_mode_touched_0x16")
-    if is_live_df_mainboard_apply:
-        if not live_df_apply_done:
-            reasons.append("live_df_apply_not_done")
-        if live_df_apply_errors:
-            reasons.append("live_df_apply_errors")
-        if not live_df_readback_seen:
-            reasons.append("live_df_readback_missing")
-        elif not live_df_readback_matches:
-            reasons.append("live_df_readback_mismatch")
+    if is_charge_profile_apply:
+        if not charge_profile_apply_done:
+            reasons.append("charge_profile_apply_not_done")
+        if charge_profile_apply_writes != 7:
+            reasons.append("charge_profile_field_count_not_7")
+        if charge_profile_apply_errors:
+            reasons.append("charge_profile_apply_errors")
+        if not charge_profile_readback_seen:
+            reasons.append("charge_profile_readback_missing")
 
     verdict_pass = len(reasons) == 0
     verdict_reason = "ok" if verdict_pass else ";".join(reasons)
@@ -385,19 +376,12 @@ def main() -> int:
             "runtime_invalid": rom_fw_invalid_runtime,
             "runtime_status_unconfirmed": rom_runtime_status_unconfirmed,
         },
-        "live_df_apply": {
-            "attempted": live_df_apply_attempted,
-            "applied": live_df_apply_applied,
-            "done": live_df_apply_done,
-            "writes": live_df_apply_writes,
-            "errors": dict(sorted(live_df_apply_errors.items())),
-            "readback": {
-                "seen": live_df_readback_seen,
-                "fet_options": live_df_readback_fet_options,
-                "prot_cfg": live_df_readback_prot_cfg,
-                "cuv_recovery": live_df_readback_cuv_recovery,
-                "matches_live_df_mainboard": live_df_readback_matches,
-            },
+        "charge_temperature_apply": {
+            "attempted": charge_profile_apply_attempted,
+            "done": charge_profile_apply_done,
+            "writes": charge_profile_apply_writes,
+            "errors": dict(sorted(charge_profile_apply_errors.items())),
+            "readback_seen": charge_profile_readback_seen,
         },
         "verdict": {
             "pass": verdict_pass,
@@ -417,11 +401,6 @@ def main() -> int:
 
     def fmt_cfg_str(value: Optional[str]) -> str:
         return value if value is not None else "unknown"
-
-    def fmt_hex(value: Optional[int]) -> str:
-        if value is None:
-            return "unknown"
-        return f"0x{value:x}"
 
     md = [
         "# BQ40 Communication Summary",
@@ -464,22 +443,17 @@ def main() -> int:
             f"- runtime_invalid: `{summary['rom_events']['runtime_invalid']}`",
             f"- runtime_status_unconfirmed: `{summary['rom_events']['runtime_status_unconfirmed']}`",
             "",
-            "## Live DF Apply",
+            "## BQ40 Charge Temperature Apply",
             "",
-            f"- attempted: `{summary['live_df_apply']['attempted']}`",
-            f"- applied: `{summary['live_df_apply']['applied']}`",
-            f"- done: `{summary['live_df_apply']['done']}`",
-            f"- writes: `{summary['live_df_apply']['writes']}`",
-            f"- readback_seen: `{summary['live_df_apply']['readback']['seen']}`",
-            f"- readback_fet_options: `{fmt_hex(summary['live_df_apply']['readback']['fet_options'])}`",
-            f"- readback_prot_cfg: `{fmt_hex(summary['live_df_apply']['readback']['prot_cfg'])}`",
-            f"- readback_cuv_recovery: `{fmt_hex(summary['live_df_apply']['readback']['cuv_recovery'])}`",
-            f"- readback_matches_live_df_mainboard: `{summary['live_df_apply']['readback']['matches_live_df_mainboard']}`",
+            f"- attempted: `{summary['charge_temperature_apply']['attempted']}`",
+            f"- done: `{summary['charge_temperature_apply']['done']}`",
+            f"- writes: `{summary['charge_temperature_apply']['writes']}`",
+            f"- readback_seen: `{summary['charge_temperature_apply']['readback_seen']}`",
         ]
     )
 
-    if summary["live_df_apply"]["errors"]:
-        for key, value in summary["live_df_apply"]["errors"].items():
+    if summary["charge_temperature_apply"]["errors"]:
+        for key, value in summary["charge_temperature_apply"]["errors"].items():
             md.append(f"- {key}: {value}")
     else:
         md.append("- errors: none")

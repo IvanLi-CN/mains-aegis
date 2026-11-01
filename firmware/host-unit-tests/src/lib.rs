@@ -45,6 +45,9 @@ pub mod bq25792;
 #[path = "../../src/bq40z50.rs"]
 pub mod bq40z50;
 
+#[path = "../../src/charge_temperature.rs"]
+pub mod charge_temperature;
+
 #[path = "../../src/boot_recovery.rs"]
 pub mod boot_recovery;
 

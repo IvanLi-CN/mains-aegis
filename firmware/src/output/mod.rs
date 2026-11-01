@@ -19,6 +19,7 @@ use esp_hal::time::{Duration, Instant};
 use heapless::String;
 use mains_aegis_firmware::bq25792;
 use mains_aegis_firmware::bq40z50;
+use mains_aegis_firmware::charge_temperature;
 use mains_aegis_firmware::fan;
 use mains_aegis_firmware::ina3221;
 use mains_aegis_firmware::net_types::{
@@ -178,7 +179,6 @@ const MANUAL_CHARGE_TARGET_PACK_MV: u16 = 14_800;
 const MANUAL_CHARGE_TARGET_RSOC_PCT: u16 = 80;
 const MANUAL_CHARGE_STATUS_TEXT_100MA: &str = "CHG100";
 const MANUAL_CHARGE_STATUS_TEXT_500MA: &str = "CHG500";
-const MANUAL_CHARGE_STATUS_TEXT_1A: &str = "CHG1A";
 const EEPROM_ADDR: u8 = 0x50;
 const EEPROM_BLOCK_LEN: usize = 32;
 const EEPROM_SUPERBLOCK_OFFSET: u16 = 0x0000;
@@ -809,7 +809,6 @@ const fn manual_charge_speed_encode(speed: ManualChargeSpeed) -> u8 {
     match speed {
         ManualChargeSpeed::Ma100 => 0,
         ManualChargeSpeed::Ma500 => 1,
-        ManualChargeSpeed::Ma1000 => 2,
     }
 }
 
@@ -817,7 +816,9 @@ const fn manual_charge_speed_decode(raw: u8) -> Option<ManualChargeSpeed> {
     match raw {
         0 => Some(ManualChargeSpeed::Ma100),
         1 => Some(ManualChargeSpeed::Ma500),
-        2 => Some(ManualChargeSpeed::Ma1000),
+        // Schema v1 used raw value 2 for the retired 1A option. Normalize
+        // persisted settings to the highest supported ordinary profile.
+        2 => Some(ManualChargeSpeed::Ma500),
         _ => None,
     }
 }
@@ -909,9 +910,6 @@ const fn web_serial_manual_charge_speed(
         }
         mains_aegis_firmware::usb_cdc_protocol::ManualChargeSpeed::Ma500 => {
             ManualChargeSpeed::Ma500
-        }
-        mains_aegis_firmware::usb_cdc_protocol::ManualChargeSpeed::Ma1000 => {
-            ManualChargeSpeed::Ma1000
         }
     }
 }
@@ -1011,7 +1009,6 @@ fn manual_charge_status_text(speed: ManualChargeSpeed, derated: bool) -> &'stati
         match speed {
             ManualChargeSpeed::Ma100 => MANUAL_CHARGE_STATUS_TEXT_100MA,
             ManualChargeSpeed::Ma500 => MANUAL_CHARGE_STATUS_TEXT_500MA,
-            ManualChargeSpeed::Ma1000 => MANUAL_CHARGE_STATUS_TEXT_1A,
         }
     }
 }
@@ -4127,6 +4124,9 @@ pub struct PowerManager<'d, I2C> {
     bms_ok_streak: u16,
     bms_err_streak: u16,
     bms_cached_da_status2: Option<bq40z50::DaStatus2>,
+    bms_cached_da_status2_at_ms: Option<u64>,
+    bq40_charge_request: Option<charge_temperature::Bq40ChargeRequest>,
+    bq40_charge_request_next_poll_at: Instant,
     bms_cached_filter_capacity: Option<bq40z50::FilterCapacity>,
     bms_cached_balance_config: Option<bq40z50::BalanceConfig>,
     bms_cached_gauging_status: Option<u32>,
@@ -4928,6 +4928,9 @@ where
             bms_ok_streak: 0,
             bms_err_streak: 0,
             bms_cached_da_status2: None,
+            bms_cached_da_status2_at_ms: None,
+            bq40_charge_request: None,
+            bq40_charge_request_next_poll_at: now,
             bms_cached_filter_capacity: None,
             bms_cached_balance_config: None,
             bms_cached_gauging_status: None,
@@ -6294,7 +6297,7 @@ where
             return;
         };
         if !self.manual_charge_runtime.active
-            && target_ichg_ma < ManualChargeSpeed::Ma1000.ichg_ma()
+            && target_ichg_ma <= ManualChargeSpeed::Ma500.ichg_ma()
         {
             return;
         }
@@ -6530,6 +6533,70 @@ where
         self.fan_started_at.elapsed().as_millis()
     }
 
+    fn refresh_bq40_charge_request(&mut self, now: Instant) {
+        if now < self.bq40_charge_request_next_poll_at {
+            return;
+        }
+        self.bq40_charge_request_next_poll_at = now + Duration::from_secs(1);
+
+        let Some(addr) = self.bms_addr else {
+            self.bq40_charge_request = None;
+            return;
+        };
+
+        let current_ma = bq40z50::read_charging_current_ma(&mut self.i2c, addr);
+        let voltage_mv = bq40z50::read_charging_voltage_mv(&mut self.i2c, addr);
+        let observed_at_ms = self.fan_now_ms();
+        match (current_ma, voltage_mv) {
+            (Ok(current_ma), Ok(voltage_mv)) => {
+                let request = charge_temperature::Bq40ChargeRequest {
+                    current_ma,
+                    voltage_mv,
+                    observed_at_ms,
+                };
+                if request.is_valid() {
+                    self.bq40_charge_request = Some(request);
+                } else {
+                    self.bq40_charge_request = None;
+                    defmt::warn!(
+                        "bms: bq40 charge_request invalid current_ma={=u16} voltage_mv={=u16}",
+                        current_ma,
+                        voltage_mv
+                    );
+                }
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                self.bq40_charge_request = None;
+                defmt::warn!(
+                    "bms: bq40 charge_request read_failed err={}",
+                    i2c_error_kind(e)
+                );
+            }
+        }
+    }
+
+    fn bq40_charge_temperature_decision(
+        &self,
+        now_ms: u64,
+    ) -> charge_temperature::ChargeTemperatureDecision {
+        let Some(observed_at_ms) = self.bms_cached_da_status2_at_ms else {
+            return charge_temperature::ChargeTemperatureDecision::no_charge();
+        };
+        if now_ms.saturating_sub(observed_at_ms) > BMS_DETAIL_MAC_REFRESH_PERIOD.as_millis() as u64
+        {
+            return charge_temperature::ChargeTemperatureDecision::no_charge();
+        }
+        let Some(da_status2) = self.bms_cached_da_status2 else {
+            return charge_temperature::ChargeTemperatureDecision::no_charge();
+        };
+        let Some(max_cell_temp_k_x10) =
+            charge_temperature::max_cell_temperature_k_x10(da_status2.ts_temp_k_x10)
+        else {
+            return charge_temperature::ChargeTemperatureDecision::no_charge();
+        };
+        charge_temperature::evaluate_cell_temperature_k_x10(Some(max_cell_temp_k_x10))
+    }
+
     fn fan_temps_ready(&self) -> bool {
         self.ui_snapshot.tmp_a != SelfCheckCommState::Pending
             || self.ui_snapshot.tmp_b != SelfCheckCommState::Pending
@@ -6592,10 +6659,14 @@ where
         self.charge_policy.charge_latched = false;
         self.charge_policy_derate.reset();
         self.charge_policy_output_load.reset();
+        self.bq40_charge_request = None;
     }
 
     fn reset_bms_detail_mac_cache(&mut self, now: Instant) {
         self.bms_cached_da_status2 = None;
+        self.bms_cached_da_status2_at_ms = None;
+        self.bq40_charge_request = None;
+        self.bq40_charge_request_next_poll_at = now;
         self.bms_cached_filter_capacity = None;
         self.bms_cached_balance_config = None;
         self.bms_cached_gauging_status = None;
@@ -13395,6 +13466,7 @@ where
             }
         }
         self.chg_next_poll_at = now + poll_period;
+        self.refresh_bq40_charge_request(now);
 
         // Snapshot key registers with multi-byte reads (BQ25792 supports crossing boundaries).
         let mut st = [0u8; 5];
@@ -13411,6 +13483,14 @@ where
                 return;
             }
         };
+        if let Err(e) = bq25792::ensure_eve_jeita_profile(&mut self.i2c) {
+            self.mark_charger_poll_failed(now);
+            defmt::error!(
+                "charger: bq25792 err stage=jeita_profile err={}",
+                i2c_error_kind(e)
+            );
+            return;
+        }
         let termination_ctrl =
             bq25792::read_u16(&mut self.i2c, bq25792::reg::TERMINATION_CONTROL).ok();
         let iterm_ma = termination_ctrl.map(bq25792::decode_termination_current_ma);
@@ -14013,13 +14093,11 @@ where
                         match self.manual_charge_prefs.speed {
                             ManualChargeSpeed::Ma100 => "manual_loopback_confirmed_charging_100ma",
                             ManualChargeSpeed::Ma500 => "manual_loopback_confirmed_charging_500ma",
-                            ManualChargeSpeed::Ma1000 => "manual_loopback_confirmed_charging_1a",
                         }
                     } else {
                         match self.manual_charge_prefs.speed {
                             ManualChargeSpeed::Ma100 => "charging_100ma_manual",
                             ManualChargeSpeed::Ma500 => "charging_500ma",
-                            ManualChargeSpeed::Ma1000 => "charging_1a_manual",
                         }
                     };
                 }
@@ -14101,6 +14179,50 @@ where
             policy_status_text = runtime_charge_override.policy_status_text;
             policy_notice_text = runtime_charge_override.policy_notice_text;
             policy_detail_status_text = runtime_charge_override.policy_status_text;
+        }
+        let mut policy_target_vreg_mv = allow_charge.then_some(CHARGE_POLICY_VREG_MV);
+        if allow_charge && !force_allow_charge && !auto_force_charge && !activation_pending {
+            let temperature_decision = self.bq40_charge_temperature_decision(charge_policy_now_ms);
+            if !temperature_decision.allows_charge() {
+                allow_charge = false;
+                policy_target_ichg_ma = None;
+                effective_policy_target_ichg_ma = None;
+                policy_target_vreg_mv = None;
+                policy_status_text = "TEMP";
+                policy_detail_status_text = "TEMP";
+                policy_notice_text = "bq40_cell_temperature_no_charge";
+            } else {
+                let request = self
+                    .bq40_charge_request
+                    .filter(|request| request.is_fresh(charge_policy_now_ms));
+                let policy_current_ma = policy_target_ichg_ma
+                    .or(effective_policy_target_ichg_ma)
+                    .unwrap_or(0);
+                let target = request.and_then(|request| {
+                    charge_temperature::clamp_target_to_bq40_request(
+                        policy_current_ma,
+                        CHARGE_POLICY_VREG_MV,
+                        request,
+                    )
+                });
+                if let Some(target) = target {
+                    policy_target_ichg_ma = Some(target.current_ma);
+                    effective_policy_target_ichg_ma = Some(
+                        effective_policy_target_ichg_ma.map_or(target.current_ma, |current_ma| {
+                            current_ma.min(target.current_ma)
+                        }),
+                    );
+                    policy_target_vreg_mv = Some(target.voltage_mv);
+                } else {
+                    allow_charge = false;
+                    policy_target_ichg_ma = None;
+                    effective_policy_target_ichg_ma = None;
+                    policy_target_vreg_mv = None;
+                    policy_status_text = "LOCK";
+                    policy_detail_status_text = "LOCK";
+                    policy_notice_text = "bq40_charge_request_stale_or_invalid";
+                }
+            }
         }
         let requested_policy_target_ichg_ma = policy_target_ichg_ma;
         let mut applied_ctrl0 = ctrl0;
@@ -14342,8 +14464,8 @@ where
 
             if !force_allow_charge && !auto_force_charge && !activation_pending {
                 if let Some(target_ichg_ma) = effective_policy_target_ichg_ma {
-                    match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, CHARGE_POLICY_VREG_MV)
-                    {
+                    let target_vreg_mv = policy_target_vreg_mv.unwrap_or(CHARGE_POLICY_VREG_MV);
+                    match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, target_vreg_mv) {
                         Ok(v) => applied_vreg_mv = Some(decode_voltage_mv(v)),
                         Err(e) => {
                             self.mark_charger_poll_failed(now);
@@ -15493,6 +15615,7 @@ where
             if let Ok(snapshot) = bq40z50::read_da_status2(&mut self.i2c, addr) {
                 da_status2 = snapshot;
                 self.bms_cached_da_status2 = snapshot;
+                self.bms_cached_da_status2_at_ms = Some(self.fan_now_ms());
             }
             self.bms_next_da_status2_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
             bms_detail_refreshed = true;

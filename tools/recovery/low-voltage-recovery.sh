@@ -27,7 +27,7 @@ Options:
   --skip-main-build true         reuse an existing release main firmware ELF
 
 This runner performs the controlled two-flash recovery maintenance flow:
-  1. flash bq40-comm-tool firmware and apply live-df-mainboard
+  1. flash bq40-comm-tool firmware and apply bq40-charge-temperature
   2. flash main firmware through mains-aegis-devd
   3. verify USB diag-snapshot exposes the recovery baseline
 USAGE
@@ -330,7 +330,7 @@ if [[ ! -x "$REPO_ROOT/tools/bq40-comm-tool/bin/run.sh" ]]; then
 fi
 echo "Validated bq40-comm-tool runner."
 
-run_step "Apply BQ40 live DF baseline through temporary tool firmware" \
+run_step "Apply BQ40 charge-temperature profile through temporary tool firmware" \
   env \
     BQ40_TOOL_DEVD_URL="$devd_url" \
     BQ40_TOOL_DEVICE_ID="$target_device_id" \
@@ -338,7 +338,7 @@ run_step "Apply BQ40 live DF baseline through temporary tool firmware" \
     --mode canonical \
     --duration-sec 120 \
     --force-min-charge true \
-    --repair-profile live-df-mainboard \
+    --repair-profile bq40-charge-temperature \
     --report-out "$report_root/bq40-apply-df"
 
 if [[ "$skip_main_build" != "true" ]]; then

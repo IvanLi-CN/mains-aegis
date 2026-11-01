@@ -5682,9 +5682,7 @@ function manualChargePreviewInput(
     current_ma:
       prefs.speed === "ma_100"
         ? 100
-        : prefs.speed === "ma_1000"
-          ? 1_000
-          : 500,
+        : 500,
     timer_minutes: prefs.timer_h * 60,
     power_path: prefs.power_path ?? "auto",
   };

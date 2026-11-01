@@ -2,10 +2,19 @@
 
 This page defines the controlled maintenance path for the low-voltage recovery baseline. The flow intentionally uses two ESP32-S3 firmware flashes:
 
-1. Temporary `tools/bq40-comm-tool` firmware applies the BQ40Z50 live Data Flash baseline.
+1. Temporary `tools/bq40-comm-tool` firmware applies the explicit seven-field
+   `bq40-charge-temperature` Data Flash profile.
 2. Main firmware is flashed back and verified through USB CDC `diag-snapshot`.
 
-The main firmware must not write BQ40 Data Flash. BQ40 DF maintenance stays behind the explicit `bq40-comm-tool` `live-df-mainboard` entrypoint.
+The main firmware must not write BQ40 Data Flash. BQ40 charge-temperature
+maintenance stays behind the explicit `bq40-comm-tool`
+`bq40-charge-temperature` entrypoint. The retired `live-df-mainboard` name is
+rejected and must not be replaced with a broad fallback writer.
+
+This runner's temporary tool phase changes only the seven temperature fields.
+It does not establish or rewrite the CUV/protection golden baseline; that
+baseline remains owned by the explicit asset/ROM recovery path described in
+the BQ40 maintenance documentation.
 
 ## Safety Scope
 
@@ -48,7 +57,7 @@ software behavior and safety gates only. They must not be reported as HIL.
      --mode canonical \
      --duration-sec 120 \
      --force-min-charge true \
-     --repair-profile live-df-mainboard
+     --repair-profile bq40-charge-temperature
    ```
 
    The runner exports the explicit devd target for this step, so the temporary tool firmware is flashed through `mains-aegis-devd` as well.
@@ -69,7 +78,9 @@ software behavior and safety gates only. They must not be reported as HIL.
 
 The runner writes reports under `tools/recovery/reports/<timestamp>/`. A pass requires:
 
-- BQ40 DF apply report completed through `live-df-mainboard`.
+- BQ40 DF apply report completed through `bq40-charge-temperature` with exactly
+  seven temperature fields, a containing-block snapshot, and per-field
+  MB44 echo/length/raw/decoded readback.
 - Main firmware flash response includes backend success from devd.
 - USB `diag-snapshot` is readable from the main firmware.
 - `diag-snapshot.packages["derived.power"].payload.charger.vbat_lowv_pct_x10 == 714`.

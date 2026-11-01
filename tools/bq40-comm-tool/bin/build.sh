@@ -19,7 +19,7 @@ usage() {
   cat <<USAGE
 Usage: $(basename "$0") [--mode canonical|dual-diag] [--recover never|if-rom|force]
                          [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5]
-                         [--repair-profile none|afe-default|live-df-mainboard|asset-df-mainboard]
+                         [--repair-profile none|afe-default|bq40-charge-temperature|asset-df-mainboard]
 USAGE
 }
 
@@ -135,7 +135,11 @@ esac
 case "$repair_profile" in
   none) ;;
   afe-default) features+=("bms-df-repair-afe-default") ;;
-  live-df-mainboard) features+=("bms-live-df-mainboard") ;;
+  bq40-charge-temperature) features+=("bms-charge-temperature-profile") ;;
+  live-df-mainboard)
+    echo "--repair-profile live-df-mainboard was retired; use bq40-charge-temperature" >&2
+    exit 23
+    ;;
   asset-df-mainboard) features+=("bms-rom-repair-asset-df-mainboard") ;;
   *)
     echo "Invalid --repair-profile: $repair_profile" >&2

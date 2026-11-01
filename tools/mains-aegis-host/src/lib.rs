@@ -3067,11 +3067,12 @@ fn settings_state_from_api(value: &Value) -> Result<DeviceSettingsState, HttpErr
                 .and_then(Value::as_str)
                 .unwrap_or("full_100")
                 .to_string(),
-            speed: manual_charge
-                .get("speed")
-                .and_then(Value::as_str)
-                .unwrap_or("ma_500")
-                .to_string(),
+            speed: normalize_legacy_manual_charge_speed(
+                manual_charge
+                    .get("speed")
+                    .and_then(Value::as_str)
+                    .unwrap_or("ma_500"),
+            ),
             timer_h: manual_charge
                 .get("timer_h")
                 .and_then(Value::as_u64)
@@ -5500,6 +5501,7 @@ async fn set_manual_charge(
     State(state): State<AppState>,
     Json(input): Json<ManualChargeRequest>,
 ) -> Result<Json<Value>, HttpError> {
+    validate_manual_charge_speed(&input.speed)?;
     let target = resolve_settings_control_target(
         &state,
         input.device_id.as_deref(),
@@ -6239,8 +6241,27 @@ fn manual_charge_current_ma_from_speed(speed: &str) -> Option<u16> {
     match speed {
         "ma_100" => Some(100),
         "ma_500" => Some(500),
-        "ma_1000" => Some(1_000),
         _ => None,
+    }
+}
+
+fn normalize_legacy_manual_charge_speed(speed: &str) -> String {
+    match speed {
+        "ma_1000" => "ma_500".to_string(),
+        _ => speed.to_string(),
+    }
+}
+
+fn validate_manual_charge_speed(speed: &str) -> Result<(), HttpError> {
+    match speed {
+        "ma_100" | "ma_500" => Ok(()),
+        "ma_1000" => Err(HttpError::unsupported(
+            "manual charge speed ma_1000 is no longer supported",
+        )),
+        _ => Err(HttpError::non_retryable(
+            "manual_charge_speed_invalid",
+            format!("unsupported manual charge speed: {speed}"),
+        )),
     }
 }
 
@@ -14731,7 +14752,7 @@ mod tests {
         assert_eq!(settings.wifi_ssid.as_deref(), Some("lab"));
         assert_eq!(settings.log_level, "debug");
         assert_eq!(settings.manual_charge.target, "rsoc_80");
-        assert_eq!(settings.manual_charge.speed, "ma_1000");
+        assert_eq!(settings.manual_charge.speed, "ma_500");
         assert_eq!(settings.manual_charge.timer_h, 6);
         assert_eq!(settings.manual_charge.power_path, "usbc");
         assert_eq!(
@@ -14766,6 +14787,13 @@ mod tests {
                 .max,
             3000
         );
+    }
+
+    #[test]
+    fn rejects_retired_one_amp_manual_charge_speed() {
+        let error = validate_manual_charge_speed("ma_1000").unwrap_err();
+        assert_eq!(error.0.code, "unsupported");
+        assert_eq!(error.0.details.as_ref().unwrap()["result"], "unsupported");
     }
 
     #[test]

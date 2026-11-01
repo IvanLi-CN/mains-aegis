@@ -338,7 +338,7 @@ export type DeviceSettings = {
   log_level: "error" | "warn" | "info" | "debug" | "trace" | string;
   manual_charge: {
     target: "pack_3v7" | "rsoc_80" | "full_100" | string;
-    speed: "ma_100" | "ma_500" | "ma_1000" | string;
+    speed: "ma_100" | "ma_500" | string;
     timer_h: 1 | 2 | 6 | number;
     power_path?: ChargePowerPath;
   };

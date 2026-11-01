@@ -81,6 +81,12 @@ host-test:
 firmware-host-test:
     cargo test --manifest-path firmware/host-unit-tests/Cargo.toml
 
+# Run the host-only BQ40 charge-temperature writer contract tests.
+bq40-charge-profile-test:
+    rustc --edition=2021 --test tools/bq40-comm-tool/firmware/src/charge_profile.rs -o /tmp/mains-aegis-bq40-charge-profile-test
+    /tmp/mains-aegis-bq40-charge-profile-test
+    bash tools/bq40-comm-tool/bin/profile-contract-test.sh
+
 # Check ESP firmware.
 firmware-check:
     cd firmware && cargo +esp check
@@ -171,5 +177,5 @@ flash-current-real-hil-19v device confirm: host-tools-build
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --real
 
 # Run the standard local validation set.
-check: web-check host-test firmware-host-test firmware-check
+check: web-check host-test firmware-host-test bq40-charge-profile-test firmware-check
     git diff --check

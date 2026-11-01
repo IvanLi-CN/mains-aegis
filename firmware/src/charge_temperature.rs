@@ -1,0 +1,348 @@
+//! Shared BQ40/BQ25792 charge-temperature policy.
+//!
+//! The policy is intentionally pure so the boundary cases can be exercised on
+//! the host without requiring an ESP target or a connected gauge.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChargeTemperatureBand {
+    NoCharge,
+    Low,
+    Normal,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChargeTemperatureDecision {
+    pub band: ChargeTemperatureBand,
+    pub target_current_ma: Option<u16>,
+    pub target_voltage_mv: Option<u16>,
+}
+
+impl ChargeTemperatureDecision {
+    pub const fn no_charge() -> Self {
+        Self {
+            band: ChargeTemperatureBand::NoCharge,
+            target_current_ma: None,
+            target_voltage_mv: None,
+        }
+    }
+
+    pub const fn low() -> Self {
+        Self {
+            band: ChargeTemperatureBand::Low,
+            target_current_ma: Some(100),
+            target_voltage_mv: Some(16_800),
+        }
+    }
+
+    pub const fn normal() -> Self {
+        Self {
+            band: ChargeTemperatureBand::Normal,
+            target_current_ma: Some(500),
+            target_voltage_mv: Some(16_800),
+        }
+    }
+
+    pub const fn allows_charge(self) -> bool {
+        matches!(
+            self.band,
+            ChargeTemperatureBand::Low | ChargeTemperatureBand::Normal
+        )
+    }
+}
+
+/// BQ40 stores temperature in 0.1 K. These are the rounded values used by
+/// the profile and therefore avoid a second, ambiguous Celsius conversion at
+/// the runtime boundary.
+pub const TEMP_ZERO_K_X10: u16 = 2_732;
+pub const TEMP_COOL_K_X10: u16 = 2_882;
+pub const TEMP_WARM_K_X10: u16 = 3_182;
+
+pub const BQ40_REQUEST_MIN_CURRENT_MA: u16 = 50;
+pub const BQ40_REQUEST_MAX_CURRENT_MA: u16 = 5_000;
+pub const BQ40_REQUEST_MIN_VOLTAGE_MV: u16 = 3_000;
+pub const BQ40_REQUEST_MAX_VOLTAGE_MV: u16 = 16_800;
+pub const BQ40_REQUEST_MAX_AGE_MS: u64 = 1_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bq40ChargeRequest {
+    pub current_ma: u16,
+    pub voltage_mv: u16,
+    pub observed_at_ms: u64,
+}
+
+impl Bq40ChargeRequest {
+    pub const fn is_valid(self) -> bool {
+        self.current_ma >= BQ40_REQUEST_MIN_CURRENT_MA
+            && self.current_ma <= BQ40_REQUEST_MAX_CURRENT_MA
+            && self.voltage_mv >= BQ40_REQUEST_MIN_VOLTAGE_MV
+            && self.voltage_mv <= BQ40_REQUEST_MAX_VOLTAGE_MV
+    }
+
+    pub const fn is_fresh(self, now_ms: u64) -> bool {
+        self.is_valid() && now_ms.saturating_sub(self.observed_at_ms) <= BQ40_REQUEST_MAX_AGE_MS
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChargeTarget {
+    pub current_ma: u16,
+    pub voltage_mv: u16,
+}
+
+pub const fn clamp_target_to_bq40_request(
+    policy_current_ma: u16,
+    policy_voltage_mv: u16,
+    request: Bq40ChargeRequest,
+) -> Option<ChargeTarget> {
+    if !request.is_valid() {
+        return None;
+    }
+
+    let current_ma = if policy_current_ma < request.current_ma {
+        policy_current_ma
+    } else {
+        request.current_ma
+    };
+    let voltage_mv = if policy_voltage_mv < request.voltage_mv {
+        policy_voltage_mv
+    } else {
+        request.voltage_mv
+    };
+    if current_ma == 0 || voltage_mv == 0 {
+        None
+    } else {
+        Some(ChargeTarget {
+            current_ma,
+            voltage_mv,
+        })
+    }
+}
+
+pub const fn evaluate_cell_temperature_k_x10(temp_k_x10: Option<u16>) -> ChargeTemperatureDecision {
+    match temp_k_x10 {
+        Some(temp_k_x10) if temp_k_x10 < TEMP_ZERO_K_X10 => ChargeTemperatureDecision::no_charge(),
+        Some(temp_k_x10) if temp_k_x10 < TEMP_COOL_K_X10 => ChargeTemperatureDecision::low(),
+        Some(temp_k_x10) if temp_k_x10 < TEMP_WARM_K_X10 => ChargeTemperatureDecision::normal(),
+        _ => ChargeTemperatureDecision::no_charge(),
+    }
+}
+
+/// Return the maximum of TS2/TS3/TS4. TS1 is deliberately ignored for the
+/// cell-temperature decision; an absent or zero cell sensor is fail-closed.
+pub const fn max_cell_temperature_k_x10(ts_temp_k_x10: [u16; 4]) -> Option<u16> {
+    if ts_temp_k_x10[1] == 0 || ts_temp_k_x10[2] == 0 || ts_temp_k_x10[3] == 0 {
+        return None;
+    }
+
+    let max = if ts_temp_k_x10[1] > ts_temp_k_x10[2] {
+        ts_temp_k_x10[1]
+    } else {
+        ts_temp_k_x10[2]
+    };
+    Some(if max > ts_temp_k_x10[3] {
+        max
+    } else {
+        ts_temp_k_x10[3]
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bq40TemperatureField {
+    T1,
+    T2,
+    T5,
+    T6,
+    T3,
+    T4,
+    Hysteresis,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bq40TemperatureFieldVector {
+    pub field: Bq40TemperatureField,
+    pub address: u16,
+    pub raw: u16,
+    pub bytes_le: [u8; 2],
+}
+
+pub const BQ40_CHARGE_TEMPERATURE_VECTORS: [Bq40TemperatureFieldVector; 7] = [
+    Bq40TemperatureFieldVector {
+        field: Bq40TemperatureField::T1,
+        address: 0x4A0B,
+        raw: 2_732,
+        bytes_le: [0xAC, 0x0A],
+    },
+    Bq40TemperatureFieldVector {
+        field: Bq40TemperatureField::T2,
+        address: 0x4A0D,
+        raw: 2_882,
+        bytes_le: [0x42, 0x0B],
+    },
+    Bq40TemperatureFieldVector {
+        field: Bq40TemperatureField::T5,
+        address: 0x4A0F,
+        raw: 2_932,
+        bytes_le: [0x74, 0x0B],
+    },
+    Bq40TemperatureFieldVector {
+        field: Bq40TemperatureField::T6,
+        address: 0x4A11,
+        raw: 3_082,
+        bytes_le: [0x0A, 0x0C],
+    },
+    Bq40TemperatureFieldVector {
+        field: Bq40TemperatureField::T3,
+        address: 0x4A13,
+        raw: 3_132,
+        bytes_le: [0x3C, 0x0C],
+    },
+    Bq40TemperatureFieldVector {
+        field: Bq40TemperatureField::T4,
+        address: 0x4A15,
+        raw: 3_182,
+        bytes_le: [0x6E, 0x0C],
+    },
+    Bq40TemperatureFieldVector {
+        field: Bq40TemperatureField::Hysteresis,
+        address: 0x4A17,
+        raw: 20,
+        bytes_le: [0x14, 0x00],
+    },
+];
+
+/// Current/voltage entries are a static manifest only. They are not Data
+/// Flash writer targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bq40ChargeProfileManifestEntry {
+    pub label: &'static str,
+    pub current_ma: u16,
+    pub voltage_mv: u16,
+}
+
+pub const BQ40_CHARGE_PROFILE_MANIFEST: [Bq40ChargeProfileManifestEntry; 4] = [
+    Bq40ChargeProfileManifestEntry {
+        label: "LT",
+        current_ma: 100,
+        voltage_mv: 16_800,
+    },
+    Bq40ChargeProfileManifestEntry {
+        label: "STL",
+        current_ma: 500,
+        voltage_mv: 16_800,
+    },
+    Bq40ChargeProfileManifestEntry {
+        label: "RT/STH",
+        current_ma: 500,
+        voltage_mv: 16_800,
+    },
+    Bq40ChargeProfileManifestEntry {
+        label: "HT",
+        current_ma: 500,
+        voltage_mv: 16_800,
+    },
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uses_only_ts2_ts3_ts4_and_fail_closes_missing_cell_sensor() {
+        assert_eq!(
+            max_cell_temperature_k_x10([3_500, 2_800, 2_900, 2_850]),
+            Some(2_900)
+        );
+        assert_eq!(max_cell_temperature_k_x10([2_700, 0, 2_900, 2_850]), None);
+    }
+
+    #[test]
+    fn temperature_boundaries_are_conservative_and_monotonic() {
+        assert_eq!(
+            evaluate_cell_temperature_k_x10(Some(2_731)).band,
+            ChargeTemperatureBand::NoCharge
+        );
+        assert_eq!(
+            evaluate_cell_temperature_k_x10(Some(2_732)).target_current_ma,
+            Some(100)
+        );
+        assert_eq!(
+            evaluate_cell_temperature_k_x10(Some(2_881)).target_current_ma,
+            Some(100)
+        );
+        assert_eq!(
+            evaluate_cell_temperature_k_x10(Some(2_882)).target_current_ma,
+            Some(500)
+        );
+        assert_eq!(
+            evaluate_cell_temperature_k_x10(Some(3_181)).target_current_ma,
+            Some(500)
+        );
+        assert_eq!(
+            evaluate_cell_temperature_k_x10(Some(3_182)).band,
+            ChargeTemperatureBand::NoCharge
+        );
+        assert_eq!(
+            evaluate_cell_temperature_k_x10(Some(3_732)).band,
+            ChargeTemperatureBand::NoCharge
+        );
+    }
+
+    #[test]
+    fn vectors_match_the_golden_little_endian_bytes() {
+        assert_eq!(
+            BQ40_CHARGE_TEMPERATURE_VECTORS.map(|vector| vector.bytes_le),
+            [
+                [0xAC, 0x0A],
+                [0x42, 0x0B],
+                [0x74, 0x0B],
+                [0x0A, 0x0C],
+                [0x3C, 0x0C],
+                [0x6E, 0x0C],
+                [0x14, 0x00],
+            ]
+        );
+        assert!(BQ40_CHARGE_TEMPERATURE_VECTORS[..6]
+            .windows(2)
+            .all(|pair| pair[0].raw <= pair[1].raw));
+    }
+
+    #[test]
+    fn invalid_or_stale_requests_do_not_clamp_a_charge_target() {
+        let invalid = Bq40ChargeRequest {
+            current_ma: 0,
+            voltage_mv: 16_800,
+            observed_at_ms: 0,
+        };
+        assert_eq!(clamp_target_to_bq40_request(500, 16_800, invalid), None);
+
+        let stale = Bq40ChargeRequest {
+            current_ma: 500,
+            voltage_mv: 16_800,
+            observed_at_ms: 0,
+        };
+        assert!(!stale.is_fresh(1_001));
+        assert_eq!(
+            clamp_target_to_bq40_request(500, 16_800, stale),
+            Some(ChargeTarget {
+                current_ma: 500,
+                voltage_mv: 16_800
+            })
+        );
+    }
+
+    #[test]
+    fn request_is_an_upper_bound() {
+        let request = Bq40ChargeRequest {
+            current_ma: 100,
+            voltage_mv: 15_000,
+            observed_at_ms: 10,
+        };
+        assert_eq!(
+            clamp_target_to_bq40_request(500, 16_800, request),
+            Some(ChargeTarget {
+                current_ma: 100,
+                voltage_mv: 15_000,
+            })
+        );
+    }
+}

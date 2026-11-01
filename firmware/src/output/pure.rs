@@ -3786,30 +3786,20 @@ mod tests {
             ManualChargeSpeed::Ma500,
             false
         ));
-        assert!(!manual_charge_speed_derated(
-            ManualChargeSpeed::Ma1000,
-            false
-        ));
         assert!(manual_charge_speed_derated(ManualChargeSpeed::Ma500, true));
-        assert!(manual_charge_speed_derated(ManualChargeSpeed::Ma1000, true));
     }
 
     #[test]
-    fn manual_charge_1a_profile_maps_to_1000ma() {
-        assert_eq!(ManualChargeSpeed::Ma1000.ichg_ma(), 1_000);
-    }
-
-    #[test]
-    fn charger_delivery_diag_detects_manual_1a_under_delivery_on_iindpm() {
+    fn charger_delivery_diag_detects_manual_under_delivery_on_iindpm() {
         assert_eq!(
             charger_delivery_diag_kind(
                 true,
                 true,
-                Some(1_000),
+                Some(500),
                 Some(1_300),
                 Some(420),
-                Some(470),
-                Some(465),
+                Some(100),
+                Some(95),
                 false,
                 true,
                 200,
@@ -3824,11 +3814,11 @@ mod tests {
             charger_delivery_diag_kind(
                 true,
                 true,
-                Some(1_000),
+                Some(500),
                 Some(1_300),
                 Some(1_120),
-                Some(940),
-                Some(950),
+                Some(500),
+                Some(500),
                 false,
                 false,
                 200,
@@ -3843,7 +3833,7 @@ mod tests {
             charger_delivery_diag_kind(
                 true,
                 true,
-                Some(1_000),
+                Some(500),
                 Some(1_300),
                 Some(420),
                 Some(-900),

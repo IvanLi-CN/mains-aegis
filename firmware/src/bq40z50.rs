@@ -31,6 +31,8 @@ pub mod cmd {
     pub const RELATIVE_STATE_OF_CHARGE: u8 = 0x0D;
     pub const REMAINING_CAPACITY: u8 = 0x0F;
     pub const FULL_CHARGE_CAPACITY: u8 = 0x10;
+    pub const CHARGING_CURRENT: u8 = 0x14;
+    pub const CHARGING_VOLTAGE: u8 = 0x15;
     pub const BATTERY_STATUS: u8 = 0x16;
     pub const MANUFACTURER_DATA: u8 = 0x23;
     pub const SAFETY_ALERT: u8 = 0x50;
@@ -312,6 +314,20 @@ where
     I2C: embedded_hal::i2c::I2c,
 {
     read_u16(i2c, addr, sbscmd).map(|raw| i16::from_le_bytes(raw.to_le_bytes()))
+}
+
+pub fn read_charging_current_ma<I2C>(i2c: &mut I2C, addr: u8) -> Result<u16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    read_u16(i2c, addr, cmd::CHARGING_CURRENT)
+}
+
+pub fn read_charging_voltage_mv<I2C>(i2c: &mut I2C, addr: u8) -> Result<u16, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    read_u16(i2c, addr, cmd::CHARGING_VOLTAGE)
 }
 
 pub const MAX_BLOCK_PAYLOAD_LEN: usize = 32;
@@ -1214,6 +1230,36 @@ mod tests {
             .unwrap();
 
         assert_eq!(value, 0x8127);
+    }
+
+    #[test]
+    fn charging_limits_have_typed_sbs_reads_and_raw_little_endian_values() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let current_bytes = [0xF4, 0x01];
+        let current_pec = crc8_smbus(&[
+            addr << 1,
+            cmd::CHARGING_CURRENT,
+            (addr << 1) | 1,
+            current_bytes[0],
+            current_bytes[1],
+        ]);
+        let voltage_bytes = [0xA0, 0x41];
+        let voltage_pec = crc8_smbus(&[
+            addr << 1,
+            cmd::CHARGING_VOLTAGE,
+            (addr << 1) | 1,
+            voltage_bytes[0],
+            voltage_bytes[1],
+        ]);
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd::CHARGING_CURRENT]),
+            Step::Read(addr, vec![current_bytes[0], current_bytes[1], current_pec]),
+            Step::Write(addr, vec![cmd::CHARGING_VOLTAGE]),
+            Step::Read(addr, vec![voltage_bytes[0], voltage_bytes[1], voltage_pec]),
+        ]);
+
+        assert_eq!(read_charging_current_ma(&mut i2c, addr).unwrap(), 500);
+        assert_eq!(read_charging_voltage_mv(&mut i2c, addr).unwrap(), 16_800);
     }
 
     #[test]

@@ -2,6 +2,10 @@
 
 > 当前有效规范以本文为准；实现覆盖与当前状态见 `./IMPLEMENTATION.md`，关键演进原因见 `./HISTORY.md`。
 
+本规格中的主板保护基线仍由 `asset-df-mainboard` 维护。旧的
+`live-df-mainboard` broad writer 已退役，当前工具会返回迁移错误；历史
+live 写入记录仅作为不可重放的背景证据。主固件仍不得自动写入这些字段。
+
 ## 背景 / 问题陈述
 
 - 主板当前已经收敛出 `asset-df-mainboard` 修复路径，但该路径此前只覆写了 `DA Configuration / Manufacturing Status Init / Temperature / AFE Protection Control / calibration` 等字段，没有真正冻结 `OCC/OCD/SOCC/SOCD`。
@@ -91,13 +95,14 @@
 | `CUV Recovery` | `0x493F` | `2550mV` | 允许 BQ40 在最低单体达到 recovery 后释放主 CHG/DSG 路径 |
 | `CUVC Recovery` | `0x4944` | `3000mV` | 保持默认二级恢复点 |
 
-主固件不得自动写入这些 Data Flash 字段；只允许 `asset-df-mainboard` 和 `live-df-mainboard` 等显式维护/修复入口写入。
+主固件不得自动写入这些 Data Flash 字段；当前只允许 `asset-df-mainboard`
+以及 ROM/AFE 等既有显式修复路径按各自契约写入。
 
 ## 接口变更（Interfaces）
 
 - `tools/bq40-comm-tool/firmware/src/output/mod.rs`
   - `asset-df-mainboard` 新增 `OCC/OCD/SOCC/SOCD` 与 `CUV Recovery / Protection Configuration` 覆写。
-  - app-mode live DF 基线写入入口 `live-df-mainboard` 通过 `./bin/run.sh apply-df ... --repair-profile live-df-mainboard` 写回 pack，包含 `FET Options=0x19`、`CUV Recovery=2550mV` 与 `CUV_RECOV_CHG=0`。
+  - 旧 app-mode broad live DF writer 已移除；`live-df-mainboard` 只保留迁移失败提示，不再写回 pack。
 - `firmware/src/fan.rs`
   - 风扇温控输入新增 BMS 聚合温度。
 - `firmware/src/output/mod.rs`
@@ -111,9 +116,8 @@
 
 - `asset-df-mainboard` 生成的 section1 覆写中，`OCC1/OCC2/OCD1/OCD2/OCD Recovery/SOCC/SOCD` 地址被明确写入仓库冻结值。
 - `asset-df-mainboard` 生成的 section1 覆写中，`FET Options=0x19`、`Protection Configuration=0x00` 与 `CUV Recovery=2550mV` 地址被明确写入仓库冻结值。
-- `live-df-mainboard` app-mode 写入路径必须把 `OCD Recovery Threshold/Delay` 一并写回 live pack，不允许只改 trip threshold 而保留 stock recovery 条件。
-- `live-df-mainboard` app-mode 写入路径必须把 `FET Options=0x19`、`Protection Configuration=0x00` 与 `CUV Recovery=2550mV` 一并写回 live pack；主固件运行时不得自动写 DF。
-- `apply-df --repair-profile live-df-mainboard` 的报告必须把 `stage=done fields=25` 与 live DF 读回一起作为通过证据；读回至少确认 `FET Options=0x19`、`Protection Configuration=0x00` 与 `CUV Recovery=2550mV` 匹配仓库冻结值。
+- 旧 `live-df-mainboard` 参数必须被明确拒绝并指向迁移路径，不得恢复 broad 25-field writer；主固件运行时不得自动写 DF。
+- `asset-df-mainboard` 生成的 section1 仍必须包含本规格冻结的保护与 CUV recovery 字段，并保留现有 ROM/AFE repair 语义。
 - 主固件风扇策略在 `TMP` 缺失但 BMS 温度可用时，仍能继续闭环调速而不是直接退到 full-speed fail-safe。
 - 主动热保护使用与风扇相同的共享热控最高温；当 BMS 温度高于 `TMP` 时，日志中的 `max_temp_c_x16` 体现 BMS 侧热点。
 - `tmp-hw-protect-test` 构建下，风扇仍保持 `off` 且 `thermal_protection_enabled=false`，但共享热控温度的遥测/详情页仍可读。

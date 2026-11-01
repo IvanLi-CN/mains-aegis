@@ -2,6 +2,10 @@
 
 > 当前有效规范以本文为准；实现覆盖与当前状态见 `./IMPLEMENTATION.md`，关键演进原因见 `./HISTORY.md`。
 
+均衡基线当前通过 `asset-df-mainboard` 进入离线资产恢复路径。旧的
+`live-df-mainboard` broad writer 已退役；历史实板记录仍可用于解释现状，
+但不能作为当前维护命令或新的 live 写入授权。
+
 ## 背景 / 问题陈述
 
 - 当前主板硬件已经固定为 `BQ40Z50 + 外部 PMOS + 16Ω` 的外部被动均衡链路，但项目主线还没有把均衡 DF 基线、运行态观测语义和界面语义统一冻结。
@@ -19,7 +23,7 @@
   - `0x490E Relax Balance Interval = 18000s`
   - `0x4912 Min RSOC for Balancing = 80%`
 - 明确主线策略：`CB=1 / CBM=1 / CBR=1 / CBS=0`，即 **外部均衡、充电均衡开启、静置均衡开启、睡眠均衡关闭**。
-- 让 `asset-df-mainboard` 与 `live-df-mainboard` 都能把 pack 拉回这套均衡基线。
+- 让 `asset-df-mainboard` 把 pack 拉回这套均衡基线；live 维护继续遵守已退役 broad writer 的迁移边界。
 - 主固件补齐均衡配置与活动态观测：读取 `Balancing Configuration`，在 `CB=1` 时读取 `AFE Register[KK]`，并把 Cells 页 `BAL STATE` 固定为 `OFF / IDLE / C1 / C2 / C3 / C4 / MULTI / ACTIVE / N/A`。
 - 补齐设计文档、工具文档与稳定预览图，把最终视觉证据落到本 spec 的 `## Visual Evidence`。
 
@@ -35,7 +39,7 @@
 ### In scope
 
 - `tools/bq40-comm-tool`
-  - 在 `live-df-mainboard` 与 `asset-df-mainboard` 中写入主板均衡基线。
+  - 在 `asset-df-mainboard` 中写入主板均衡基线。
   - 更新 operator docs，使 `apply-df` 与 `recover` 的均衡口径对齐。
 - `firmware`
   - 在 `bq40z50` helper 中加入均衡 DF 地址和 `AFE Register[KK]` 读取。
@@ -119,7 +123,7 @@
 
 ## 验收标准（Acceptance Criteria）
 
-- `asset-df-mainboard` 与 `live-df-mainboard` 最终都明确写入：
+- `asset-df-mainboard` 最终明确写入：
   - `0x4908 = 0x07`
   - `0x490D = 3`
   - `0x490E = 18000`
@@ -131,11 +135,11 @@
 
 ## 实现记录
 
-- 工具侧已把主板均衡基线加入 `asset-df-mainboard` 与 `live-df-mainboard`。
+- 工具侧已把主板均衡基线加入 `asset-df-mainboard`；旧 live writer 不再作为当前维护路径。
 - 主固件已补齐 `BalanceConfig` 与 `AFE Register[KK]` 观测，并把 Cells 页 `BAL STATE` 与 footer 语义对齐到本规格。
 - Web `/devices/:device_id/battery` 已复用同一套均衡语义，展示 cell delta、`balance_min_start_delta_mv`、`BAL OFF / IDLE / Cn / MULTI / ACTIVE / --` 与当前 `balance_mask` 命中的 cell。
 - Preview 工具已新增三组稳定 Cells 详情场景，用于冻结均衡 active / idle / config mismatch 画面。
-- 实板已完成一次 `live-df-mainboard` 写入，主固件 monitor 已确认 `balance_raw=Some(7)` 且 `balance_match=Some(true)`。
+- 历史实板写入记录曾确认 `balance_raw=Some(7)` 且 `balance_match=Some(true)`；该记录不授权重放旧 live writer。
 
 ## 验证记录
 
@@ -144,7 +148,7 @@
 - `cargo run --manifest-path <REPO_ROOT>/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-cells-balance-active --out-dir <REPO_ROOT>/docs/specs/bq40-balance-baseline-and-observability/assets/render`
 - `cargo run --manifest-path <REPO_ROOT>/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-cells-balance-idle --out-dir <REPO_ROOT>/docs/specs/bq40-balance-baseline-and-observability/assets/render`
 - `cargo run --manifest-path <REPO_ROOT>/tools/front-panel-preview/Cargo.toml -- --variant B --focus idle --scenario dashboard-detail-cells-balance-config-mismatch --out-dir <REPO_ROOT>/docs/specs/bq40-balance-baseline-and-observability/assets/render`
-- `./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --repair-profile live-df-mainboard`（tool report: `tools/bq40-comm-tool/reports/20260407_121248/summary.json`）
+- 历史 tool report `tools/bq40-comm-tool/reports/20260407_121248/summary.json` 仅作为旧维护结果存档，不作为当前命令示例。
 - `mcu-agentd --non-interactive monitor esp --reset`（主固件 monitor: `.mcu-agentd/monitor/esp/20260407_041848.mon.ndjson`）
 - `./bin/run.sh diagnose --mode canonical --duration-sec 60 --force-min-charge true`（观测 `REST / Update Status / CBStatus`：`tools/bq40-comm-tool/.mcu-agentd/monitor/esp/20260407_065018.mon.ndjson`）
 

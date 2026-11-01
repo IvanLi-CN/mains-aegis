@@ -71,41 +71,34 @@ Mainboard policy:
   - `Relax Balance Interval=18000s`
   - `Min RSOC for Balancing=80%`
 
-## 2.1) Live DF baseline apply (app-mode, state-changing path)
+## 2.1) BQ40 charge-temperature profile apply (app-mode, maintenance-only path)
 
-Use this when canonical/app-mode communication already passes and you need to write this repository's
-mainboard DF current-protection baseline into the live pack without forcing ROM recovery.
+Use this only when canonical/app-mode communication already passes and an explicitly
+authorized maintenance window is available. This command is not part of normal runtime
+charging and is not run by the firmware automatically.
 
 ```bash
-./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --repair-profile live-df-mainboard
+./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --repair-profile bq40-charge-temperature
 ```
 
 Policy:
 - `apply-df` is app-mode only; it rejects `--recover` and `--rom-image`
-- `--repair-profile live-df-mainboard` is mandatory for this subcommand
-- the tool writes the live current-protection + balance + charge-temperature baseline fields via MB44
-- the monitor log must contain `bms_df_apply: ... stage=done fields=25`
-- `summary.json` records the live apply outcome under `live_df_apply`
-- a passing `apply-df` report requires `live_df_apply.done=true`, no live DF apply errors, and readback matching `FET Options=0x19`, `Protection Configuration=0x00`, plus `CUV Recovery=2550mV`
+- `--repair-profile bq40-charge-temperature` is mandatory for this subcommand
+- the writer first snapshots the complete containing block at `0x4A00`, length `32`
+- exactly seven temperature fields are allowed: T1, T2, T5, T6, T3, T4, and hysteresis
+- each MB44 write must pass echo address, returned length, raw vector, and decoded value checks
+- any transport, write, address, length, raw, or decoded mismatch stops the operation immediately
+- the monitor log must contain `bms_df_apply: ... profile=bq40_charge_temperature stage=done fields=7`
+- `summary.json` records the outcome under `charge_temperature_apply`
+- the profile does not write ChemID, calibration, protection, termination, precharge, maintenance, or current/voltage manifest fields
 
-Current fixed live baseline:
-- `OCC1=4500mA/6s`
-- `OCC2=5200mA/3s`
-- `SOCC=6000mA/5s`
-- `OCD1=-14500mA/6s`
-- `OCD2=-15000mA/3s`
-- `OCD recovery=100mA/3s`
-- `SOCD=-16000mA/5s`
-- `FET Options=0x19` (`PCHG_COMM=1`, PRECHARGE uses CHG FET)
-- `Protection Configuration=0x00` (`CUV_RECOV_CHG=0`)
-- `CUV Recovery=2550mV`
-- `Balancing Configuration=0x07`
-- `Min Start Balance Delta=3mV`
-- `Relax Balance Interval=18000s`
-- `Min RSOC for Balancing=80%`
-- `Charge Temp T3=40.0°C`
-- `Charge Temp T4=55.0°C`
-- `Charge Temp Hysteresis=2.0°C`
+Locked vectors are the little-endian 0.1 K values `AC 0A`, `42 0B`, `74 0B`, `0A 0C`,
+`3C 0C`, `6E 0C`, and `14 00`. The static current/voltage manifest is 100mA/16800mV
+for LT and 500mA/16800mV for STL/RT/STH/HT; it is a safety/reference input, not a
+Data Flash writer field.
+
+The retired `live-df-mainboard` argument is rejected with an explicit migration error.
+Do not replace it with a broad fallback or a 25-field write set.
 
 ## 3) Verify (offline)
 
@@ -119,7 +112,7 @@ Notes:
 ## 4) Supported sequence
 
 1. `diagnose --mode canonical --force-min-charge true`
-2. If canonical diagnose passes but the live pack still needs the repo baseline, run `apply-df --mode canonical --force-min-charge true --repair-profile live-df-mainboard`
+2. If canonical diagnose passes and an authorized maintenance window needs the locked charge-temperature profile, run `apply-df --mode canonical --force-min-charge true --repair-profile bq40-charge-temperature`
 3. If the log contains `stage=rom_mode_detected`, run `recover --mode dual-diag --recover if-rom --force-min-charge true --repair-profile asset-df-mainboard`
 4. Re-flash canonical firmware and re-run `diagnose --mode canonical --force-min-charge true`
 5. Run `verify --mode canonical --monitor-file <canonical log>` on the final canonical log

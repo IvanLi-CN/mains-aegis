@@ -18,6 +18,8 @@ pub mod reg {
     pub const INPUT_CURRENT_LIMIT: u8 = 0x06;
     pub const PRECHARGE_CONTROL: u8 = 0x08;
     pub const TERMINATION_CONTROL: u8 = 0x09;
+    pub const NTC_CONTROL_0: u8 = 0x17;
+    pub const NTC_CONTROL_1: u8 = 0x18;
 
     pub const CHARGER_CONTROL_0: u8 = 0x0F;
     pub const CHARGER_CONTROL_1: u8 = 0x10;
@@ -141,6 +143,72 @@ pub mod status4 {
     pub const TS_COOL_STAT: u8 = 1 << 2;
     pub const TS_WARM_STAT: u8 = 1 << 1;
     pub const TS_HOT_STAT: u8 = 1 << 0;
+}
+
+pub mod ntc_control0 {
+    pub const JEITA_VSET_MASK: u8 = 0b111 << 5;
+    pub const JEITA_ISETH_MASK: u8 = 0b11 << 3;
+    pub const JEITA_ISETC_MASK: u8 = 0b11 << 1;
+
+    pub const JEITA_SUSPEND: u8 = 0;
+    pub const JEITA_CURRENT_UNCHANGED: u8 = 3;
+    pub const JEITA_VREG_UNCHANGED: u8 = 7;
+}
+
+pub mod ntc_control1 {
+    pub const TS_COOL_MASK: u8 = 0b11 << 6;
+    pub const TS_WARM_MASK: u8 = 0b11 << 4;
+    pub const TS_IGNORE: u8 = 1 << 0;
+
+    pub const TS_COOL_15C: u8 = 2;
+    pub const TS_WARM_45C: u8 = 1;
+}
+
+pub const BATTERY_NTC_R25_OHM: u32 = 10_000;
+pub const BATTERY_NTC_BETA: u16 = 3_380;
+pub const JEITA_RTS1_OHM: u32 = 5_230;
+pub const JEITA_RTS2_OHM: u32 = 30_100;
+
+pub const fn encode_jeita_ntc_control_0() -> u8 {
+    (ntc_control0::JEITA_SUSPEND << 5)
+        | (ntc_control0::JEITA_SUSPEND << 3)
+        | (ntc_control0::JEITA_CURRENT_UNCHANGED << 1)
+}
+
+pub const fn encode_jeita_ntc_control_1() -> u8 {
+    (ntc_control1::TS_COOL_15C << 6) | (ntc_control1::TS_WARM_45C << 4)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JeitaProfileState {
+    pub ntc_control_0: u8,
+    pub ntc_control_1: u8,
+}
+
+/// Apply the project-selected BQ25792 JEITA semantics while preserving the
+/// unrelated BHOT/BCOLD bits in REG18.
+pub fn ensure_eve_jeita_profile<I2C>(i2c: &mut I2C) -> Result<JeitaProfileState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ntc_control_0 = update_u8(
+        i2c,
+        reg::NTC_CONTROL_0,
+        ntc_control0::JEITA_VSET_MASK
+            | ntc_control0::JEITA_ISETH_MASK
+            | ntc_control0::JEITA_ISETC_MASK,
+        encode_jeita_ntc_control_0(),
+    )?;
+    let ntc_control_1 = update_u8(
+        i2c,
+        reg::NTC_CONTROL_1,
+        ntc_control1::TS_COOL_MASK | ntc_control1::TS_WARM_MASK | ntc_control1::TS_IGNORE,
+        encode_jeita_ntc_control_1(),
+    )?;
+    Ok(JeitaProfileState {
+        ntc_control_0,
+        ntc_control_1,
+    })
 }
 
 pub const TERMINATION_CURRENT_MIN_MA: u16 = 40;
@@ -916,6 +984,27 @@ mod tests {
             i2c.writes.as_slice(),
             [std::vec![reg::INPUT_CURRENT_LIMIT, 0x00, 0x82]].as_slice()
         );
+    }
+
+    #[test]
+    fn eve_jeita_profile_encodes_selected_threshold_actions() {
+        assert_eq!(encode_jeita_ntc_control_0(), 0x06);
+        assert_eq!(encode_jeita_ntc_control_1(), 0x90);
+
+        let ntc_control_0_before = 0x80;
+        let ntc_control_0_after = (ntc_control_0_before
+            & !(ntc_control0::JEITA_VSET_MASK
+                | ntc_control0::JEITA_ISETH_MASK
+                | ntc_control0::JEITA_ISETC_MASK))
+            | encode_jeita_ntc_control_0();
+        assert_eq!(ntc_control_0_after, 0x06);
+
+        let ntc_control_1_before = 0x0f;
+        let ntc_control_1_after = (ntc_control_1_before
+            & !(ntc_control1::TS_COOL_MASK | ntc_control1::TS_WARM_MASK | ntc_control1::TS_IGNORE))
+            | encode_jeita_ntc_control_1();
+        assert_eq!(ntc_control_1_after, 0x9e);
+        assert_eq!(ntc_control_1_after & 0x0e, ntc_control_1_before & 0x0e);
     }
 
     #[test]

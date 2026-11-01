@@ -80,7 +80,7 @@
 - `DC IN` 自适应限充的当前输入压力、限流值与限流原因必须作为 owner-facing 状态输出，不允许只存在于 defmt 或局部寄存器日志里。
 - Dashboard charger detail 与首页 charge 区域应优先显示 `BQ25792 IBAT_ADC` 实测电流；若 `IBAT_ADC` 暂时不可用，则回退到目标 `ICHG`。
 - 首页 `ChargeCard` 应直接从 runtime charger state 派生紧凑 token，而不是按 `UpsMode` 或 `allow_charge + current` 推导。
-- `LOAD / NOAC` 是否生效首先服从运行态 mode coupling；唯一例外是本规格定义的已受控放行 `BACKUP + USB-C` 会话，其余 `CHG100 / CHG500 / CHG1A / RECOV / FULL / WARM / TEMP / WAIT` 等内部细节仍由主线 policy 决定。
+- `LOAD / NOAC` 是否生效首先服从运行态 mode coupling；唯一例外是本规格定义的已受控放行 `BACKUP + USB-C` 会话，其余 `CHG100 / CHG500 / RECOV / FULL / WARM / TEMP / WAIT` 等内部细节仍由主线 policy 决定。
 - `IBUS/VBUS/VBAT/VSYS/IBAT` 的 BQ25792 ADC 遥测应保持真实量级，不得把 `~5.2V/102mA` 误解成 `~21.8V/26.1A` 一类 swapped 假值。
 - 当目标 `ICHG` 已写入但实测 `IBAT/BMS current` 长时间明显低于目标，日志应输出 `charger: delivery_diag`，明确区分目标值、实测值、PD 合约、电流限制寄存器与 `IINDPM/VINDPM` 限流状态。
 
@@ -158,7 +158,7 @@ None。
 - Given 已自动放行且输出开启，When 两次不同 TPS 遥测采样尝试均无法得到可信聚合功率，Then 立即停充并显示 `LOCK / backup_usb_telemetry_lost_latched`；有效新样本必须将缺样计数归零，重复同一缺样不得增加计数。
 - Given 任一 USB 例外锁存，When 只有临时模式波动发生，Then 锁存保持；When 真实 USB-C detach 或确认后的新手动 `START` 发生，Then 才开始新的判断周期。
 - Given `IBAT_ADC` 可用，When 前面板显示 charger 电流，Then 应显示实测 `IBAT` 而不是目标 `ICHG`。
-- Given 目标 `ICHG=1000mA`、实测 `IBAT/BMS current` 持续低于目标超过 margin 且 `IINDPM=true`，When charger poll 继续运行，Then monitor 必须输出 `charger: delivery_diag reason=charge_under_target_input_dpm`，并包含目标电流、实测电流、PD 合约和限流寄存器快照。
+- Given 目标 `ICHG=500mA`、实测 `IBAT/BMS current` 持续低于目标超过 margin 且 `IINDPM=true`，When charger poll 继续运行，Then monitor 必须输出 `charger: delivery_diag reason=charge_under_target_input_dpm`，并包含目标电流、实测电流、PD 合约和限流寄存器快照。
 - Given runtime charger state=`CHG500/CHG100/RECOV`，When 首页显示 `ChargeCard`，Then 状态必须压缩为 `CHG`。
 - Given runtime charger state=`WAIT/FULL/WARM/TEMP/LOAD/LOCK/NOAC`，When 首页显示 `ChargeCard`，Then 状态必须直接沿用对应 token。
 - Given `BQ25792` 返回 `VBUS_ADC=[0x14, 0x55]` 与 `IBUS_ADC=[0x00, 0x66]`，When 固件解码 charger ADC 遥测，Then monitor 与 UI 关联值必须分别落在 `5205mV` 与 `102mA` 的真实量级，而不是 swapped 假值。
@@ -211,6 +211,7 @@ None。
 ## 参考（References）
 
 - `docs/charger-design.md`
+- `docs/specs/bq40-charge-temperature-profile/SPEC.md`
 - `docs/specs/bq25792-charging-enable/SPEC.md`
 - `firmware/src/output/mod.rs`
 - `firmware/src/front_panel_scene.rs`

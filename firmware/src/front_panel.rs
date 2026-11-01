@@ -3319,7 +3319,6 @@ fn dashboard_touch_target_name(target: DashboardTouchTarget) -> &'static str {
         DashboardTouchTarget::ManualTarget100 => "manual_target_100",
         DashboardTouchTarget::ManualSpeed100 => "manual_speed_100",
         DashboardTouchTarget::ManualSpeed500 => "manual_speed_500",
-        DashboardTouchTarget::ManualSpeed1A => "manual_speed_1a",
         DashboardTouchTarget::ManualTimer1h => "manual_timer_1h",
         DashboardTouchTarget::ManualTimer2h => "manual_timer_2h",
         DashboardTouchTarget::ManualTimer6h => "manual_timer_6h",
@@ -3348,9 +3347,6 @@ fn manual_charge_ui_action_name(action: ManualChargeUiAction) -> &'static str {
         }
         ManualChargeUiAction::SetSpeed(front_panel_scene::ManualChargeSpeed::Ma500) => {
             "set_speed_500"
-        }
-        ManualChargeUiAction::SetSpeed(front_panel_scene::ManualChargeSpeed::Ma1000) => {
-            "set_speed_1a"
         }
         ManualChargeUiAction::SetTimerLimit(front_panel_scene::ManualChargeTimerLimit::H1) => {
             "set_timer_1h"

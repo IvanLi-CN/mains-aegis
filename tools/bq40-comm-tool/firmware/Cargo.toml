@@ -5,7 +5,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [lib]
-test = false
+test = true
 doctest = false
 bench = false
 
@@ -30,7 +30,7 @@ bms-rom-force-pec = []
 bms-rom-image-r3 = []
 bms-rom-image-r5 = []
 bms-df-repair-afe-default = []
-bms-live-df-mainboard = []
+bms-charge-temperature-profile = []
 bms-rom-repair-asset-df-mainboard = []
 
 [dependencies]

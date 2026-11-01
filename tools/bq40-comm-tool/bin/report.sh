@@ -19,7 +19,7 @@ usage() {
 Usage: $(basename "$0") --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--report-out DIR]
                          [--action diagnose|apply-df|recover|verify] [--force-min-charge true|false]
                          [--probe-mode strict|mac-only] [--rom-image r2|r3|r5]
-                         [--repair-profile none|afe-default|live-df-mainboard|asset-df-mainboard]
+                         [--repair-profile none|afe-default|bq40-charge-temperature|asset-df-mainboard]
 USAGE
 }
 

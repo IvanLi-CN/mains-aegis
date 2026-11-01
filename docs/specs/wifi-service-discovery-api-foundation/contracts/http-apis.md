@@ -333,7 +333,10 @@ Host: mains-aegis-a1b2c3.local
 ```
 
 - `target`: `pack_3v7 | rsoc_80 | full_100`
-- `speed`: `ma_100 | ma_500 | ma_1000`
+- `speed`: `ma_100 | ma_500`
+
+`ma_1000` is rejected as `unsupported`; legacy persisted `1000mA` preferences are
+normalized to `ma_500` when loaded.
 - `timer_h`: `1 | 2 | 6`
 - `power_path`: `auto | dcin | usbc`
 

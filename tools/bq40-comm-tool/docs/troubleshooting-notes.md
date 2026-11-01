@@ -86,33 +86,15 @@
 
 - 本仓库的主板修复路径固定为：**官方 TI `section1.bin` 做底 + 主板固定 DF 覆盖项**。
 - 工具应通过 `--repair-profile asset-df-mainboard` 进入这条路径，而不是依赖 live DF capture。
-- 当 pack 已经能稳定工作在 app mode 且只需要把主板电流保护阈值写回 live DF 时，使用：
+- `asset-df-mainboard` 只用于 ROM recovery；它不是 charge-temperature profile 的别名。
+- 当 pack 已经能稳定工作在 app mode 且需要在显式维护窗口写入冻结的充电温度 profile 时，使用：
   ```bash
-  ./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --repair-profile live-df-mainboard
+  ./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --repair-profile bq40-charge-temperature
   ```
-- 这条路径的目标是把主板关键字段稳定写回项目基线：
-  - `DA Configuration = 0x8127`
-  - `Manufacturing Status Init = 0x0378`
-  - `FET Options = 0x19` (`PCHG_COMM=1`, PRECHARGE uses CHG FET)
-  - `Temperature Enable = 0x1E`
-  - `Temperature Mode = 0x00`
-  - `OCC1 = 4500mA / 6s`
-  - `OCC2 = 5200mA / 3s`
-  - `SOCC = 6000mA / 5s`
-  - `OCD1 = -14500mA / 6s`
-  - `OCD2 = -15000mA / 3s`
-  - `OCD Recovery = 100mA / 3s`
-  - `SOCD = -16000mA / 5s`
-  - `Protection Configuration = 0x00` (`CUV_RECOV_CHG=0`)
-  - `CUV Recovery = 2550mV`
-  - `Balancing Configuration = 0x07`（`CB=1 / CBM=1 / CBR=1 / CBS=0`）
-  - `Min Start Balance Delta = 3mV`
-  - `Relax Balance Interval = 18000s`
-  - `Min RSOC for Balancing = 80%`
-- 如果器件在进入 ROM 前还能完整回应 MB44 的这三项校准字，工具会额外保留 live 的 `CELL_GAIN` / `PACK_GAIN` / `BAT_GAIN`；只要其中任何一项抓取失败，就整体回退到 asset 默认值，避免写入半套 live、半套默认的混合校准。
-- 这不等于“直接写 TI 默认 DF 字段”。TI 默认值会把器件带回 stock 配置，典型表现就是退回 `3S / cell4=0`。
-- 因此，当器件会掉回 TI stock DF，或 live DF capture 持续 `i2c_nack` 时，支持策略应直接切换到 `asset-df-mainboard`，而不是继续等待 live capture 成功。
-- `apply-df` 的收敛信号不是 ROM 事件，而是 monitor 日志里的 `bms_df_apply: ... stage=done fields=25`；对应 `summary.json` 里的 `live_df_apply.done` 也必须为 `true`。
+- 写入前保存完整 `0x4A00`/`32` containing block；只允许七个温度字段。
+- 每项必须通过 MB44 echo、length、raw 和 decoded readback；任何错误立即停止。
+- 这条路径不写 ChemID、calibration、protection、termination、precharge 或 maintenance 字段，也不依赖 live DF capture。
+- `live-df-mainboard` 已退役，继续使用旧名称会返回迁移错误；不能回退到 25-field writer。
 
 ## 5. 可执行排障 SOP（无逻辑分析仪版本）
 
@@ -132,11 +114,11 @@
    ```bash
    ./bin/run.sh recover --mode dual-diag --recover if-rom --force-min-charge true --rom-image r2 --repair-profile asset-df-mainboard
    ```
-5. 若 canonical 已通但 live DF 阈值仍未冻结，执行：
+5. 若 canonical 已通且需要在授权维护窗口写入冻结的 charge-temperature profile，执行：
    ```bash
-   ./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --repair-profile live-df-mainboard
+   ./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --repair-profile bq40-charge-temperature
    ```
-6. 恢复或 live apply 后都必须重新刷回 canonical 并再次诊断，然后用同一份 canonical 日志做离线 verify。
+6. 恢复或 maintenance apply 后都必须重新刷回 canonical 并再次诊断，然后用同一份 canonical 日志做离线 verify。
 
 ## 6. ROM 模式相关结论
 

@@ -144,7 +144,6 @@ pub enum ManualChargeTarget {
 pub enum ManualChargeSpeed {
     Ma100,
     Ma500,
-    Ma1000,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -807,7 +806,6 @@ fn parse_manual_charge_prefs(line: &str) -> Result<ManualChargePrefsCommand, Usb
     {
         "ma_100" => ManualChargeSpeed::Ma100,
         "ma_500" => ManualChargeSpeed::Ma500,
-        "ma_1000" => ManualChargeSpeed::Ma1000,
         _ => return Err(UsbCdcProtocolError::InvalidManualChargePrefs),
     };
     let power_path = match json_string_field::<16>(line, "power_path")?
@@ -874,14 +872,12 @@ fn parse_manual_charge_preview(
             .and_then(|speed| match speed.as_str() {
                 "ma_100" => Some(100),
                 "ma_500" => Some(500),
-                "ma_1000" => Some(1000),
                 _ => None,
             })
     });
     let speed = match current_ma.ok_or(UsbCdcProtocolError::MissingField)? {
         100 => ManualChargeSpeed::Ma100,
         500 => ManualChargeSpeed::Ma500,
-        1000 => ManualChargeSpeed::Ma1000,
         _ => return Err(UsbCdcProtocolError::InvalidManualChargePrefs),
     };
     let timer_minutes = json_u16_field(line, "timer_minutes")?.or_else(|| {
@@ -1873,6 +1869,15 @@ mod tests {
                 })
             }
         );
+    }
+
+    #[test]
+    fn rejects_retired_one_amp_manual_charge_speed() {
+        let error = parse_frame(
+            r#"{"type":"request","request_id":"req-1a","op":"set_manual_charge_prefs","target":"rsoc_80","speed":"ma_1000","timer_h":2}"#,
+        )
+        .unwrap_err();
+        assert_eq!(error, UsbCdcProtocolError::InvalidManualChargePrefs);
     }
 
     #[test]
