@@ -14199,9 +14199,10 @@ where
                     .or(effective_policy_target_ichg_ma)
                     .unwrap_or(0);
                 let target = request.and_then(|request| {
-                    charge_temperature::clamp_target_to_bq40_request(
+                    charge_temperature::clamp_policy_to_bq40_request(
                         policy_current_ma,
                         CHARGE_POLICY_VREG_MV,
+                        temperature_decision,
                         request,
                     )
                 });

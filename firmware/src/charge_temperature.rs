@@ -118,6 +118,37 @@ pub const fn clamp_target_to_bq40_request(
     }
 }
 
+pub const fn clamp_policy_to_bq40_request(
+    policy_current_ma: u16,
+    policy_voltage_mv: u16,
+    temperature: ChargeTemperatureDecision,
+    request: Bq40ChargeRequest,
+) -> Option<ChargeTarget> {
+    if !temperature.allows_charge() {
+        return None;
+    }
+
+    let temperature_current_ma = match temperature.target_current_ma {
+        Some(current_ma) => current_ma,
+        None => return None,
+    };
+    let temperature_voltage_mv = match temperature.target_voltage_mv {
+        Some(voltage_mv) => voltage_mv,
+        None => return None,
+    };
+    let policy_current_ma = if policy_current_ma < temperature_current_ma {
+        policy_current_ma
+    } else {
+        temperature_current_ma
+    };
+    let policy_voltage_mv = if policy_voltage_mv < temperature_voltage_mv {
+        policy_voltage_mv
+    } else {
+        temperature_voltage_mv
+    };
+    clamp_target_to_bq40_request(policy_current_ma, policy_voltage_mv, request)
+}
+
 pub const fn evaluate_cell_temperature_k_x10(temp_k_x10: Option<u16>) -> ChargeTemperatureDecision {
     match temp_k_x10 {
         Some(temp_k_x10) if temp_k_x10 < TEMP_ZERO_K_X10 => ChargeTemperatureDecision::no_charge(),
@@ -342,6 +373,29 @@ mod tests {
             Some(ChargeTarget {
                 current_ma: 100,
                 voltage_mv: 15_000,
+            })
+        );
+    }
+
+    #[test]
+    fn temperature_target_is_applied_before_bq40_clamp() {
+        let request = Bq40ChargeRequest {
+            current_ma: 500,
+            voltage_mv: 16_800,
+            observed_at_ms: 10,
+        };
+        assert_eq!(
+            clamp_policy_to_bq40_request(500, 16_800, ChargeTemperatureDecision::low(), request),
+            Some(ChargeTarget {
+                current_ma: 100,
+                voltage_mv: 16_800,
+            })
+        );
+        assert_eq!(
+            clamp_policy_to_bq40_request(500, 16_800, ChargeTemperatureDecision::normal(), request,),
+            Some(ChargeTarget {
+                current_ma: 500,
+                voltage_mv: 16_800,
             })
         );
     }

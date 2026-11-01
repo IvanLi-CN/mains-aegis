@@ -159,13 +159,10 @@ pub fn apply_profile<T: Transport>(transport: &mut T) -> Result<ApplyReport, App
         {
             return Err(ApplyError::new(ApplyErrorKind::EchoLength, Some(snapshot)));
         }
-        let offset = field.offset as usize;
-        if echoed.payload[offset..offset + 2] != field.raw {
+        if echoed.payload[..2] != field.raw {
             return Err(ApplyError::new(ApplyErrorKind::EchoRaw, Some(snapshot)));
         }
-        if u16::from_le_bytes([echoed.payload[offset], echoed.payload[offset + 1]])
-            != field.decoded()
-        {
+        if u16::from_le_bytes([echoed.payload[0], echoed.payload[1]]) != field.decoded() {
             return Err(ApplyError::new(ApplyErrorKind::EchoDecoded, Some(snapshot)));
         }
         writes = writes.saturating_add(1);
@@ -250,11 +247,15 @@ mod tests {
         }
 
         fn field_snapshot(&self, address: u16) -> BlockSnapshot {
+            let offset = (address - CONTAINING_BLOCK_ADDRESS) as usize;
+            let mut payload = [0u8; CONTAINING_BLOCK_LEN as usize];
+            let available = self.block.len().saturating_sub(offset);
+            payload[..available].copy_from_slice(&self.block[offset..]);
             BlockSnapshot {
                 address,
                 declared_len: CONTAINING_BLOCK_LEN,
                 payload_len: CONTAINING_BLOCK_LEN,
-                payload: self.block,
+                payload,
             }
         }
     }
@@ -299,8 +300,7 @@ mod tests {
                 Failure::EchoAddress(at) if at == index => snapshot.address = address + 1,
                 Failure::EchoLength(at) if at == index => snapshot.payload_len = 31,
                 Failure::EchoRaw(at) if at == index => {
-                    let offset = (address - CONTAINING_BLOCK_ADDRESS) as usize;
-                    snapshot.payload[offset] ^= 0x01;
+                    snapshot.payload[0] ^= 0x01;
                 }
                 _ => {}
             }

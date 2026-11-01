@@ -14,7 +14,7 @@
 - `REQ-BQ40-CTP-003`: 同一模块提供 LT/normal 静态 manifest；BQ40 current/voltage 只作为策略记录，不进入 writer allowlist。
 - `REQ-BQ40-CTP-004`: `firmware/src/output/mod.rs` 每秒最多刷新 SBS `0x14/0x15`，对温度、请求有效性、请求新鲜度和 runtime target 做 min clamp；低电流路径保持 `ITERM=40mA` 与 `EN_TERM=0`，正常路径保持 `CurrentAtEOC`。
 - `REQ-BQ40-CTP-005`: `firmware/src/bq25792.rs` 固化 10kΩ/β3380、5.23kΩ/30.1kΩ、15°C/45°C JEITA 编码，并保留 BHOT/BCOLD 无关位。
-- `REQ-BQ40-CTP-006`: `tools/bq40-comm-tool/firmware/src/charge_profile.rs` 实现七字段 allowlist、0x4A00/32-byte 快照、MB44 echo/length/raw/decoded fail-stop contract；成功与失败都保留写前完整 block；`bq40-charge-temperature` 是唯一温度 profile，旧 `live-df-mainboard` 明确迁移失败。
+- `REQ-BQ40-CTP-006`: `tools/bq40-comm-tool/firmware/src/charge_profile.rs` 实现七字段 allowlist、0x4A00/32-byte 快照、MB44 echo/length/raw/decoded fail-stop contract；逐字段 readback 按 echoed address 的 payload 起点校验，最终 containing block 按字段 offset 校验；成功与失败都保留写前完整 block；`bq40-charge-temperature` 是唯一温度 profile，旧 `live-df-mainboard` 明确迁移失败。
 - `REQ-BQ40-CTP-007`: `4S1P`、`5000mAh`、`14600mV` 与 `16800mV` 已纳入设计口径；ChemID 和非温度保护字段仍由独立 golden-image/化学匹配流程管理。
 
 ## Verification Commands

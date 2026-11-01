@@ -9,6 +9,7 @@ ALLOWED = {
     "audio.rs",
     "bq25792.rs",
     "bq40z50.rs",
+    "charge_temperature.rs",
     "boot_recovery.rs",
     "display_power.rs",
     "display_pipeline.rs",
