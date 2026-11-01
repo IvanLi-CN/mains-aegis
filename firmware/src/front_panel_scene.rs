@@ -1229,6 +1229,7 @@ impl DashboardDetailSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SelfCheckUiSnapshot {
     pub mode: UpsMode,
+    pub host_power_profile: Option<&'static str>,
     pub requested_outputs: EnabledOutputs,
     pub active_outputs: EnabledOutputs,
     pub recoverable_outputs: EnabledOutputs,
@@ -1284,6 +1285,7 @@ impl SelfCheckUiSnapshot {
     pub const fn pending(mode: UpsMode) -> Self {
         Self {
             mode,
+            host_power_profile: None,
             requested_outputs: EnabledOutputs::None,
             active_outputs: EnabledOutputs::None,
             recoverable_outputs: EnabledOutputs::None,

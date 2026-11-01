@@ -2776,6 +2776,20 @@ fn handle_web_serial_frame<'d, I2C>(
                     "log level updated for USB session",
                 );
             }
+            UsbCdcRequest::SetHostPowerProfile(profile) => {
+                power.set_host_power_profile(profile);
+                let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                let _ = body.push_str(r#"{"profile":"#);
+                if let Some(profile) = profile {
+                    let _ = write!(body, "\"{}\"", profile.as_str());
+                } else {
+                    let _ = body.push_str("null");
+                }
+                let _ = body.push('}');
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
+            }
             UsbCdcRequest::SetManualChargePrefs(prefs) => {
                 let mut body = heapless::String::<WEB_SERIAL_RESPONSE_BODY_CAP>::new();
                 let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();

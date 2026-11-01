@@ -28,10 +28,11 @@ use mains_aegis_firmware::net_types::{
     ChargeControlDetailSnapshot, ChargeControlEvidenceEntrySnapshot,
     ChargeControlEvidenceValueSnapshot, ChargeControlLoopOverrideSnapshot,
     ChargeControlReadinessSnapshot, ChargeControlSnapshot, ChargeControlTelemetrySnapshot,
-    DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot, DerivedPowerInputSnapshot,
-    DerivedPowerPolicySnapshot, DerivedPowerSnapshot, DiagI2cNackReason, DiagReadError,
-    DiagReadU16, DiagReadU8, RuntimeModePolicySnapshot, Tmp112DiagSnapshot, Tps55288DiagSnapshot,
-    TpsEnableInterlockSnapshot, CHARGE_CONTROL_EVIDENCE_CAP, DIAG_READ_ERROR_CAP,
+    ChargingStatusTraceSnapshot, DerivedPowerBmsSnapshot, DerivedPowerChargerSnapshot,
+    DerivedPowerInputSnapshot, DerivedPowerPolicySnapshot, DerivedPowerSnapshot, DiagI2cNackReason,
+    DiagReadError, DiagReadU16, DiagReadU8, HostPowerProfile, RuntimeModePolicySnapshot,
+    Tmp112DiagSnapshot, Tps55288DiagSnapshot, TpsEnableInterlockSnapshot,
+    CHARGE_CONTROL_EVIDENCE_CAP, DIAG_READ_ERROR_CAP,
 };
 use mains_aegis_firmware::output_protection;
 use mains_aegis_firmware::output_retry::{self, TpsConfigRetryDecision};
@@ -62,6 +63,7 @@ const BMS_ADDR_LOG: &str = "0x0b/0x16";
 const BMS_ADDR_LOG: &str = "0x0b";
 
 const BMS_ACTIVATION_WINDOW: Duration = Duration::from_secs(40);
+const HOST_POWER_PROFILE_TTL: Duration = Duration::from_secs(3);
 const BMS_ACTIVATION_FORCE_VREG_MV: u16 = 16_800;
 const BMS_ACTIVATION_FORCE_ICHG_MA: u16 = 200;
 const BMS_ACTIVATION_FORCE_IINDPM_MA: u16 = 500;
@@ -1882,6 +1884,35 @@ fn bq40_selected_probe(trace: &bq40z50::BlockReadTrace) -> Option<&bq40z50::Bloc
         Some(bq40z50::BlockReadSource::Pec) => Some(&trace.pec),
         Some(bq40z50::BlockReadSource::Plain) => Some(&trace.plain),
         None => None,
+    }
+}
+
+fn charging_status_trace_snapshot(
+    charging: Option<bq40z50::ChargingStatusTrace>,
+) -> ChargingStatusTraceSnapshot {
+    let Some(charging) = charging else {
+        return ChargingStatusTraceSnapshot::empty();
+    };
+    let pec = charging.block.pec;
+    let plain = charging.block.plain;
+    ChargingStatusTraceSnapshot {
+        value: charging.value,
+        selected_source: Some(bq40z50::block_read_source_name(
+            charging.block.selected_source,
+        )),
+        raw_declared_len: charging.block.raw.map(|raw| raw.declared_len),
+        raw_payload_len: charging.block.raw.map(|raw| raw.payload_len),
+        raw_payload: charging.block.raw.map(|raw| raw.payload),
+        pec_status: Some(bq40z50::block_read_probe_status_name(pec.status)),
+        pec_declared_len: Some(pec.declared_len),
+        pec_payload_len: Some(pec.payload_len),
+        pec_prefix_len: Some(pec.prefix_len),
+        pec_prefix: Some(pec.prefix),
+        plain_status: Some(bq40z50::block_read_probe_status_name(plain.status)),
+        plain_declared_len: Some(plain.declared_len),
+        plain_payload_len: Some(plain.payload_len),
+        plain_prefix_len: Some(plain.prefix_len),
+        plain_prefix: Some(plain.prefix),
     }
 }
 
@@ -4220,6 +4251,8 @@ pub struct PowerManager<'d, I2C> {
     usb_pd_restore_input_limits_pending: bool,
     pd_breadcrumb_next_seq: u16,
     diag_snapshot: DerivedPowerSnapshot,
+    host_power_profile: Option<HostPowerProfile>,
+    host_power_profile_updated_at: Option<Instant>,
 
     ui_snapshot: SelfCheckUiSnapshot,
     audio_snapshot: AudioSignalSnapshot,
@@ -5047,6 +5080,8 @@ where
             usb_pd_restore_input_limits_pending: false,
             pd_breadcrumb_next_seq,
             diag_snapshot: DerivedPowerSnapshot::empty(),
+            host_power_profile: None,
+            host_power_profile_updated_at: None,
             ui_snapshot: initial_ui_snapshot,
             audio_snapshot: AudioSignalSnapshot::default(),
             audio_events: AudioSignalEvents::default(),
@@ -5507,6 +5542,12 @@ where
     pub fn ui_snapshot(&self) -> SelfCheckUiSnapshot {
         let evaluation = self.current_manual_charge_control_evaluation();
         let mut snapshot = self.ui_snapshot;
+        snapshot.host_power_profile = active_host_power_profile(
+            self.host_power_profile,
+            self.host_power_profile_updated_at,
+            snapshot.mode,
+            Instant::now(),
+        );
         let mut detail = snapshot.dashboard_detail;
         detail.manual_charge.prefs = self.manual_charge_prefs;
         detail.manual_charge.runtime = ManualChargeRuntimeState {
@@ -5615,6 +5656,11 @@ where
 
         snapshot.dashboard_detail = detail;
         snapshot
+    }
+
+    pub fn set_host_power_profile(&mut self, profile: Option<HostPowerProfile>) {
+        self.host_power_profile = profile;
+        self.host_power_profile_updated_at = profile.map(|_| Instant::now());
     }
 
     pub fn derived_power_snapshot(&self) -> DerivedPowerSnapshot {
@@ -6010,6 +6056,7 @@ where
             read_bq40_op_status_with_raw_trace_diag(&mut self.i2c, addr, &mut errors);
         let op_status = op_status.or(lock_diag.op_status);
         let charging_status = lock_diag.charging.and_then(|charging| charging.value);
+        let charging_status_trace = charging_status_trace_snapshot(lock_diag.charging);
         let afe_register = diag_bq40_optional(
             bq40z50::read_afe_register(&mut self.i2c, addr),
             "AFE_REGISTER",
@@ -6024,6 +6071,7 @@ where
         self.diag_snapshot.bms.manufacturing_status = lock_diag.manufacturing_status;
         self.diag_snapshot.bms.gauging_status = lock_diag.gauging_status;
         self.diag_snapshot.bms.charging_status = charging_status;
+        self.diag_snapshot.bms.charging_status_trace = charging_status_trace;
         self.diag_snapshot.bms.op_status = op_status;
         self.diag_snapshot.bms.op_status_raw_len = op_status_raw_len;
         self.diag_snapshot.bms.op_status_raw_bytes = op_status_raw_bytes;
@@ -6042,16 +6090,8 @@ where
         self.diag_snapshot.bms.op_dsg_fet = bq40_op_bit(op_status, bq40z50::operation_status::DSG);
         self.diag_snapshot.bms.op_pchg_fet =
             bq40_op_bit(op_status, bq40z50::operation_status::PCHG);
-        self.diag_snapshot.bms.chg_fet = self
-            .diag_snapshot
-            .bms
-            .afe_chg_fet
-            .or(self.diag_snapshot.bms.op_chg_fet);
-        self.diag_snapshot.bms.dsg_fet = self
-            .diag_snapshot
-            .bms
-            .afe_dsg_fet
-            .or(self.diag_snapshot.bms.op_dsg_fet);
+        self.diag_snapshot.bms.chg_fet = self.diag_snapshot.bms.afe_chg_fet;
+        self.diag_snapshot.bms.dsg_fet = self.diag_snapshot.bms.afe_dsg_fet;
         self.diag_snapshot.bms.pchg_fet = self.diag_snapshot.bms.op_pchg_fet;
         let discharge_path_contradiction = self.diag_snapshot.bms.op_dsg_fet == Some(true)
             && self.diag_snapshot.bms.xdsg == Some(false)
@@ -6100,7 +6140,12 @@ where
             bq40_mac_bit(charging_status, bq40z50::charging_status::SU);
         self.diag_snapshot.bms.charging_hv =
             bq40_mac_bit(charging_status, bq40z50::charging_status::HV);
+        self.diag_snapshot.bms.update_status = lock_diag.update_status;
         self.diag_snapshot.bms.current_at_eoc_ma = lock_diag.current_at_eoc_ma;
+        self.diag_snapshot.bms.no_valid_charge_term = lock_diag.no_valid_charge_term;
+        self.diag_snapshot.bms.last_valid_charge_term = lock_diag.last_valid_charge_term;
+        self.diag_snapshot.bms.no_of_qmax_updates = lock_diag.no_of_qmax_updates;
+        self.diag_snapshot.bms.no_of_ra_updates = lock_diag.no_of_ra_updates;
         self.diag_snapshot.bms.da_configuration = lock_diag.da_configuration;
         self.diag_snapshot.bms.power_config = lock_diag.power_config;
         self.diag_snapshot.bms.emshut_en = bq40_df_bit(
@@ -6733,14 +6778,8 @@ where
         detail.discharge_ready = discharge_ready;
         detail.xchg = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::XCHG);
         detail.xdsg = bq40_op_bit(snapshot.op_status, bq40z50::operation_status::XDSG);
-        detail.charge_fet_on = snapshot
-            .afe_register
-            .map(|afe| afe.chg_fet_on())
-            .or_else(|| bq40_op_bit(snapshot.op_status, bq40z50::operation_status::CHG));
-        detail.discharge_fet_on = snapshot
-            .afe_register
-            .map(|afe| afe.dsg_fet_on())
-            .or_else(|| bq40_op_bit(snapshot.op_status, bq40z50::operation_status::DSG));
+        detail.charge_fet_on = snapshot.afe_register.map(|afe| afe.chg_fet_on());
+        detail.discharge_fet_on = snapshot.afe_register.map(|afe| afe.dsg_fet_on());
         detail.precharge_fet_on = snapshot
             .op_status
             .map(|raw| (raw & bq40z50::operation_status::PCHG) != 0);
@@ -15496,6 +15535,8 @@ where
         let charging_status = lock_diag
             .and_then(|diag| diag.charging)
             .and_then(|charging| charging.value);
+        let charging_status_trace =
+            charging_status_trace_snapshot(lock_diag.and_then(|diag| diag.charging));
         let cuv_recovery_mv = lock_diag.and_then(|diag| diag.cuv_recovery_mv);
         let protection_configuration = lock_diag.and_then(|diag| diag.protection_configuration);
         let da_configuration = lock_diag.and_then(|diag| diag.da_configuration);
@@ -15537,6 +15578,7 @@ where
             manufacturing_status,
             gauging_status,
             charging_status,
+            charging_status_trace,
             op_status,
             op_status_raw_len: s.op_status_raw_len,
             op_status_raw_bytes: s.op_status_raw_bytes,
@@ -15553,8 +15595,8 @@ where
             op_chg_fet,
             op_dsg_fet,
             op_pchg_fet,
-            chg_fet: afe_chg_fet.or(op_chg_fet),
-            dsg_fet: afe_dsg_fet.or(op_dsg_fet),
+            chg_fet: afe_chg_fet,
+            dsg_fet: afe_dsg_fet,
             pchg_fet: op_pchg_fet,
             discharge_path_contradiction: Some(
                 op_dsg_fet == Some(true)
@@ -15593,7 +15635,12 @@ where
             charging_inhibit: bq40_mac_bit(charging_status, bq40z50::charging_status::IN),
             charging_suspend: bq40_mac_bit(charging_status, bq40z50::charging_status::SU),
             charging_hv: bq40_mac_bit(charging_status, bq40z50::charging_status::HV),
+            update_status: lock_diag.and_then(|diag| diag.update_status),
             current_at_eoc_ma: lock_diag.and_then(|diag| diag.current_at_eoc_ma),
+            no_valid_charge_term: lock_diag.and_then(|diag| diag.no_valid_charge_term),
+            last_valid_charge_term: lock_diag.and_then(|diag| diag.last_valid_charge_term),
+            no_of_qmax_updates: lock_diag.and_then(|diag| diag.no_of_qmax_updates),
+            no_of_ra_updates: lock_diag.and_then(|diag| diag.no_of_ra_updates),
             da_configuration,
             power_config,
             emshut_en: bq40_df_bit(da_configuration, bq40z50::da_configuration::EMSHUT_EN),
@@ -15985,6 +16032,22 @@ where
             b.map_err(i2c_error_kind),
         );
     }
+}
+
+fn active_host_power_profile(
+    profile: Option<HostPowerProfile>,
+    updated_at: Option<Instant>,
+    mode: UpsMode,
+    now: Instant,
+) -> Option<&'static str> {
+    if !matches!(mode, UpsMode::Backup) {
+        return None;
+    }
+    let updated_at = updated_at?;
+    if now - updated_at > HOST_POWER_PROFILE_TTL {
+        return None;
+    }
+    profile.map(HostPowerProfile::as_str)
 }
 
 #[derive(Clone, Copy)]
