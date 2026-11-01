@@ -349,11 +349,13 @@ compile_error!("bms-rom-image-r5 currently supports only stock-sparse info write
         feature = "bms-dual-probe-diag",
         feature = "bms-rom-recover-force",
         feature = "bms-df-repair-afe-default",
-        feature = "bms-rom-repair-asset-df-mainboard"
+        feature = "bms-rom-repair-asset-df-mainboard",
+        feature = "bms-rom-image-r3",
+        feature = "bms-rom-image-r5"
     )
 ))]
 compile_error!(
-    "bms-charge-temperature-profile requires the strict identity probe and cannot be combined with mac-only, BQ40 recovery, or repair features"
+    "bms-charge-temperature-profile requires the strict identity probe and cannot be combined with mac-only, BQ40 recovery, ROM image, or repair features"
 );
 #[cfg(feature = "bms-rom-image-r5")]
 const BMS_ROM_FLASH_IMAGE_TAG: &str = "bq40z50-r5-v5.05-build96";

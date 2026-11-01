@@ -87,7 +87,9 @@ const BMS_ACTIVATION_FOLLOWUP_INITIAL_DELAY: Duration = Duration::from_millis(0)
 const BMS_ACTIVATION_FOLLOWUP_PERIOD: Duration = Duration::from_secs(2);
 const BMS_ACTIVATION_EXIT_EXERCISE_WINDOW: Duration = Duration::from_secs(6);
 const BMS_ACTIVATION_EXIT_EXERCISE_PERIOD: Duration = Duration::from_secs(2);
-const BMS_ACTIVATION_CHARGER_POLL_PERIOD: Duration = Duration::from_secs(2);
+// Keep the activation charger poll below the one-second BQ40 evidence TTL. The tick-level
+// expiry guard remains the hard interlock when a poll is delayed by other work.
+const BMS_ACTIVATION_CHARGER_POLL_PERIOD: Duration = Duration::from_millis(500);
 const BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY: Duration = Duration::from_secs(34);
 const BMS_ACTIVATION_AUTO_DELAY: Duration = Duration::from_secs(30);
 const BMS_DISCHARGE_AUTH_MANUAL_WINDOW: Duration = Duration::from_secs(62);
@@ -5394,6 +5396,7 @@ where
     }
 
     pub fn tick(&mut self, irq: &IrqSnapshot) -> bool {
+        self.enforce_bq40_activation_charge_freshness();
         self.consume_ina_alert_irq(irq);
         if let Some(until) = self.bms_activation_isolation_until {
             if Instant::now() < until {
@@ -6685,6 +6688,25 @@ where
             self.bq40_charge_request_observed,
             self.bq40_charge_request,
         )
+    }
+
+    fn enforce_bq40_activation_charge_freshness(&mut self) {
+        if self.bms_activation_state != BmsActivationState::Pending
+            || !self.bms_activation_force_charge_requested
+            || !self.chg_enabled
+        {
+            return;
+        }
+
+        let now_ms = self.fan_now_ms();
+        if self.bq40_activation_wake_gate(now_ms) {
+            return;
+        }
+
+        self.chg_ce.set_high();
+        self.chg_enabled = false;
+        self.chg_next_poll_at = Instant::now();
+        defmt::warn!("bms: activation charge disabled reason=bq40_evidence_expired_or_invalid");
     }
 
     fn fan_temps_ready(&self) -> bool {

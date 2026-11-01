@@ -28,7 +28,8 @@ requires the ordered `CE high/charger disabled`, dual identity, Full Access, com
 blocks, and all seven field records before writing `verdict.pass=true`. `summary.json`
 persists the blocks, gate evidence, and verified field names under
 `charge_temperature_apply`. The profile image is canonical-only and cannot be combined
-with ROM recovery, AFE repair, asset repair, `dual-diag`, or `mac-only`; it also requires
+with ROM recovery, non-R2 ROM images, AFE repair, asset repair, `dual-diag`, or `mac-only`; it
+is accepted by offline verification only for `apply-df` or `verify` actions, and it also requires
 the existing strict BQ40 identity probe with both the Texas manufacturer and BQ40
 device-name evidence before the writer image is built or run.
 

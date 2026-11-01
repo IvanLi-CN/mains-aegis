@@ -230,6 +230,24 @@ pub const fn activation_wake_charge_allowed(
     )
 }
 
+pub const fn activation_wake_charge_should_disable(
+    now_ms: u64,
+    temperature_observed_at_ms: Option<u64>,
+    temperature: Option<ChargeTemperatureDecision>,
+    request_observed: bool,
+    request: Option<Bq40ChargeRequest>,
+    charger_enabled: bool,
+) -> bool {
+    charger_enabled
+        && !activation_wake_charge_allowed(
+            now_ms,
+            temperature_observed_at_ms,
+            temperature,
+            request_observed,
+            request,
+        )
+}
+
 /// Latch any successfully read half of the BQ40 current/voltage request. A
 /// partial read is still safety evidence; a later transport failure must not
 /// reopen the fixed activation-wake fallback.
@@ -456,6 +474,22 @@ mod tests {
             Some(ChargeTemperatureDecision::normal()),
             true,
             Some(request)
+        ));
+        assert!(activation_wake_charge_should_disable(
+            1_101,
+            Some(100),
+            Some(ChargeTemperatureDecision::normal()),
+            true,
+            Some(request),
+            true,
+        ));
+        assert!(!activation_wake_charge_should_disable(
+            1_101,
+            Some(100),
+            Some(ChargeTemperatureDecision::normal()),
+            true,
+            Some(request),
+            false,
         ));
     }
 

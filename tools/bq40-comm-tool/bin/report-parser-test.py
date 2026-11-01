@@ -378,6 +378,11 @@ def main() -> None:
         assert bad.returncode == 24
         assert "requires canonical mode" in bad.stderr
 
+        for invalid_action in ("diagnose", "recover"):
+            bad = run_parser(successful_log(), root, action=invalid_action)
+            assert bad.returncode == 24
+            assert "requires apply-df or verify action" in bad.stderr
+
         bad = run_parser(ordinary_sample_log(), root, action="verify")
         assert bad.returncode == 20
         summary = json.loads((root / "report" / "summary.json").read_text())

@@ -162,6 +162,11 @@ if [[ "$repair_profile" == "bq40-charge-temperature" && "$mode" != "canonical" ]
   exit 24
 fi
 
+if [[ "$repair_profile" == "bq40-charge-temperature" && "$rom_image" != "r2" ]]; then
+  echo "--repair-profile bq40-charge-temperature cannot be combined with --rom-image $rom_image" >&2
+  exit 21
+fi
+
 artifact_features=$(IFS=, ; echo "${features[*]}")
 
 if [[ "$recover" != "never" && "$mode" != "dual-diag" ]]; then

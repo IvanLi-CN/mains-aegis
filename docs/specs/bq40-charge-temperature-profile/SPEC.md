@@ -61,7 +61,7 @@
 ### REQ-BQ40-CTP-006
 
 - The Data Flash writer MUST use an explicit semantic profile and an allowlist containing only `T1`, `T2`, `T5`, `T6`, `T3`, `T4`, and `Hysteresis` for this topic.
-- The charge-temperature writer MUST use canonical addressing and the existing strict BQ40 identity probe with both `ManufacturerName()` containing `Texas` and `DeviceName()` containing `BQ40` evidence. The diagnostic-only `mac-only` and `dual-diag` modes MUST be rejected before a profile image can write or verify Data Flash.
+- The charge-temperature writer MUST use canonical addressing and the existing strict BQ40 identity probe with both `ManufacturerName()` containing `Texas` and `DeviceName()` containing `BQ40` evidence. The explicit profile MUST be limited to `apply-df` and `verify` actions; diagnostic/recovery actions, `mac-only` and `dual-diag` modes, non-R2 ROM images, and recovery/repair feature combinations MUST be rejected before a profile image can write or verify Data Flash.
 - Before writing, it MUST save the complete containing Data Flash block. After writing, it MUST verify the address echo, block length, every target raw value, and every decoded semantic value.
 - The writer MUST treat the operation as non-atomic and MUST stop on transport error, write failure, or readback mismatch. A profile failure in the maintenance firmware MUST latch `CE` high and terminate the maintenance charge flow. It MUST NOT silently fall back to the existing broad 25-field `bq40-comm-tool` baseline.
 - The audit stream MUST prove the ordered pre-write gates `CE high/charger disabled`, both identity evidence, and Full Access before accepting snapshot, field, and completion evidence.

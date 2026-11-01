@@ -99,7 +99,7 @@ Policy:
 - any profile failure latches the temporary maintenance image fail-closed across transport loss; rerun the explicit maintenance command to establish a new retry boundary
 - `summary.json` records the outcome under `charge_temperature_apply`, including the complete pre-write and post-write blocks and verified field names for offline rollback/audit
 - the profile does not write ChemID, calibration, protection, termination, precharge, maintenance, or current/voltage manifest fields
-- the profile image cannot be combined with ROM recovery, AFE repair, or asset repair features
+- the profile image cannot be combined with ROM recovery, non-R2 ROM images, AFE repair, or asset repair features; offline verification accepts the profile only for `apply-df` or `verify` actions
 
 Locked vectors are the little-endian 0.1 K values `AC 0A`, `42 0B`, `74 0B`, `0A 0C`,
 `3C 0C`, `6E 0C`, and `14 00`. The static current/voltage manifest is 100mA/16800mV

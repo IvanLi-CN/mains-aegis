@@ -350,6 +350,16 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
+    if args.repair_profile == "bq40-charge-temperature" and args.action not in {
+        "apply-df",
+        "verify",
+    }:
+        print(
+            "bq40-charge-temperature profile verification requires apply-df or verify action",
+            file=sys.stderr,
+        )
+        return 24
+
     if args.repair_profile == "bq40-charge-temperature" and args.mode != "canonical":
         print(
             "bq40-charge-temperature profile verification requires canonical mode; "
