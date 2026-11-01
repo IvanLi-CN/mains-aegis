@@ -79,12 +79,13 @@ charging. Its profile-specific maintenance image applies the profile once after 
 gauge enters the working state; ordinary BMS polling never writes Data Flash.
 
 ```bash
-./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --repair-profile bq40-charge-temperature
+./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --probe-mode strict --repair-profile bq40-charge-temperature
 ```
 
 Policy:
 - `apply-df` is app-mode only; it rejects `--recover` and `--rom-image`
 - `--repair-profile bq40-charge-temperature` is mandatory for this subcommand
+- the profile requires the existing strict BQ40 identity probe (`ManufacturerName()` or `DeviceName()` evidence); `--probe-mode mac-only` is diagnostic-only and is rejected
 - the writer first snapshots the complete containing block at `0x4A00`, length `32`
 - exactly seven temperature fields are allowed: T1, T2, T5, T6, T3, T4, and hysteresis
 - each MB44 write must pass echo address, returned length, raw vector, and decoded value checks
@@ -107,16 +108,16 @@ Do not replace it with a broad fallback or a 25-field write set.
 ## 3) Verify (offline)
 
 ```bash
-./bin/run.sh verify --mode canonical --duration-sec 120 --monitor-file /abs/path/to/file.mon.ndjson
+./bin/run.sh verify --mode canonical --duration-sec 120 --repair-profile bq40-charge-temperature --monitor-file /abs/path/to/profile.mon.ndjson
 ```
 
 Notes:
-- `verify` is offline-only and does not accept `--flash` or `--recover`.
+- `verify` is offline-only and does not accept `--flash` or `--recover`; pass the same explicit `--repair-profile bq40-charge-temperature` when verifying a profile apply log so the full seven-field evidence contract is enforced.
 
 ## 4) Supported sequence
 
 1. `diagnose --mode canonical --force-min-charge true`
-2. If canonical diagnose passes and an authorized maintenance window needs the locked charge-temperature profile, run `apply-df --mode canonical --force-min-charge true --repair-profile bq40-charge-temperature`
+2. If canonical diagnose passes and an authorized maintenance window needs the locked charge-temperature profile, run `apply-df --mode canonical --force-min-charge true --probe-mode strict --repair-profile bq40-charge-temperature`
 3. If the log contains `stage=rom_mode_detected`, run `recover --mode dual-diag --recover if-rom --force-min-charge true --repair-profile asset-df-mainboard`
 4. Re-flash canonical firmware and re-run `diagnose --mode canonical --force-min-charge true`
 5. Run `verify --mode canonical --monitor-file <canonical log>` on the final canonical log

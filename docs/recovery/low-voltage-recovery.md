@@ -16,6 +16,14 @@ It does not establish or rewrite the CUV/protection golden baseline; that
 baseline remains owned by the explicit asset/ROM recovery path described in
 the BQ40 maintenance documentation.
 
+The runner therefore performs a read-only baseline preflight before the
+temporary profile is written. A fresh/default pack, or a pack whose
+`CUV Recovery` / `CUV_RECOV_CHG` values do not already match the project
+baseline, stops before any Data Flash write. Run the explicit
+`asset-df-mainboard` ROM-recovery path first when its ROM-signature
+precondition is met; do not combine that recovery image with the
+`bq40-charge-temperature` profile image.
+
 ## Safety Scope
 
 - Real recovery maintenance has no baked-in device id, serial-port allowlist, or serial-port denylist.
@@ -50,7 +58,8 @@ software behavior and safety gates only. They must not be reported as HIL.
 ## Sequence
 
 1. Validate that the runner received explicit `--device-id` and `--port`, then confirm devd scan results and selector caches match that target exactly.
-2. Run:
+2. Connect to the existing main firmware and verify the read-only low-voltage baseline (`CUV Recovery=2550mV`, `CUV_RECOV_CHG=0`, `VBAT_LOWV=71.4%`, and `IPRECHG=120mA`). If it is absent, stop and complete the explicit asset/ROM recovery path first.
+3. Run:
 
    ```bash
    tools/bq40-comm-tool/bin/run.sh apply-df \
@@ -62,17 +71,17 @@ software behavior and safety gates only. They must not be reported as HIL.
 
    The runner exports the explicit devd target for this step, so the temporary tool firmware is flashed through `mains-aegis-devd` as well.
 
-3. Build main firmware:
+4. Build main firmware:
 
    ```bash
    just firmware-build
    ```
 
-4. Generate a Firmware Catalog manifest for the built main firmware. The
+5. Generate a Firmware Catalog manifest for the built main firmware. The
    runner uses the same artifact generation path as `just firmware-release`.
-5. Start or reuse `mains-aegis-devd`.
-6. Run devd scan, bind only the explicit `--device-id`, select the generated manifest, and flash the main firmware through devd.
-7. Reconnect through devd and read `GET /api/v1/devices/{id}/diag-snapshot?package=bq25792.regs&package=bq40.manufacturing&package=derived.power`.
+6. Start or reuse `mains-aegis-devd`.
+7. Run devd scan, bind only the explicit `--device-id`, select the generated manifest, and flash the main firmware through devd.
+8. Reconnect through devd and read `GET /api/v1/devices/{id}/diag-snapshot?package=bq25792.regs&package=bq40.manufacturing&package=derived.power`.
 
 ## Pass Criteria
 

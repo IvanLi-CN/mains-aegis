@@ -83,7 +83,7 @@ Usage:
   $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default] [--monitor-file PATH] [--report-out DIR]
   $(basename "$0") apply-df [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--repair-profile bq40-charge-temperature] [--monitor-file PATH] [--report-out DIR]
   $(basename "$0") recover  [--mode dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default|asset-df-mainboard] [--monitor-file PATH] [--report-out DIR]
-  $(basename "$0") verify   --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--report-out DIR]
+  $(basename "$0") verify   --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--repair-profile none|bq40-charge-temperature] [--report-out DIR]
 USAGE
 }
 
@@ -252,6 +252,11 @@ fi
 if [[ "$subcommand" == "apply-df" && "$repair_profile" != "bq40-charge-temperature" ]]; then
   echo "apply-df requires --repair-profile bq40-charge-temperature" >&2
   exit 20
+fi
+
+if [[ "$subcommand" == "apply-df" && "$probe_mode" == "mac-only" ]]; then
+  echo "--repair-profile bq40-charge-temperature requires the strict identity probe; mac-only is diagnostic-only" >&2
+  exit 24
 fi
 
 if [[ "$subcommand" == "recover" ]]; then

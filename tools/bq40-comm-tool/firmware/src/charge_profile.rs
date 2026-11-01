@@ -452,6 +452,26 @@ mod tests {
     }
 
     #[test]
+    fn fields_match_locked_addresses_and_raw_vectors() {
+        let expected = [
+            ("t1", 0x4A0B, [0xAC, 0x0A]),
+            ("t2", 0x4A0D, [0x42, 0x0B]),
+            ("t5", 0x4A0F, [0x74, 0x0B]),
+            ("t6", 0x4A11, [0x0A, 0x0C]),
+            ("t3", 0x4A13, [0x3C, 0x0C]),
+            ("t4", 0x4A15, [0x6E, 0x0C]),
+            ("hysteresis", 0x4A17, [0x14, 0x00]),
+        ];
+
+        for (field, (name, address, raw)) in FIELDS.iter().zip(expected) {
+            assert_eq!(field.name, name);
+            assert_eq!(field.address, address);
+            assert_eq!(field.raw, raw);
+            assert_eq!(field.decoded(), u16::from_le_bytes(raw));
+        }
+    }
+
+    #[test]
     fn apply_saves_full_snapshot_and_verifies_every_field() {
         let mut transport = MockTransport::new(Failure::None);
         let report = match apply_profile(&mut transport) {

@@ -301,10 +301,24 @@ poll_diag_snapshot() {
   validate_diag_snapshot "$diag_json" "$result_out"
 }
 
+preflight_existing_recovery_baseline() {
+  local out="$1"
+  local diag_json
+  diag_json=$(curl_json GET "$devd_url/api/v1/devices/$target_device_id/diag-snapshot?package=bq25792.regs&package=bq40.manufacturing&package=derived.power")
+  printf '%s\n' "$diag_json" > "$report_root/preflight-diag-snapshot.json"
+  if ! validate_diag_snapshot "$diag_json" "$out"; then
+    echo "Existing low-voltage recovery baseline is missing; stop before writing the charge-temperature profile." >&2
+    echo "Run the explicit asset-df-mainboard ROM-recovery path when its ROM-signature precondition is met, then rerun this maintenance flow." >&2
+    return 1
+  fi
+  echo "Validated existing low-voltage recovery baseline before charge-temperature maintenance."
+}
+
 main_elf="$REPO_ROOT/firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware"
 main_artifact_dir="$report_root/main-artifact"
 
 if [[ "$mode" == "real" ]]; then
+  bound_identity_available="false"
   require_explicit_target
   validate_selector_cache "main firmware" "$REPO_ROOT/firmware/.esp32-port"
   validate_selector_cache "bq40-comm-tool" "$REPO_ROOT/tools/bq40-comm-tool/.esp32-port"
@@ -316,8 +330,16 @@ if [[ "$mode" == "real" ]]; then
     > "$report_root/devd-bind-pre-bq40.json"
   if connect_json=$(curl_json POST "$devd_url/api/v1/devices/$target_device_id/connect" '{}' 2>/dev/null); then
     printf '%s\n' "$connect_json" > "$report_root/devd-connect-pre-bq40.json"
+    bound_identity_available="true"
   else
     echo "Bound device is present but identity is unavailable; continuing from download mode." >&2
+  fi
+  if [[ "$bound_identity_available" != "true" ]]; then
+    echo "Low-voltage recovery requires a readable existing main-firmware baseline before the temporary BQ40 profile write." >&2
+    exit 52
+  fi
+  if ! preflight_existing_recovery_baseline "$report_root/preflight-result.json"; then
+    exit 52
   fi
   decision_summary "state-changing" "tools/bq40-comm-tool/bin/run.sh apply-df ... && devd flash ..." "allow" "G4/G5: explicit owner-supplied device id and port; devd scan confirmed the same port; no direct espflash and no port switching" "Run two-flash recovery maintenance."
 else

@@ -61,6 +61,7 @@
 ### REQ-BQ40-CTP-006
 
 - A future Data Flash writer MUST use an explicit semantic profile and an allowlist containing only `T1`, `T2`, `T5`, `T6`, `T3`, `T4`, and `Hysteresis` for this topic.
+- The charge-temperature writer MUST use the existing strict BQ40 identity probe, including `ManufacturerName()` / `DeviceName()` evidence. The diagnostic-only `mac-only` probe MUST be rejected before a profile image can write Data Flash.
 - Before writing, it MUST save the complete containing Data Flash block. After writing, it MUST verify the address echo, block length, every target raw value, and every decoded semantic value.
 - The writer MUST treat the operation as non-atomic and MUST stop on transport error, write failure, or readback mismatch. A profile failure in the maintenance firmware MUST latch `CE` high and terminate the maintenance charge flow. It MUST NOT silently fall back to the existing broad 25-field `bq40-comm-tool` baseline.
 - The normal `mains-aegis` runtime MUST NOT automatically write BQ40 Data Flash.
@@ -108,7 +109,7 @@
 
 ### VER-BQ40-CTP-006
 
-- Method: Host MB44 protocol/contract tests cover the exact read and field-write frames, echoed-address readback, malformed length, mismatch, and interrupted-write cases; the target adapter uses those tested frame builders, the report parser requires complete pre/post blocks plus all seven field-verification records, and the persisted report records the complete pre-write snapshot.
+- Method: Host MB44 protocol/contract tests cover the exact read and field-write frames, echoed-address readback, malformed length, mismatch, and interrupted-write cases; the target adapter uses those tested frame builders, the profile build requires the strict identity probe, the report parser requires complete pre/post blocks plus all seven field-verification records, and the persisted report records the complete pre-write snapshot.
 - covers: `REQ-BQ40-CTP-006`
 - Pass condition: Only the seven allowlisted fields can change; the report parser compares every non-allowlisted byte between the complete pre-write and post-write blocks and rejects unknown stages, reordered, duplicated, or incomplete evidence whenever the explicit profile is requested; every failure stops the transaction and preserves the pre-write block for rollback; incomplete or inconsistent report evidence is not accepted as PASS.
 

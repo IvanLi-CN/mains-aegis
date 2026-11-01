@@ -26,7 +26,9 @@ The complete pre-write and post-write blocks are emitted as machine-readable
 field verification records are emitted as `stage=field_verify`, and the report parser
 requires all of them before writing `verdict.pass=true`. `summary.json` persists the
 blocks and verified field names under `charge_temperature_apply`. The profile image
-cannot be combined with ROM recovery, AFE repair, or asset repair features.
+cannot be combined with ROM recovery, AFE repair, or asset repair features. The profile
+image also requires the existing strict BQ40 identity probe; the diagnostic-only
+`mac-only` probe is rejected before the writer image is built or run.
 
 The former `live-df-mainboard` profile is retired and returns a migration error. ROM,
 AFE, and `asset-df-mainboard` recovery paths retain their existing semantics and are not

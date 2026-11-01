@@ -345,6 +345,7 @@ compile_error!("bms-rom-image-r5 currently supports only stock-sparse info write
 #[cfg(all(
     feature = "bms-charge-temperature-profile",
     any(
+        feature = "bms-mac-probe-only",
         feature = "bms-dual-probe-diag",
         feature = "bms-rom-recover-force",
         feature = "bms-df-repair-afe-default",
@@ -352,7 +353,7 @@ compile_error!("bms-rom-image-r5 currently supports only stock-sparse info write
     )
 ))]
 compile_error!(
-    "bms-charge-temperature-profile cannot be combined with BQ40 recovery or repair features"
+    "bms-charge-temperature-profile requires the strict identity probe and cannot be combined with mac-only, BQ40 recovery, or repair features"
 );
 #[cfg(feature = "bms-rom-image-r5")]
 const BMS_ROM_FLASH_IMAGE_TAG: &str = "bq40z50-r5-v5.05-build96";
@@ -5988,6 +5989,11 @@ where
 
     fn mark_bms_working(&mut self, addr: u8) {
         let now = Instant::now();
+        #[cfg(feature = "bms-charge-temperature-profile")]
+        if self.bms_addr != Some(addr) {
+            self.bms_charge_temperature_profile_applied = false;
+            self.bms_charge_temperature_snapshot = None;
+        }
         self.maybe_restore_charger_watchdog_after_recovery(false);
         if self.charge_mode == BootChargeMode::MinCharge && !self.cfg.force_min_charge {
             self.set_charge_mode(BootChargeMode::Off);
@@ -6919,6 +6925,13 @@ where
         }
 
         self.bms_addr = None;
+        #[cfg(feature = "bms-charge-temperature-profile")]
+        {
+            // A later discovery may be a replacement gauge at the same SMBus address. Do not
+            // carry the previous device's successful-apply latch across that loss boundary.
+            self.bms_charge_temperature_profile_applied = false;
+            self.bms_charge_temperature_snapshot = None;
+        }
         self.bms_next_retry_at = None;
         self.bms_next_poll_at = Instant::now();
         self.bms_missing_diag_next_at = Some(Instant::now() + BMS_MISSING_VERBOSE_REPROBE_INTERVAL);
@@ -7153,10 +7166,15 @@ where
             );
         }
 
-        let read_name_blocks = matches!(
-            self.cfg.bms_address_mode,
-            bq40z50::BmsAddressMode::DualProbeDiag
-        );
+        // A Data Flash writer must bind the maintenance operation to the existing BQ40
+        // identity evidence. Canonical diagnostics may omit the name blocks, but the
+        // charge-temperature profile must never accept a shape-correct numeric snapshot from
+        // an unknown device.
+        let read_name_blocks = cfg!(feature = "bms-charge-temperature-profile")
+            || matches!(
+                self.cfg.bms_address_mode,
+                bq40z50::BmsAddressMode::DualProbeDiag
+            );
         let force_rom_recover = cfg!(feature = "bms-rom-recover-force");
         let blind_force_recover =
             force_rom_recover && self.blind_force_recover_ready(Instant::now());
@@ -8501,14 +8519,7 @@ where
             };
 
             if let Some(addr) = probe {
-                self.bms_addr = Some(addr);
-                self.bms_next_retry_at = Some(now);
-                self.bms_next_poll_at = now;
-                self.bms_last_int_poll_at = None;
-                self.bms_weak_pass_votes = 0;
-                self.bms_transport_fail_count = 0;
-                self.bms_missing_diag_next_at = None;
-                defmt::info!("bms: bq40z50 discovered addr=0x{=u8:x}", addr);
+                self.mark_bms_working(addr);
             }
             return true;
         }
@@ -9850,6 +9861,14 @@ where
                     self.bms_transport_fail_count = self.bms_transport_fail_count.saturating_add(1);
                     if self.bms_transport_fail_count >= BMS_TRANSPORT_LOSS_THRESHOLD {
                         self.bms_addr = None;
+                        #[cfg(feature = "bms-charge-temperature-profile")]
+                        {
+                            // The next discovery is a new binding even when the gauge reuses
+                            // the same address. Keep a failed profile latched fail-closed, but
+                            // require a fresh successful apply for a replacement gauge.
+                            self.bms_charge_temperature_profile_applied = false;
+                            self.bms_charge_temperature_snapshot = None;
+                        }
                         self.bms_next_retry_at = None;
                         self.bms_transport_fail_count = 0;
                         self.bms_missing_diag_next_at =

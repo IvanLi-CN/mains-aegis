@@ -152,6 +152,11 @@ if [[ "$repair_profile" == "bq40-charge-temperature" && "$recover" != "never" ]]
   exit 21
 fi
 
+if [[ "$repair_profile" == "bq40-charge-temperature" && "$probe_mode" == "mac-only" ]]; then
+  echo "--repair-profile bq40-charge-temperature requires the strict identity probe; mac-only is diagnostic-only" >&2
+  exit 24
+fi
+
 artifact_features=$(IFS=, ; echo "${features[*]}")
 
 if [[ "$recover" != "never" && "$mode" != "dual-diag" ]]; then

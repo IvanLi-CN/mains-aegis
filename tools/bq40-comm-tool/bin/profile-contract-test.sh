@@ -45,6 +45,18 @@ expect_exit_with_text 21 \
   "cannot be combined with --recover if-rom" \
   "$SCRIPT_DIR/build.sh" --mode dual-diag --recover if-rom --repair-profile bq40-charge-temperature
 
+expect_exit_with_text 24 \
+  "requires the strict identity probe" \
+  "$SCRIPT_DIR/build.sh" --probe-mode mac-only --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 24 \
+  "requires the strict identity probe" \
+  "$SCRIPT_DIR/run.sh" apply-df --probe-mode mac-only --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 12 \
+  "monitor file not found" \
+  "$SCRIPT_DIR/run.sh" verify --monitor-file /tmp/mains-aegis-missing-charge-profile-log --repair-profile bq40-charge-temperature
+
 for required_path in \
   "$REPO_ROOT/firmware/src" \
   "$REPO_ROOT/web/src" \
@@ -66,7 +78,7 @@ for required in \
   fi
 done
 
-if ! rg -q 'bms-charge-temperature-profile cannot be combined with BQ40 recovery or repair features' \
+if ! rg -q 'bms-charge-temperature-profile requires the strict identity probe and cannot be combined with mac-only, BQ40 recovery, or repair features' \
   "$TOOL_ROOT/firmware/src/output/mod.rs"; then
   echo "profile/recovery compile-time conflict guard is missing" >&2
   exit 1
@@ -80,7 +92,7 @@ if incompatible_output=$(
   printf '%s\n' "$incompatible_output" >&2
   exit 1
 fi
-if [[ "$incompatible_output" != *"bms-charge-temperature-profile cannot be combined with BQ40 recovery or repair features"* ]]; then
+if [[ "$incompatible_output" != *"bms-charge-temperature-profile requires the strict identity probe"* ]]; then
   echo "profile/recovery compile-time conflict was not enforced by cargo" >&2
   printf '%s\n' "$incompatible_output" >&2
   exit 1

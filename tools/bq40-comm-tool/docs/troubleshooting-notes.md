@@ -89,9 +89,10 @@
 - `asset-df-mainboard` 只用于 ROM recovery；它不是 charge-temperature profile 的别名。
 - 当 pack 已经能稳定工作在 app mode 且需要在显式维护窗口写入冻结的充电温度 profile 时，使用：
   ```bash
-  ./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --repair-profile bq40-charge-temperature
+  ./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --probe-mode strict --repair-profile bq40-charge-temperature
   ```
 - 写入前保存完整 `0x4A00`/`32` containing block；只允许七个温度字段。
+- profile image 必须使用已有 strict BQ40 identity probe；`mac-only` 只用于诊断，不能进入写入路径。
 - 每项必须通过 MB44 echo、length、raw 和 decoded readback；任何错误立即停止。
 - 这条路径不写 ChemID、calibration、protection、termination、precharge 或 maintenance 字段，也不依赖 live DF capture。
 - `live-df-mainboard` 已退役，继续使用旧名称会返回迁移错误；不能回退到 25-field writer。
@@ -116,7 +117,7 @@
    ```
 5. 若 canonical 已通且需要在授权维护窗口写入冻结的 charge-temperature profile，执行：
    ```bash
-   ./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --repair-profile bq40-charge-temperature
+   ./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --probe-mode strict --repair-profile bq40-charge-temperature
    ```
 6. 恢复或 maintenance apply 后都必须重新刷回 canonical 并再次诊断，然后用同一份 canonical 日志做离线 verify。
 
