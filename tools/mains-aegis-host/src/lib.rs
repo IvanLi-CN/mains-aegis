@@ -290,6 +290,8 @@ struct HostPowerState {
 struct DeviceHostPowerRuntime {
     last_ups_mode: Option<String>,
     last_runtime_sync_attempt_at: Option<Instant>,
+    host_power_profile_supported: Option<bool>,
+    host_usb_session_state_supported: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -8687,6 +8689,9 @@ async fn sync_host_usb_session_to_device_if_possible(
     state: &AppState,
     device_id: &str,
 ) -> Result<(), HttpError> {
+    if !monitor_cdc_capability_supported(state, device_id, "host_usb_session_state") {
+        return Ok(());
+    }
     let Some(command_tx) = native_monitor_command_sender(state, device_id) else {
         return Ok(());
     };
@@ -8733,6 +8738,9 @@ async fn sync_host_power_profile_to_device_if_possible(
     state: &AppState,
     device_id: &str,
 ) -> Result<(), HttpError> {
+    if !monitor_cdc_capability_supported(state, device_id, "host_power_profile") {
+        return Ok(());
+    }
     let Some(command_tx) = native_monitor_command_sender(state, device_id) else {
         return Ok(());
     };
@@ -10845,6 +10853,15 @@ fn load_native_monitor_defmt_table(
         let Some(artifact) = guard.artifacts.get(artifact_id) else {
             return Ok(None);
         };
+        if !defmt_artifact_matches_device(device, artifact) {
+            return Err(HttpError::non_retryable(
+                "defmt_artifact_identity_mismatch",
+                format!(
+                    "selected artifact {} is not verified against device firmware identity",
+                    artifact.artifact_id
+                ),
+            ));
+        }
         artifact.clone()
     };
     let Some(elf_path) = native_monitor_defmt_elf_path(&artifact)? else {
@@ -10888,6 +10905,11 @@ fn load_native_monitor_defmt_table(
         ));
     }
     Ok(Some(table))
+}
+
+fn defmt_artifact_matches_device(device: &DeviceRecord, artifact: &FirmwareArtifact) -> bool {
+    device.log_decode.status == "verified"
+        && device.log_decode.artifact_id.as_deref() == Some(artifact.artifact_id.as_str())
 }
 
 fn native_monitor_defmt_elf_path(
@@ -10956,6 +10978,7 @@ fn append_monitor_trace(
     let trace_event = trace.clone();
     let log_event = log.clone();
     let status_event = status_from_trace_payload(&trace_event.payload);
+    update_device_cdc_capabilities(state, device_id, &trace_event.payload);
     {
         let mut guard = state.inner.lock().expect("state lock");
         if let Some(device) = guard.devices.get_mut(device_id) {
@@ -11005,6 +11028,44 @@ fn status_from_trace_payload(payload: &str) -> Option<Value> {
         }
         _ => None,
     }
+}
+
+fn monitor_cdc_capability_supported(state: &AppState, device_id: &str, capability: &str) -> bool {
+    let guard = state.inner.lock().expect("state lock");
+    let Some(runtime) = guard.device_host_power.get(device_id) else {
+        return false;
+    };
+    match capability {
+        "host_power_profile" => runtime.host_power_profile_supported == Some(true),
+        "host_usb_session_state" => runtime.host_usb_session_state_supported == Some(true),
+        _ => false,
+    }
+}
+
+fn update_device_cdc_capabilities(state: &AppState, device_id: &str, payload: &str) {
+    let Ok(frame) = serde_json::from_str::<Value>(payload) else {
+        return;
+    };
+    if frame.get("type").and_then(Value::as_str) != Some("hello") {
+        return;
+    }
+    let mut guard = state.inner.lock().expect("state lock");
+    let runtime = guard
+        .device_host_power
+        .entry(device_id.to_string())
+        .or_default();
+    runtime.host_power_profile_supported = Some(cdc_hello_capability(&frame, "host_power_profile"));
+    runtime.host_usb_session_state_supported =
+        Some(cdc_hello_capability(&frame, "host_usb_session_state"));
+}
+
+fn cdc_hello_capability(frame: &Value, capability: &str) -> bool {
+    frame
+        .get("capabilities")
+        .and_then(Value::as_object)
+        .and_then(|capabilities| capabilities.get(capability))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn reset_backend_name(transport: &DeviceTransport) -> &'static str {
@@ -13137,6 +13198,10 @@ mod tests {
             );
         }
 
+        let hello = br#"{"type":"hello","capabilities":{"host_power_profile":true}}"#;
+        let (trace, log) = parse_cdc_line_for_monitor(hello).expect("monitor hello trace");
+        append_monitor_trace(&state, &device_id, trace, log);
+
         let line = br#"{"type":"response","request_id":"devd-status-1","ok":true,"result":{"mode":"standby"}}"#;
         let (trace, log) = parse_cdc_line_for_monitor(line).expect("monitor trace");
         append_monitor_trace(&state, &device_id, trace, log);
@@ -13148,6 +13213,8 @@ mod tests {
             .expect("host runtime should be updated");
         assert_eq!(runtime.last_ups_mode.as_deref(), Some("standby"));
         assert!(runtime.last_runtime_sync_attempt_at.is_some());
+        assert_eq!(runtime.host_power_profile_supported, Some(true));
+        assert_eq!(runtime.host_usb_session_state_supported, Some(false));
         assert_eq!(
             guard.devices[&device_id].status.as_ref().unwrap()["mode"],
             "standby"
@@ -13971,11 +14038,33 @@ mod tests {
     }
 
     #[test]
+    fn host_runtime_sync_capabilities_fail_closed_for_old_hello_frames() {
+        let old = json!({
+            "type": "hello",
+            "capabilities": {"status": true}
+        });
+        let current = json!({
+            "type": "hello",
+            "capabilities": {
+                "status": true,
+                "host_power_profile": true,
+                "host_usb_session_state": true
+            }
+        });
+
+        assert!(!cdc_hello_capability(&old, "host_power_profile"));
+        assert!(!cdc_hello_capability(&old, "host_usb_session_state"));
+        assert!(cdc_hello_capability(&current, "host_power_profile"));
+        assert!(cdc_hello_capability(&current, "host_usb_session_state"));
+    }
+
+    #[test]
     fn leaving_backup_keeps_runtime_sync_throttle_intact() {
         let now = Instant::now();
         let mut runtime = DeviceHostPowerRuntime {
             last_ups_mode: Some("backup".to_string()),
             last_runtime_sync_attempt_at: Some(now),
+            ..DeviceHostPowerRuntime::default()
         };
 
         assert_eq!(
@@ -14982,6 +15071,59 @@ mod tests {
         assert_eq!(error.0.code, "defmt_elf_missing");
     }
 
+    #[tokio::test]
+    async fn native_monitor_defmt_rejects_unverified_selected_artifact() {
+        let state = create_app_state(false);
+        let device_id = "fixture-defmt-device".to_string();
+        let artifact = test_artifact_with_defmt("mains-aegis", true, vec![]);
+        let artifact_id = artifact.artifact_id.clone();
+        {
+            let mut guard = state.inner.lock().expect("state lock");
+            guard.artifacts.insert(artifact_id.clone(), artifact);
+            guard.devices.insert(
+                device_id.clone(),
+                DeviceRecord {
+                    id: device_id.clone(),
+                    display_name: "fixture".into(),
+                    port_path: None,
+                    lan_address: None,
+                    lan_conflict_addresses: Vec::new(),
+                    companion_lan_candidate: None,
+                    transport: DeviceTransport::NativeSerial,
+                    binding: None,
+                    connection: ConnectionState::Connected,
+                    identity: Some(json!({
+                        "firmware": {
+                            "build_id": "different-build",
+                            "build_profile": "release",
+                            "features": ["web_serial"]
+                        }
+                    })),
+                    status: None,
+                    status_updated_at: None,
+                    diag_snapshot: None,
+                    diag_snapshot_updated_at: None,
+                    selected_artifact_id: Some(artifact_id.clone()),
+                    log_decode: LogDecodeState {
+                        status: "unverified".into(),
+                        reason: Some(
+                            "device firmware identity does not match selected artifact".into(),
+                        ),
+                        artifact_id: Some(artifact_id),
+                    },
+                    settings: default_settings(),
+                    logs: VecDeque::new(),
+                    trace: VecDeque::new(),
+                    last_power_event_signature: None,
+                },
+            );
+        }
+
+        let error = load_native_monitor_defmt_table(&state, &device_id).unwrap_err();
+
+        assert_eq!(error.0.code, "defmt_artifact_identity_mismatch");
+    }
+
     #[test]
     fn artifact_match_uses_exact_build_id() {
         let mut device = DeviceRecord {
@@ -15028,6 +15170,7 @@ mod tests {
         };
         apply_artifact_match(&mut device, Some(&artifact));
         assert_eq!(device.log_decode.status, "verified");
+        assert!(defmt_artifact_matches_device(&device, &artifact));
     }
 
     #[test]
@@ -15076,6 +15219,7 @@ mod tests {
         };
         apply_artifact_match(&mut device, Some(&artifact));
         assert_eq!(device.log_decode.status, "unverified");
+        assert!(!defmt_artifact_matches_device(&device, &artifact));
     }
 
     #[test]
