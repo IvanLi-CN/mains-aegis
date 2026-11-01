@@ -2084,7 +2084,13 @@ where
         gauging_status: None,
         op_status: None,
         update_status: None,
-        current_at_eoc_ma: None,
+        current_at_eoc_ma: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::CURRENT_AT_EOC,
+        )
+        .ok()
+        .flatten(),
         no_valid_charge_term: None,
         last_valid_charge_term: None,
         no_of_qmax_updates: None,
@@ -6567,10 +6573,11 @@ where
             }
             (Err(e), _) | (_, Err(e)) => {
                 self.bq40_charge_request = None;
-                defmt::warn!(
-                    "bms: bq40 charge_request read_failed err={}",
-                    i2c_error_kind(e)
-                );
+                let error_kind = match e {
+                    bq40z50::SbsWordReadError::I2c(error) => i2c_error_kind(error),
+                    bq40z50::SbsWordReadError::PecMismatch => "pec_mismatch",
+                };
+                defmt::warn!("bms: bq40 charge_request read_failed err={}", error_kind);
             }
         }
     }
@@ -14225,7 +14232,6 @@ where
                 }
             }
         }
-        let requested_policy_target_ichg_ma = policy_target_ichg_ma;
         let mut applied_ctrl0 = ctrl0;
         let mut applied_vreg_mv: Option<u16> = None;
         let mut applied_ichg_ma: Option<u16> = None;
@@ -14239,15 +14245,33 @@ where
             && !auto_force_charge
             && !activation_pending
             && effective_policy_target_ichg_ma.is_some_and(|target_ma| target_ma <= 100);
+        let current_at_eoc_ma = self
+            .bms_cached_lock_diag
+            .and_then(|diag| diag.current_at_eoc_ma)
+            .and_then(bq25792::valid_termination_current_ma);
+        if allow_charge
+            && !force_allow_charge
+            && !auto_force_charge
+            && !activation_pending
+            && !policy_low_current_charge
+            && current_at_eoc_ma.is_none()
+        {
+            allow_charge = false;
+            policy_target_ichg_ma = None;
+            effective_policy_target_ichg_ma = None;
+            policy_target_vreg_mv = None;
+            policy_status_text = "LOCK";
+            policy_detail_status_text = "LOCK";
+            policy_notice_text = "bq40_current_at_eoc_unavailable";
+        }
+        let requested_policy_target_ichg_ma = policy_target_ichg_ma;
         let policy_term_target_ma = if force_allow_charge || auto_force_charge || activation_pending
         {
             None
         } else if policy_low_current_charge {
             Some(CHARGE_POLICY_100MA_ITERM_MA)
         } else {
-            self.bms_cached_lock_diag
-                .and_then(|diag| diag.current_at_eoc_ma)
-                .map(bq25792::align_termination_current_ma)
+            current_at_eoc_ma
         };
 
         fn decode_voltage_mv(reg: u16) -> u16 {

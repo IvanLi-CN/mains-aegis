@@ -296,6 +296,34 @@ where
     Some(u16::from_le_bytes([buf[0], buf[1]]))
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum SbsWordReadError<E> {
+    I2c(E),
+    PecMismatch,
+}
+
+fn read_sbs_u16_with_pec<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+    sbscmd: u8,
+) -> Result<u16, SbsWordReadError<I2C::Error>>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let mut buf = [0u8; 3];
+    i2c.write_read(addr, &[sbscmd], &mut buf)
+        .map_err(SbsWordReadError::I2c)?;
+
+    let addr_w = addr << 1;
+    let addr_r = addr_w | 1;
+    let expected = crc8_smbus(&[addr_w, sbscmd, addr_r, buf[0], buf[1]]);
+    if expected != buf[2] {
+        return Err(SbsWordReadError::PecMismatch);
+    }
+
+    Ok(u16::from_le_bytes([buf[0], buf[1]]))
+}
+
 pub fn read_u16<I2C>(i2c: &mut I2C, addr: u8, sbscmd: u8) -> Result<u16, I2C::Error>
 where
     I2C: embedded_hal::i2c::I2c,
@@ -316,18 +344,24 @@ where
     read_u16(i2c, addr, sbscmd).map(|raw| i16::from_le_bytes(raw.to_le_bytes()))
 }
 
-pub fn read_charging_current_ma<I2C>(i2c: &mut I2C, addr: u8) -> Result<u16, I2C::Error>
+pub fn read_charging_current_ma<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+) -> Result<u16, SbsWordReadError<I2C::Error>>
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    read_u16(i2c, addr, cmd::CHARGING_CURRENT)
+    read_sbs_u16_with_pec(i2c, addr, cmd::CHARGING_CURRENT)
 }
 
-pub fn read_charging_voltage_mv<I2C>(i2c: &mut I2C, addr: u8) -> Result<u16, I2C::Error>
+pub fn read_charging_voltage_mv<I2C>(
+    i2c: &mut I2C,
+    addr: u8,
+) -> Result<u16, SbsWordReadError<I2C::Error>>
 where
     I2C: embedded_hal::i2c::I2c,
 {
-    read_u16(i2c, addr, cmd::CHARGING_VOLTAGE)
+    read_sbs_u16_with_pec(i2c, addr, cmd::CHARGING_VOLTAGE)
 }
 
 pub const MAX_BLOCK_PAYLOAD_LEN: usize = 32;
@@ -1260,6 +1294,31 @@ mod tests {
 
         assert_eq!(read_charging_current_ma(&mut i2c, addr).unwrap(), 500);
         assert_eq!(read_charging_voltage_mv(&mut i2c, addr).unwrap(), 16_800);
+    }
+
+    #[test]
+    fn charging_limit_rejects_bad_pec_instead_of_using_unverified_bytes() {
+        let addr = I2C_ADDRESS_PRIMARY;
+        let current_bytes = [0xF4, 0x01];
+        let current_pec = crc8_smbus(&[
+            addr << 1,
+            cmd::CHARGING_CURRENT,
+            (addr << 1) | 1,
+            current_bytes[0],
+            current_bytes[1],
+        ]);
+        let mut i2c = ScriptedI2c::new([
+            Step::Write(addr, vec![cmd::CHARGING_CURRENT]),
+            Step::Read(
+                addr,
+                vec![current_bytes[0], current_bytes[1], current_pec ^ 0x01],
+            ),
+        ]);
+
+        assert!(matches!(
+            read_charging_current_ma(&mut i2c, addr),
+            Err(SbsWordReadError::PecMismatch)
+        ));
     }
 
     #[test]

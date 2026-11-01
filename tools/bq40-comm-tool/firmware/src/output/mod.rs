@@ -5443,6 +5443,8 @@ pub struct PowerManager<'d, I2C> {
     #[cfg(feature = "bms-charge-temperature-profile")]
     bms_charge_temperature_profile_applied: bool,
     #[cfg(feature = "bms-charge-temperature-profile")]
+    bms_charge_temperature_profile_failed: bool,
+    #[cfg(feature = "bms-charge-temperature-profile")]
     bms_charge_temperature_snapshot: Option<[u8; 32]>,
     #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
     bms_rom_df_section1_valid: bool,
@@ -5567,7 +5569,8 @@ where
 
     #[cfg(feature = "bms-charge-temperature-profile")]
     fn maybe_apply_bq40_charge_temperature_profile(&mut self, addr: u8, now: Instant) -> bool {
-        if self.bms_charge_temperature_profile_applied {
+        if self.bms_charge_temperature_profile_applied || self.bms_charge_temperature_profile_failed
+        {
             return false;
         }
 
@@ -5577,6 +5580,7 @@ where
                 addr,
                 err,
             );
+            self.bms_charge_temperature_profile_failed = true;
             self.bms_next_poll_at = now + BMS_POLL_PERIOD;
             return true;
         }
@@ -5606,6 +5610,7 @@ where
                     addr,
                     err.as_str(),
                 );
+                self.bms_charge_temperature_profile_failed = true;
                 self.bms_next_poll_at = now + BMS_POLL_PERIOD;
                 true
             }
@@ -5700,6 +5705,8 @@ where
             bms_last_working_info_at: None,
             #[cfg(feature = "bms-charge-temperature-profile")]
             bms_charge_temperature_profile_applied: false,
+            #[cfg(feature = "bms-charge-temperature-profile")]
+            bms_charge_temperature_profile_failed: false,
             #[cfg(feature = "bms-charge-temperature-profile")]
             bms_charge_temperature_snapshot: None,
             #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]

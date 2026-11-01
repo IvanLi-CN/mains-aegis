@@ -1061,6 +1061,15 @@ mod tests {
     }
 
     #[test]
+    fn valid_termination_current_rejects_zero_and_out_of_range_values() {
+        assert_eq!(valid_termination_current_ma(0), None);
+        assert_eq!(valid_termination_current_ma(40), Some(40));
+        assert_eq!(valid_termination_current_ma(41), Some(40));
+        assert_eq!(valid_termination_current_ma(1000), Some(1000));
+        assert_eq!(valid_termination_current_ma(1001), None);
+    }
+
+    #[test]
     fn set_termination_current_writes_low_field_msb_first() {
         let mut i2c = RegisterWordI2c::new([0xab, 0x03]);
 
@@ -1290,6 +1299,14 @@ pub const fn align_termination_current_ma(target_ma: u16) -> u16 {
         target_ma
     };
     (clamped / TERMINATION_CURRENT_STEP_MA) * TERMINATION_CURRENT_STEP_MA
+}
+
+pub const fn valid_termination_current_ma(raw_ma: u16) -> Option<u16> {
+    if raw_ma < TERMINATION_CURRENT_MIN_MA || raw_ma > TERMINATION_CURRENT_MAX_MA {
+        None
+    } else {
+        Some(align_termination_current_ma(raw_ma))
+    }
 }
 
 pub const fn encode_termination_current_bits(target_ma: u16) -> u8 {
