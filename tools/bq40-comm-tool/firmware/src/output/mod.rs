@@ -350,6 +350,20 @@ compile_error!(
     "bms-charge-temperature-profile requires bms-rom-recover-disable so profile-only builds cannot enter ROM recovery"
 );
 #[cfg(all(
+    feature = "bms-charge-temperature-apply",
+    not(feature = "bms-charge-temperature-profile")
+))]
+compile_error!(
+    "bms-charge-temperature-apply requires bms-charge-temperature-profile so the maintenance trigger cannot stand alone"
+);
+#[cfg(all(
+    feature = "bms-charge-temperature-apply",
+    not(feature = "bms-rom-recover-disable")
+))]
+compile_error!(
+    "bms-charge-temperature-apply requires bms-rom-recover-disable so the maintenance image cannot enter ROM recovery"
+);
+#[cfg(all(
     feature = "bms-charge-temperature-profile",
     any(
         feature = "bms-mac-probe-only",
@@ -5606,6 +5620,7 @@ pub struct Config {
     pub bms_mac_probe_only: bool,
     pub bms_mac_probe_boot_window: Duration,
     pub bms_rom_recover: bool,
+    pub bms_charge_temperature_apply: bool,
 }
 
 impl<'d, I2C> PowerManager<'d, I2C>
@@ -6093,33 +6108,51 @@ where
         self.bms_exit_exercise_reported = false;
         self.clear_post_flash_resume();
         self.bms_last_working_info_at = None;
-        #[cfg(feature = "bms-charge-temperature-profile")]
-        {
-            // The maintenance writer is non-atomic with respect to the gauge's Data Flash.
-            // Hold CE high before identity, security, snapshot, or field-write traffic even
-            // when this tool was configured to keep the 200mA wake current alive.
-            self.set_charge_mode(BootChargeMode::Off);
-            self.chg_ce.set_high();
-            self.chg_enabled = false;
-            self.chg_next_retry_at = Some(now + BMS_POLL_PERIOD);
-            if self.maybe_apply_bq40_charge_temperature_profile(addr, now) {
-                self.set_charge_mode(BootChargeMode::Off);
-                self.charger_allowed = false;
-                self.chg_ce.set_high();
-                self.chg_enabled = false;
-                self.chg_next_retry_at = Some(now + BMS_POLL_PERIOD);
-                defmt::error!(
-                    "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=halt reason=profile_failed charger_enabled=false",
-                    addr,
-                );
-            }
-        }
         defmt::warn!(
             "bms_flow: stage={} addr=0x{=u8:x} charge_mode={}",
             self.bms_startup_stage.as_str(),
             addr,
             self.charge_mode.as_str()
         );
+    }
+
+    #[cfg(feature = "bms-charge-temperature-profile")]
+    fn run_bq40_charge_temperature_maintenance(&mut self) {
+        if !self.cfg.bms_charge_temperature_apply {
+            return;
+        }
+
+        // This is the only production entry point for the Data Flash writer. It is armed by the
+        // explicit `apply-df` maintenance image during startup, before the normal polling loop
+        // begins; automatic discovery and ordinary BMS polling never invoke the writer.
+        let now = Instant::now();
+        self.set_charge_mode(BootChargeMode::Off);
+        self.chg_ce.set_high();
+        self.chg_enabled = false;
+        self.chg_next_retry_at = Some(now + BMS_POLL_PERIOD);
+
+        let Some(addr) = self.probe_bq40z50_quiet() else {
+            self.bms_charge_temperature_profile_failed = true;
+            self.charger_allowed = false;
+            defmt::error!(
+                "bms_df_apply: profile=bq40_charge_temperature stage=halt reason=identity_not_found charger_enabled=false"
+            );
+            return;
+        };
+
+        self.mark_bms_working(addr);
+        let now = Instant::now();
+        if self.maybe_apply_bq40_charge_temperature_profile(addr, now) {
+            self.set_charge_mode(BootChargeMode::Off);
+            self.charger_allowed = false;
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
+            self.chg_next_retry_at = Some(now + BMS_POLL_PERIOD);
+            defmt::error!(
+                "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=halt reason=profile_failed charger_enabled=false",
+                addr,
+            );
+        }
     }
 
     fn rom_recover_due(&self, addr: u8, now: Instant) -> bool {
@@ -7029,6 +7062,8 @@ where
         self.bms_exit_exercise_reported = false;
         self.clear_post_flash_resume();
         self.bms_last_working_info_at = None;
+        #[cfg(feature = "bms-charge-temperature-profile")]
+        self.run_bq40_charge_temperature_maintenance();
         defmt::warn!(
             "bms_flow: stage={} charge_mode={} rom_recover={=bool}",
             self.bms_startup_stage.as_str(),

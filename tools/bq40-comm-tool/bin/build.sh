@@ -135,7 +135,9 @@ esac
 case "$repair_profile" in
   none) ;;
   afe-default) features+=("bms-df-repair-afe-default") ;;
-  bq40-charge-temperature) features+=("bms-charge-temperature-profile") ;;
+  bq40-charge-temperature)
+    features+=("bms-charge-temperature-profile" "bms-charge-temperature-apply")
+    ;;
   live-df-mainboard)
     echo "--repair-profile live-df-mainboard was retired; use bq40-charge-temperature" >&2
     exit 23

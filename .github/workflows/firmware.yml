@@ -76,7 +76,7 @@ jobs:
         if: steps.changes.outputs.firmware == 'true'
         run: |
           cd tools/bq40-comm-tool/firmware
-          cargo +esp check --features bms-rom-recover-disable,bms-charge-temperature-profile
+          cargo +esp check --features bms-rom-recover-disable,bms-charge-temperature-profile,bms-charge-temperature-apply
           cargo +esp check --features bms-rom-recover-force
           cargo +esp check --features bms-df-repair-afe-default
           cargo +esp check --features bms-rom-repair-asset-df-mainboard

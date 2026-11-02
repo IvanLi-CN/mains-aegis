@@ -31,6 +31,7 @@ bms-rom-image-r3 = []
 bms-rom-image-r5 = []
 bms-df-repair-afe-default = []
 bms-charge-temperature-profile = []
+bms-charge-temperature-apply = ["bms-charge-temperature-profile"]
 bms-rom-repair-asset-df-mainboard = []
 
 [dependencies]

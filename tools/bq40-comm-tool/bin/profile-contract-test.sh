@@ -112,6 +112,17 @@ if ! rg -q 'bms-charge-temperature-profile requires the strict identity probe an
   exit 1
 fi
 
+if ! rg -q 'bms-charge-temperature-apply' "$TOOL_ROOT/firmware/Cargo.toml" "$SCRIPT_DIR/build.sh"; then
+  echo "explicit charge-temperature maintenance feature is missing from the firmware/build contract" >&2
+  exit 1
+fi
+
+if ! rg -q 'bms-charge-temperature-apply requires bms-charge-temperature-profile' \
+  "$TOOL_ROOT/firmware/src/output/mod.rs"; then
+  echo "charge-temperature maintenance trigger guard is missing" >&2
+  exit 1
+fi
+
 if profile_only_output=$(
   cd "$TOOL_ROOT/firmware"
   cargo +esp check --features bms-charge-temperature-profile 2>&1
@@ -181,6 +192,23 @@ poll_writer_refs=$(awk '
 if [[ -n "$poll_writer_refs" ]]; then
   echo "charge-temperature Data Flash writer is still reachable from ordinary BMS polling" >&2
   printf '%s\n' "$poll_writer_refs" >&2
+  exit 1
+fi
+
+working_writer_refs=$(awk '
+  /^    fn mark_bms_working/ { in_working = 1; next }
+  in_working && /^    fn / { exit }
+  in_working && /maybe_apply_bq40_charge_temperature_profile/ { print }
+' "$TOOL_ROOT/firmware/src/output/mod.rs")
+if [[ -n "$working_writer_refs" ]]; then
+  echo "charge-temperature Data Flash writer is still reachable from automatic BMS discovery" >&2
+  printf '%s\n' "$working_writer_refs" >&2
+  exit 1
+fi
+
+if ! rg -q 'run_bq40_charge_temperature_maintenance\(\);' \
+  "$TOOL_ROOT/firmware/src/output/mod.rs"; then
+  echo "explicit charge-temperature maintenance startup hook is missing" >&2
   exit 1
 fi
 

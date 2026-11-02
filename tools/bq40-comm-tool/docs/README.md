@@ -37,6 +37,10 @@ also enforces the writer-emitted `strict`/`r2` provenance for `apply-df`; `verif
 live-run provenance flags, rejects ROM/recovery evidence, and validates the Full Access
 operation-status bits.
 
+The writer is armed only by the explicit `apply-df` maintenance image and its
+`bms-charge-temperature-apply` feature. Normal BQ40 discovery and polling share the profile
+implementation but cannot enter the Data Flash writer.
+
 The former `live-df-mainboard` profile is retired and returns a migration error. ROM,
 AFE, and `asset-df-mainboard` recovery paths retain their existing semantics and are not
 aliases for this profile.
