@@ -213,7 +213,7 @@ ROM_RUNTIME_STATUS_UNCONFIRMED_RE = re.compile(
 # several terminal and failure stages; accepting an unlisted one would let a
 # mixed recovery/profile log pass offline verification.
 ROM_OR_RECOVERY_EVENT_RE = re.compile(
-    r"(?:\bstage=[^\s]*(?:rom|wake_window|post_flash|recovery|recover|flash|mode_exit)[^\s]*"
+    r"(?:\bstage=[^\s]*(?:rom|wake|post_flash|recovery|recover|flash|mode_exit|emshut|addr_scan)[^\s]*"
     r"|\brom=[^\s]+|\brecover=[^\s]+)",
     re.IGNORECASE,
 )

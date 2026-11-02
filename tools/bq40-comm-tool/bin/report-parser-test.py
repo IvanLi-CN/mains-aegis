@@ -453,6 +453,9 @@ def main() -> None:
             "rom_mode_detected",
             "rom_mode_exit_failed",
             "wake_window_rom",
+            "wake_touch_temp",
+            "addr_scan_hit",
+            "emshut_shutdown_exit_window",
             "probe_rom_flash_skipped",
             "rom_post_flash_resume_bad_temp",
         ):

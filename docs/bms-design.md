@@ -345,7 +345,7 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
 
 LT 的 Low/Med/High 电流字段全部使用 `100mA`；STL、RT、STH、HT 的 Low/Med/High 电流字段全部使用 `500mA`；各允许温区的充电电压字段全部使用 `16800mV`。本 profile 不修改 BQ40 的 precharge、maintenance-charge 或 termination Data Flash 字段。
 
-主固件每秒刷新一次 SBS `ChargingCurrent()`/`ChargingVoltage()`（`0x14/0x15`），并将有效、未过期的 BQ40 请求作为 BQ25792 的安全上限；读失败、零值、越界或超过 `1s` 的请求均禁充。已使能的产品充电在每次主循环 tick 重新检查温度与 request 新鲜度，轮询延迟或证据过期时立即拉高 `CE`，不得依赖下一次轮询才停充。activation/recovery 的固定 `200mA` 只用于唤醒睡眠 gauge，不是产品充电后门：它必须先通过 BQ25792 JEITA 的 `15–45°C` 正常窗口；若已有 BQ40 温度/请求缓存，还必须通过新鲜正常温度和新鲜有效请求，且 wake 目标不超过请求值。activation 完成后只恢复寄存器，`CE` 保持禁充，下一次普通轮询重新执行完整门控。
+主固件每秒刷新一次 SBS `ChargingCurrent()`/`ChargingVoltage()`（`0x14/0x15`），并将有效、未过期的 BQ40 请求作为 BQ25792 的安全上限；读失败、零值、越界或超过 `1s` 的请求均禁充。已使能的产品充电在每次主循环 tick 重新检查温度与 request 新鲜度，轮询延迟或证据过期时立即拉高 `CE`，不得依赖下一次轮询才停充；boot-diagnostic auto-force 也只在尚无 BQ40 观察时依赖 JEITA，出现 BQ40 证据后沿用同一 tick 联锁。activation/recovery 的固定 `200mA` 只用于唤醒睡眠 gauge，不是产品充电后门：它必须先通过 BQ25792 JEITA 的 `15–45°C` 正常窗口；若已有 BQ40 温度/请求缓存，还必须通过新鲜正常温度和新鲜有效请求，且 wake 目标不超过请求值。activation 完成后只恢复寄存器，`CE` 保持禁充，下一次普通轮询重新执行完整门控。
 
 ### 5.4 首版 Golden DF 基线（主板固定项）
 

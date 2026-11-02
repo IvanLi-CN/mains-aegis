@@ -6711,20 +6711,26 @@ where
     }
 
     fn enforce_bq40_product_charge_freshness(&mut self) {
-        if self.bms_activation_state == BmsActivationState::Pending
-            || self.bms_activation_auto_force_charge_programmed
-            || !self.chg_enabled
-        {
+        if self.bms_activation_state == BmsActivationState::Pending || !self.chg_enabled {
             return;
         }
 
         let now_ms = self.fan_now_ms();
-        let temperature = self.bq40_charge_temperature_decision(now_ms);
-        if charge_temperature::bq40_product_charge_evidence_fresh(
-            now_ms,
-            temperature,
-            self.bq40_charge_request,
-        ) {
+        let evidence_fresh = if self.bms_activation_auto_force_charge_programmed {
+            // Boot-diagnostic auto-force is an exceptional wake state, but it
+            // must still stop on every tick once any BQ40 evidence has become
+            // stale or invalid. With no BQ40 observation yet, the independent
+            // BQ25792 JEITA interlock remains the only wake fallback.
+            self.bq40_activation_wake_gate(now_ms)
+        } else {
+            let temperature = self.bq40_charge_temperature_decision(now_ms);
+            charge_temperature::bq40_product_charge_evidence_fresh(
+                now_ms,
+                temperature,
+                self.bq40_charge_request,
+            )
+        };
+        if evidence_fresh {
             return;
         }
 
