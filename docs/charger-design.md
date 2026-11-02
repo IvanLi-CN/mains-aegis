@@ -113,7 +113,7 @@ min(runtime_policy_target, BQ40_ChargingCurrent/Voltage)
 
 BQ40 profile 的字段地址、编码和温度区间以 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md) 为准。
 
-activation/recovery 的 `200mA` wake 仅是维护态唤醒电流，不属于普通 UI、USB 或 backup 产品充电。它必须同时满足 BQ25792 `TS_COLD/TS_COOL/TS_WARM/TS_HOT` 全部未置位；若 BQ40 已经提供请求或温度缓存，还必须使用新鲜有效请求与 `15–45°C` 正常温度证据，wake 的 `ICHG/VREG` 取不超过请求的值。普通产品充电已使能后，主循环每个 tick 仍会复核 BQ40 证据的新鲜度，过期立即拉高 `CE`；boot-diagnostic auto-force 只有在尚无 BQ40 观察时保留 JEITA fallback，观察到 BQ40 后同样受 tick 联锁。恢复完成后 charger register image 可以恢复，但 `CE` 必须保持高电平，直到下一次普通轮询重新通过温度、BQ40 请求、CurrentAtEOC、PD 和产品策略门控。
+activation/recovery 的 `200mA` wake 仅是维护态唤醒电流，不属于普通 UI、USB 或 backup 产品充电。它必须同时满足 BQ25792 `TS_COLD/TS_COOL/TS_WARM/TS_HOT` 全部未置位；若 BQ40 已经提供请求、温度或配置证据（即使 detail cache 发生瞬态 reset），还必须使用新鲜有效请求与 `15–45°C` 正常温度证据，wake 的 `ICHG/VREG` 取不超过请求的值；明确读到的错误配置在新的有效配置读回前持续阻断。普通产品充电已使能后，主循环每个 tick 仍会复核 BQ40 证据的新鲜度，过期立即拉高 `CE`；boot-diagnostic auto-force 只有在尚无 BQ40 温度或配置观察时保留 JEITA fallback，观察到 BQ40 后同样受 tick 联锁。恢复完成后 charger register image 可以恢复，但 `CE` 必须保持高电平，直到下一次普通轮询重新通过温度、BQ40 请求、CurrentAtEOC、PD 和产品策略门控。
 
 下面的输入功率估算仅保留为 BQ25792 器件能力背景；当前产品 profile 不启用 `1A/2A`，不会因为输入功率充足而自动提高到这些档位。
 

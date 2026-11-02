@@ -231,17 +231,17 @@ pub const fn bq40_product_charge_evidence_fresh(
 
 /// Gate the exceptional activation wake current. With no BQ40 observation at
 /// all, the caller may rely on the independent charger-side JEITA interlock to
-/// wake a sleeping gauge. Once either a request or a temperature observation
-/// exists, both fresh request and fresh normal-band temperature evidence are
-/// required.
+/// wake a sleeping gauge. Once either a request or temperature/configuration
+/// evidence exists, both fresh request and fresh normal-band temperature
+/// evidence are required.
 pub const fn activation_wake_charge_allowed(
     now_ms: u64,
-    temperature_observed_at_ms: Option<u64>,
+    temperature_evidence_observed: bool,
     temperature: Option<ChargeTemperatureDecision>,
     request_observed: bool,
     request: Option<Bq40ChargeRequest>,
 ) -> bool {
-    if temperature_observed_at_ms.is_none() && !request_observed {
+    if !temperature_evidence_observed && !request_observed {
         return true;
     }
     if !request_observed {
@@ -264,7 +264,7 @@ pub const fn activation_wake_charge_allowed(
 
 pub const fn activation_wake_charge_should_disable(
     now_ms: u64,
-    temperature_observed_at_ms: Option<u64>,
+    temperature_evidence_observed: bool,
     temperature: Option<ChargeTemperatureDecision>,
     request_observed: bool,
     request: Option<Bq40ChargeRequest>,
@@ -273,7 +273,7 @@ pub const fn activation_wake_charge_should_disable(
     charger_enabled
         && !activation_wake_charge_allowed(
             now_ms,
-            temperature_observed_at_ms,
+            temperature_evidence_observed,
             temperature,
             request_observed,
             request,
@@ -289,6 +289,17 @@ pub const fn latch_bq40_charge_request_observed(
     voltage_read_succeeded: bool,
 ) -> bool {
     previously_observed || current_read_succeeded || voltage_read_succeeded
+}
+
+/// Preserve the fact that BQ40 temperature/configuration evidence was seen.
+/// A transient detail-cache reset must not reopen the JEITA-only activation
+/// wake fallback after the gauge has already supplied safety evidence.
+pub const fn latch_bq40_temperature_evidence_observed(
+    previously_observed: bool,
+    da_status2_read_succeeded: bool,
+    temperature_configuration: Option<bool>,
+) -> bool {
+    previously_observed || da_status2_read_succeeded || temperature_configuration.is_some()
 }
 
 pub const fn evaluate_cell_temperature_k_x10(temp_k_x10: Option<u16>) -> ChargeTemperatureDecision {
@@ -532,46 +543,46 @@ mod tests {
             voltage_mv: 16_800,
             observed_at_ms: 100,
         };
-        assert!(activation_wake_charge_allowed(100, None, None, false, None));
+        assert!(activation_wake_charge_allowed(
+            100, false, None, false, None
+        ));
         assert!(!activation_wake_charge_allowed(
-            100,
-            Some(100),
-            None,
-            false,
-            None
+            100, true, None, false, None
         ));
         assert!(!activation_wake_charge_allowed(
             100,
-            None,
+            false,
             None,
             true,
             Some(request)
         ));
-        assert!(!activation_wake_charge_allowed(100, None, None, true, None));
+        assert!(!activation_wake_charge_allowed(
+            100, false, None, true, None
+        ));
         assert!(activation_wake_charge_allowed(
             100,
-            Some(100),
+            true,
             Some(ChargeTemperatureDecision::normal()),
             true,
             Some(request)
         ));
         assert!(!activation_wake_charge_allowed(
             100,
-            Some(100),
+            true,
             Some(ChargeTemperatureDecision::low()),
             true,
             Some(request)
         ));
         assert!(!activation_wake_charge_allowed(
             1_101,
-            Some(100),
+            true,
             Some(ChargeTemperatureDecision::normal()),
             true,
             Some(request)
         ));
         assert!(activation_wake_charge_should_disable(
             1_101,
-            Some(100),
+            true,
             Some(ChargeTemperatureDecision::normal()),
             true,
             Some(request),
@@ -579,7 +590,7 @@ mod tests {
         ));
         assert!(!activation_wake_charge_should_disable(
             1_101,
-            Some(100),
+            true,
             Some(ChargeTemperatureDecision::normal()),
             true,
             Some(request),
@@ -596,7 +607,7 @@ mod tests {
         };
         assert!(!activation_wake_charge_allowed(
             100,
-            None,
+            false,
             None,
             true,
             Some(invalid)
@@ -609,6 +620,25 @@ mod tests {
         assert!(latch_bq40_charge_request_observed(false, false, true));
         assert!(latch_bq40_charge_request_observed(true, false, false));
         assert!(!latch_bq40_charge_request_observed(false, false, false));
+    }
+
+    #[test]
+    fn temperature_evidence_latch_survives_detail_cache_reset() {
+        assert!(latch_bq40_temperature_evidence_observed(false, true, None));
+        assert!(latch_bq40_temperature_evidence_observed(
+            false,
+            false,
+            Some(true)
+        ));
+        assert!(latch_bq40_temperature_evidence_observed(true, false, None));
+        assert!(!latch_bq40_temperature_evidence_observed(
+            false, false, None
+        ));
+        // Once the cache is gone, the latched evidence still blocks the
+        // JEITA-only wake fallback until fresh normal BQ40 evidence exists.
+        assert!(!activation_wake_charge_allowed(
+            1_100, true, None, false, None
+        ));
     }
 
     #[test]

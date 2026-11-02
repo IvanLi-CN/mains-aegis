@@ -4166,6 +4166,8 @@ pub struct PowerManager<'d, I2C> {
     bms_cached_da_status2: Option<bq40z50::DaStatus2>,
     bms_cached_da_status2_at_ms: Option<u64>,
     bms_temperature_configuration_ok: Option<bool>,
+    bq40_temperature_evidence_observed: bool,
+    bq40_temperature_configuration_invalid: bool,
     bq40_charge_request: Option<charge_temperature::Bq40ChargeRequest>,
     bq40_charge_request_observed: bool,
     bq40_charge_request_next_poll_at: Instant,
@@ -4974,6 +4976,8 @@ where
             bms_cached_da_status2: None,
             bms_cached_da_status2_at_ms: None,
             bms_temperature_configuration_ok: None,
+            bq40_temperature_evidence_observed: false,
+            bq40_temperature_configuration_invalid: false,
             bq40_charge_request: None,
             bq40_charge_request_observed: false,
             bq40_charge_request_next_poll_at: now,
@@ -6673,9 +6677,11 @@ where
     /// evidence as product charging. The charger-side JEITA NTC remains an
     /// independent hardware interlock at the call site.
     fn bq40_activation_wake_gate(&self, now_ms: u64) -> bool {
-        if !charge_temperature::bq40_activation_temperature_configuration_allows(
-            self.bms_temperature_configuration_ok,
-        ) {
+        if self.bq40_temperature_configuration_invalid
+            || !charge_temperature::bq40_activation_temperature_configuration_allows(
+                self.bms_temperature_configuration_ok,
+            )
+        {
             return false;
         }
         let temperature = self
@@ -6684,7 +6690,7 @@ where
             .then(|| self.bq40_charge_temperature_decision(now_ms));
         charge_temperature::activation_wake_charge_allowed(
             now_ms,
-            self.bms_cached_da_status2_at_ms,
+            self.bq40_temperature_evidence_observed,
             temperature,
             self.bq40_charge_request_observed,
             self.bq40_charge_request,
@@ -6813,8 +6819,10 @@ where
         self.bms_cached_da_status2_at_ms = None;
         self.bms_temperature_configuration_ok = None;
         self.bq40_charge_request = None;
-        // The request observation latch is cleared only on PowerManager
-        // initialization, not on a transient BQ40 detail-cache reset.
+        // Temperature/configuration evidence latches are cleared only on
+        // PowerManager initialization, not on a transient BQ40 detail-cache
+        // reset. A cache reset must not reopen JEITA-only activation wake.
+        // The request observation latch follows the same rule.
         self.bq40_charge_request_next_poll_at = now;
         self.bms_cached_filter_capacity = None;
         self.bms_cached_balance_config = None;
@@ -15861,19 +15869,22 @@ where
         let mut bms_slow_detail_refreshed = false;
         if now >= self.bms_next_da_status2_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
-            match bq40z50::read_da_status2(&mut self.i2c, addr) {
+            let da_status2_read_succeeded = match bq40z50::read_da_status2(&mut self.i2c, addr) {
                 Ok(snapshot) => {
+                    let read_succeeded = snapshot.is_some();
                     da_status2 = snapshot;
                     self.bms_cached_da_status2 = snapshot;
                     self.bms_cached_da_status2_at_ms = Some(self.fan_now_ms());
+                    read_succeeded
                 }
                 Err(_) => {
                     da_status2 = None;
                     self.bms_cached_da_status2 = None;
                     self.bms_cached_da_status2_at_ms = None;
                     self.bms_temperature_configuration_ok = None;
+                    false
                 }
-            }
+            };
             let temperature_enable = bq40z50::read_data_flash_u8(
                 &mut self.i2c,
                 addr,
@@ -15893,6 +15904,15 @@ where
                     temperature_enable,
                     temperature_mode,
                 );
+            self.bq40_temperature_evidence_observed =
+                charge_temperature::latch_bq40_temperature_evidence_observed(
+                    self.bq40_temperature_evidence_observed,
+                    da_status2_read_succeeded,
+                    temperature_configuration_ok,
+                );
+            if let Some(configuration_ok) = temperature_configuration_ok {
+                self.bq40_temperature_configuration_invalid = !configuration_ok;
+            }
             if self.bms_temperature_configuration_ok != temperature_configuration_ok {
                 match temperature_configuration_ok {
                     Some(true) => {
