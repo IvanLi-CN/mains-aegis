@@ -22,7 +22,7 @@
 - Markdown links and field references: `rg -n "bq40-charge-temperature-profile|T1|T2|T3|T4|T5|T6|0x4A0B|0x4A15" docs`
 - Topic contract: set `AGENT_TOOLKIT_ROOT` to a checkout of the public `agent-toolkit` repository, then run `just spec-contract-check` (the checker receives the repository root explicitly).
 - Writer contract and report-parser fail-closed fixtures: `just bq40-charge-profile-test`
-- BQ40 maintenance firmware feature: `cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-rom-recover-disable,bms-charge-temperature-profile`
+- BQ40 maintenance firmware feature: `cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-rom-recover-disable,bms-charge-temperature-profile,bms-charge-temperature-apply`
 - Firmware host tests: `just firmware-host-test`（调用 `firmware/scripts/run-host-unit-tests.sh`，包含 host-test audit 与全部 host manifests）
 
 ## Coverage / rollout summary
