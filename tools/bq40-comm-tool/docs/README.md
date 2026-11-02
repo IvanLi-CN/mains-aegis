@@ -41,6 +41,10 @@ The writer is armed only by the explicit `apply-df` maintenance image and its
 `bms-charge-temperature-apply` feature. Normal BQ40 discovery and polling share the profile
 implementation but cannot enter the Data Flash writer.
 
+Low-level `bin/build.sh` calls must pass `--action apply-df` together with this profile before
+the writer feature is compiled. The supported `bin/run.sh apply-df` path supplies that action;
+diagnostic and recovery actions build without the writer feature.
+
 The former `live-df-mainboard` profile is retired and returns a migration error. ROM,
 AFE, and `asset-df-mainboard` recovery paths retain their existing semantics and are not
 aliases for this profile.

@@ -89,6 +89,7 @@ Policy:
 - the profile requires the existing strict BQ40 identity probe (`ManufacturerName()` containing `Texas` and `DeviceName()` containing `BQ40`); `--probe-mode mac-only` is diagnostic-only and is rejected
 - the maintenance image repeats the identity read immediately before the Data Flash writer, so a numeric-only wake-window hit cannot authorize a write
 - the writer is armed only by the explicit `bms-charge-temperature-apply` maintenance feature; the shared profile implementation by itself is inert
+- low-level `bin/build.sh` calls must pass `--action apply-df` with this profile; `bin/run.sh apply-df` supplies the action, while diagnostic/recovery builds do not compile the writer
 - the audit stream must prove the ordered `CE high/charger disabled`, dual identity, and Full Access gates before snapshot/write evidence can pass offline verification
 - the writer first snapshots the complete containing block at `0x4A00`, length `32`
 - exactly seven temperature fields are allowed: T1, T2, T5, T6, T3, T4, and hysteresis

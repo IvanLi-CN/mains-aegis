@@ -41,13 +41,21 @@ expect_exit_with_text 20 \
   "apply-df requires --repair-profile bq40-charge-temperature" \
   "$SCRIPT_DIR/run.sh" apply-df --repair-profile none
 
+expect_exit_with_text 25 \
+  "requires explicit --action apply-df" \
+  "$SCRIPT_DIR/build.sh" --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 25 \
+  "requires explicit --action apply-df" \
+  "$SCRIPT_DIR/build.sh" --action diagnose --repair-profile bq40-charge-temperature
+
 expect_exit_with_text 21 \
   "cannot be combined with --recover if-rom" \
-  "$SCRIPT_DIR/build.sh" --mode dual-diag --recover if-rom --repair-profile bq40-charge-temperature
+  "$SCRIPT_DIR/build.sh" --action apply-df --mode dual-diag --recover if-rom --repair-profile bq40-charge-temperature
 
 expect_exit_with_text 24 \
   "requires the strict identity probe" \
-  "$SCRIPT_DIR/build.sh" --probe-mode mac-only --repair-profile bq40-charge-temperature
+  "$SCRIPT_DIR/build.sh" --action apply-df --probe-mode mac-only --repair-profile bq40-charge-temperature
 
 expect_exit_with_text 24 \
   "requires the strict identity probe" \
@@ -55,7 +63,7 @@ expect_exit_with_text 24 \
 
 expect_exit_with_text 24 \
   "requires canonical mode" \
-  "$SCRIPT_DIR/build.sh" --mode dual-diag --recover never --repair-profile bq40-charge-temperature
+  "$SCRIPT_DIR/build.sh" --action apply-df --mode dual-diag --recover never --repair-profile bq40-charge-temperature
 
 expect_exit_with_text 24 \
   "requires canonical mode" \
@@ -71,7 +79,7 @@ expect_exit_with_text 24 \
 
 expect_exit_with_text 21 \
   "cannot be combined with --rom-image r3" \
-  "$SCRIPT_DIR/build.sh" --rom-image r3 --repair-profile bq40-charge-temperature
+  "$SCRIPT_DIR/build.sh" --action apply-df --rom-image r3 --repair-profile bq40-charge-temperature
 
 expect_exit_with_text 12 \
   "monitor file not found" \
@@ -114,6 +122,16 @@ fi
 
 if ! rg -q 'bms-charge-temperature-apply' "$TOOL_ROOT/firmware/Cargo.toml" "$SCRIPT_DIR/build.sh"; then
   echo "explicit charge-temperature maintenance feature is missing from the firmware/build contract" >&2
+  exit 1
+fi
+
+if ! rg -q '\-\-action \"\$subcommand\"' "$SCRIPT_DIR/run.sh"; then
+  echo "run.sh does not pass its explicit action to build.sh" >&2
+  exit 1
+fi
+
+if ! rg -q 'requires explicit \-\-action apply-df' "$SCRIPT_DIR/build.sh"; then
+  echo "build.sh does not enforce the explicit apply-df action gate" >&2
   exit 1
 fi
 

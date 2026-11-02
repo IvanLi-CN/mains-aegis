@@ -8,6 +8,7 @@ FIRMWARE_DIR="$TOOL_ROOT/firmware"
 ARTIFACT_DIR="$FIRMWARE_DIR/target/bq40-comm-tool-artifacts"
 
 mode="canonical"
+action="diagnose"
 recover="never"
 recover_arg_set="false"
 force_min_charge="false"
@@ -17,7 +18,7 @@ repair_profile="none"
 
 usage() {
   cat <<USAGE
-Usage: $(basename "$0") [--mode canonical|dual-diag] [--recover never|if-rom|force]
+Usage: $(basename "$0") [--action diagnose|apply-df|recover] [--mode canonical|dual-diag] [--recover never|if-rom|force]
                          [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5]
                          [--repair-profile none|afe-default|bq40-charge-temperature|asset-df-mainboard]
 USAGE
@@ -35,6 +36,11 @@ require_value() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --action)
+      require_value "$1" "$#"
+      action="${2:-}"
+      shift 2
+      ;;
     --mode)
       require_value "$1" "$#"
       mode="${2:-}"
@@ -77,6 +83,14 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+case "$action" in
+  diagnose|apply-df|recover) ;;
+  *)
+    echo "Invalid --action: $action" >&2
+    exit 10
+    ;;
+esac
 
 if [[ "$mode" == "dual-diag" && "$recover_arg_set" != "true" ]]; then
   # Low-level default: dual-diag is almost always used for ROM recovery, so keep it enabled
@@ -136,7 +150,10 @@ case "$repair_profile" in
   none) ;;
   afe-default) features+=("bms-df-repair-afe-default") ;;
   bq40-charge-temperature)
-    features+=("bms-charge-temperature-profile" "bms-charge-temperature-apply")
+    features+=("bms-charge-temperature-profile")
+    if [[ "$action" == "apply-df" ]]; then
+      features+=("bms-charge-temperature-apply")
+    fi
     ;;
   live-df-mainboard)
     echo "--repair-profile live-df-mainboard was retired; use bq40-charge-temperature" >&2
@@ -148,6 +165,16 @@ case "$repair_profile" in
     exit 9
     ;;
 esac
+
+if [[ "$repair_profile" == "bq40-charge-temperature" && "$action" != "apply-df" ]]; then
+  echo "--repair-profile bq40-charge-temperature requires explicit --action apply-df" >&2
+  exit 25
+fi
+
+if [[ "$action" == "apply-df" && "$repair_profile" != "bq40-charge-temperature" ]]; then
+  echo "--action apply-df requires --repair-profile bq40-charge-temperature" >&2
+  exit 26
+fi
 
 if [[ "$repair_profile" == "bq40-charge-temperature" && "$recover" != "never" ]]; then
   echo "--repair-profile bq40-charge-temperature cannot be combined with --recover $recover" >&2

@@ -435,7 +435,7 @@ else
     exit 9
   fi
 
-  "$SCRIPT_DIR/build.sh" --mode "$mode" --recover "$recover_policy" --force-min-charge "$force_min_charge" --probe-mode "$probe_mode" --rom-image "$rom_image" --repair-profile "$repair_profile"
+  "$SCRIPT_DIR/build.sh" --action "$subcommand" --mode "$mode" --recover "$recover_policy" --force-min-charge "$force_min_charge" --probe-mode "$probe_mode" --rom-image "$rom_image" --repair-profile "$repair_profile"
 
   artifact_manifest_path=$(find_manifest "$TOOL_ROOT/firmware/target/bq40-comm-tool-artifacts")
 
