@@ -449,15 +449,22 @@ def main() -> None:
             summary = json.loads((root / "report" / "summary.json").read_text())
             assert "charge_profile_provenance_missing" in summary["verdict"]["reason"]
 
-        bad = run_parser(
-            successful_log() + [log("bms: stage=rom_mode_detected")],
-            root,
-            probe_mode="strict",
-            rom_image="r2",
-        )
-        assert bad.returncode == 20
-        summary = json.loads((root / "report" / "summary.json").read_text())
-        assert "charge_profile_provenance_conflict" in summary["verdict"]["reason"]
+        for rom_stage in (
+            "rom_mode_detected",
+            "rom_mode_exit_failed",
+            "wake_window_rom",
+            "probe_rom_flash_skipped",
+            "rom_post_flash_resume_bad_temp",
+        ):
+            bad = run_parser(
+                successful_log() + [log(f"bms: stage={rom_stage}")],
+                root,
+                probe_mode="strict",
+                rom_image="r2",
+            )
+            assert bad.returncode == 20
+            summary = json.loads((root / "report" / "summary.json").read_text())
+            assert "charge_profile_provenance_conflict" in summary["verdict"]["reason"]
 
         for invalid_action in ("diagnose", "recover"):
             bad = run_parser(successful_log(), root, action=invalid_action)

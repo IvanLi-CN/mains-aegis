@@ -208,6 +208,15 @@ ROM_FW_INVALID_RUNTIME_RE = re.compile(r"stage=probe_rom_post_flash_fw_invalid_r
 ROM_RUNTIME_STATUS_UNCONFIRMED_RE = re.compile(
     r"stage=(?:probe_rom_post_flash_runtime_status_unavailable|probe_rom_post_flash_fw_seen_status_unconfirmed|probe_rom_post_flash_fw_invalid_runtime_status_unconfirmed)\b"
 )
+# The explicit ROM event flags above feed the human-readable summary.  The
+# profile verdict uses this broader boundary because ROM/repair paths have
+# several terminal and failure stages; accepting an unlisted one would let a
+# mixed recovery/profile log pass offline verification.
+ROM_OR_RECOVERY_EVENT_RE = re.compile(
+    r"(?:\bstage=[^\s]*(?:rom|wake_window|post_flash|recovery|recover|flash|mode_exit)[^\s]*"
+    r"|\brom=[^\s]+|\brecover=[^\s]+)",
+    re.IGNORECASE,
+)
 ADDR16_RE = re.compile(r"addr=0x16\b")
 
 CHARGE_PROFILE_EXPECTED_FIELDS = {
@@ -418,6 +427,7 @@ def main() -> int:
     rom_fw_seen = False
     rom_fw_invalid_runtime = False
     rom_runtime_status_unconfirmed = False
+    charge_profile_provenance_conflict = False
     charge_profile_apply_attempted = False
     charge_profile_apply_done = False
     charge_profile_apply_writes = 0
@@ -536,6 +546,8 @@ def main() -> int:
                     if is_charge_profile_requested and "text" in entry:
                         mark_malformed_charge_profile_evidence("malformed_text")
                     continue
+                if is_charge_profile_requested and ROM_OR_RECOVERY_EVENT_RE.search(text):
+                    charge_profile_provenance_conflict = True
                 is_charge_profile_evidence = "bms_df_apply:" in text
                 if (
                     is_charge_profile_requested
@@ -881,7 +893,8 @@ def main() -> int:
         if not charge_profile_provenance_verified:
             reasons.append("charge_profile_provenance_missing")
         if (
-            rom_detected
+            charge_profile_provenance_conflict
+            or rom_detected
             or rom_flash_attempted
             or rom_flash_image_done
             or rom_flash_done

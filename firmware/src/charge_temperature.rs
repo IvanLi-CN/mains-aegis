@@ -86,6 +86,8 @@ pub const fn bq40_temperature_configuration_status(
         (Some(enable), Some(mode)) => {
             Some(bq40_project_temperature_configuration_matches(enable, mode))
         }
+        (Some(enable), None) if enable != BQ40_PROJECT_TEMPERATURE_ENABLE => Some(false),
+        (None, Some(mode)) if mode != BQ40_PROJECT_TEMPERATURE_MODE => Some(false),
         _ => None,
     }
 }
@@ -211,6 +213,20 @@ pub const fn runtime_charge_target(
         return None;
     };
     clamp_policy_to_bq40_request(policy_current_ma, policy_voltage_mv, temperature, request)
+}
+
+pub const fn bq40_product_charge_evidence_fresh(
+    now_ms: u64,
+    temperature: ChargeTemperatureDecision,
+    request: Option<Bq40ChargeRequest>,
+) -> bool {
+    if !temperature.allows_charge() {
+        return false;
+    }
+    match request {
+        Some(request) => request.is_fresh(now_ms),
+        None => false,
+    }
 }
 
 /// Gate the exceptional activation wake current. With no BQ40 observation at
@@ -442,6 +458,39 @@ mod tests {
             bq40_temperature_configuration_status(None, Some(0x00)),
             None
         );
+        assert_eq!(
+            bq40_temperature_configuration_status(Some(0x00), None),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn product_charge_evidence_must_be_fresh_and_in_a_charge_band() {
+        let request = Bq40ChargeRequest {
+            current_ma: 500,
+            voltage_mv: 16_800,
+            observed_at_ms: 100,
+        };
+        assert!(bq40_product_charge_evidence_fresh(
+            1_100,
+            ChargeTemperatureDecision::normal(),
+            Some(request)
+        ));
+        assert!(!bq40_product_charge_evidence_fresh(
+            1_101,
+            ChargeTemperatureDecision::normal(),
+            Some(request)
+        ));
+        assert!(!bq40_product_charge_evidence_fresh(
+            100,
+            ChargeTemperatureDecision::no_charge(),
+            Some(request)
+        ));
+        assert!(!bq40_product_charge_evidence_fresh(
+            100,
+            ChargeTemperatureDecision::normal(),
+            None
+        ));
     }
 
     #[test]

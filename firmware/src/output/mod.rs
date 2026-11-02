@@ -5397,6 +5397,7 @@ where
 
     pub fn tick(&mut self, irq: &IrqSnapshot) -> bool {
         self.enforce_bq40_activation_charge_freshness();
+        self.enforce_bq40_product_charge_freshness();
         self.consume_ina_alert_irq(irq);
         if let Some(until) = self.bms_activation_isolation_until {
             if Instant::now() < until {
@@ -6707,6 +6708,30 @@ where
         self.chg_enabled = false;
         self.chg_next_poll_at = Instant::now();
         defmt::warn!("bms: activation charge disabled reason=bq40_evidence_expired_or_invalid");
+    }
+
+    fn enforce_bq40_product_charge_freshness(&mut self) {
+        if self.bms_activation_state == BmsActivationState::Pending
+            || self.bms_activation_auto_force_charge_programmed
+            || !self.chg_enabled
+        {
+            return;
+        }
+
+        let now_ms = self.fan_now_ms();
+        let temperature = self.bq40_charge_temperature_decision(now_ms);
+        if charge_temperature::bq40_product_charge_evidence_fresh(
+            now_ms,
+            temperature,
+            self.bq40_charge_request,
+        ) {
+            return;
+        }
+
+        self.chg_ce.set_high();
+        self.chg_enabled = false;
+        self.chg_next_poll_at = Instant::now();
+        defmt::warn!("bms: product charge disabled reason=bq40_evidence_expired_or_invalid");
     }
 
     fn fan_temps_ready(&self) -> bool {
