@@ -10,7 +10,7 @@
 
 ## Implementation Coverage
 
-- `REQ-BQ40-CTP-001` / `002`: `firmware/src/charge_temperature.rs` 固化 TS2/TS3/TS4 最大值、边界判定和七个 little-endian vectors；host tests 覆盖 `<0°C`、`0°C`、`15°C`、`45°C` 和 `45–55°C`。
+- `REQ-BQ40-CTP-001` / `002`: `firmware/src/charge_temperature.rs` 固化 TS2/TS3/TS4 最大值、边界判定和七个 little-endian vectors；host tests 覆盖 `<0°C`、`0°C`、`15°C`、`45°C`、`50°C` 和 `45–55°C`。
 - `REQ-BQ40-CTP-003`: 同一模块提供 LT/normal 静态 manifest；BQ40 current/voltage 只作为策略记录，不进入 writer allowlist。
 - `REQ-BQ40-CTP-004`: `firmware/src/output/mod.rs` 每秒最多刷新 SBS `0x14/0x15`，并同步读取已锁定的 `Temperature Enable=0x1E` / `Temperature Mode=0x00`；正常产品充电在配置缺失或不匹配时 no-charge，避免用错误的 TS 映射放行充电；每次主循环 tick 还会复核已使能充电的 BQ40 温度与 request 是否仍在 `1s` 有效窗口内，轮询延迟或证据过期时立即拉高 CE。boot-diagnostic auto-force 虽可在尚无 BQ40 观察时依赖 BQ25792 JEITA 唤醒，但一旦出现 BQ40 证据，同一 tick 联锁也会在证据过期或无效时拉高 CE；温度/配置证据 latch 跨越瞬态 detail-cache reset，明确读到的错误配置在新的有效配置读回前持续阻断。activation wake 在尚未观察到 BQ40 温度或配置证据时允许依赖 BQ25792 JEITA 唤醒，明确读到错误配置时仍阻断。对温度、请求有效性、请求新鲜度和 runtime target 做 min clamp；读取失败、零值、越界或过期请求均 no-charge；低电流路径先关闭 `EN_TERM` 再写入 `ITERM=40mA`，正常路径保持 `CurrentAtEOC`。activation wake 是独立维护状态，只在原始 BQ25792 `VBAT_PRESENT_STAT=1` 且 JEITA 正常窗口内运行，并在已有 BQ40 请求或温度/配置证据观测（包括无效值）时复用新鲜正常温度/请求门控；恢复寄存器后 CE 保持高电平。因项目 HPE=0，`ChargingCurrent/ChargingVoltage` 使用明确的两字节 SBS 读取，PEC helper 不做隐式帧回退。
 - `REQ-BQ40-CTP-005`: `firmware/src/bq25792.rs` 固化 10kΩ/β3380、5.23kΩ/30.1kΩ、15°C/45°C JEITA 编码，并保留 BHOT/BCOLD 无关位；`charge_temperature.rs` 同时记录已锁定的 BQ40 `Temperature Enable=0x1E` / `Temperature Mode=0x00` 解释前提。
@@ -22,8 +22,8 @@
 - Markdown links and field references: `rg -n "bq40-charge-temperature-profile|T1|T2|T3|T4|T5|T6|0x4A0B|0x4A15" docs`
 - Topic contract: set `AGENT_TOOLKIT_ROOT` to a checkout of the public `agent-toolkit` repository, then run `just spec-contract-check` (the checker receives the repository root explicitly).
 - Writer contract and report-parser fail-closed fixtures: `just bq40-charge-profile-test`
-- BQ40 maintenance firmware feature: `cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-charge-temperature-profile`
-- Firmware host tests: `just firmware-host-test`
+- BQ40 maintenance firmware feature: `cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-rom-recover-disable,bms-charge-temperature-profile`
+- Firmware host tests: `just firmware-host-test`（调用 `firmware/scripts/run-host-unit-tests.sh`，包含 host-test audit 与全部 host manifests）
 
 ## Coverage / rollout summary
 

@@ -79,7 +79,7 @@ host-test:
 
 # Run firmware host-side unit tests.
 firmware-host-test:
-    cargo test --manifest-path firmware/host-unit-tests/Cargo.toml
+    cd firmware && bash scripts/run-host-unit-tests.sh
 
 # Run the host-only BQ40 charge-temperature writer contract tests.
 bq40-charge-profile-test:

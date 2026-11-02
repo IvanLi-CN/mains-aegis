@@ -435,6 +435,21 @@ def main() -> None:
         summary = json.loads((root / "report" / "summary.json").read_text())
         assert "charge_profile_evidence_sequence_invalid" in summary["verdict"]["reason"]
 
+        reordered_security = successful_log()
+        reordered_security[3], reordered_security[5] = (
+            reordered_security[5],
+            reordered_security[3],
+        )
+        bad = run_parser(
+            reordered_security,
+            root,
+            probe_mode="strict",
+            rom_image="r2",
+        )
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_evidence_sequence_invalid" in summary["verdict"]["reason"]
+
         for replacement in (
             ("probe_mode=strict", "probe_mode=mac-only"),
             ("rom_image=r2", "rom_image=r3"),

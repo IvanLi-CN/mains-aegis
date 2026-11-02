@@ -671,6 +671,10 @@ mod tests {
             evaluate_cell_temperature_k_x10(Some(3_282)).band,
             ChargeTemperatureBand::NoCharge
         );
+        assert_eq!(
+            evaluate_cell_temperature_k_x10(Some(3_231)).band,
+            ChargeTemperatureBand::NoCharge
+        );
     }
 
     #[test]

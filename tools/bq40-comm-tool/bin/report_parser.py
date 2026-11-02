@@ -261,6 +261,12 @@ CHARGE_PROFILE_KNOWN_STAGES = {
     "error",
     "halt",
 }
+CHARGE_PROFILE_SECURITY_STAGE_ORDER = (
+    "security_unseal_0414",
+    "security_unseal_3672",
+    "security_full_access_ffff_1",
+    "security_full_access_ffff_2",
+)
 
 
 def charge_profile_address_allowed(mode: str, address: int) -> bool:
@@ -455,6 +461,7 @@ def main() -> int:
     charge_profile_identity_verified = False
     charge_profile_full_access_verified = False
     charge_profile_security_stages_seen: set[str] = set()
+    charge_profile_security_stage_index = 0
     charge_profile_ce_disabled_count = 0
     charge_profile_identity_verified_count = 0
     charge_profile_security_after_count = 0
@@ -661,8 +668,16 @@ def main() -> int:
                         if (
                             not charge_profile_identity_verified
                             or stage in charge_profile_security_stages_seen
+                            or charge_profile_security_stage_index
+                            >= len(CHARGE_PROFILE_SECURITY_STAGE_ORDER)
+                            or stage
+                            != CHARGE_PROFILE_SECURITY_STAGE_ORDER[
+                                charge_profile_security_stage_index
+                            ]
                         ):
                             charge_profile_sequence_error = True
+                        else:
+                            charge_profile_security_stage_index += 1
                         charge_profile_security_stages_seen.add(stage)
                     elif stage == "security_after":
                         charge_profile_security_after_count += 1
@@ -671,6 +686,8 @@ def main() -> int:
                             not charge_profile_identity_verified
                             or charge_profile_security_after_count != 1
                             or len(charge_profile_security_stages_seen) != 4
+                            or charge_profile_security_stage_index
+                            != len(CHARGE_PROFILE_SECURITY_STAGE_ORDER)
                             or security_match is None
                             or security_match.group("sec") != "full_access"
                         ):
