@@ -169,8 +169,18 @@ jobs:
           assets=(release-assets/*)
 
           if gh release view "$release_tag" >/dev/null 2>&1; then
+            tag_ref="refs/tags/${release_tag}"
+            tag_object_type="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/${tag_ref}" --jq '.object.type')"
+            tag_object_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/${tag_ref}" --jq '.object.sha')"
+            if [[ "$tag_object_type" == "tag" ]]; then
+              tag_object_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object_sha}" --jq '.object.sha')"
+            fi
+            if [[ "$tag_object_sha" != "$GITHUB_SHA" ]]; then
+              echo "Release tag ${release_tag} points to ${tag_object_sha}, expected ${GITHUB_SHA}."
+              exit 1
+            fi
             gh release upload "$release_tag" "${assets[@]}" --clobber
             gh release edit "$release_tag" --title "$release_title" --notes "$release_notes"
           else
-            gh release create "$release_tag" "${assets[@]}" --title "$release_title" --notes "$release_notes"
+            gh release create "$release_tag" "${assets[@]}" --target "$GITHUB_SHA" --title "$release_title" --notes "$release_notes"
           fi

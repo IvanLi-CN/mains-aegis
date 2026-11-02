@@ -13,6 +13,9 @@ on:
       - "docs-site/**"
       - "README.md"
 
+permissions:
+  contents: read
+
 jobs:
   rustfmt:
     name: Rust fmt check
