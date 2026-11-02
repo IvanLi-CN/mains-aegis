@@ -3678,6 +3678,11 @@ mod tests {
         ));
         evidence.on_detail_cache_reset();
         assert!(!evidence.activation_wake_charge_allowed(2, None, None, None,));
+        assert!(!evidence.product_charge_evidence_fresh(
+            2,
+            charge_temperature::ChargeTemperatureDecision::normal(),
+            Some(request),
+        ));
     }
 
     #[test]

@@ -339,7 +339,7 @@ BQ25792 的温度相关寄存器集中在 `REG17/REG18/REG1F/REG24/REG2B`（见 
      - 高温段：`JEITA_ISETH=Suspend`，`TS_WARM=45°C` 后禁止充电；不使用 `VREG-400mV` 作为 45°C 以上的替代充电策略
      - `TS_IGNORE=0`
 
-BQ40/BQ25792 的完整温度 profile 与终止策略边界见 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md)。低电流模式继续使用 `ITERM=40mA`、禁用 `EN_TERM` 和现有 restart 行为；正常模式不因 T1～T6 改动而改变现有 `CurrentAtEOC` 对齐路径。
+BQ40/BQ25792 的完整温度 profile 与终止策略边界见 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md)。低电流模式继续使用 `ITERM=40mA`、禁用 `EN_TERM` 和现有 restart 行为；正常模式不因 T1～T6 改动而改变现有 `CurrentAtEOC` 对齐路径，但 `CurrentAtEOC` 对齐值必须严格低于最终 `ICHG`，否则保持禁充。activation/boot-diagnostic 的 `200mA` 仅是唤醒电流，明确禁用 `EN_TERM`，不继承历史 termination 值。
 
 3. **状态/告警（用于 bring-up 验证，不是配置项）**
    - `REG1F_Charger_Status_4`（Offset `1Fh`）：`TS_COLD_STAT / TS_COOL_STAT / TS_WARM_STAT / TS_HOT_STAT`（当前温区）

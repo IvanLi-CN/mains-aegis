@@ -112,6 +112,20 @@ if ! rg -q 'bms-charge-temperature-profile requires the strict identity probe an
   exit 1
 fi
 
+if profile_only_output=$(
+  cd "$TOOL_ROOT/firmware"
+  cargo +esp check --features bms-charge-temperature-profile 2>&1
+); then
+  echo "profile-only build unexpectedly compiled without bms-rom-recover-disable" >&2
+  printf '%s\n' "$profile_only_output" >&2
+  exit 1
+fi
+if [[ "$profile_only_output" != *"requires bms-rom-recover-disable"* ]]; then
+  echo "profile-only build did not enforce the ROM-recovery disable guard" >&2
+  printf '%s\n' "$profile_only_output" >&2
+  exit 1
+fi
+
 if incompatible_output=$(
   cd "$TOOL_ROOT/firmware"
   cargo +esp check --features bms-charge-temperature-profile,bms-rom-recover-force 2>&1

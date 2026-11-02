@@ -25,6 +25,16 @@ def log(text: str) -> str:
     return json.dumps({"text": text})
 
 
+def session_boundary_log(reset_on_attach: bool = True) -> str:
+    return json.dumps(
+        {
+            "src": "meta",
+            "event": "monitor_session_start",
+            "reset_on_attach": reset_on_attach,
+        }
+    )
+
+
 def block_payload() -> bytearray:
     payload = bytearray([0xA5] * 32)
     for address, raw_lo, raw_hi, _decoded in FIELD_VALUES.values():
@@ -244,6 +254,14 @@ def missing_gate_evidence_log() -> list[str]:
     ]
 
 
+def mixed_session_profile_log() -> list[str]:
+    return [session_boundary_log()] + successful_log() + [session_boundary_log()]
+
+
+def repair_event_profile_log() -> list[str]:
+    return successful_log() + [log("bms_df_repair: addr=0xb field=afe_prot_ctrl")]
+
+
 def ordinary_sample_log() -> list[str]:
     return [
         log(
@@ -343,6 +361,16 @@ def main() -> None:
         assert bad.returncode == 20
         summary = json.loads((root / "report" / "summary.json").read_text())
         assert "charge_profile_evidence_sequence_invalid" in summary["verdict"]["reason"]
+
+        bad = run_parser(mixed_session_profile_log(), root)
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_provenance_conflict" in summary["verdict"]["reason"]
+
+        bad = run_parser(repair_event_profile_log(), root)
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_provenance_conflict" in summary["verdict"]["reason"]
 
         bad = run_parser(duplicate_field_evidence_log(), root)
         assert bad.returncode == 20

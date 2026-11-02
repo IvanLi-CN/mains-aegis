@@ -344,6 +344,13 @@ compile_error!("Select at most one BQ ROM image feature");
 compile_error!("bms-rom-image-r5 currently supports only stock-sparse info writes");
 #[cfg(all(
     feature = "bms-charge-temperature-profile",
+    not(feature = "bms-rom-recover-disable")
+))]
+compile_error!(
+    "bms-charge-temperature-profile requires bms-rom-recover-disable so profile-only builds cannot enter ROM recovery"
+);
+#[cfg(all(
+    feature = "bms-charge-temperature-profile",
     any(
         feature = "bms-mac-probe-only",
         feature = "bms-dual-probe-diag",

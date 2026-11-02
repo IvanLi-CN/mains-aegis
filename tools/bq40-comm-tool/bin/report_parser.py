@@ -214,7 +214,7 @@ ROM_RUNTIME_STATUS_UNCONFIRMED_RE = re.compile(
 # mixed recovery/profile log pass offline verification.
 ROM_OR_RECOVERY_EVENT_RE = re.compile(
     r"(?:\bstage=[^\s]*(?:rom|wake|post_flash|recovery|recover|flash|mode_exit|emshut|addr_scan)[^\s]*"
-    r"|\brom=[^\s]+|\brecover=[^\s]+)",
+    r"|\brom=[^\s]+|\brecover=[^\s]+|\bbms_df_(?:repair|prepare):)",
     re.IGNORECASE,
 )
 ADDR16_RE = re.compile(r"addr=0x16\b")
@@ -535,6 +535,13 @@ def main() -> int:
                         parse_preexisting_segment = False
                         continue
                     if event == SESSION_BOUNDARY_EVENT:
+                        if is_charge_profile_requested and charge_profile_apply_attempted:
+                            # A profile verdict must never be assembled from evidence emitted by
+                            # multiple monitor sessions. Ordinary telemetry may span re-attaches,
+                            # but the non-atomic Data Flash audit stream must remain single-session.
+                            charge_profile_provenance_conflict = True
+                            charge_profile_sequence_error = True
+                            charge_profile_apply_errors["session_boundary"] += 1
                         # Only treat reset attaches (or older logs without the flag) as streak
                         # discontinuities. Re-attaches without a reset can still build a valid
                         # streak across the combined log.

@@ -14646,7 +14646,12 @@ where
 
             // Charge is enabled only when both `EN_CHG=1` and `CE=LOW`.
             let mut desired_ctrl0 = (ctrl0 | bq25792::ctrl0::EN_CHG) & !bq25792::ctrl0::EN_HIZ;
-            if policy_low_current_charge {
+            if force_allow_charge || auto_force_charge || activation_pending {
+                // The 200mA activation/boot-diagnostic current is a wake
+                // state, not product taper. Do not inherit a stale or
+                // oversized ITERM value and terminate the wake prematurely.
+                desired_ctrl0 &= !bq25792::ctrl0::EN_TERM;
+            } else if policy_low_current_charge {
                 desired_ctrl0 &= !bq25792::ctrl0::EN_TERM;
             } else {
                 desired_ctrl0 |= bq25792::ctrl0::EN_TERM;

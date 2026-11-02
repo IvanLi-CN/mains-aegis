@@ -1182,6 +1182,14 @@ mod tests {
             }
         );
         assert_eq!(
+            charge_termination_policy(true, Some(500), Some(500)),
+            ChargeTerminationPolicy::Blocked
+        );
+        assert_eq!(
+            charge_termination_policy(true, Some(200), Some(200)),
+            ChargeTerminationPolicy::Blocked
+        );
+        assert_eq!(
             charge_termination_policy(true, Some(500), None),
             ChargeTerminationPolicy::Blocked
         );
@@ -1458,8 +1466,10 @@ pub const fn charge_termination_policy(
         return ChargeTerminationPolicy::LowCurrent;
     }
     match current_at_eoc_ma {
-        Some(current_at_eoc_ma) => ChargeTerminationPolicy::Normal { current_at_eoc_ma },
-        None => ChargeTerminationPolicy::Blocked,
+        Some(current_at_eoc_ma) if current_at_eoc_ma < target_ichg_ma => {
+            ChargeTerminationPolicy::Normal { current_at_eoc_ma }
+        }
+        Some(_) | None => ChargeTerminationPolicy::Blocked,
     }
 }
 
