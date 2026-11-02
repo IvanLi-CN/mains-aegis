@@ -4,6 +4,7 @@ use crate::front_panel_scene::{
     SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
 };
 use mains_aegis_firmware::bq40z50;
+use mains_aegis_firmware::charge_temperature;
 use mains_aegis_firmware::fan;
 use mains_aegis_firmware::output_state::{self as output_state_logic, OutputGateReason};
 use mains_aegis_firmware::time::Duration;
@@ -17,6 +18,94 @@ use super::{
     AudioChargePhase, AudioMainsSource, Bq40z50Snapshot, ChargerInputPowerSample,
     ChargerInputSampleIssue, OutputRuntimeState, StableMainsState, CHARGER_INPUT_POWER_ANOMALY_W10,
 };
+
+/// Runtime latches shared by the product and activation charge gates.
+///
+/// The detail cache is disposable, but successful BQ40 observations are
+/// safety evidence. Keeping those latches in the shared output policy module
+/// makes the cache-reset contract testable on the host and prevents a reset
+/// from reopening the JEITA-only activation fallback.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Bq40ChargeEvidence {
+    pub(super) temperature_evidence_observed: bool,
+    pub(super) temperature_configuration_invalid: bool,
+    pub(super) charge_request_observed: bool,
+}
+
+impl Bq40ChargeEvidence {
+    pub(super) const fn new() -> Self {
+        Self {
+            temperature_evidence_observed: false,
+            temperature_configuration_invalid: false,
+            charge_request_observed: false,
+        }
+    }
+
+    pub(super) fn observe_temperature(
+        &mut self,
+        da_status2_read_succeeded: bool,
+        temperature_configuration: Option<bool>,
+    ) {
+        self.temperature_evidence_observed =
+            charge_temperature::latch_bq40_temperature_evidence_observed(
+                self.temperature_evidence_observed,
+                da_status2_read_succeeded,
+                temperature_configuration,
+            );
+        if let Some(configuration_ok) = temperature_configuration {
+            self.temperature_configuration_invalid = !configuration_ok;
+        }
+    }
+
+    pub(super) fn observe_charge_request(
+        &mut self,
+        current_read_succeeded: bool,
+        voltage_read_succeeded: bool,
+    ) {
+        self.charge_request_observed = charge_temperature::latch_bq40_charge_request_observed(
+            self.charge_request_observed,
+            current_read_succeeded,
+            voltage_read_succeeded,
+        );
+    }
+
+    /// Detail-cache reset deliberately clears cached values in `PowerManager`
+    /// but never clears these safety latches.
+    pub(super) fn on_detail_cache_reset(&mut self) {}
+
+    pub(super) const fn activation_wake_charge_allowed(
+        &self,
+        now_ms: u64,
+        temperature_configuration: Option<bool>,
+        temperature: Option<charge_temperature::ChargeTemperatureDecision>,
+        request: Option<charge_temperature::Bq40ChargeRequest>,
+    ) -> bool {
+        if self.temperature_configuration_invalid
+            || !charge_temperature::bq40_activation_temperature_configuration_allows(
+                temperature_configuration,
+            )
+        {
+            return false;
+        }
+        charge_temperature::activation_wake_charge_allowed(
+            now_ms,
+            self.temperature_evidence_observed,
+            temperature,
+            self.charge_request_observed,
+            request,
+        )
+    }
+
+    pub(super) const fn product_charge_evidence_fresh(
+        &self,
+        now_ms: u64,
+        temperature: charge_temperature::ChargeTemperatureDecision,
+        request: Option<charge_temperature::Bq40ChargeRequest>,
+    ) -> bool {
+        !self.temperature_configuration_invalid
+            && charge_temperature::bq40_product_charge_evidence_fresh(now_ms, temperature, request)
+    }
+}
 
 pub(super) const INA3221_ADDR: u8 = 0x40;
 pub(super) const INA_REG_CH1_CRITICAL: u8 = 0x07;
@@ -3530,6 +3619,66 @@ mod tests {
     use super::*;
 
     const TEST_VIN_DROP_THRESHOLD_PCT: u16 = 4;
+
+    #[test]
+    fn bq40_charge_evidence_latch_survives_cache_reset_and_relocks_runtime_gates() {
+        let request = charge_temperature::Bq40ChargeRequest {
+            current_ma: 500,
+            voltage_mv: 16_800,
+            observed_at_ms: 0,
+        };
+        let mut evidence = Bq40ChargeEvidence::new();
+
+        // Before any BQ40 observation, activation may use the independent
+        // BQ25792 JEITA wake interlock.
+        assert!(evidence.activation_wake_charge_allowed(0, None, None, None));
+
+        evidence.observe_temperature(true, Some(true));
+        evidence.observe_charge_request(true, true);
+        assert!(evidence.activation_wake_charge_allowed(
+            0,
+            Some(true),
+            Some(charge_temperature::ChargeTemperatureDecision::normal()),
+            Some(request),
+        ));
+        assert!(evidence.product_charge_evidence_fresh(
+            0,
+            charge_temperature::ChargeTemperatureDecision::normal(),
+            Some(request),
+        ));
+
+        // This is the same transition as PowerManager's detail-cache reset:
+        // cached temperature/request values disappear, but the evidence
+        // latch remains and must not reopen JEITA-only activation.
+        evidence.on_detail_cache_reset();
+        assert!(!evidence.activation_wake_charge_allowed(1, None, None, None));
+        assert!(!evidence.product_charge_evidence_fresh(
+            1,
+            charge_temperature::ChargeTemperatureDecision::no_charge(),
+            None,
+        ));
+
+        // A fresh, normal BQ40 sample and request re-arm both runtime gates.
+        evidence.observe_temperature(true, Some(true));
+        evidence.observe_charge_request(true, true);
+        assert!(evidence.activation_wake_charge_allowed(
+            1,
+            Some(true),
+            Some(charge_temperature::ChargeTemperatureDecision::normal()),
+            Some(request),
+        ));
+
+        // An explicitly invalid configuration remains fail-closed across a
+        // subsequent cache reset until a valid configuration is observed.
+        evidence.observe_temperature(true, Some(false));
+        assert!(!evidence.product_charge_evidence_fresh(
+            1,
+            charge_temperature::ChargeTemperatureDecision::normal(),
+            Some(request),
+        ));
+        evidence.on_detail_cache_reset();
+        assert!(!evidence.activation_wake_charge_allowed(2, None, None, None,));
+    }
 
     #[test]
     fn ina_alert_write_plan_never_targets_read_only_sum_register() {

@@ -4166,10 +4166,8 @@ pub struct PowerManager<'d, I2C> {
     bms_cached_da_status2: Option<bq40z50::DaStatus2>,
     bms_cached_da_status2_at_ms: Option<u64>,
     bms_temperature_configuration_ok: Option<bool>,
-    bq40_temperature_evidence_observed: bool,
-    bq40_temperature_configuration_invalid: bool,
+    bq40_charge_evidence: Bq40ChargeEvidence,
     bq40_charge_request: Option<charge_temperature::Bq40ChargeRequest>,
-    bq40_charge_request_observed: bool,
     bq40_charge_request_next_poll_at: Instant,
     bms_cached_filter_capacity: Option<bq40z50::FilterCapacity>,
     bms_cached_balance_config: Option<bq40z50::BalanceConfig>,
@@ -4976,10 +4974,8 @@ where
             bms_cached_da_status2: None,
             bms_cached_da_status2_at_ms: None,
             bms_temperature_configuration_ok: None,
-            bq40_temperature_evidence_observed: false,
-            bq40_temperature_configuration_invalid: false,
+            bq40_charge_evidence: Bq40ChargeEvidence::new(),
             bq40_charge_request: None,
-            bq40_charge_request_observed: false,
             bq40_charge_request_next_poll_at: now,
             bms_cached_filter_capacity: None,
             bms_cached_balance_config: None,
@@ -6611,11 +6607,8 @@ where
         let current_ma = bq40z50::read_charging_current_ma(&mut self.i2c, addr);
         let voltage_mv = bq40z50::read_charging_voltage_mv(&mut self.i2c, addr);
         let observed_at_ms = self.fan_now_ms();
-        self.bq40_charge_request_observed = charge_temperature::latch_bq40_charge_request_observed(
-            self.bq40_charge_request_observed,
-            current_ma.is_ok(),
-            voltage_mv.is_ok(),
-        );
+        self.bq40_charge_evidence
+            .observe_charge_request(current_ma.is_ok(), voltage_mv.is_ok());
         match (current_ma, voltage_mv) {
             (Ok(current_ma), Ok(voltage_mv)) => {
                 let request = charge_temperature::Bq40ChargeRequest {
@@ -6677,22 +6670,14 @@ where
     /// evidence as product charging. The charger-side JEITA NTC remains an
     /// independent hardware interlock at the call site.
     fn bq40_activation_wake_gate(&self, now_ms: u64) -> bool {
-        if self.bq40_temperature_configuration_invalid
-            || !charge_temperature::bq40_activation_temperature_configuration_allows(
-                self.bms_temperature_configuration_ok,
-            )
-        {
-            return false;
-        }
         let temperature = self
             .bms_cached_da_status2_at_ms
             .is_some()
             .then(|| self.bq40_charge_temperature_decision(now_ms));
-        charge_temperature::activation_wake_charge_allowed(
+        self.bq40_charge_evidence.activation_wake_charge_allowed(
             now_ms,
-            self.bq40_temperature_evidence_observed,
+            self.bms_temperature_configuration_ok,
             temperature,
-            self.bq40_charge_request_observed,
             self.bq40_charge_request,
         )
     }
@@ -6730,7 +6715,7 @@ where
             self.bq40_activation_wake_gate(now_ms)
         } else {
             let temperature = self.bq40_charge_temperature_decision(now_ms);
-            charge_temperature::bq40_product_charge_evidence_fresh(
+            self.bq40_charge_evidence.product_charge_evidence_fresh(
                 now_ms,
                 temperature,
                 self.bq40_charge_request,
@@ -6815,6 +6800,7 @@ where
     }
 
     fn reset_bms_detail_mac_cache(&mut self, now: Instant) {
+        self.bq40_charge_evidence.on_detail_cache_reset();
         self.bms_cached_da_status2 = None;
         self.bms_cached_da_status2_at_ms = None;
         self.bms_temperature_configuration_ok = None;
@@ -15904,15 +15890,8 @@ where
                     temperature_enable,
                     temperature_mode,
                 );
-            self.bq40_temperature_evidence_observed =
-                charge_temperature::latch_bq40_temperature_evidence_observed(
-                    self.bq40_temperature_evidence_observed,
-                    da_status2_read_succeeded,
-                    temperature_configuration_ok,
-                );
-            if let Some(configuration_ok) = temperature_configuration_ok {
-                self.bq40_temperature_configuration_invalid = !configuration_ok;
-            }
+            self.bq40_charge_evidence
+                .observe_temperature(da_status2_read_succeeded, temperature_configuration_ok);
             if self.bms_temperature_configuration_ok != temperature_configuration_ok {
                 match temperature_configuration_ok {
                     Some(true) => {
