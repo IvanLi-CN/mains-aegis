@@ -83,6 +83,8 @@ def charge_profile_evidence_shape_is_valid(text: str) -> bool:
             (
                 r"field=[a-zA-Z0-9_]+",
                 r"df_addr=0x[0-9a-fA-F]+",
+                r"declared_len=\d+",
+                r"payload_len=\d+",
                 r"raw_lo=0x[0-9a-fA-F]{1,2}",
                 r"raw_hi=0x[0-9a-fA-F]{1,2}",
                 r"decoded=0x[0-9a-fA-F]{1,4}",
@@ -107,6 +109,8 @@ def charge_profile_evidence_shape_is_valid(text: str) -> bool:
         return matches((r"write=ok",))
     if stage == "charge_disabled":
         return matches((r"ce_high=true", r"charger_enabled=false"))
+    if stage == "provenance":
+        return matches((r"probe_mode=strict", r"rom_image=r2", r"mode=canonical"))
     if stage == "identity_verified":
         return matches((r"manufacturer=texas", r"device=bq40"))
     if stage == "security_after":
@@ -160,7 +164,9 @@ CHARGE_PROFILE_DONE_RE = re.compile(
 CHARGE_PROFILE_FIELD_VERIFY_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=bq40_charge_temperature stage=field_verify field=(?P<field>[a-zA-Z0-9_]+) "
-    rf"df_addr=0x(?P<df_addr>[0-9a-fA-F]+) raw_lo=0x(?P<raw_lo>[0-9a-fA-F]{{1,2}}) "
+    rf"df_addr=0x(?P<df_addr>[0-9a-fA-F]+) "
+    rf"declared_len=(?P<declared_len>\d+) payload_len=(?P<payload_len>\d+) "
+    rf"raw_lo=0x(?P<raw_lo>[0-9a-fA-F]{{1,2}}) "
     rf"raw_hi=0x(?P<raw_hi>[0-9a-fA-F]{{1,2}}) decoded=0x(?P<decoded>[0-9a-fA-F]{{1,4}})$"
 )
 CHARGE_PROFILE_ERROR_RE = re.compile(
@@ -176,6 +182,13 @@ CHARGE_PROFILE_IDENTITY_VERIFIED_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=bq40_charge_temperature stage=identity_verified "
     rf"manufacturer=(?P<manufacturer>[a-zA-Z0-9_]+) device=(?P<device>[a-zA-Z0-9_]+)$"
+)
+CHARGE_PROFILE_PROVENANCE_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=provenance "
+    rf"probe_mode=(?P<probe_mode>strict|mac-only) "
+    rf"rom_image=(?P<rom_image>r2|r3|r5) "
+    rf"mode=(?P<mode>canonical|dual-diag)$"
 )
 CHARGE_PROFILE_SECURITY_AFTER_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
@@ -217,6 +230,7 @@ CHARGE_PROFILE_KNOWN_STAGES = {
     "security_full_access_ffff_2",
     "security_after",
     "charge_disabled",
+    "provenance",
     "identity_verified",
     "security_error",
     "identity_mfg_error",
@@ -426,6 +440,8 @@ def main() -> int:
     charge_profile_sequence_error = False
     charge_profile_unknown_stage = False
     charge_profile_ce_disabled = False
+    charge_profile_provenance_verified = False
+    charge_profile_provenance_count = 0
     charge_profile_identity_verified = False
     charge_profile_full_access_verified = False
     charge_profile_security_stages_seen: set[str] = set()
@@ -596,11 +612,26 @@ def main() -> int:
                             charge_profile_sequence_error = True
                         else:
                             charge_profile_ce_disabled = True
+                    elif stage == "provenance":
+                        charge_profile_provenance_count += 1
+                        provenance_match = CHARGE_PROFILE_PROVENANCE_RE.search(text)
+                        if (
+                            not charge_profile_ce_disabled
+                            or charge_profile_provenance_count != 1
+                            or provenance_match is None
+                            or provenance_match.group("probe_mode") != "strict"
+                            or provenance_match.group("rom_image") != "r2"
+                            or provenance_match.group("mode") != "canonical"
+                        ):
+                            charge_profile_sequence_error = True
+                        else:
+                            charge_profile_provenance_verified = True
                     elif stage == "identity_verified":
                         charge_profile_identity_verified_count += 1
                         identity_match = CHARGE_PROFILE_IDENTITY_VERIFIED_RE.search(text)
                         if (
                             not charge_profile_ce_disabled
+                            or not charge_profile_provenance_verified
                             or charge_profile_identity_verified_count != 1
                             or identity_match is None
                             or identity_match.group("manufacturer") != "texas"
@@ -742,13 +773,20 @@ def main() -> int:
                     expected = CHARGE_PROFILE_EXPECTED_FIELDS.get(field_name)
                     actual = (
                         int(charge_profile_field_match.group("df_addr"), 16),
+                        int(charge_profile_field_match.group("declared_len")),
+                        int(charge_profile_field_match.group("payload_len")),
                         (
                             int(charge_profile_field_match.group("raw_lo"), 16),
                             int(charge_profile_field_match.group("raw_hi"), 16),
                         ),
                         int(charge_profile_field_match.group("decoded"), 16),
                     )
-                    if expected is None or actual != expected:
+                    if (
+                        expected is None
+                        or actual[0] != expected[0]
+                        or actual[1:3] != (32, 32)
+                        or actual[3:] != expected[1:]
+                    ):
                         charge_profile_apply_errors["field_verify"] += 1
                     else:
                         charge_profile_verified_fields.add(field_name)
@@ -840,6 +878,18 @@ def main() -> int:
     if is_charge_profile_requested:
         if not charge_profile_ce_disabled:
             reasons.append("charge_profile_ce_disabled_evidence_missing")
+        if not charge_profile_provenance_verified:
+            reasons.append("charge_profile_provenance_missing")
+        if (
+            rom_detected
+            or rom_flash_attempted
+            or rom_flash_image_done
+            or rom_flash_done
+            or rom_fw_seen
+            or rom_fw_invalid_runtime
+            or rom_runtime_status_unconfirmed
+        ):
+            reasons.append("charge_profile_provenance_conflict")
         if not charge_profile_identity_verified:
             reasons.append("charge_profile_identity_evidence_missing")
         if not charge_profile_full_access_verified:
@@ -912,6 +962,8 @@ def main() -> int:
             "attempted": charge_profile_apply_attempted,
             "done": charge_profile_apply_done,
             "ce_disabled": charge_profile_ce_disabled,
+            "provenance_verified": charge_profile_provenance_verified,
+            "provenance_conflict": "charge_profile_provenance_conflict" in reasons,
             "identity_verified": charge_profile_identity_verified,
             "full_access_verified": charge_profile_full_access_verified,
             "writes": charge_profile_apply_writes,

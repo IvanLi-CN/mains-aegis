@@ -78,6 +78,18 @@ pub const fn bq40_project_temperature_configuration_matches(
         && temperature_mode == BQ40_PROJECT_TEMPERATURE_MODE
 }
 
+pub const fn bq40_temperature_configuration_status(
+    temperature_enable: Option<u8>,
+    temperature_mode: Option<u8>,
+) -> Option<bool> {
+    match (temperature_enable, temperature_mode) {
+        (Some(enable), Some(mode)) => {
+            Some(bq40_project_temperature_configuration_matches(enable, mode))
+        }
+        _ => None,
+    }
+}
+
 pub const fn bq40_temperature_configuration_verified(value: Option<bool>) -> bool {
     match value {
         Some(true) => true,
@@ -410,6 +422,26 @@ mod tests {
         assert!(bq40_project_temperature_configuration_matches(0x1E, 0x00));
         assert!(!bq40_project_temperature_configuration_matches(0x00, 0x00));
         assert!(!bq40_project_temperature_configuration_matches(0x1E, 0x01));
+    }
+
+    #[test]
+    fn incomplete_temperature_configuration_stays_unknown() {
+        assert_eq!(
+            bq40_temperature_configuration_status(Some(0x1E), Some(0x00)),
+            Some(true)
+        );
+        assert_eq!(
+            bq40_temperature_configuration_status(Some(0x00), Some(0x00)),
+            Some(false)
+        );
+        assert_eq!(
+            bq40_temperature_configuration_status(Some(0x1E), None),
+            None
+        );
+        assert_eq!(
+            bq40_temperature_configuration_status(None, Some(0x00)),
+            None
+        );
     }
 
     #[test]

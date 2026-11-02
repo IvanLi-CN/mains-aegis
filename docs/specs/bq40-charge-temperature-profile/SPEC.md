@@ -110,7 +110,7 @@
 
 ### VER-BQ40-CTP-006
 
-- Method: Host MB44 protocol/contract tests cover the exact read and field-write frames, echoed-address readback, malformed length, mismatch, and interrupted-write cases; the target adapter uses those tested frame builders, the profile build requires the strict canonical identity probe, the report parser requires ordered CE/identity/Full Access gates plus complete pre/post blocks and all seven field-verification records, and the persisted report records the complete pre-write snapshot.
+- Method: Host MB44 protocol/contract tests cover the exact read and field-write frames, echoed-address readback, malformed length, mismatch, and interrupted-write cases; the target adapter uses those tested frame builders, the profile build requires the strict canonical identity probe, the writer emits strict/R2/canonical provenance plus each actual per-write echo address/length/raw/decoded result, the report parser requires ordered CE/provenance/identity/Full Access gates plus complete pre/post blocks and all seven field-verification records, and ROM/recovery evidence conflicts with a profile pass.
 - covers: `REQ-BQ40-CTP-006`
 - Pass condition: Only the seven allowlisted fields can change; the report parser compares every non-allowlisted byte between the complete pre-write and post-write blocks and rejects unknown stages, reordered, duplicated, or incomplete evidence whenever the explicit profile is requested; every failure stops the transaction and preserves the pre-write block for rollback; incomplete or inconsistent report evidence is not accepted as PASS.
 

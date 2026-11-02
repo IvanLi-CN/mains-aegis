@@ -44,6 +44,10 @@ def successful_log() -> list[str]:
         ),
         log(
             "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
+            "stage=provenance probe_mode=strict rom_image=r2 mode=canonical"
+        ),
+        log(
+            "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
             "stage=identity_verified manufacturer=texas device=bq40"
         ),
     ]
@@ -80,6 +84,7 @@ def successful_log() -> list[str]:
             log(
                 "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
                 f"stage=field_verify field={name} df_addr=0x{address:x} "
+                "declared_len=32 payload_len=32 "
                 f"raw_lo=0x{raw_lo:x} raw_hi=0x{raw_hi:x} decoded=0x{decoded:x}"
             )
         )
@@ -429,6 +434,30 @@ def main() -> None:
         assert bad.returncode == 20
         summary = json.loads((root / "report" / "summary.json").read_text())
         assert "charge_profile_evidence_sequence_invalid" in summary["verdict"]["reason"]
+
+        for replacement in (
+            ("probe_mode=strict", "probe_mode=mac-only"),
+            ("rom_image=r2", "rom_image=r3"),
+        ):
+            bad = run_parser(
+                [line.replace(*replacement) for line in successful_log()],
+                root,
+                probe_mode="strict",
+                rom_image="r2",
+            )
+            assert bad.returncode == 20
+            summary = json.loads((root / "report" / "summary.json").read_text())
+            assert "charge_profile_provenance_missing" in summary["verdict"]["reason"]
+
+        bad = run_parser(
+            successful_log() + [log("bms: stage=rom_mode_detected")],
+            root,
+            probe_mode="strict",
+            rom_image="r2",
+        )
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_provenance_conflict" in summary["verdict"]["reason"]
 
         for invalid_action in ("diagnose", "recover"):
             bad = run_parser(successful_log(), root, action=invalid_action)

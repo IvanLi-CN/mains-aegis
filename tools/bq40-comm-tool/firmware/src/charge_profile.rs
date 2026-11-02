@@ -95,9 +95,19 @@ pub fn decode_plain_mb44_block(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FieldVerification {
+    pub address: u16,
+    pub declared_len: u8,
+    pub payload_len: u8,
+    pub raw: [u8; 2],
+    pub decoded: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ApplyReport {
     pub snapshot: BlockSnapshot,
     pub final_snapshot: BlockSnapshot,
+    pub field_verifications: [FieldVerification; FIELD_COUNT],
     pub writes: u8,
 }
 
@@ -186,7 +196,14 @@ pub fn apply_profile<T: Transport>(transport: &mut T) -> Result<ApplyReport, App
     }
 
     let mut writes = 0u8;
-    for field in FIELDS {
+    let mut field_verifications = [FieldVerification {
+        address: 0,
+        declared_len: 0,
+        payload_len: 0,
+        raw: [0, 0],
+        decoded: 0,
+    }; FIELD_COUNT];
+    for (index, field) in FIELDS.into_iter().enumerate() {
         let echoed = match transport.write_field(field.address, field.raw) {
             Ok(echoed) => echoed,
             Err(error) => {
@@ -209,6 +226,14 @@ pub fn apply_profile<T: Transport>(transport: &mut T) -> Result<ApplyReport, App
         if u16::from_le_bytes([echoed.payload[0], echoed.payload[1]]) != field.decoded() {
             return Err(ApplyError::new(ApplyErrorKind::EchoDecoded, Some(snapshot)));
         }
+        let raw = [echoed.payload[0], echoed.payload[1]];
+        field_verifications[index] = FieldVerification {
+            address: echoed.address,
+            declared_len: echoed.declared_len,
+            payload_len: echoed.payload_len,
+            raw,
+            decoded: u16::from_le_bytes(raw),
+        };
         writes = writes.saturating_add(1);
     }
 
@@ -270,6 +295,7 @@ pub fn apply_profile<T: Transport>(transport: &mut T) -> Result<ApplyReport, App
     Ok(ApplyReport {
         snapshot,
         final_snapshot,
+        field_verifications,
         writes,
     })
 }
@@ -484,6 +510,13 @@ mod tests {
         assert_eq!(report.writes, 7);
         assert_eq!(transport.writes, 7);
         assert_eq!(transport.snapshots, 2);
+        for (field, observed) in FIELDS.into_iter().zip(report.field_verifications) {
+            assert_eq!(observed.address, field.address);
+            assert_eq!(observed.declared_len, CONTAINING_BLOCK_LEN);
+            assert_eq!(observed.payload_len, CONTAINING_BLOCK_LEN);
+            assert_eq!(observed.raw, field.raw);
+            assert_eq!(observed.decoded, field.decoded());
+        }
     }
 
     #[test]

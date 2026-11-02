@@ -1312,20 +1312,18 @@ fn log_bms_charge_temperature_snapshot(addr: u8, stage: &'static str, payload: [
 fn log_bms_charge_temperature_field_verification(
     addr: u8,
     field: charge_profile::Field,
-    observed: charge_profile::BlockSnapshot,
+    observed: charge_profile::FieldVerification,
 ) {
-    let offset = field.offset as usize;
-    let raw_lo = observed.payload[offset];
-    let raw_hi = observed.payload[offset + 1];
-    let decoded = u16::from_le_bytes([raw_lo, raw_hi]);
     defmt::info!(
-        "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=field_verify field={} df_addr=0x{=u16:x} raw_lo=0x{=u8:x} raw_hi=0x{=u8:x} decoded=0x{=u16:x}",
+        "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=field_verify field={} df_addr=0x{=u16:x} declared_len={=u8} payload_len={=u8} raw_lo=0x{=u8:x} raw_hi=0x{=u8:x} decoded=0x{=u16:x}",
         addr,
         field.name,
-        field.address,
-        raw_lo,
-        raw_hi,
-        decoded,
+        observed.address,
+        observed.declared_len,
+        observed.payload_len,
+        observed.raw[0],
+        observed.raw[1],
+        observed.decoded,
     );
 }
 
@@ -5706,6 +5704,10 @@ where
             "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=charge_disabled ce_high=true charger_enabled=false",
             addr,
         );
+        defmt::info!(
+            "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=provenance probe_mode=strict rom_image=r2 mode=canonical",
+            addr,
+        );
 
         // The wake-window and post-recovery paths deliberately use a numeric-only probe to
         // bring the gauge out of sleep. Before any Data Flash write, repeat the identity probe
@@ -5787,12 +5789,11 @@ where
                     "final_after_hex",
                     report.final_snapshot.payload,
                 );
-                for field in charge_profile::FIELDS {
-                    log_bms_charge_temperature_field_verification(
-                        addr,
-                        field,
-                        report.final_snapshot,
-                    );
+                for (field, observed) in charge_profile::FIELDS
+                    .into_iter()
+                    .zip(report.field_verifications)
+                {
+                    log_bms_charge_temperature_field_verification(addr, field, observed);
                 }
                 defmt::info!(
                     "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=done fields={=u8} snapshot_addr=0x{=u16:x} snapshot_len={=u8} final_addr=0x{=u16:x} final_len={=u8}",

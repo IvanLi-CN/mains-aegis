@@ -15857,30 +15857,39 @@ where
             )
             .ok()
             .flatten();
-            let temperature_configuration_ok = match (temperature_enable, temperature_mode) {
-                (Some(enable), Some(mode)) => {
-                    charge_temperature::bq40_project_temperature_configuration_matches(enable, mode)
-                }
-                _ => false,
-            };
-            if self.bms_temperature_configuration_ok != Some(temperature_configuration_ok) {
-                if temperature_configuration_ok {
-                    defmt::info!(
+            let temperature_configuration_ok =
+                charge_temperature::bq40_temperature_configuration_status(
+                    temperature_enable,
+                    temperature_mode,
+                );
+            if self.bms_temperature_configuration_ok != temperature_configuration_ok {
+                match temperature_configuration_ok {
+                    Some(true) => {
+                        defmt::info!(
                         "bms: charge_temperature_config verified temperature_enable=0x{=u8:x} temperature_mode=0x{=u8:x}",
                         temperature_enable.unwrap_or(0),
                         temperature_mode.unwrap_or(0),
                     );
-                } else {
-                    defmt::error!(
+                    }
+                    Some(false) => {
+                        defmt::error!(
                         "bms: charge_temperature_config invalid temperature_enable={=?} temperature_mode={=?} expected_enable=0x{=u8:x} expected_mode=0x{=u8:x} charge_allowed=false",
                         temperature_enable,
                         temperature_mode,
                         charge_temperature::BQ40_PROJECT_TEMPERATURE_ENABLE,
                         charge_temperature::BQ40_PROJECT_TEMPERATURE_MODE,
                     );
+                    }
+                    None => {
+                        defmt::warn!(
+                            "bms: charge_temperature_config unavailable temperature_enable={=?} temperature_mode={=?} charge_allowed=false",
+                            temperature_enable,
+                            temperature_mode,
+                        );
+                    }
                 }
             }
-            self.bms_temperature_configuration_ok = Some(temperature_configuration_ok);
+            self.bms_temperature_configuration_ok = temperature_configuration_ok;
             self.bms_next_da_status2_refresh_at = now + BMS_CHARGE_TEMP_REFRESH_PERIOD;
         }
         let mut filter_capacity = self.bms_cached_filter_capacity;
