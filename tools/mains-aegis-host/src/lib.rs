@@ -6024,6 +6024,12 @@ async fn monitor_start(
             device.lan_address.clone(),
         )
     };
+    if !maintenance_profile_transport_allowed(allow_unverified_maintenance, &transport) {
+        return Err(HttpError::non_retryable(
+            "maintenance_profile_transport_unsupported",
+            "bq40-charge-temperature monitor mode requires a native serial device",
+        ));
+    }
     let sample = if matches!(transport, DeviceTransport::NativeSerial) {
         if let Some(sample) = running_native_monitor_snapshot(&state, &id)? {
             sample
@@ -6082,6 +6088,13 @@ async fn monitor_start(
     Ok(Json(
         json!({"ok": true, "log_decode": decode, "trace_count": trace_count, "log_count": log_count, "initial_trace_count": sample.trace_count, "initial_log_count": sample.log_count, "already_running": sample.already_running}),
     ))
+}
+
+fn maintenance_profile_transport_allowed(
+    allow_unverified_maintenance: bool,
+    transport: &DeviceTransport,
+) -> bool {
+    !allow_unverified_maintenance || matches!(transport, DeviceTransport::NativeSerial)
 }
 
 async fn monitor_stop(
@@ -12965,6 +12978,26 @@ mod tests {
         assert_eq!(response.0["already_running"], true);
         assert_eq!(response.0["initial_trace_count"], 1);
         assert_eq!(response.0["initial_log_count"], 1);
+    }
+
+    #[test]
+    fn charge_temperature_maintenance_is_native_serial_only() {
+        assert!(maintenance_profile_transport_allowed(
+            false,
+            &DeviceTransport::Lan
+        ));
+        assert!(maintenance_profile_transport_allowed(
+            true,
+            &DeviceTransport::NativeSerial
+        ));
+        assert!(!maintenance_profile_transport_allowed(
+            true,
+            &DeviceTransport::Lan
+        ));
+        assert!(!maintenance_profile_transport_allowed(
+            true,
+            &DeviceTransport::Mock
+        ));
     }
 
     #[tokio::test]

@@ -22,13 +22,14 @@
 - Markdown links and field references: `rg -n "bq40-charge-temperature-profile|T1|T2|T3|T4|T5|T6|0x4A0B|0x4A15" docs`
 - Topic contract: set `AGENT_TOOLKIT_ROOT` to a checkout of the public `agent-toolkit` repository, then run `just spec-contract-check` (the checker receives the repository root explicitly).
 - Writer contract and report-parser fail-closed fixtures: `just bq40-charge-profile-test`
+- Read-only HIL decoder contract fixtures: `just hil-diag-snapshot-test`
 - BQ40 maintenance firmware feature: `cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-rom-recover-disable,bms-charge-temperature-profile,bms-charge-temperature-apply`
 - Firmware host tests: `just firmware-host-test`（调用 `firmware/scripts/run-host-unit-tests.sh`，包含 host-test audit 与全部 host manifests）
 
 ## Coverage / rollout summary
 
 - 文档已把电芯本体 `0–45°C` 充电窗口、`100mA/500mA` 策略、BQ40 原始编码、BQ25792 协同和未来写入边界收敛为单一 profile。
-- 目标硬件写入证据已经闭环：`identity_verified=true`、`full_access_verified=true`、`writes=7`、`verified_fields` 覆盖 T1/T2/T5/T6/T3/T4/Hysteresis，写前和写后均为 `0x4A00` 的 32-byte containing block，非 allowlist 字节保持不变。
+- 目标硬件写入证据已经闭环，机器可读摘要见 [`evidence/hardware-apply-summary.json`](evidence/hardware-apply-summary.json)；原始临时 `summary.json` 的 SHA-256 为 `8bdb8ad753c631901e9319ce57c36848393cb807f2e1b132831c0e891efc1518`。摘要包含 `identity_verified=true`、`full_access_verified=true`、`writes=7`、`verified_fields` 覆盖 T1/T2/T5/T6/T3/T4/Hysteresis，写前和写后均为 `0x4A00` 的 32-byte containing block，非 allowlist 字节保持不变。
 - 写入后的 `final_after_hex` 为 `0505000564020564050500ac0a420b740b0a0c3c0c6e0c1400a00f8400600108`，其中七个字段为 `AC 0A`、`42 0B`、`74 0B`、`0A 0C`、`3C 0C`、`6E 0C`、`14 00`；离线 `verify` 报告 `verdict.pass=true`。
 - 写入后已恢复 canonical artifact，设备身份与 artifact 完全匹配，`log_decode=verified`。canonical 固件烧录不修改 BQ40 Data Flash。
 

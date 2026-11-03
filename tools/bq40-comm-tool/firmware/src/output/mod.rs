@@ -1277,33 +1277,18 @@ fn write_bms_charge_profile_field_once<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let mut last_err = bq40z50::BmsDiagError::I2cNack;
-    for via in [BmsDfWriteVia::Direct, BmsDfWriteVia::Pec] {
-        match write_bms_df_bytes_via_mb44_once(i2c, addr, df_addr, &raw, via) {
-            Ok(()) => {
-                if matches!(via, BmsDfWriteVia::Pec) {
-                    defmt::warn!(
-                        "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=field_write via=pec df_addr=0x{=u16:x}",
-                        addr,
-                        df_addr,
-                    );
-                }
-                return Ok(());
-            }
-            Err(err) => {
-                last_err = err;
-                defmt::warn!(
-                    "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=field_write via={} df_addr=0x{=u16:x} err={}",
-                    addr,
-                    via.as_str(),
-                    df_addr,
-                    err,
-                );
-            }
+    match write_bms_df_bytes_via_mb44_once(i2c, addr, df_addr, &raw, BmsDfWriteVia::Direct) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            defmt::warn!(
+                "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=write_transport via=direct df_addr=0x{=u16:x} err={}",
+                addr,
+                df_addr,
+                err,
+            );
+            Err(err)
         }
     }
-
-    Err(last_err)
 }
 
 #[cfg(feature = "bms-charge-temperature-profile")]
@@ -6161,7 +6146,6 @@ where
         let now = Instant::now();
         #[cfg(feature = "bms-charge-temperature-profile")]
         if self.bms_addr != Some(addr) {
-            self.bms_charge_temperature_profile_applied = false;
             self.bms_charge_temperature_snapshot = None;
         }
         self.maybe_restore_charger_watchdog_after_recovery(false);
@@ -8117,7 +8101,8 @@ where
     fn maybe_poll_charger(&mut self, irq: &IrqSnapshot) {
         let now = Instant::now();
         #[cfg(feature = "bms-charge-temperature-profile")]
-        if self.bms_charge_temperature_profile_failed {
+        if self.bms_charge_temperature_profile_applied || self.bms_charge_temperature_profile_failed
+        {
             self.chg_ce.set_high();
             self.chg_enabled = false;
             self.charger_allowed = false;
@@ -10056,12 +10041,9 @@ where
                         self.bms_addr = None;
                         #[cfg(feature = "bms-charge-temperature-profile")]
                         {
-                            // The next discovery is a new binding even when the gauge reuses
-                            // the same address. Keep a failed apply latched across transport loss:
-                            // a gauge that disappeared after a partial Data Flash write is not
-                            // proven to be a replacement, and retrying would violate the writer's
-                            // fail-stop contract. A fresh tool process is the retry boundary.
-                            self.bms_charge_temperature_profile_applied = false;
+                            // Keep the apply result latched across transport loss. A gauge that
+                            // disappears after maintenance is not permission to recover the
+                            // charger, and a fresh tool process is the retry boundary.
                             self.bms_charge_temperature_snapshot = None;
                         }
                         self.bms_next_retry_at = None;

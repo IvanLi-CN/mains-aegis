@@ -1,0 +1,34 @@
+{
+  "source": "operator-run summary copied from /private/tmp/mains-aegis-bq40-charge-temperature-apply-20261104-pretouch-verified-report/summary.json",
+  "source_sha256": "8bdb8ad753c631901e9319ce57c36848393cb807f2e1b132831c0e891efc1518",
+  "mode": "canonical",
+  "action": "verify",
+  "repair_profile": "bq40-charge-temperature",
+  "device": {
+    "stable_id": "serial-04f3bb3f5367",
+    "logical_id": "mains-aegis-198840",
+    "transport": "native-serial",
+    "port": "/dev/cu.usbmodem2111401"
+  },
+  "charge_temperature_apply": {
+    "attempted": true,
+    "done": true,
+    "ce_disabled": true,
+    "provenance_verified": true,
+    "identity_verified": true,
+    "full_access_verified": true,
+    "writes": 7,
+    "snapshot_before_hex": "0505000564020564050500ac0a420b740b0a0c3c0c6e0c1400a00f8400600108",
+    "final_after_hex": "0505000564020564050500ac0a420b740b0a0c3c0c6e0c1400a00f8400600108",
+    "field_order": ["t1", "t2", "t5", "t6", "t3", "t4", "hysteresis"],
+    "addresses": ["0x0b"],
+    "verified_fields": ["hysteresis", "t1", "t2", "t3", "t4", "t5", "t6"],
+    "evidence_sequence_error": false,
+    "unknown_stage": false
+  },
+  "verdict": {
+    "pass": true,
+    "reason": "ok"
+  },
+  "scope": "This artifact records the maintenance write/readback result only. It does not prove full-temperature JEITA behavior or cell balancing."
+}

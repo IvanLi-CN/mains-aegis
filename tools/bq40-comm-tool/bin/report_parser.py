@@ -178,6 +178,10 @@ CHARGE_PROFILE_CE_DISABLED_RE = re.compile(
     rf"profile=bq40_charge_temperature stage=charge_disabled "
     rf"ce_high=(?P<ce_high>true|false) charger_enabled=(?P<charger_enabled>true|false)$"
 )
+CHARGE_PROFILE_POST_HALT_CHARGE_ENABLE_RE = re.compile(
+    r"(?:\bcharger:\s+enabled=true\b|\bcharger_enabled=true\b|\bce_low=true\b|\bEN_CHG=1\b)",
+    re.IGNORECASE,
+)
 CHARGE_PROFILE_IDENTITY_VERIFIED_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=bq40_charge_temperature stage=identity_verified "
@@ -475,6 +479,8 @@ def main() -> int:
     charge_profile_ce_disabled_count = 0
     charge_profile_identity_verified_count = 0
     charge_profile_security_after_count = 0
+    charge_profile_halt_seen = False
+    charge_profile_post_halt_charge_enabled = False
     canonical_touched_0x16 = False
     last_sample_ts: Optional[float] = None
     in_preexisting_segment = False
@@ -571,6 +577,14 @@ def main() -> int:
                     if is_charge_profile_requested and "text" in entry:
                         mark_malformed_charge_profile_evidence("malformed_text")
                     continue
+                if (
+                    is_charge_profile_requested
+                    and charge_profile_halt_seen
+                    and CHARGE_PROFILE_POST_HALT_CHARGE_ENABLE_RE.search(text)
+                ):
+                    charge_profile_post_halt_charge_enabled = True
+                    charge_profile_sequence_error = True
+                    charge_profile_apply_errors["post_halt_charge_enable"] += 1
                 if is_charge_profile_requested and ROM_OR_RECOVERY_EVENT_RE.search(text):
                     charge_profile_provenance_conflict = True
                 is_charge_profile_evidence = "bms_df_apply:" in text
@@ -787,6 +801,8 @@ def main() -> int:
                         )
                         if halt_match is None or halt_match.group("reason") != "complete":
                             charge_profile_apply_errors[stage] += 1
+                        else:
+                            charge_profile_halt_seen = True
                     elif stage not in CHARGE_PROFILE_KNOWN_STAGES:
                         charge_profile_unknown_stage = True
                         charge_profile_sequence_error = True
@@ -999,6 +1015,8 @@ def main() -> int:
             reasons.append("charge_profile_address_inconsistent")
         if set(CHARGE_PROFILE_EXPECTED_FIELDS) != charge_profile_verified_fields:
             reasons.append("charge_profile_field_verification_missing")
+        if charge_profile_post_halt_charge_enabled:
+            reasons.append("charge_profile_post_halt_charge_enable")
 
     verdict_pass = len(reasons) == 0
     verdict_reason = "ok" if verdict_pass else ";".join(reasons)

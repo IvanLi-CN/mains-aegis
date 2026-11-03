@@ -283,6 +283,15 @@ def repair_event_profile_log() -> list[str]:
     return successful_log() + [log("bms_df_repair: addr=0xb field=afe_prot_ctrl")]
 
 
+def post_halt_charge_enable_log() -> list[str]:
+    return successful_log() + [
+        log(
+            "charger: enabled=true charge_allowed=true allow_charge=true "
+            "ce_low=true ctrl0=0x20"
+        )
+    ]
+
+
 def ordinary_sample_log() -> list[str]:
     return [
         log(
@@ -398,6 +407,11 @@ def main() -> None:
         assert bad.returncode == 20
         summary = json.loads((root / "report" / "summary.json").read_text())
         assert "charge_profile_provenance_conflict" in summary["verdict"]["reason"]
+
+        bad = run_parser(post_halt_charge_enable_log(), root)
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert "charge_profile_post_halt_charge_enable" in summary["verdict"]["reason"]
 
         bad = run_parser(duplicate_field_evidence_log(), root)
         assert bad.returncode == 20

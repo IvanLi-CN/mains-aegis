@@ -245,4 +245,28 @@ if [[ "$profile_transport" == *"read_bms_df_block_via_mb44"* ]]; then
   exit 1
 fi
 
+profile_field_writer=$(awk '
+  /^fn write_bms_charge_profile_field_once/ { in_writer = 1 }
+  in_writer && /^struct Bq40ChargeTemperatureTransport/ { exit }
+  in_writer { print }
+' "$TOOL_ROOT/firmware/src/output/mod.rs")
+if [[ "$profile_field_writer" == *"BmsDfWriteVia::Pec"* ]]; then
+  echo "charge-temperature profile writer still retries through PEC" >&2
+  exit 1
+fi
+if [[ "$profile_field_writer" != *"BmsDfWriteVia::Direct"* ]]; then
+  echo "charge-temperature profile writer lost its direct transport contract" >&2
+  exit 1
+fi
+
+charger_poll=$(awk '
+  /^    fn maybe_poll_charger/ { in_poll = 1 }
+  in_poll && /^    fn / && !/maybe_poll_charger/ { exit }
+  in_poll { print }
+' "$TOOL_ROOT/firmware/src/output/mod.rs")
+if [[ "$charger_poll" != *"bms_charge_temperature_profile_applied"* || "$charger_poll" != *"bms_charge_temperature_profile_failed"* ]]; then
+  echo "charge-temperature maintenance result is not a terminal charger inhibit" >&2
+  exit 1
+fi
+
 echo "bq40 profile shell contract: ok"

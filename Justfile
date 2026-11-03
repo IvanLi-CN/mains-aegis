@@ -91,6 +91,10 @@ bq40-charge-profile-test:
     cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-rom-repair-asset-df-mainboard
     bash tools/bq40-comm-tool/bin/profile-contract-test.sh
 
+# Run deterministic read-only HIL decoder contract tests without hardware.
+hil-diag-snapshot-test:
+    python3 -m unittest discover -s tools/hil -p 'test_diag_snapshot_readonly.py'
+
 # Validate the canonical topic specification through the public agent-toolkit checker.
 spec-contract-check:
     bash scripts/spec-contract-check.sh
@@ -185,5 +189,5 @@ flash-current-real-hil-19v device confirm: host-tools-build
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --real
 
 # Run the standard local validation set.
-check: web-check host-test firmware-host-test bq40-charge-profile-test spec-contract-check firmware-check
+check: web-check host-test firmware-host-test bq40-charge-profile-test hil-diag-snapshot-test spec-contract-check firmware-check
     git diff --check
