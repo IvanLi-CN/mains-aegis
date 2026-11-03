@@ -6195,6 +6195,7 @@ where
         self.set_charge_mode(BootChargeMode::Off);
         self.chg_ce.set_high();
         self.chg_enabled = false;
+        self.charger_allowed = false;
         self.chg_next_retry_at = Some(now + BMS_POLL_PERIOD);
         defmt::info!(
             "bms_charge_profile: profile=bq40_charge_temperature stage=armed wait_for_identity=true charger_enabled=false"
@@ -8101,7 +8102,9 @@ where
     fn maybe_poll_charger(&mut self, irq: &IrqSnapshot) {
         let now = Instant::now();
         #[cfg(feature = "bms-charge-temperature-profile")]
-        if self.bms_charge_temperature_profile_applied || self.bms_charge_temperature_profile_failed
+        if self.bms_charge_temperature_apply_pending
+            || self.bms_charge_temperature_profile_applied
+            || self.bms_charge_temperature_profile_failed
         {
             self.chg_ce.set_high();
             self.chg_enabled = false;

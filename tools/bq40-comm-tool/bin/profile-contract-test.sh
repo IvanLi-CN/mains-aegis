@@ -268,5 +268,19 @@ if [[ "$charger_poll" != *"bms_charge_temperature_profile_applied"* || "$charger
   echo "charge-temperature maintenance result is not a terminal charger inhibit" >&2
   exit 1
 fi
+if [[ "$charger_poll" != *"bms_charge_temperature_apply_pending"* ]]; then
+  echo "charge-temperature pending apply is not an early charger inhibit" >&2
+  exit 1
+fi
+
+maintenance_arm=$(awk '
+  /^    fn run_bq40_charge_temperature_maintenance/ { in_arm = 1 }
+  in_arm && /^    fn / && !/run_bq40_charge_temperature_maintenance/ { exit }
+  in_arm { print }
+' "$TOOL_ROOT/firmware/src/output/mod.rs")
+if [[ "$maintenance_arm" != *"self.charger_allowed = false"* ]]; then
+  echo "charge-temperature maintenance arming does not close charger recovery" >&2
+  exit 1
+fi
 
 echo "bq40 profile shell contract: ok"
