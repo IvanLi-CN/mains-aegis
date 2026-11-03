@@ -105,6 +105,12 @@ def successful_log() -> list[str]:
             "final_addr=0x4a00 final_len=32"
         )
     )
+    lines.append(
+        log(
+            "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
+            "stage=halt reason=complete charger_enabled=false"
+        )
+    )
     return lines
 
 
@@ -139,6 +145,21 @@ def duplicate_timestamp_field_evidence_log() -> list[str]:
         lines.append(json.dumps(entry))
     field_line = next(line for line in lines if "field=t1" in line)
     lines.insert(-1, field_line)
+    return lines
+
+
+def mirrored_profile_evidence_log() -> list[str]:
+    lines = []
+    for index, line in enumerate(successful_log()):
+        entry = json.loads(line)
+        timestamp = f"2026-11-02T00:00:00.{index:03d}Z"
+        entry["ts"] = timestamp
+        entry["src"] = "trace"
+        lines.append(json.dumps(entry))
+        mirror = dict(entry)
+        mirror["src"] = "log"
+        mirror["ts"] = timestamp
+        lines.append(json.dumps(mirror))
     return lines
 
 
@@ -332,6 +353,12 @@ def main() -> None:
         assert summary["verdict"]["pass"] is True
         assert summary["charge_temperature_apply"]["snapshot_before_hex"]
         assert summary["charge_temperature_apply"]["final_after_hex"]
+
+        mirrored = run_parser(mirrored_profile_evidence_log(), root)
+        assert mirrored.returncode == 0, mirrored.stderr + mirrored.stdout
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        assert summary["verdict"]["pass"] is True
+        assert summary["charge_temperature_apply"]["field_order"] == list(FIELD_VALUES)
 
         incomplete = successful_log()[:1] + [successful_log()[-1]]
         bad = run_parser(incomplete, root)

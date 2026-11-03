@@ -113,7 +113,7 @@ min(runtime_policy_target, BQ40_ChargingCurrent/Voltage)
 
 BQ40 profile 的字段地址、编码和温度区间以 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md) 为准。
 
-activation/recovery 的 `200mA` wake 仅是维护态唤醒电流，不属于普通 UI、USB 或 backup 产品充电。它必须同时满足 BQ25792 `TS_COLD/TS_COOL/TS_WARM/TS_HOT` 全部未置位；若 BQ40 已经提供请求、温度或配置证据（即使 detail cache 发生瞬态 reset），还必须使用新鲜有效请求与 `15–45°C` 正常温度证据，wake 的 `ICHG/VREG` 取不超过请求的值；明确读到的错误配置在新的有效配置读回前持续阻断。普通产品充电已使能后，主循环每个 tick 仍会复核 BQ40 证据的新鲜度，过期立即拉高 `CE`；boot-diagnostic auto-force 只有在尚无 BQ40 温度或配置观察时保留 JEITA fallback，观察到 BQ40 后同样受 tick 联锁。恢复完成后 charger register image 可以恢复，但 `CE` 必须保持高电平，直到下一次普通轮询重新通过温度、BQ40 请求、CurrentAtEOC、PD 和产品策略门控。
+activation/recovery 的 `200mA` wake 仅是维护态唤醒电流，不属于普通 UI、USB 或 backup 产品充电。它必须同时满足 BQ25792 `TS_COLD/TS_COOL/TS_WARM/TS_HOT` 全部未置位；若 BQ40 已经提供请求、温度或配置证据（即使 detail cache 发生瞬态 reset），还必须使用新鲜有效请求与 `15–45°C` 正常温度证据，wake 的 `ICHG/VREG` 取不超过请求的值；明确读到的错误配置在新的有效配置读回前持续阻断。普通产品充电已使能后，主循环每个 tick 仍会复核 BQ40 证据的新鲜度；过期时先调度立即 charger poll，由该 poll 先刷新请求再决定是否拉高 `CE`，避免有效期边界导致充电反复开关；刷新失败或证据仍无效时仍 fail-closed。boot-diagnostic auto-force 只有在尚无 BQ40 温度或配置观察时保留 JEITA fallback，观察到 BQ40 后同样受 tick 联锁。恢复完成后 charger register image 可以恢复，但 `CE` 必须保持高电平，直到下一次普通轮询重新通过温度、BQ40 请求、CurrentAtEOC、PD 和产品策略门控。
 
 下面的输入功率估算仅保留为 BQ25792 器件能力背景；当前产品 profile 不启用 `1A/2A`，不会因为输入功率充足而自动提高到这些档位。
 
@@ -340,6 +340,8 @@ BQ25792 的温度相关寄存器集中在 `REG17/REG18/REG1F/REG24/REG2B`（见 
      - `TS_IGNORE=0`
 
 BQ40/BQ25792 的完整温度 profile 与终止策略边界见 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md)。低电流模式继续使用 `ITERM=40mA`、禁用 `EN_TERM` 和现有 restart 行为；正常模式不因 T1～T6 改动而改变现有 `CurrentAtEOC` 对齐路径，但 `CurrentAtEOC` 对齐值必须严格低于最终 `ICHG`，否则保持禁充。activation/boot-diagnostic 的 `200mA` 仅是唤醒电流，明确禁用 `EN_TERM`，不继承历史 termination 值。
+
+目标设备已完成 BQ40 七字段温度 profile 的显式 Data Flash 写入并恢复 canonical 固件。canonical HIL 期间 BQ40 报告 `xchg=true`、`chg_fet=false`、`chg_ready=false`，电芯最低/最高约 `3152/3870mV`，主固件因此保持禁充；这属于 BQ40 安全阻断和电芯压差问题，不是 BQ25792 JEITA 将 `100mA/500mA` 误降为零。温箱/热风枪仍需在独立硬件验证中完成，当前不能把 HIL 的常温读数当作 JEITA 全温区证明。
 
 3. **状态/告警（用于 bring-up 验证，不是配置项）**
    - `REG1F_Charger_Status_4`（Offset `1Fh`）：`TS_COLD_STAT / TS_COOL_STAT / TS_WARM_STAT / TS_HOT_STAT`（当前温区）

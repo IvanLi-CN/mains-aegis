@@ -125,6 +125,11 @@ if ! rg -q 'bms-charge-temperature-apply' "$TOOL_ROOT/firmware/Cargo.toml" "$SCR
   exit 1
 fi
 
+if ! rg -q 'start_monitor_with_retry\(monitor_start_path\)' "$SCRIPT_DIR/monitor.sh"; then
+  echo "maintenance monitor fallback does not preserve the selected start profile" >&2
+  exit 1
+fi
+
 if ! rg -q '\-\-action \"\$subcommand\"' "$SCRIPT_DIR/run.sh"; then
   echo "run.sh does not pass its explicit action to build.sh" >&2
   exit 1

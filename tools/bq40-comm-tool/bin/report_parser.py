@@ -139,7 +139,7 @@ def charge_profile_evidence_shape_is_valid(text: str) -> bool:
     if stage == "error":
         return matches((r"error=\S+",))
     if stage == "halt":
-        return matches((r"reason=profile_failed", r"charger_enabled=false"))
+        return matches((r"reason=(?:complete|profile_failed)", r"charger_enabled=false"))
 
     # Unknown stages are rejected semantically below. Keep their shape check
     # conservative so a bare stage can still produce the explicit unknown-stage
@@ -352,6 +352,16 @@ def dedupe_key(entry: dict, text: str) -> Optional[tuple[int, str]]:
     return (round(entry_ts * 1000), text)
 
 
+def is_mirrored_profile_evidence(
+    seen_sources: set[str], source: object
+) -> bool:
+    """Identify the trace/log mirror of one defmt event without hiding real duplicates."""
+    if source not in {"trace", "log"}:
+        return False
+    other_source = "log" if source == "trace" else "trace"
+    return seen_sources == {other_source}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -471,6 +481,7 @@ def main() -> int:
     parse_preexisting_segment = False
     allow_preexisting_parse = False
     seen_entries: set[tuple[int, str]] = set()
+    seen_charge_profile_entries: dict[tuple[int, str], set[str]] = {}
     allowed_addrs = {0x0B} if args.mode == "canonical" else {0x0B, 0x16}
 
     run_config = {
@@ -571,13 +582,20 @@ def main() -> int:
                     mark_malformed_charge_profile_evidence("malformed_evidence")
                 key = dedupe_key(entry, text)
                 if key is not None:
-                    # Ordinary monitor telemetry can be duplicated when a session tail is
-                    # reattached. Profile evidence is an audit stream: silently dropping an
-                    # identical event would turn a duplicate write/readback record into a false
-                    # pass, so let the sequence validator reject it explicitly.
-                    if key in seen_entries and not is_charge_profile_evidence:
-                        continue
-                    seen_entries.add(key)
+                    if is_charge_profile_evidence:
+                        source = entry.get("src")
+                        source_name = source if isinstance(source, str) else ""
+                        profile_sources = seen_charge_profile_entries.setdefault(key, set())
+                        if is_mirrored_profile_evidence(profile_sources, source_name):
+                            profile_sources.add(source_name)
+                            continue
+                        profile_sources.add(source_name)
+                    else:
+                        # Ordinary monitor telemetry can be duplicated when a session tail is
+                        # reattached.
+                        if key in seen_entries:
+                            continue
+                        seen_entries.add(key)
 
                 if ADDR16_RE.search(text):
                     canonical_touched_0x16 = True
@@ -759,9 +777,16 @@ def main() -> int:
                         "final_raw",
                         "final_decoded",
                         "error",
-                        "halt",
                     }:
                         charge_profile_apply_errors[stage] += 1
+                    elif stage == "halt":
+                        halt_match = re.search(
+                            r"\bstage=halt reason=(?P<reason>complete|profile_failed) "
+                            r"charger_enabled=false$",
+                            text,
+                        )
+                        if halt_match is None or halt_match.group("reason") != "complete":
+                            charge_profile_apply_errors[stage] += 1
                     elif stage not in CHARGE_PROFILE_KNOWN_STAGES:
                         charge_profile_unknown_stage = True
                         charge_profile_sequence_error = True

@@ -48,3 +48,8 @@ diagnostic and recovery actions build without the writer feature.
 The former `live-df-mainboard` profile is retired and returns a migration error. ROM,
 AFE, and `asset-df-mainboard` recovery paths retain their existing semantics and are not
 aliases for this profile.
+
+After an authorized hardware apply, retain the machine-readable `summary.json` evidence with
+`writes=7`, `identity_verified=true`, `full_access_verified=true`, one 32-byte pre-write block,
+one 32-byte post-write block, and all seven verified field names. Reflash canonical firmware
+after the maintenance image and confirm the bound device identity before any runtime HIL.

@@ -345,7 +345,9 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
 
 LT 的 Low/Med/High 电流字段全部使用 `100mA`；STL、RT、STH、HT 的 Low/Med/High 电流字段全部使用 `500mA`；各允许温区的充电电压字段全部使用 `16800mV`。本 profile 不修改 BQ40 的 precharge、maintenance-charge 或 termination Data Flash 字段。
 
-主固件每秒刷新一次 SBS `ChargingCurrent()`/`ChargingVoltage()`（`0x14/0x15`），并将有效、未过期的 BQ40 请求作为 BQ25792 的安全上限；读失败、零值、越界或超过 `1s` 的请求均禁充。已使能的产品充电在每次主循环 tick 重新检查温度与 request 新鲜度，轮询延迟或证据过期时立即拉高 `CE`，不得依赖下一次轮询才停充；boot-diagnostic auto-force 也只在尚无 BQ40 温度或配置观察时依赖 JEITA，出现 BQ40 证据后沿用同一 tick 联锁；温度/配置证据跨瞬态 detail-cache reset 保持 fail-closed，明确读到的错误配置在新的有效配置读回前持续阻断。activation/recovery 的固定 `200mA` 只用于唤醒睡眠 gauge，不是产品充电后门：它必须先通过 BQ25792 JEITA 的 `15–45°C` 正常窗口；若已有 BQ40 温度、配置或请求证据，还必须通过新鲜正常温度和新鲜有效请求，且 wake 目标不超过请求值。activation 完成后只恢复寄存器，`CE` 保持禁充，下一次普通轮询重新执行完整门控。
+主固件每秒刷新一次 SBS `ChargingCurrent()`/`ChargingVoltage()`（`0x14/0x15`），并将有效、未过期的 BQ40 请求作为 BQ25792 的安全上限；读失败、零值、越界或超过 `1s` 的请求均禁充。已使能的产品充电在每次主循环 tick 重新检查温度与 request 新鲜度；证据过期时先调度立即 charger poll，由该 poll 先刷新 BQ40 请求再作 fail-closed 决策，避免有效期边界导致 `CE` 反复开关；刷新仍失败、零值、越界或温度证据无效时在该 poll 拉高 `CE`。boot-diagnostic auto-force 也只在尚无 BQ40 温度或配置观察时依赖 JEITA，出现 BQ40 证据后沿用同一 tick 联锁；温度/配置证据跨瞬态 detail-cache reset 保持 fail-closed，明确读到的错误配置在新的有效配置读回前持续阻断。activation/recovery 的固定 `200mA` 只用于唤醒睡眠 gauge，不是产品充电后门：它必须先通过 BQ25792 JEITA 的 `15–45°C` 正常窗口；若已有 BQ40 温度、配置或请求证据，还必须通过新鲜正常温度和新鲜有效请求，且 wake 目标不超过请求值。activation 完成后只恢复寄存器，`CE` 保持禁充，下一次普通轮询重新执行完整门控。
+
+硬件应用核对：绑定设备已完成上述七个 T1～T6/Hysteresis 字段的 `0x4A00`/32-byte containing block 快照、MB44 逐项回读和 canonical 固件恢复。后续只认 `summary.json` 的 `writes=7`、完整快照和七项 `verified_fields`，不得以普通运行时轮询日志代替 Data Flash 写入证据。
 
 ### 5.4 首版 Golden DF 基线（主板固定项）
 
@@ -522,7 +524,7 @@ LT 的 Low/Med/High 电流字段全部使用 `100mA`；STL、RT、STH、HT 的 L
 1. `Rsense=1 mΩ (1206, ≥1W)`（已定）；待定：具体料号（`TCR ≤ 50 ppm/°C`）、Kelvin 取样细节落板与 OC/SC 门限协同定标
 2. CHG/DSG 主功率 MOSFET 料号、数量与散热结构
 3. 预充电路径（PCHG）器件（P-MOS 与门极网络等，除 R1 外；R1 已定为 `2×150 Ω 2512` 串联）
-4. 温度：NTC、安装归属、`T1..T6/Hysteresis` 和 `0–45°C` 充电策略均已固化并已接入固件、维护工具和项目文档，见 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md) 与 [`IMPLEMENTATION.md`](specs/bq40-charge-temperature-profile/IMPLEMENTATION.md)；剩余工作仅是按既定边界执行离线/硬件验证，不能借此扩大 profile 写入范围。
+4. 温度：NTC、安装归属、`T1..T6/Hysteresis` 和 `0–45°C` 充电策略均已固化并已接入固件、维护工具、目标硬件和项目文档，见 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md) 与 [`IMPLEMENTATION.md`](specs/bq40-charge-temperature-profile/IMPLEMENTATION.md)；目标硬件的温度 profile 写入已完成，但温箱/热风枪验证仍不在本次范围内，不能借此扩大 profile 写入范围。
 5. Pack 连接器 pinout 与 ESD/EMI 方案
 6. 二次保护触发指标：`BQ296100` → `AO3400A` → `CLM` heater 的电压/电流/触发时间
 

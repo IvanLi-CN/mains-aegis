@@ -107,6 +107,27 @@ impl Bq40ChargeEvidence {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProductChargeFreshnessAction {
+    KeepCharging,
+    RefreshBeforeDecision,
+}
+
+/// A stale product-charge sample is a scheduling signal before the next
+/// charger poll, not permission to toggle CE immediately. The poll refreshes
+/// the BQ40 request first and then applies the normal fail-closed decision.
+pub(super) const fn product_charge_freshness_action(
+    activation_pending: bool,
+    charger_enabled: bool,
+    evidence_fresh: bool,
+) -> ProductChargeFreshnessAction {
+    if activation_pending || !charger_enabled || evidence_fresh {
+        ProductChargeFreshnessAction::KeepCharging
+    } else {
+        ProductChargeFreshnessAction::RefreshBeforeDecision
+    }
+}
+
 pub(super) const INA3221_ADDR: u8 = 0x40;
 pub(super) const INA_REG_CH1_CRITICAL: u8 = 0x07;
 pub(super) const INA_REG_CH1_WARNING: u8 = 0x08;
@@ -3619,6 +3640,26 @@ mod tests {
     use super::*;
 
     const TEST_VIN_DROP_THRESHOLD_PCT: u16 = 4;
+
+    #[test]
+    fn stale_product_evidence_requests_refresh_before_ce_disable() {
+        assert_eq!(
+            product_charge_freshness_action(false, true, false),
+            ProductChargeFreshnessAction::RefreshBeforeDecision
+        );
+        assert_eq!(
+            product_charge_freshness_action(false, true, true),
+            ProductChargeFreshnessAction::KeepCharging
+        );
+        assert_eq!(
+            product_charge_freshness_action(true, true, false),
+            ProductChargeFreshnessAction::KeepCharging
+        );
+        assert_eq!(
+            product_charge_freshness_action(false, false, false),
+            ProductChargeFreshnessAction::KeepCharging
+        );
+    }
 
     #[test]
     fn bq40_charge_evidence_latch_survives_cache_reset_and_relocks_runtime_gates() {

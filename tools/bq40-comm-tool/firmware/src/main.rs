@@ -63,7 +63,11 @@ const BMS_MAC_PROBE_BOOT_WINDOW_SECS: u64 = if cfg!(feature = "bms-mac-probe-onl
     0
 };
 const BMS_ROM_RECOVER: bool = !cfg!(feature = "bms-rom-recover-disable");
-const BMS_PRETOUCH_ENABLED: bool = FORCE_MIN_CHARGE || BMS_ROM_RECOVER;
+// The explicit charge-temperature maintenance image also needs the same harmless SMBus
+// wake-touch as the canonical image. This only wakes the gauge; CE remains high and the writer
+// still requires strict identity plus Full Access before any Data Flash transaction.
+const BMS_PRETOUCH_ENABLED: bool =
+    FORCE_MIN_CHARGE || BMS_ROM_RECOVER || BMS_CHARGE_TEMPERATURE_APPLY;
 // Keep the whole diagnostic tool on the slowest known-good SMBus rate to maximize margin during
 // recovery and wake attempts.
 const I2C1_FREQ_KHZ: u32 = 25;

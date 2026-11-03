@@ -181,6 +181,8 @@ const BMS_BOOT_STAGE_POLL_PERIOD: Duration = Duration::from_secs(5);
 const BMS_WAIT_ROM_FAST_POLL_PERIOD: Duration = Duration::from_millis(250);
 const BMS_BOOT_MIN_CHARGE_SETTLE: Duration = Duration::from_secs(2);
 const BMS_POST_FLASH_BOOT_QUIET: Duration = Duration::from_secs(10);
+#[cfg(feature = "bms-charge-temperature-apply")]
+const BMS_CHARGE_PROFILE_MONITOR_GRACE: Duration = Duration::from_secs(3);
 const BMS_WORKING_INFO_PERIOD: Duration = Duration::from_secs(5);
 const BMS_FORCE_MIN_CHARGE_REPOWER_OFF: Duration = Duration::from_secs(10);
 const BMS_ROM_RECOVER_MIN_INTERVAL: Duration = Duration::from_secs(30);
@@ -1275,11 +1277,33 @@ fn write_bms_charge_profile_field_once<I2C>(
 where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
-    let frame = charge_profile::build_mb44_field_write_request(df_addr, raw);
-    i2c.write(addr, &frame)
-        .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
-    spin_delay(BMS_MAC_WRITE_SETTLE);
-    Ok(())
+    let mut last_err = bq40z50::BmsDiagError::I2cNack;
+    for via in [BmsDfWriteVia::Direct, BmsDfWriteVia::Pec] {
+        match write_bms_df_bytes_via_mb44_once(i2c, addr, df_addr, &raw, via) {
+            Ok(()) => {
+                if matches!(via, BmsDfWriteVia::Pec) {
+                    defmt::warn!(
+                        "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=field_write via=pec df_addr=0x{=u16:x}",
+                        addr,
+                        df_addr,
+                    );
+                }
+                return Ok(());
+            }
+            Err(err) => {
+                last_err = err;
+                defmt::warn!(
+                    "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=field_write via={} df_addr=0x{=u16:x} err={}",
+                    addr,
+                    via.as_str(),
+                    df_addr,
+                    err,
+                );
+            }
+        }
+    }
+
+    Err(last_err)
 }
 
 #[cfg(feature = "bms-charge-temperature-profile")]
@@ -5593,6 +5617,10 @@ pub struct PowerManager<'d, I2C> {
     bms_charge_temperature_profile_failed: bool,
     #[cfg(feature = "bms-charge-temperature-profile")]
     bms_charge_temperature_snapshot: Option<[u8; 32]>,
+    #[cfg(feature = "bms-charge-temperature-apply")]
+    bms_charge_temperature_apply_pending: bool,
+    #[cfg(feature = "bms-charge-temperature-apply")]
+    bms_charge_temperature_apply_ready_at: Option<Instant>,
     #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
     bms_rom_df_section1_valid: bool,
     #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
@@ -5849,6 +5877,51 @@ where
         }
     }
 
+    #[cfg(feature = "bms-charge-temperature-apply")]
+    fn maybe_run_pending_bq40_charge_temperature_profile(&mut self) {
+        if !self.cfg.bms_charge_temperature_apply
+            || !self.bms_charge_temperature_apply_pending
+            || self.bms_charge_temperature_profile_applied
+            || self.bms_charge_temperature_profile_failed
+        {
+            return;
+        }
+
+        let Some(addr) = self.bms_addr else {
+            return;
+        };
+        let now = Instant::now();
+        if self
+            .bms_charge_temperature_apply_ready_at
+            .is_some_and(|ready_at| now < ready_at)
+        {
+            return;
+        }
+
+        self.bms_charge_temperature_apply_pending = false;
+        if self.maybe_apply_bq40_charge_temperature_profile(addr, now) {
+            self.set_charge_mode(BootChargeMode::Off);
+            self.charger_allowed = false;
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
+            self.chg_next_retry_at = Some(now + BMS_POLL_PERIOD);
+            defmt::error!(
+                "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=halt reason=profile_failed charger_enabled=false",
+                addr,
+            );
+        } else {
+            // Keep the maintenance image in a no-charge state after a successful write. The
+            // canonical runtime image is responsible for normal charge policy after restore.
+            self.charger_allowed = false;
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
+            defmt::info!(
+                "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=halt reason=complete charger_enabled=false",
+                addr,
+            );
+        }
+    }
+
     pub fn new(
         i2c: I2C,
         i2c1_int: Input<'d>,
@@ -5941,6 +6014,10 @@ where
             bms_charge_temperature_profile_failed: false,
             #[cfg(feature = "bms-charge-temperature-profile")]
             bms_charge_temperature_snapshot: None,
+            #[cfg(feature = "bms-charge-temperature-apply")]
+            bms_charge_temperature_apply_pending: false,
+            #[cfg(feature = "bms-charge-temperature-apply")]
+            bms_charge_temperature_apply_ready_at: None,
             #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
             bms_rom_df_section1_valid: false,
             #[cfg(feature = "bms-rom-repair-asset-df-mainboard")]
@@ -6108,6 +6185,8 @@ where
         self.bms_exit_exercise_reported = false;
         self.clear_post_flash_resume();
         self.bms_last_working_info_at = None;
+        #[cfg(feature = "bms-charge-temperature-apply")]
+        self.maybe_run_pending_bq40_charge_temperature_profile();
         defmt::warn!(
             "bms_flow: stage={} addr=0x{=u8:x} charge_mode={}",
             self.bms_startup_stage.as_str(),
@@ -6122,37 +6201,20 @@ where
             return;
         }
 
-        // This is the only production entry point for the Data Flash writer. It is armed by the
-        // explicit `apply-df` maintenance image during startup, before the normal polling loop
-        // begins; automatic discovery and ordinary BMS polling never invoke the writer.
+        // Arm the one-shot writer, but let the normal bounded BQ40 discovery loop establish a
+        // live address first. A freshly reset MCU can otherwise probe while the gauge is still
+        // asleep and permanently fail before the monitor has attached.
+        self.bms_charge_temperature_apply_pending = true;
+        self.bms_charge_temperature_apply_ready_at =
+            Some(self.boot_at + BMS_CHARGE_PROFILE_MONITOR_GRACE);
         let now = Instant::now();
         self.set_charge_mode(BootChargeMode::Off);
         self.chg_ce.set_high();
         self.chg_enabled = false;
         self.chg_next_retry_at = Some(now + BMS_POLL_PERIOD);
-
-        let Some(addr) = self.probe_bq40z50_quiet() else {
-            self.bms_charge_temperature_profile_failed = true;
-            self.charger_allowed = false;
-            defmt::error!(
-                "bms_df_apply: profile=bq40_charge_temperature stage=halt reason=identity_not_found charger_enabled=false"
-            );
-            return;
-        };
-
-        self.mark_bms_working(addr);
-        let now = Instant::now();
-        if self.maybe_apply_bq40_charge_temperature_profile(addr, now) {
-            self.set_charge_mode(BootChargeMode::Off);
-            self.charger_allowed = false;
-            self.chg_ce.set_high();
-            self.chg_enabled = false;
-            self.chg_next_retry_at = Some(now + BMS_POLL_PERIOD);
-            defmt::error!(
-                "bms_df_apply: addr=0x{=u8:x} profile=bq40_charge_temperature stage=halt reason=profile_failed charger_enabled=false",
-                addr,
-            );
-        }
+        defmt::info!(
+            "bms_df_apply: profile=bq40_charge_temperature stage=armed wait_for_identity=true charger_enabled=false"
+        );
     }
 
     fn rom_recover_due(&self, addr: u8, now: Instant) -> bool {
@@ -7103,6 +7165,8 @@ where
         } else {
             self.maybe_run_bms_startup_flow()
         };
+        #[cfg(feature = "bms-charge-temperature-apply")]
+        self.maybe_run_pending_bq40_charge_temperature_profile();
         if self.cfg.bms_diag_isolation && bms_i2c_active {
             self.bms_isolation_until = Some(Instant::now() + BMS_ISOLATION_WINDOW);
             return;

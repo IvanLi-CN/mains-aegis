@@ -449,6 +449,9 @@ else
     initial_stdout_timeout_sec="$POST_FLASH_BOOT_QUIET_SEC"
   fi
   monitor_args=(--duration-sec "$duration_sec" --after-flash "$flash" --reset-on-attach "$monitor_reset_on_attach")
+  if [[ "$repair_profile" == "bq40-charge-temperature" ]]; then
+    monitor_args+=(--maintenance-profile bq40-charge-temperature)
+  fi
   if [[ -n "$initial_stdout_timeout_sec" ]]; then
     monitor_args+=(--initial-stdout-timeout-sec "$initial_stdout_timeout_sec")
   fi

@@ -79,7 +79,7 @@ charging. Its profile-specific maintenance image performs one explicit startup m
 apply after the strict identity probe; ordinary BMS discovery and polling never write Data Flash.
 
 ```bash
-./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge true --probe-mode strict --repair-profile bq40-charge-temperature
+./bin/run.sh apply-df --mode canonical --duration-sec 120 --force-min-charge false --probe-mode strict --repair-profile bq40-charge-temperature
 ```
 
 Policy:
@@ -125,10 +125,10 @@ Notes:
 
 ## 4) Supported sequence
 
-1. `diagnose --mode canonical --force-min-charge true`
-2. If canonical diagnose passes and an authorized maintenance window needs the locked charge-temperature profile, run `apply-df --mode canonical --force-min-charge true --probe-mode strict --repair-profile bq40-charge-temperature`
+1. `diagnose --mode canonical --force-min-charge false`
+2. If canonical diagnose passes and an authorized maintenance window needs the locked charge-temperature profile, run `apply-df --mode canonical --force-min-charge false --probe-mode strict --repair-profile bq40-charge-temperature`
 3. If the log contains `stage=rom_mode_detected`, run `recover --mode dual-diag --recover if-rom --force-min-charge true --repair-profile asset-df-mainboard`
-4. Re-flash canonical firmware and re-run `diagnose --mode canonical --force-min-charge true`
+4. Re-flash canonical firmware and re-run `diagnose --mode canonical --force-min-charge false`
 5. Run `verify --mode canonical --monitor-file <canonical log>` on the final canonical log
 
 

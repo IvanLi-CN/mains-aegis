@@ -82,6 +82,35 @@ class DiagSnapshotReadonlyTests(unittest.TestCase):
             [],
         )
 
+    def test_validate_accepts_devd_decoded_payload_shape(self) -> None:
+        response = {
+            "sample": {
+                "packages": {
+                    "bq40.manufacturing": {
+                        "payload": {
+                            "decoded": {
+                                "manufacturing_status": 0,
+                                "fet_en": True,
+                                "chg_en": True,
+                                "dsg_en": True,
+                                "safety_status": 0,
+                                "pf_status": 0,
+                                "charging_status": 0,
+                                "gauging_status": 0,
+                                "op_status_raw_len": 4,
+                                "op_status_raw_bytes": [1, 2, 3, 4],
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        self.assertEqual(
+            self.mod.validate_response(response, ["bq40.manufacturing"]),
+            [],
+        )
+
     def test_validate_reports_missing_bq40_raw_fields(self) -> None:
         response = {
             "sample": {

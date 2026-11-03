@@ -63,14 +63,14 @@
 
 | 子项 | 选型状态 | 说明 |
 |---|---|---|
-| NTC / 温度映射 | 已定 | BQ40 `TS1~TS4` 使用 `10 kΩ@25°C(103), β=3380`；`Temperature Enable=0x1E`、`Temperature Mode=0x00`；`TS1` 为板侧点，`TS2~TS4` 为电芯间点；BQ25792 使用独立同曲线 NTC，`RTS1=5.23kΩ`、`RTS2=30.1kΩ`，JEITA `15–45°C` |
+| NTC / 温度映射 | 已定 | BQ40 `TS1~TS4` 使用 `10 kΩ@25°C(103), β=3380`；`Temperature Enable=0x1E`、`Temperature Mode=0x00`；`TS1` 为板侧点，`TS2~TS4` 为电芯间点；BQ25792 使用独立同曲线 NTC，`RTS1=5.23kΩ`、`RTS2=30.1kΩ`，JEITA `15–45°C`；T1～T6/Hysteresis 已通过显式 writer 应用到绑定硬件并逐项回读 |
 | PTC 安全检测 | 已定 | 启用 `PTC/PTCEN`，使用 `Murata PRF18BA103QB1RB` 或同等规格，作为高于正常温控关断的最后一道安全闩锁 |
 
 ### 2.5 均衡（cell balancing）
 
 | 子项 | 选型状态 | 说明 |
 |---|---|---|
-| 均衡策略 | 已定（外部被动均衡） | 采用 TI app note 的外部均衡 **PMOS** 拓扑（BQ40Z50 内部均衡开关 + 外部 PMOS + `Rext`）；目标均衡电流：`200 mA`（平均值） |
+| 均衡策略 | 已定（外部被动均衡） | 采用 TI app note 的外部均衡 **PMOS** 拓扑（BQ40Z50 内部均衡开关 + 外部 PMOS + `Rext`）；目标均衡电流：`200 mA`（平均值）。当前 HIL 未观察到均衡动作，`dsg_fet=true` 只表示整包放电 FET 状态，不表示最低电压 C2 正在被单体放电 |
 | 外部均衡 MOSFET（PMOS） | `UMW SI2305A` | `SOT-23`，`VDS=-20V`，`ID=-4.2A`，`VGS(th) max=-0.5V`，`RDS(on) max 40mΩ@-4.5V / 60mΩ@-2.5V`；资料：`docs/datasheets/UMW_SI2305A/` |
 | 外部均衡电阻（Rext） | 已定（200 mA） | `Rext=16Ω`（以 `Vcell≈4.2V` 估算约 `200 mA` 平均均衡电流）；建议 `2512`、`≥2W`、`1%`，并按 PCB 热能力校核 |
 | VC 采样滤波（Rvc/Cvc） | 已定（按 BQ40Z50 推荐） | `Rvc=100Ω`（每个 VCx 串联电阻）；`Cvc=0.1µF`（按 datasheet 连接）；建议 `Cvc` 选 `X7R`、`≥10V` 并贴近 IC 放置 |

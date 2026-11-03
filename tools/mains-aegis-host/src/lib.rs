@@ -68,7 +68,9 @@ const NATIVE_MONITOR_STATUS_INTERVAL_MS: u64 = 200;
 const NATIVE_MONITOR_STATUS_RESPONSE_TIMEOUT_MS: u64 = 750;
 const NATIVE_MONITOR_COMMAND_TIMEOUT_MS: u64 = 750;
 const NATIVE_MONITOR_STOP_WAIT_MS: u64 = 1_000;
-const NATIVE_MONITOR_DECODE_DEFMT: bool = false;
+// Native monitor records defmt frames so firmware diagnostics remain inspectable through devd.
+// Identity matching below still gates which ELF may decode a live stream.
+const NATIVE_MONITOR_DECODE_DEFMT: bool = true;
 const NATIVE_MONITOR_POLL_STATUS: bool = true;
 const HOST_RUNTIME_SYNC_INTERVAL_MS: u64 = 1_000;
 const MONITOR_CACHE_FRESHNESS_MS: u64 = 750;
@@ -796,6 +798,11 @@ struct SessionQuery {
     logs_limit: Option<usize>,
     trace_limit: Option<usize>,
     lease_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct MonitorStartQuery {
+    maintenance_profile: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -2004,7 +2011,14 @@ async fn dispatch_ipc_request(
         }
         "device.monitor.start" => {
             let id = require_param(&params, "device_id")?;
-            json_result(monitor_start(State(state.clone()), Path(id)).await)
+            json_result(
+                monitor_start(
+                    Query(MonitorStartQuery::default()),
+                    State(state.clone()),
+                    Path(id),
+                )
+                .await,
+            )
         }
         "device.monitor.stop" => {
             let id = require_param(&params, "device_id")?;
@@ -5965,16 +5979,45 @@ async fn reset_advanced_power(
 }
 
 async fn monitor_start(
+    Query(query): Query<MonitorStartQuery>,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, HttpError> {
     ensure_bound_device_record(&state, &id)?;
+    let allow_unverified_maintenance = match query.maintenance_profile.as_deref() {
+        None => false,
+        Some("bq40-charge-temperature") => true,
+        Some(profile) => {
+            return Err(HttpError::non_retryable(
+                "maintenance_profile_unsupported",
+                format!("unsupported monitor maintenance profile: {profile}"),
+            ))
+        }
+    };
     let (transport, port_path, lan_address) = {
         let guard = state.inner.lock().expect("state lock");
         let device = guard
             .devices
             .get(&id)
             .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        if allow_unverified_maintenance {
+            let selected_artifact = device
+                .selected_artifact_id
+                .as_ref()
+                .and_then(|artifact_id| guard.artifacts.get(artifact_id));
+            let is_charge_temperature_maintenance = selected_artifact.is_some_and(|artifact| {
+                artifact
+                    .features
+                    .iter()
+                    .any(|feature| feature == "bms-charge-temperature-apply")
+            });
+            if !is_charge_temperature_maintenance {
+                return Err(HttpError::non_retryable(
+                    "maintenance_artifact_required",
+                    "bq40-charge-temperature monitor mode requires the selected maintenance artifact",
+                ));
+            }
+        }
         (
             device.transport.clone(),
             device.port_path.clone(),
@@ -5992,7 +6035,13 @@ async fn monitor_start(
                 )
             })?;
             let port = open_native_monitor_serial_async(port_path.clone()).await?;
-            start_native_monitor(&state, id.clone(), port_path, port)?
+            start_native_monitor(
+                &state,
+                id.clone(),
+                port_path,
+                port,
+                allow_unverified_maintenance,
+            )?
         }
     } else if matches!(transport, DeviceTransport::Lan) {
         if let Some(sample) = running_native_monitor_snapshot(&state, &id)? {
@@ -10458,6 +10507,7 @@ fn start_native_monitor(
     device_id: String,
     port_path: String,
     port: Box<dyn serialport::SerialPort>,
+    allow_unverified_maintenance: bool,
 ) -> Result<MonitorStartResult, HttpError> {
     let stop = Arc::new(AtomicBool::new(false));
     let done = Arc::new(AtomicBool::new(false));
@@ -10486,7 +10536,16 @@ fn start_native_monitor(
     }
     let state = state.clone();
     std::thread::spawn(move || {
-        run_native_monitor(state, device_id, port_path, stop, done, command_rx, port)
+        run_native_monitor(
+            state,
+            device_id,
+            port_path,
+            stop,
+            done,
+            command_rx,
+            port,
+            allow_unverified_maintenance,
+        )
     });
     Ok(MonitorStartResult {
         trace_count: 0,
@@ -10590,10 +10649,17 @@ fn run_native_monitor(
     done: Arc<AtomicBool>,
     command_rx: mpsc::Receiver<NativeMonitorCommand>,
     port: Box<dyn serialport::SerialPort>,
+    allow_unverified_maintenance: bool,
 ) {
-    if let Err(error) =
-        run_native_monitor_inner(&state, &device_id, &port_path, &stop, command_rx, port)
-    {
+    if let Err(error) = run_native_monitor_inner(
+        &state,
+        &device_id,
+        &port_path,
+        &stop,
+        command_rx,
+        port,
+        allow_unverified_maintenance,
+    ) {
         let mut guard = state.inner.lock().expect("state lock");
         guard.monitors.remove(&device_id);
         if let Some(device) = guard.devices.get_mut(&device_id) {
@@ -10656,9 +10722,10 @@ fn run_native_monitor_inner(
     stop: &AtomicBool,
     command_rx: mpsc::Receiver<NativeMonitorCommand>,
     mut port: Box<dyn serialport::SerialPort>,
+    allow_unverified_maintenance: bool,
 ) -> Result<(), HttpError> {
     let defmt_table = NATIVE_MONITOR_DECODE_DEFMT
-        .then(|| load_native_monitor_defmt_table(state, device_id))
+        .then(|| load_native_monitor_defmt_table(state, device_id, allow_unverified_maintenance))
         .transpose()?
         .flatten();
     let mut defmt_decoder = defmt_table.as_ref().map(|table| table.new_stream_decoder());
@@ -10861,8 +10928,9 @@ fn run_native_monitor_inner(
 fn load_native_monitor_defmt_table(
     state: &AppState,
     device_id: &str,
+    allow_unverified_maintenance: bool,
 ) -> Result<Option<Table>, HttpError> {
-    let artifact = {
+    let (artifact, identity_verified, identity_absent) = {
         let guard = state.inner.lock().expect("state lock");
         let device = guard
             .devices
@@ -10874,17 +10942,27 @@ fn load_native_monitor_defmt_table(
         let Some(artifact) = guard.artifacts.get(artifact_id) else {
             return Ok(None);
         };
-        if !defmt_artifact_matches_device(device, artifact) {
-            return Err(HttpError::non_retryable(
-                "defmt_artifact_identity_mismatch",
-                format!(
-                    "selected artifact {} is not verified against device firmware identity",
-                    artifact.artifact_id
-                ),
-            ));
-        }
-        artifact.clone()
+        (
+            artifact.clone(),
+            defmt_artifact_matches_device(device, artifact),
+            device.identity.is_none(),
+        )
     };
+    let is_charge_temperature_maintenance = artifact
+        .features
+        .iter()
+        .any(|feature| feature == "bms-charge-temperature-apply");
+    if !identity_verified
+        && !(allow_unverified_maintenance && identity_absent && is_charge_temperature_maintenance)
+    {
+        return Err(HttpError::non_retryable(
+            "defmt_artifact_identity_mismatch",
+            format!(
+                "selected artifact {} is not verified against device firmware identity",
+                artifact.artifact_id
+            ),
+        ));
+    }
     let Some(elf_path) = native_monitor_defmt_elf_path(&artifact)? else {
         return Ok(None);
     };
@@ -12876,7 +12954,13 @@ mod tests {
             );
         }
 
-        let response = monitor_start(State(state), Path(device_id)).await.unwrap();
+        let response = monitor_start(
+            Query(MonitorStartQuery::default()),
+            State(state),
+            Path(device_id),
+        )
+        .await
+        .unwrap();
         assert_eq!(response.0["ok"], true);
         assert_eq!(response.0["already_running"], true);
         assert_eq!(response.0["initial_trace_count"], 1);
@@ -15150,7 +15234,7 @@ mod tests {
             );
         }
 
-        let error = load_native_monitor_defmt_table(&state, &device_id).unwrap_err();
+        let error = load_native_monitor_defmt_table(&state, &device_id, false).unwrap_err();
 
         assert_eq!(error.0.code, "defmt_artifact_identity_mismatch");
     }

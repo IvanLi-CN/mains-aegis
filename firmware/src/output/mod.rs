@@ -6721,14 +6721,22 @@ where
                 self.bq40_charge_request,
             )
         };
-        if evidence_fresh {
-            return;
+        if matches!(
+            product_charge_freshness_action(
+                self.bms_activation_state == BmsActivationState::Pending,
+                self.chg_enabled,
+                evidence_fresh,
+            ),
+            ProductChargeFreshnessAction::RefreshBeforeDecision
+        ) {
+            // The next charger poll refreshes SBS 0x14/0x15 before applying
+            // the fail-closed decision. Do not toggle CE on a boundary tick.
+            self.chg_next_poll_at = Instant::now();
+            self.bq40_charge_request_next_poll_at = Instant::now();
+            defmt::info!(
+                "bms: product charge refresh requested reason=bq40_evidence_expired_or_invalid"
+            );
         }
-
-        self.chg_ce.set_high();
-        self.chg_enabled = false;
-        self.chg_next_poll_at = Instant::now();
-        defmt::warn!("bms: product charge disabled reason=bq40_evidence_expired_or_invalid");
     }
 
     fn fan_temps_ready(&self) -> bool {
