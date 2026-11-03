@@ -305,6 +305,23 @@ def post_halt_charge_enable_log() -> list[str]:
     ]
 
 
+def write_transport_failure_log() -> list[str]:
+    lines = successful_log()
+    snapshot_index = next(
+        index for index, line in enumerate(lines) if "stage=snapshot_before_hex" in line
+    )
+    return lines[: snapshot_index + 1] + [
+        log(
+            "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
+            "stage=write_transport via=direct df_addr=0x4a0b err=i2c_nack"
+        ),
+        log(
+            "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
+            "stage=halt reason=profile_failed charger_enabled=false"
+        ),
+    ]
+
+
 def ordinary_sample_log() -> list[str]:
     return [
         log(
@@ -425,6 +442,14 @@ def main() -> None:
         assert bad.returncode == 20
         summary = json.loads((root / "report" / "summary.json").read_text())
         assert "charge_profile_post_halt_charge_enable" in summary["verdict"]["reason"]
+
+        bad = run_parser(write_transport_failure_log(), root)
+        assert bad.returncode == 20
+        summary = json.loads((root / "report" / "summary.json").read_text())
+        reason = summary["verdict"]["reason"]
+        assert "charge_profile_apply_errors" in reason
+        assert "charge_profile_evidence_sequence_invalid" not in reason
+        assert "charge_profile_unknown_stage" not in reason
 
         bad = run_parser(duplicate_field_evidence_log(), root)
         assert bad.returncode == 20

@@ -122,7 +122,6 @@ def charge_profile_evidence_shape_is_valid(text: str) -> bool:
         "snapshot_transport",
         "snapshot_address",
         "snapshot_length",
-        "write_transport",
         "echo_address",
         "echo_length",
         "echo_raw",
@@ -134,6 +133,8 @@ def charge_profile_evidence_shape_is_valid(text: str) -> bool:
         "final_decoded",
     }:
         return matches((r"err=\S+",))
+    if stage == "write_transport":
+        return matches((r"via=direct", r"df_addr=0x[0-9a-fA-F]+", r"err=\S+"))
     if stage == "identity_error":
         return matches((r"reason=\S+",))
     if stage == "error":
