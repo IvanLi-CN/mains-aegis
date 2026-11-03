@@ -49,6 +49,10 @@ def successful_log() -> list[str]:
     after = " ".join(f"b{index}=0x{value:02x}" for index, value in enumerate(after_payload))
     lines = [
         log(
+            "bms_charge_profile: profile=bq40_charge_temperature stage=armed "
+            "wait_for_identity=true charger_enabled=false"
+        ),
+        log(
             "bms_df_apply: addr=0xb profile=bq40_charge_temperature "
             "stage=charge_disabled ce_high=true charger_enabled=false"
         ),
@@ -125,7 +129,16 @@ def non_allowlisted_byte_change_log() -> list[str]:
 
 def reordered_evidence_log() -> list[str]:
     lines = successful_log()
-    lines[0], lines[1] = lines[1], lines[0]
+    charge_disabled_index = next(
+        index for index, line in enumerate(lines) if "stage=charge_disabled" in line
+    )
+    provenance_index = next(
+        index for index, line in enumerate(lines) if "stage=provenance" in line
+    )
+    lines[charge_disabled_index], lines[provenance_index] = (
+        lines[provenance_index],
+        lines[charge_disabled_index],
+    )
     return lines
 
 

@@ -6197,7 +6197,7 @@ where
         self.chg_enabled = false;
         self.chg_next_retry_at = Some(now + BMS_POLL_PERIOD);
         defmt::info!(
-            "bms_df_apply: profile=bq40_charge_temperature stage=armed wait_for_identity=true charger_enabled=false"
+            "bms_charge_profile: profile=bq40_charge_temperature stage=armed wait_for_identity=true charger_enabled=false"
         );
     }
 
