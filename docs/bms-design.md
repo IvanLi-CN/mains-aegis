@@ -312,7 +312,7 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
 
 温度保护的“配置”不靠硬件电阻值自动适配，而是靠 **BQSTUDIO 通过 SMBus 写 Data Flash（DF）** 的方式，把“TS 引脚电压 → 温度(°C)”的热敏曲线模型与温度保护阈值固化为一份 **golden image**（开发/量产共用）。
 
-本项目建议配置策略（配合 3.4 的布点）：
+本项目最终配置策略（配合 3.4 的布点）见 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md)：
 
 - 传感器启用：
   - 启用 `TS1~TS4`
@@ -326,6 +326,28 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
 - `PTC`（安全 PTC）：
   - 启用 `PTC/PTCEN` 安全 PTC 检测，并按参考设计连接至 `BAT`
   - 注意：`PTC fault` 属于永久故障类，通常只能通过 `POR` 清除；因此 PTC 的触发温度应高于“正常温控关断（可恢复）”的阈值，用作最后一道安全闩锁
+
+#### 5.3.1 电芯充电温度 profile（当前唯一口径）
+
+本项目只支持电芯本体 `0–45°C` 充电，不支持 `45–55°C` 低电流充电。电芯温度判定取 `TS2/TS3/TS4` 的最高值；`TS1` 是板侧温度点，不能放宽电芯温度上限。
+
+| 电芯温度 | BQ40 区间 | BQ40/BQ25792 目标 | 说明 |
+|---|---|---:|---|
+| `<0°C` | UT/LT 边界外 | 禁止充电 | 低温保护 |
+| `0–15°C` | LT | `100mA / 16800mV` | 项目保守低温策略 |
+| `15–20°C` | STL | `500mA / 16800mV` | 正常策略 |
+| `20–35°C` | RT | `500mA / 16800mV` | 正常策略 |
+| `35–40°C` | STH | `500mA / 16800mV` | 正常策略 |
+| `40–45°C` | HT | `500mA / 16800mV` | 保持 15–45°C 全区间正常 |
+| `≥45°C` | OT 边界外 | 禁止充电 | 不支持 45–55°C |
+
+温度字段固定为 `T1=0°C`、`T2=15°C`、`T5=20°C`、`T6=35°C`、`T3=40°C`、`T4=45°C`、`Hysteresis=2°C`，满足 `T1≤T2≤T5≤T6≤T3≤T4`。Data Flash 使用 TRM 的 `0.1K` 小端表示，原始值依次为 `2732`、`2882`、`2932`、`3082`、`3132`、`3182`、`20`。
+
+LT 的 Low/Med/High 电流字段全部使用 `100mA`；STL、RT、STH、HT 的 Low/Med/High 电流字段全部使用 `500mA`；各允许温区的充电电压字段全部使用 `16800mV`。本 profile 不修改 BQ40 的 precharge、maintenance-charge 或 termination Data Flash 字段。
+
+主固件每秒刷新一次 SBS `ChargingCurrent()`/`ChargingVoltage()`（`0x14/0x15`），并将有效、未过期的 BQ40 请求作为 BQ25792 的安全上限；读失败、零值、越界或超过 `1s` 的请求均禁充。已使能的产品充电在每次主循环 tick 重新检查温度与 request 新鲜度；证据过期时先调度立即 charger poll，由该 poll 先刷新 BQ40 请求再作 fail-closed 决策，避免有效期边界导致 `CE` 反复开关；刷新仍失败、零值、越界或温度证据无效时在该 poll 拉高 `CE`。boot-diagnostic auto-force 也只在尚无 BQ40 温度或配置观察时依赖 JEITA，出现 BQ40 证据后沿用同一 tick 联锁；温度/配置证据跨瞬态 detail-cache reset 保持 fail-closed，明确读到的错误配置在新的有效配置读回前持续阻断。activation/recovery 的固定 `200mA` 只用于唤醒睡眠 gauge，不是产品充电后门：它必须先通过 BQ25792 JEITA 的 `15–45°C` 正常窗口；若已有 BQ40 温度、配置或请求证据，还必须通过新鲜正常温度和新鲜有效请求，且 wake 目标不超过请求值。activation 完成后只恢复寄存器，`CE` 保持禁充，下一次普通轮询重新执行完整门控。
+
+硬件应用核对：绑定设备已完成上述七个 T1～T6/Hysteresis 字段的 `0x4A00`/32-byte containing block 快照、MB44 逐项回读和 canonical 固件恢复。后续只认 `summary.json` 的 `writes=7`、完整快照和七项 `verified_fields`，不得以普通运行时轮询日志代替 Data Flash 写入证据。
 
 ### 5.4 首版 Golden DF 基线（主板固定项）
 
@@ -483,26 +505,26 @@ PACK 端 ESD/瞬态钳位（TVS）（已定）：
 
 ### 5.5 仍需单独锁定的量产字段
 
-以下字段与主板 bring-up 逻辑解耦，但在量产前必须单独锁定，不得沿用卖家模板：
+以下字段与温度 profile 解耦，必须保持独立的 golden-image 管理，不得由温度 profile 写入器顺带修改：
 
 - `Manufacturing Status Init`：需单独确认 `GAUGE_EN`、`FET_EN`、`LF_EN`、`PF_EN`、`LED_EN`、`FUSE_EN`
-- `ChemID`
-- `Design Capacity`
-- `Design Voltage`
-- `Terminate Voltage`
+- `ChemID`：必须通过 TI chemistry matching 流程确定，不从电芯型号臆填
+- `Design Capacity`：本项目固定为 `5000mAh`
+- `Design Voltage`：本项目固定为 `14600mV`（4S × 3.65V）
+- `Terminate Voltage`：保持独立 golden 配置，不属于本 profile
 - `Remaining Capacity Alarm`
-- 充/放电温度窗口与恢复点
+- 充/放电温度窗口与恢复点：充电窗口由 `bq40-charge-temperature-profile` 规范固定
 - `COV/SCC/SCD` 与 `CUV/CUVC` trip/delay 的量产验证；`CUV Recovery=2550mV` 与 `CUV_RECOV_CHG=0` 已作为主板恢复基线冻结
 - 均衡策略
 
-温度阈值（充/放电高温/低温、延时、恢复点）需结合电芯规格书与系统功耗/散热做定标后落到 DF（此处不写死，避免后续版本变更造成误导）。
+本 profile 不改变上述独立字段；`ChemID`、校准、学习数据、保护阈值和 termination 参数仍需由独立 golden-image 流程管理。
 
 ## 6. 待定清单（把设计从“可画图”推进到“可下单 BOM”）
 
 1. `Rsense=1 mΩ (1206, ≥1W)`（已定）；待定：具体料号（`TCR ≤ 50 ppm/°C`）、Kelvin 取样细节落板与 OC/SC 门限协同定标
 2. CHG/DSG 主功率 MOSFET 料号、数量与散热结构
 3. 预充电路径（PCHG）器件（P-MOS 与门极网络等，除 R1 外；R1 已定为 `2×150 Ω 2512` 串联）
-4. 温度：NTC 已定 `10k(103) β3380`（TS1 料号 `FNTC0402X103F3380FB`；TS2~TS4 同曲线）；待定：充/放电温度阈值点与延时/恢复点（充/放电温度窗口）
+4. 温度：NTC、安装归属、`T1..T6/Hysteresis` 和 `0–45°C` 充电策略均已固化并已接入固件、维护工具、目标硬件和项目文档，见 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md) 与 [`IMPLEMENTATION.md`](specs/bq40-charge-temperature-profile/IMPLEMENTATION.md)；目标硬件的温度 profile 写入已完成，但温箱/热风枪验证仍不在本次范围内，不能借此扩大 profile 写入范围。
 5. Pack 连接器 pinout 与 ESD/EMI 方案
 6. 二次保护触发指标：`BQ296100` → `AO3400A` → `CLM` heater 的电压/电流/触发时间
 

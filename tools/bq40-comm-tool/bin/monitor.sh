@@ -11,13 +11,14 @@ duration_sec=120
 output_file=""
 after_flash="false"
 reset_on_attach="false"
+maintenance_profile=""
 initial_stdout_timeout_sec="6"
 devd_url="${BQ40_TOOL_DEVD_URL:-http://127.0.0.1:30080}"
 device_id="${BQ40_TOOL_DEVICE_ID:-}"
 
 usage() {
   cat <<USAGE
-Usage: $(basename "$0") [--duration-sec N] [--output PATH] [--after-flash true|false] [--reset-on-attach true|false] [--initial-stdout-timeout-sec N]
+Usage: $(basename "$0") [--duration-sec N] [--output PATH] [--after-flash true|false] [--reset-on-attach true|false] [--maintenance-profile bq40-charge-temperature] [--initial-stdout-timeout-sec N]
 USAGE
 }
 
@@ -51,6 +52,11 @@ while [[ $# -gt 0 ]]; do
     --reset-on-attach)
       require_value "$1" "$#"
       reset_on_attach="${2:-}"
+      shift 2
+      ;;
+    --maintenance-profile)
+      require_value "$1" "$#"
+      maintenance_profile="${2:-}"
       shift 2
       ;;
     --initial-stdout-timeout-sec)
@@ -91,6 +97,14 @@ case "$reset_on_attach" in
     ;;
 esac
 
+case "$maintenance_profile" in
+  ""|bq40-charge-temperature) ;;
+  *)
+    echo "Invalid --maintenance-profile: $maintenance_profile" >&2
+    exit 6
+    ;;
+esac
+
 if ! [[ "$initial_stdout_timeout_sec" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "Invalid --initial-stdout-timeout-sec: $initial_stdout_timeout_sec" >&2
   exit 6
@@ -107,7 +121,7 @@ if [[ -z "$output_file" ]]; then
   output_file=$(mktemp -p "$monitor_dir" "$(date +%Y%m%d_%H%M%S)_XXXXXX_combined.mon.ndjson")
 fi
 
-python3 - "$devd_url" "$device_id" "$duration_sec" "$after_flash" "$reset_on_attach" "$initial_stdout_timeout_sec" "$output_file" <<'PY'
+python3 - "$devd_url" "$device_id" "$duration_sec" "$after_flash" "$reset_on_attach" "$maintenance_profile" "$initial_stdout_timeout_sec" "$output_file" <<'PY'
 from __future__ import annotations
 
 import json
@@ -116,6 +130,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 devd_url = sys.argv[1].rstrip("/")
@@ -123,8 +138,9 @@ device_id = sys.argv[2]
 duration_sec = int(sys.argv[3])
 after_flash = sys.argv[4] == "true"
 reset_on_attach = sys.argv[5] == "true"
-initial_stdout_timeout_sec = float(sys.argv[6])
-output_path = Path(sys.argv[7]).expanduser().resolve()
+maintenance_profile = sys.argv[6]
+initial_stdout_timeout_sec = float(sys.argv[7])
+output_path = Path(sys.argv[8]).expanduser().resolve()
 
 
 def now() -> str:
@@ -233,12 +249,38 @@ def stop_monitor_best_effort() -> None:
 print(f"Using mains-aegis-devd at {devd_url}", file=sys.stderr)
 print(json.dumps(request_json("GET", "/health"), sort_keys=True), file=sys.stderr)
 
+
+def start_monitor_with_retry(path: str) -> object:
+    # Flashing can leave the bound USB serial path between enumeration states for a short
+    # window. Retry only the same bound device and only the attach errors that are expected
+    # during that transition; all other monitor-start failures remain terminal.
+    retry_deadline = time.monotonic() + (30.0 if after_flash else 0.0)
+    retryable_errors = ("native_serial_open_failed", "native_cdc_timeout")
+    while True:
+        try:
+            return request_json("POST", path, {})
+        except SystemExit as exc:
+            message = str(exc)
+            if time.monotonic() >= retry_deadline or not any(
+                error in message for error in retryable_errors
+            ):
+                raise
+            print(
+                "monitor attach waiting for the bound device to re-enumerate",
+                file=sys.stderr,
+            )
+            time.sleep(1)
+
+
 fallback_reset_triggered = False
 fallback_reset_at: datetime | None = None
 monitor_running = False
 try:
     session_started_at = datetime.now(timezone.utc)
-    start = request_json("POST", f"/api/v1/devices/{device_id}/monitor/start", {})
+    monitor_start_path = f"/api/v1/devices/{device_id}/monitor/start"
+    if maintenance_profile:
+        monitor_start_path += "?" + urlencode({"maintenance_profile": maintenance_profile})
+    start = start_monitor_with_retry(monitor_start_path)
     monitor_running = True
     initial_trace_count = int(start.get("initial_trace_count", start.get("trace_count", 0)) or 0)
     initial_log_count = int(start.get("initial_log_count", start.get("log_count", 0)) or 0)
@@ -287,7 +329,7 @@ try:
             fallback_reset_triggered = True
             fallback_reset_at = datetime.now(timezone.utc)
             session_started_at = datetime.now(timezone.utc)
-            start = request_json("POST", f"/api/v1/devices/{device_id}/monitor/start", {})
+            start = start_monitor_with_retry(monitor_start_path)
             monitor_running = True
             initial_trace_count = int(start.get("initial_trace_count", start.get("trace_count", 0)) or 0)
             initial_log_count = int(start.get("initial_log_count", start.get("log_count", 0)) or 0)

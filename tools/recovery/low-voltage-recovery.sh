@@ -27,7 +27,7 @@ Options:
   --skip-main-build true         reuse an existing release main firmware ELF
 
 This runner performs the controlled two-flash recovery maintenance flow:
-  1. flash bq40-comm-tool firmware and apply live-df-mainboard
+  1. flash bq40-comm-tool firmware and apply bq40-charge-temperature
   2. flash main firmware through mains-aegis-devd
   3. verify USB diag-snapshot exposes the recovery baseline
 USAGE
@@ -237,18 +237,41 @@ validate_diag_snapshot() {
   local out="$2"
   python_json "$diag_json" "$require_recovery_state" "$out" <<'PY'
 import json, sys
-diag = json.loads(sys.argv[1])
-packages = diag.get("packages", {})
-if isinstance(packages, dict):
-    derived = packages.get("derived.power", {})
-    if isinstance(derived, dict) and isinstance(derived.get("payload"), dict):
-        diag = derived["payload"]
+errors = []
+raw_diag = json.loads(sys.argv[1])
+if not isinstance(raw_diag, dict):
+    errors.append("diag response is not an object")
+    packages = {}
+else:
+    packages = raw_diag.get("packages", {})
+if not isinstance(packages, dict):
+    errors.append("diag.packages is missing or not an object")
+    derived_payload = {}
+else:
+    derived = packages.get("derived.power")
+    if not isinstance(derived, dict):
+        errors.append('diag.packages["derived.power"] is missing or not an object')
+        derived_payload = {}
+    elif not isinstance(derived.get("payload"), dict):
+        errors.append('diag.packages["derived.power"].payload is missing or not an object')
+        derived_payload = {}
+    else:
+        derived_payload = derived["payload"]
+diag = derived_payload
 require_recovery = sys.argv[2] == "true"
 out = sys.argv[3]
 charger = diag.get("charger", {})
 bms = diag.get("bms", {})
 policy = diag.get("policy", {})
-errors = []
+if not isinstance(charger, dict):
+    errors.append("derived.power.payload.charger is not an object")
+    charger = {}
+if not isinstance(bms, dict):
+    errors.append("derived.power.payload.bms is not an object")
+    bms = {}
+if not isinstance(policy, dict):
+    errors.append("derived.power.payload.policy is not an object")
+    policy = {}
 if charger.get("vbat_lowv_pct_x10") != 714:
     errors.append(f"charger.vbat_lowv_pct_x10={charger.get('vbat_lowv_pct_x10')!r}, expected 714")
 if charger.get("iprechg_ma") != 120:
@@ -301,10 +324,24 @@ poll_diag_snapshot() {
   validate_diag_snapshot "$diag_json" "$result_out"
 }
 
+preflight_existing_recovery_baseline() {
+  local out="$1"
+  local diag_json
+  diag_json=$(curl_json GET "$devd_url/api/v1/devices/$target_device_id/diag-snapshot?package=bq25792.regs&package=bq40.manufacturing&package=derived.power")
+  printf '%s\n' "$diag_json" > "$report_root/preflight-diag-snapshot.json"
+  if ! validate_diag_snapshot "$diag_json" "$out"; then
+    echo "Existing low-voltage recovery baseline is missing; stop before writing the charge-temperature profile." >&2
+    echo "Run the explicit asset-df-mainboard ROM-recovery path when its ROM-signature precondition is met, then rerun this maintenance flow." >&2
+    return 1
+  fi
+  echo "Validated existing low-voltage recovery baseline before charge-temperature maintenance."
+}
+
 main_elf="$REPO_ROOT/firmware/target/xtensa-esp32s3-none-elf/release/mains-aegis-firmware"
 main_artifact_dir="$report_root/main-artifact"
 
 if [[ "$mode" == "real" ]]; then
+  bound_identity_available="false"
   require_explicit_target
   validate_selector_cache "main firmware" "$REPO_ROOT/firmware/.esp32-port"
   validate_selector_cache "bq40-comm-tool" "$REPO_ROOT/tools/bq40-comm-tool/.esp32-port"
@@ -316,8 +353,16 @@ if [[ "$mode" == "real" ]]; then
     > "$report_root/devd-bind-pre-bq40.json"
   if connect_json=$(curl_json POST "$devd_url/api/v1/devices/$target_device_id/connect" '{}' 2>/dev/null); then
     printf '%s\n' "$connect_json" > "$report_root/devd-connect-pre-bq40.json"
+    bound_identity_available="true"
   else
     echo "Bound device is present but identity is unavailable; continuing from download mode." >&2
+  fi
+  if [[ "$bound_identity_available" != "true" ]]; then
+    echo "Low-voltage recovery requires a readable existing main-firmware baseline before the temporary BQ40 profile write." >&2
+    exit 52
+  fi
+  if ! preflight_existing_recovery_baseline "$report_root/preflight-result.json"; then
+    exit 52
   fi
   decision_summary "state-changing" "tools/bq40-comm-tool/bin/run.sh apply-df ... && devd flash ..." "allow" "G4/G5: explicit owner-supplied device id and port; devd scan confirmed the same port; no direct espflash and no port switching" "Run two-flash recovery maintenance."
 else
@@ -330,7 +375,7 @@ if [[ ! -x "$REPO_ROOT/tools/bq40-comm-tool/bin/run.sh" ]]; then
 fi
 echo "Validated bq40-comm-tool runner."
 
-run_step "Apply BQ40 live DF baseline through temporary tool firmware" \
+run_step "Apply BQ40 charge-temperature profile through temporary tool firmware" \
   env \
     BQ40_TOOL_DEVD_URL="$devd_url" \
     BQ40_TOOL_DEVICE_ID="$target_device_id" \
@@ -338,7 +383,7 @@ run_step "Apply BQ40 live DF baseline through temporary tool firmware" \
     --mode canonical \
     --duration-sec 120 \
     --force-min-charge true \
-    --repair-profile live-df-mainboard \
+    --repair-profile bq40-charge-temperature \
     --report-out "$report_root/bq40-apply-df"
 
 if [[ "$skip_main_build" != "true" ]]; then

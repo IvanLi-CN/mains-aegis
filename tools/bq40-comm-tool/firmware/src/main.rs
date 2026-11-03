@@ -52,6 +52,10 @@ const FORCE_MIN_CHARGE: bool = cfg!(feature = "force-min-charge");
 const BMS_DIAG_ISOLATION: bool = true;
 const BMS_STRICT_VALIDATION: bool = true;
 const BMS_MAC_PROBE_ONLY: bool = cfg!(feature = "bms-mac-probe-only");
+// The Data Flash writer is armed only by the explicit `apply-df` maintenance image. Diagnostic
+// and runtime images may contain the profile implementation for contract checks, but they never
+// arm a writer during polling or discovery.
+const BMS_CHARGE_TEMPERATURE_APPLY: bool = cfg!(feature = "bms-charge-temperature-apply");
 // Diagnostic-only build knob: keep MAC-only probing enabled for the whole monitor session.
 const BMS_MAC_PROBE_BOOT_WINDOW_SECS: u64 = if cfg!(feature = "bms-mac-probe-only") {
     60 * 60
@@ -59,7 +63,11 @@ const BMS_MAC_PROBE_BOOT_WINDOW_SECS: u64 = if cfg!(feature = "bms-mac-probe-onl
     0
 };
 const BMS_ROM_RECOVER: bool = !cfg!(feature = "bms-rom-recover-disable");
-const BMS_PRETOUCH_ENABLED: bool = FORCE_MIN_CHARGE || BMS_ROM_RECOVER;
+// The explicit charge-temperature maintenance image also needs the same harmless SMBus
+// wake-touch as the canonical image. This only wakes the gauge; CE remains high and the writer
+// still requires strict identity plus Full Access before any Data Flash transaction.
+const BMS_PRETOUCH_ENABLED: bool =
+    FORCE_MIN_CHARGE || BMS_ROM_RECOVER || BMS_CHARGE_TEMPERATURE_APPLY;
 // Keep the whole diagnostic tool on the slowest known-good SMBus rate to maximize margin during
 // recovery and wake attempts.
 const I2C1_FREQ_KHZ: u32 = 25;
@@ -358,13 +366,14 @@ fn main() -> ! {
         DEFAULT_ILIMIT_MA
     );
     defmt::info!(
-        "fw: debug force_min_charge={=bool} bms_diag_isolation={=bool} bms_strict_validation={=bool} bms_mac_probe_only={=bool} bms_mac_window_s={=u64} bms_rom_recover={=bool} bms_addr_mode={} skip_i2c2_probe={=bool}",
+        "fw: debug force_min_charge={=bool} bms_diag_isolation={=bool} bms_strict_validation={=bool} bms_mac_probe_only={=bool} bms_mac_window_s={=u64} bms_rom_recover={=bool} bms_charge_temperature_apply={=bool} bms_addr_mode={} skip_i2c2_probe={=bool}",
         FORCE_MIN_CHARGE,
         BMS_DIAG_ISOLATION,
         BMS_STRICT_VALIDATION,
         BMS_MAC_PROBE_ONLY,
         BMS_MAC_PROBE_BOOT_WINDOW_SECS,
         BMS_ROM_RECOVER,
+        BMS_CHARGE_TEMPERATURE_APPLY,
         BMS_ADDRESS_MODE.as_str(),
         SKIP_I2C2_PROBE
     );
@@ -580,6 +589,7 @@ fn main() -> ! {
         bms_mac_probe_only: BMS_MAC_PROBE_ONLY,
         bms_mac_probe_boot_window: Duration::from_secs(BMS_MAC_PROBE_BOOT_WINDOW_SECS),
         bms_rom_recover: BMS_ROM_RECOVER,
+        bms_charge_temperature_apply: BMS_CHARGE_TEMPERATURE_APPLY,
     };
 
     let mut power = output::PowerManager::new(

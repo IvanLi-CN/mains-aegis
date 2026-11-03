@@ -84,7 +84,7 @@ All single-block records must be aligned to `32B` offsets. Multi-block records m
 - Fields:
   - byte `0`: record version, currently `1`
   - byte `1`: target (`0=Pack3V7`, `1=Rsoc80`, `2=Full100`)
-  - byte `2`: speed (`0=100mA`, `1=500mA`, `2=1000mA`)
+  - byte `2`: speed (`0=100mA`, `1=500mA`; legacy `2` is normalized to `1` on load)
   - byte `3`: timer (`0=1h`, `1=2h`, `2=6h`)
   - byte `31`: CRC8 over bytes `0..31`
 - Defaults on missing/invalid/incompatible data:

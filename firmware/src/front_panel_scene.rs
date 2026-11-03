@@ -249,7 +249,6 @@ impl Default for ManualChargeTarget {
 pub enum ManualChargeSpeed {
     Ma100,
     Ma500,
-    Ma1000,
 }
 
 impl ManualChargeSpeed {
@@ -257,7 +256,6 @@ impl ManualChargeSpeed {
         match self {
             Self::Ma100 => "100mA",
             Self::Ma500 => "500mA",
-            Self::Ma1000 => "1A",
         }
     }
 
@@ -265,7 +263,6 @@ impl ManualChargeSpeed {
         match self {
             Self::Ma100 => 100,
             Self::Ma500 => 500,
-            Self::Ma1000 => 1_000,
         }
     }
 }
@@ -1002,7 +999,6 @@ pub enum DashboardTouchTarget {
     ManualTarget100,
     ManualSpeed100,
     ManualSpeed500,
-    ManualSpeed1A,
     ManualTimer1h,
     ManualTimer2h,
     ManualTimer6h,
@@ -2352,15 +2348,6 @@ pub fn dashboard_hit_test(route: DashboardRoute, x: u16, y: u16) -> Option<Dashb
             } else if contains(
                 x,
                 y,
-                manual_segment_x(2),
-                MANUAL_SPEED_ROW_Y + MANUAL_SEGMENT_Y_INSET,
-                MANUAL_SEGMENT_W,
-                MANUAL_SEGMENT_H,
-            ) {
-                Some(DashboardTouchTarget::ManualSpeed1A)
-            } else if contains(
-                x,
-                y,
                 manual_segment_x(0),
                 MANUAL_TIMER_ROW_Y + MANUAL_SEGMENT_Y_INSET,
                 MANUAL_SEGMENT_W,
@@ -2517,7 +2504,6 @@ pub const fn dashboard_route_for_target(target: DashboardTouchTarget) -> Dashboa
         | DashboardTouchTarget::ManualTarget100
         | DashboardTouchTarget::ManualSpeed100
         | DashboardTouchTarget::ManualSpeed500
-        | DashboardTouchTarget::ManualSpeed1A
         | DashboardTouchTarget::ManualTimer1h
         | DashboardTouchTarget::ManualTimer2h
         | DashboardTouchTarget::ManualTimer6h
@@ -2556,9 +2542,6 @@ pub const fn dashboard_manual_charge_action_for_target(
         }
         DashboardTouchTarget::ManualSpeed500 => {
             Some(ManualChargeUiAction::SetSpeed(ManualChargeSpeed::Ma500))
-        }
-        DashboardTouchTarget::ManualSpeed1A => {
-            Some(ManualChargeUiAction::SetSpeed(ManualChargeSpeed::Ma1000))
         }
         DashboardTouchTarget::ManualTimer1h => Some(ManualChargeUiAction::SetTimerLimit(
             ManualChargeTimerLimit::H1,
@@ -8839,10 +8822,6 @@ fn render_dashboard_manual_charge_page<P: UiPainter>(
                 prefs.speed == ManualChargeSpeed::Ma500,
                 ManualChargeSpeed::Ma500.label(),
             ),
-            (
-                prefs.speed == ManualChargeSpeed::Ma1000,
-                ManualChargeSpeed::Ma1000.label(),
-            ),
         ],
         settings_locked,
         palette.right,
@@ -9498,7 +9477,7 @@ fn manual_charge_footer_text(data: DashboardLiveData) -> &'static str {
         }
     } else if let Some(notice) = data.detail.charger_notice {
         match notice {
-            "charging_500ma" | "charging_100ma_dc_derated" | "charging_1a_manual" => "LIVE DATA",
+            "charging_500ma" | "charging_100ma_dc_derated" => "LIVE DATA",
             "manual_user_stop_inhibit" => "AUTO HELD",
             "manual_timer_expired" => "TIMER DONE",
             "manual_target_pack_reached" => "3.7V DONE",
@@ -10355,13 +10334,13 @@ fn draw_dashboard_touch_region_overlay<P: UiPainter>(
     Ok(())
 }
 
-fn draw_manual_option_row<P: UiPainter>(
+fn draw_manual_option_row<const N: usize, P: UiPainter>(
     painter: &mut P,
     variant: UiVariant,
     palette: Palette,
     y: u16,
     title: &'static str,
-    items: [(bool, &'static str); 3],
+    items: [(bool, &'static str); N],
     locked: bool,
     accent: u16,
 ) -> Result<(), P::Error> {
@@ -10932,7 +10911,7 @@ fn charger_state_text(data: DashboardLiveData) -> &'static str {
 fn home_charge_state_text(data: DashboardLiveData) -> &'static str {
     fn clamp(status: &'static str) -> Option<&'static str> {
         match status {
-            "CHG1A" | "CHG500" | "CHG100" | "RECOV" | "CHG" => Some("CHG"),
+            "CHG500" | "CHG100" | "RECOV" | "CHG" => Some("CHG"),
             "IDLE" | "READY" | "WAIT" => Some("WAIT"),
             "FULL" | "WARM" | "TEMP" | "LOAD" | "LOCK" | "NOAC" => Some(status),
             _ => None,
@@ -15855,7 +15834,7 @@ mod tests {
         let charge_100 = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
         assert_eq!(home_charge_state_text(charge_100), "CHG");
 
-        snapshot.dashboard_detail.charger_status = Some("CHG1A");
+        snapshot.dashboard_detail.charger_status = Some("CHG500");
         let charge_1a = DashboardLiveData::from_snapshot(base_model(UpsMode::Standby), &snapshot);
         assert_eq!(home_charge_state_text(charge_1a), "CHG");
 
@@ -16415,10 +16394,6 @@ mod tests {
         assert_eq!(
             dashboard_hit_test(DashboardRoute::ManualCharge, 4, UI_H - 2),
             Some(DashboardTouchTarget::ManualBack)
-        );
-        assert_eq!(
-            dashboard_manual_charge_action_for_target(DashboardTouchTarget::ManualSpeed1A),
-            Some(ManualChargeUiAction::SetSpeed(ManualChargeSpeed::Ma1000))
         );
         assert_eq!(
             dashboard_manual_charge_action_for_target(DashboardTouchTarget::ManualTimer6h),

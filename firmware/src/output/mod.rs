@@ -19,6 +19,7 @@ use esp_hal::time::{Duration, Instant};
 use heapless::String;
 use mains_aegis_firmware::bq25792;
 use mains_aegis_firmware::bq40z50;
+use mains_aegis_firmware::charge_temperature;
 use mains_aegis_firmware::fan;
 use mains_aegis_firmware::ina3221;
 use mains_aegis_firmware::net_types::{
@@ -86,7 +87,9 @@ const BMS_ACTIVATION_FOLLOWUP_INITIAL_DELAY: Duration = Duration::from_millis(0)
 const BMS_ACTIVATION_FOLLOWUP_PERIOD: Duration = Duration::from_secs(2);
 const BMS_ACTIVATION_EXIT_EXERCISE_WINDOW: Duration = Duration::from_secs(6);
 const BMS_ACTIVATION_EXIT_EXERCISE_PERIOD: Duration = Duration::from_secs(2);
-const BMS_ACTIVATION_CHARGER_POLL_PERIOD: Duration = Duration::from_secs(2);
+// Keep the activation charger poll below the one-second BQ40 evidence TTL. The tick-level
+// expiry guard remains the hard interlock when a poll is delayed by other work.
+const BMS_ACTIVATION_CHARGER_POLL_PERIOD: Duration = Duration::from_millis(500);
 const BMS_ACTIVATION_AUTO_POLL_RELEASE_DELAY: Duration = Duration::from_secs(34);
 const BMS_ACTIVATION_AUTO_DELAY: Duration = Duration::from_secs(30);
 const BMS_DISCHARGE_AUTH_MANUAL_WINDOW: Duration = Duration::from_secs(62);
@@ -112,6 +115,7 @@ const BMS_ROM_MODE_SIGNATURE: u16 = 0x9002;
 const BMS_DEVICE_TYPE_BQ40Z50: u16 = 0x4500;
 const BMS_ACTIVATION_WORD_GAP: Duration = Duration::from_millis(2);
 const BMS_DETAIL_MAC_REFRESH_PERIOD: Duration = Duration::from_secs(8);
+const BMS_CHARGE_TEMP_REFRESH_PERIOD: Duration = Duration::from_secs(1);
 const BMS_DETAIL_MAC_REFRESH_STAGGER: Duration = Duration::from_secs(2);
 const BMS_DETAIL_BALANCE_CONFIG_REFRESH_STAGGER: Duration = Duration::from_secs(4);
 const BMS_DETAIL_GAUGING_STATUS_REFRESH_STAGGER: Duration = Duration::from_secs(6);
@@ -180,7 +184,6 @@ const MANUAL_CHARGE_TARGET_PACK_MV: u16 = 14_800;
 const MANUAL_CHARGE_TARGET_RSOC_PCT: u16 = 80;
 const MANUAL_CHARGE_STATUS_TEXT_100MA: &str = "CHG100";
 const MANUAL_CHARGE_STATUS_TEXT_500MA: &str = "CHG500";
-const MANUAL_CHARGE_STATUS_TEXT_1A: &str = "CHG1A";
 const EEPROM_ADDR: u8 = 0x50;
 const EEPROM_BLOCK_LEN: usize = 32;
 const EEPROM_SUPERBLOCK_OFFSET: u16 = 0x0000;
@@ -811,7 +814,6 @@ const fn manual_charge_speed_encode(speed: ManualChargeSpeed) -> u8 {
     match speed {
         ManualChargeSpeed::Ma100 => 0,
         ManualChargeSpeed::Ma500 => 1,
-        ManualChargeSpeed::Ma1000 => 2,
     }
 }
 
@@ -819,7 +821,9 @@ const fn manual_charge_speed_decode(raw: u8) -> Option<ManualChargeSpeed> {
     match raw {
         0 => Some(ManualChargeSpeed::Ma100),
         1 => Some(ManualChargeSpeed::Ma500),
-        2 => Some(ManualChargeSpeed::Ma1000),
+        // Schema v1 used raw value 2 for the retired 1A option. Normalize
+        // persisted settings to the highest supported ordinary profile.
+        2 => Some(ManualChargeSpeed::Ma500),
         _ => None,
     }
 }
@@ -911,9 +915,6 @@ const fn web_serial_manual_charge_speed(
         }
         mains_aegis_firmware::usb_cdc_protocol::ManualChargeSpeed::Ma500 => {
             ManualChargeSpeed::Ma500
-        }
-        mains_aegis_firmware::usb_cdc_protocol::ManualChargeSpeed::Ma1000 => {
-            ManualChargeSpeed::Ma1000
         }
     }
 }
@@ -1013,7 +1014,6 @@ fn manual_charge_status_text(speed: ManualChargeSpeed, derated: bool) -> &'stati
         match speed {
             ManualChargeSpeed::Ma100 => MANUAL_CHARGE_STATUS_TEXT_100MA,
             ManualChargeSpeed::Ma500 => MANUAL_CHARGE_STATUS_TEXT_500MA,
-            ManualChargeSpeed::Ma1000 => MANUAL_CHARGE_STATUS_TEXT_1A,
         }
     }
 }
@@ -2118,7 +2118,13 @@ where
         gauging_status: None,
         op_status: None,
         update_status: None,
-        current_at_eoc_ma: None,
+        current_at_eoc_ma: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::CURRENT_AT_EOC,
+        )
+        .ok()
+        .flatten(),
         no_valid_charge_term: None,
         last_valid_charge_term: None,
         no_of_qmax_updates: None,
@@ -4158,6 +4164,11 @@ pub struct PowerManager<'d, I2C> {
     bms_ok_streak: u16,
     bms_err_streak: u16,
     bms_cached_da_status2: Option<bq40z50::DaStatus2>,
+    bms_cached_da_status2_at_ms: Option<u64>,
+    bms_temperature_configuration_ok: Option<bool>,
+    bq40_charge_evidence: Bq40ChargeEvidence,
+    bq40_charge_request: Option<charge_temperature::Bq40ChargeRequest>,
+    bq40_charge_request_next_poll_at: Instant,
     bms_cached_filter_capacity: Option<bq40z50::FilterCapacity>,
     bms_cached_balance_config: Option<bq40z50::BalanceConfig>,
     bms_cached_gauging_status: Option<u32>,
@@ -4961,6 +4972,11 @@ where
             bms_ok_streak: 0,
             bms_err_streak: 0,
             bms_cached_da_status2: None,
+            bms_cached_da_status2_at_ms: None,
+            bms_temperature_configuration_ok: None,
+            bq40_charge_evidence: Bq40ChargeEvidence::new(),
+            bq40_charge_request: None,
+            bq40_charge_request_next_poll_at: now,
             bms_cached_filter_capacity: None,
             bms_cached_balance_config: None,
             bms_cached_gauging_status: None,
@@ -5380,6 +5396,8 @@ where
     }
 
     pub fn tick(&mut self, irq: &IrqSnapshot) -> bool {
+        self.enforce_bq40_activation_charge_freshness();
+        self.enforce_bq40_product_charge_freshness();
         self.consume_ina_alert_irq(irq);
         if let Some(until) = self.bms_activation_isolation_until {
             if Instant::now() < until {
@@ -6339,7 +6357,7 @@ where
             return;
         };
         if !self.manual_charge_runtime.active
-            && target_ichg_ma < ManualChargeSpeed::Ma1000.ichg_ma()
+            && target_ichg_ma <= ManualChargeSpeed::Ma500.ichg_ma()
         {
             return;
         }
@@ -6575,6 +6593,152 @@ where
         self.fan_started_at.elapsed().as_millis()
     }
 
+    fn refresh_bq40_charge_request(&mut self, now: Instant) {
+        if now < self.bq40_charge_request_next_poll_at {
+            return;
+        }
+        self.bq40_charge_request_next_poll_at = now + Duration::from_secs(1);
+
+        let Some(addr) = self.bms_addr else {
+            self.bq40_charge_request = None;
+            return;
+        };
+
+        let current_ma = bq40z50::read_charging_current_ma(&mut self.i2c, addr);
+        let voltage_mv = bq40z50::read_charging_voltage_mv(&mut self.i2c, addr);
+        let observed_at_ms = self.fan_now_ms();
+        self.bq40_charge_evidence
+            .observe_charge_request(current_ma.is_ok(), voltage_mv.is_ok());
+        match (current_ma, voltage_mv) {
+            (Ok(current_ma), Ok(voltage_mv)) => {
+                let request = charge_temperature::Bq40ChargeRequest {
+                    current_ma,
+                    voltage_mv,
+                    observed_at_ms,
+                };
+                if request.is_valid() {
+                    self.bq40_charge_request = Some(request);
+                } else {
+                    self.bq40_charge_request = None;
+                    defmt::warn!(
+                        "bms: bq40 charge_request invalid current_ma={=u16} voltage_mv={=u16}",
+                        current_ma,
+                        voltage_mv
+                    );
+                }
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                self.bq40_charge_request = None;
+                let error_kind = match e {
+                    bq40z50::SbsWordReadError::I2c(error) => i2c_error_kind(error),
+                    bq40z50::SbsWordReadError::PecMismatch => "pec_mismatch",
+                };
+                defmt::warn!("bms: bq40 charge_request read_failed err={}", error_kind);
+            }
+        }
+    }
+
+    fn bq40_charge_temperature_decision(
+        &self,
+        now_ms: u64,
+    ) -> charge_temperature::ChargeTemperatureDecision {
+        if !charge_temperature::bq40_temperature_configuration_verified(
+            self.bms_temperature_configuration_ok,
+        ) {
+            return charge_temperature::ChargeTemperatureDecision::no_charge();
+        }
+        let Some(observed_at_ms) = self.bms_cached_da_status2_at_ms else {
+            return charge_temperature::ChargeTemperatureDecision::no_charge();
+        };
+        if !charge_temperature::is_temperature_fresh(now_ms, observed_at_ms) {
+            return charge_temperature::ChargeTemperatureDecision::no_charge();
+        }
+        let Some(da_status2) = self.bms_cached_da_status2 else {
+            return charge_temperature::ChargeTemperatureDecision::no_charge();
+        };
+        let Some(max_cell_temp_k_x10) =
+            charge_temperature::max_cell_temperature_k_x10(da_status2.ts_temp_k_x10)
+        else {
+            return charge_temperature::ChargeTemperatureDecision::no_charge();
+        };
+        charge_temperature::evaluate_cell_temperature_k_x10(Some(max_cell_temp_k_x10))
+    }
+
+    /// Activation may use the fixed wake current only when there is no BQ40
+    /// safety evidence yet. Once either a request or a temperature sample has
+    /// been observed, the wake path must use the same fresh, normal-band BQ40
+    /// evidence as product charging. The charger-side JEITA NTC remains an
+    /// independent hardware interlock at the call site.
+    fn bq40_activation_wake_gate(&self, now_ms: u64) -> bool {
+        let temperature = self
+            .bms_cached_da_status2_at_ms
+            .is_some()
+            .then(|| self.bq40_charge_temperature_decision(now_ms));
+        self.bq40_charge_evidence.activation_wake_charge_allowed(
+            now_ms,
+            self.bms_temperature_configuration_ok,
+            temperature,
+            self.bq40_charge_request,
+        )
+    }
+
+    fn enforce_bq40_activation_charge_freshness(&mut self) {
+        if self.bms_activation_state != BmsActivationState::Pending
+            || !self.bms_activation_force_charge_requested
+            || !self.chg_enabled
+        {
+            return;
+        }
+
+        let now_ms = self.fan_now_ms();
+        if self.bq40_activation_wake_gate(now_ms) {
+            return;
+        }
+
+        self.chg_ce.set_high();
+        self.chg_enabled = false;
+        self.chg_next_poll_at = Instant::now();
+        defmt::warn!("bms: activation charge disabled reason=bq40_evidence_expired_or_invalid");
+    }
+
+    fn enforce_bq40_product_charge_freshness(&mut self) {
+        if self.bms_activation_state == BmsActivationState::Pending || !self.chg_enabled {
+            return;
+        }
+
+        let now_ms = self.fan_now_ms();
+        let evidence_fresh = if self.bms_activation_auto_force_charge_programmed {
+            // Boot-diagnostic auto-force is an exceptional wake state, but it
+            // must still stop on every tick once any BQ40 evidence has become
+            // stale or invalid. With no BQ40 observation yet, the independent
+            // BQ25792 JEITA interlock remains the only wake fallback.
+            self.bq40_activation_wake_gate(now_ms)
+        } else {
+            let temperature = self.bq40_charge_temperature_decision(now_ms);
+            self.bq40_charge_evidence.product_charge_evidence_fresh(
+                now_ms,
+                temperature,
+                self.bq40_charge_request,
+            )
+        };
+        if matches!(
+            product_charge_freshness_action(
+                self.bms_activation_state == BmsActivationState::Pending,
+                self.chg_enabled,
+                evidence_fresh,
+            ),
+            ProductChargeFreshnessAction::RefreshBeforeDecision
+        ) {
+            // The next charger poll refreshes SBS 0x14/0x15 before applying
+            // the fail-closed decision. Do not toggle CE on a boundary tick.
+            self.chg_next_poll_at = Instant::now();
+            self.bq40_charge_request_next_poll_at = Instant::now();
+            defmt::info!(
+                "bms: product charge refresh requested reason=bq40_evidence_expired_or_invalid"
+            );
+        }
+    }
+
     fn fan_temps_ready(&self) -> bool {
         self.ui_snapshot.tmp_a != SelfCheckCommState::Pending
             || self.ui_snapshot.tmp_b != SelfCheckCommState::Pending
@@ -6637,10 +6801,23 @@ where
         self.charge_policy.charge_latched = false;
         self.charge_policy_derate.reset();
         self.charge_policy_output_load.reset();
+        self.bq40_charge_request = None;
+        // Keep request observation latched across snapshot failures. An
+        // observed request followed by transport loss must not reopen the
+        // fixed activation-wake fallback.
     }
 
     fn reset_bms_detail_mac_cache(&mut self, now: Instant) {
+        self.bq40_charge_evidence.on_detail_cache_reset();
         self.bms_cached_da_status2 = None;
+        self.bms_cached_da_status2_at_ms = None;
+        self.bms_temperature_configuration_ok = None;
+        self.bq40_charge_request = None;
+        // Temperature/configuration evidence latches are cleared only on
+        // PowerManager initialization, not on a transient BQ40 detail-cache
+        // reset. A cache reset must not reopen JEITA-only activation wake.
+        // The request observation latch follows the same rule.
+        self.bq40_charge_request_next_poll_at = now;
         self.bms_cached_filter_capacity = None;
         self.bms_cached_balance_config = None;
         self.bms_cached_gauging_status = None;
@@ -10977,17 +11154,12 @@ where
             self.bms_activation_auto_attempted = true;
             self.bms_activation_auto_force_charge_until = None;
             self.bms_activation_auto_force_charge_programmed = false;
-            if let Some(restore_chg_enabled) =
-                self.restore_bms_activation_charger_backup("auto_skip_not_needed")
-            {
-                if restore_chg_enabled {
-                    self.chg_ce.set_low();
-                    self.chg_enabled = true;
-                } else {
-                    self.chg_ce.set_high();
-                    self.chg_enabled = false;
-                }
-            }
+            let _ = self.restore_bms_activation_charger_backup("auto_skip_not_needed");
+            // A historical charger backup never authorizes a new charge
+            // enable. The next ordinary poll must re-evaluate the complete
+            // BQ40/JEITA/product gate before CE can go low again.
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
             defmt::info!(
                 "bms: activation auto_skip reason=bq40_not_err state={} trusted_evidence={=bool} last_result={}",
                 self_check_comm_state_name(self.ui_snapshot.bq40z50),
@@ -11001,17 +11173,11 @@ where
             self.bms_activation_auto_attempted = true;
             self.bms_activation_auto_force_charge_until = None;
             self.bms_activation_auto_force_charge_programmed = false;
-            if let Some(restore_chg_enabled) =
-                self.restore_bms_activation_charger_backup("auto_skip_no_input_power")
-            {
-                if restore_chg_enabled {
-                    self.chg_ce.set_low();
-                    self.chg_enabled = true;
-                } else {
-                    self.chg_ce.set_high();
-                    self.chg_enabled = false;
-                }
-            }
+            let _ = self.restore_bms_activation_charger_backup("auto_skip_no_input_power");
+            // No-input skip is still a state transition. Do not restore a
+            // historical CE-low state without a fresh ordinary charge poll.
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
             defmt::info!(
                 "bms: activation auto_skip reason=no_input_power bq40_state={} charger_state={} input_present={=?}",
                 self_check_comm_state_name(self.ui_snapshot.bq40z50),
@@ -11572,17 +11738,21 @@ where
                 BmsResultKind::NotDetected => 5,
             },
         );
+        // Keep the physical charger disabled while restoring register state.
+        // A failed activation must never re-enable charging merely because the
+        // pre-activation backup had CE asserted.
+        self.chg_ce.set_high();
+        self.chg_enabled = false;
         let mut restore_chg_enabled = false;
         if let Some(chg_enabled) = self.restore_bms_activation_charger_backup(reason) {
             restore_chg_enabled = chg_enabled;
         }
-        if restore_chg_enabled {
-            self.chg_ce.set_low();
-            self.chg_enabled = true;
-        } else {
-            self.chg_ce.set_high();
-            self.chg_enabled = false;
-        }
+        // Restoring the pre-activation register image is not permission to
+        // resume physical charging. Keep CE high; the next ordinary charger
+        // poll must re-evaluate BQ40 temperature/request freshness, JEITA,
+        // CurrentAtEOC, and the product policy before enabling CE again.
+        self.chg_ce.set_high();
+        self.chg_enabled = false;
         self.bms_activation_deadline = None;
         self.bms_activation_phase = BmsActivationPhase::WakeProbe;
         self.bms_activation_started_at = None;
@@ -13434,6 +13604,7 @@ where
             }
         }
         self.chg_next_poll_at = now + poll_period;
+        self.refresh_bq40_charge_request(now);
 
         // Snapshot key registers with multi-byte reads (BQ25792 supports crossing boundaries).
         let mut st = [0u8; 5];
@@ -13450,6 +13621,14 @@ where
                 return;
             }
         };
+        if let Err(e) = bq25792::ensure_eve_jeita_profile(&mut self.i2c) {
+            self.mark_charger_poll_failed(now);
+            defmt::error!(
+                "charger: bq25792 err stage=jeita_profile err={}",
+                i2c_error_kind(e)
+            );
+            return;
+        }
         let termination_ctrl =
             bq25792::read_u16(&mut self.i2c, bq25792::reg::TERMINATION_CONTROL).ok();
         let iterm_ma = termination_ctrl.map(bq25792::decode_termination_current_ma);
@@ -13762,7 +13941,13 @@ where
             status3,
         );
 
-        let can_enable = input_present && !ts_cold && !ts_hot && !usb_pd_unsafe_latched;
+        let can_enable = charger_enable_safety_gate(
+            input_present,
+            vbat_present,
+            ts_cold,
+            ts_hot,
+            usb_pd_unsafe_latched,
+        );
         let activation_probe_without_charge = activation_pending
             && self.bms_activation_phase == BmsActivationPhase::ProbeWithoutCharge;
         let activation_normal_hold_charge = false;
@@ -13852,7 +14037,29 @@ where
         };
         let normal_allow_charge =
             charge_policy_decision.map_or(false, |decision| decision.allow_charge);
-        let force_allow_charge = (activation_force_charge || auto_force_charge) && can_enable;
+        let force_charge_requested = activation_force_charge || auto_force_charge;
+        let force_charge_jeita_allowed =
+            bq25792::jeita_normal_window_allows_charge(ts_cold, ts_cool, ts_warm, ts_hot);
+        let force_charge_bq40_allowed = self.bq40_activation_wake_gate(charge_policy_now_ms);
+        let force_allow_charge = activation_force_charge_allows_ce(
+            force_charge_requested,
+            input_present,
+            status_vbat_present,
+            ts_cold,
+            ts_hot,
+            usb_pd_unsafe_latched,
+            force_charge_jeita_allowed,
+            force_charge_bq40_allowed,
+        );
+        let force_charge_blocked = force_charge_requested && !force_allow_charge;
+        let force_charge_voltage_mv = self
+            .bq40_charge_request
+            .map(|request| request.voltage_mv.min(BMS_ACTIVATION_FORCE_VREG_MV))
+            .unwrap_or(BMS_ACTIVATION_FORCE_VREG_MV);
+        let force_charge_current_ma = self
+            .bq40_charge_request
+            .map(|request| request.current_ma.min(BMS_ACTIVATION_FORCE_ICHG_MA))
+            .unwrap_or(BMS_ACTIVATION_FORCE_ICHG_MA);
         if self.manual_charge_runtime.loopback_override
             && self.manual_charge_runtime.loopback_override_mode != Some(self.ui_snapshot.mode)
         {
@@ -13893,15 +14100,18 @@ where
                 esp_println::println!("backup_usb_charge: latched reason={}", reason.notice());
             }
         }
-        let mut allow_charge =
-            if usb_pd_unsafe_latched || activation_force_charge_off || !usb_pd_charge_gate_ready {
-                false
-            } else {
-                (normal_allow_charge && self.cfg.charger_enabled)
-                    || activation_normal_hold_charge
-                    || boot_diag_hold_charge
-                    || force_allow_charge
-            };
+        let mut allow_charge = if usb_pd_unsafe_latched
+            || activation_force_charge_off
+            || !usb_pd_charge_gate_ready
+            || force_charge_blocked
+        {
+            false
+        } else {
+            (normal_allow_charge && self.cfg.charger_enabled)
+                || activation_normal_hold_charge
+                || boot_diag_hold_charge
+                || force_allow_charge
+        };
 
         let policy_state = charge_policy_decision.map(|decision| decision.state);
         let mut policy_target_ichg_ma =
@@ -13916,6 +14126,8 @@ where
             "FAULT"
         } else if !usb_pd_charge_gate_ready {
             "WAIT"
+        } else if force_charge_blocked {
+            "LOCK"
         } else if force_allow_charge {
             "WAKE"
         } else if activation_force_charge_off {
@@ -13931,6 +14143,8 @@ where
             "unsafe_source_latched"
         } else if !usb_pd_charge_gate_ready {
             "usb_pd_wait_stable_input"
+        } else if force_charge_blocked {
+            "activation_force_charge_safety_interlock"
         } else if force_allow_charge {
             "activation_force_charge"
         } else if activation_force_charge_off {
@@ -13956,7 +14170,18 @@ where
             activation_force_charge,
         );
 
-        if manual_stop_hold_blocks_charge {
+        if force_charge_blocked {
+            allow_charge = false;
+            policy_target_ichg_ma = None;
+            policy_status_text = "LOCK";
+            policy_notice_text = if !force_charge_jeita_allowed {
+                "activation_force_charge_bq25792_jeita_blocked"
+            } else if !force_charge_bq40_allowed {
+                "activation_force_charge_bq40_gate_blocked"
+            } else {
+                "activation_force_charge_safety_interlock"
+            };
+        } else if manual_stop_hold_blocks_charge {
             allow_charge = false;
             policy_target_ichg_ma = None;
             if !matches!(
@@ -13968,7 +14193,7 @@ where
             }
             policy_notice_text =
                 manual_charge_stop_notice(self.manual_charge_runtime.last_stop_reason);
-        } else if !activation_pending && !force_allow_charge && !auto_force_charge {
+        } else if !activation_pending && !force_allow_charge && !force_charge_requested {
             let manual_blocked = !self.cfg.charger_enabled
                 || !can_enable
                 || !usb_pd_charge_gate_ready
@@ -14052,13 +14277,11 @@ where
                         match self.manual_charge_prefs.speed {
                             ManualChargeSpeed::Ma100 => "manual_loopback_confirmed_charging_100ma",
                             ManualChargeSpeed::Ma500 => "manual_loopback_confirmed_charging_500ma",
-                            ManualChargeSpeed::Ma1000 => "manual_loopback_confirmed_charging_1a",
                         }
                     } else {
                         match self.manual_charge_prefs.speed {
                             ManualChargeSpeed::Ma100 => "charging_100ma_manual",
                             ManualChargeSpeed::Ma500 => "charging_500ma",
-                            ManualChargeSpeed::Ma1000 => "charging_1a_manual",
                         }
                     };
                 }
@@ -14141,7 +14364,64 @@ where
             policy_notice_text = runtime_charge_override.policy_notice_text;
             policy_detail_status_text = runtime_charge_override.policy_status_text;
         }
-        let requested_policy_target_ichg_ma = policy_target_ichg_ma;
+        if force_charge_blocked {
+            // Later input/backup policy layers must not reopen a denied
+            // activation wake request or leave its normal target behind.
+            allow_charge = false;
+            policy_target_ichg_ma = None;
+            effective_policy_target_ichg_ma = None;
+            policy_status_text = "LOCK";
+            policy_detail_status_text = "LOCK";
+            policy_notice_text = if !force_charge_jeita_allowed {
+                "activation_force_charge_bq25792_jeita_blocked"
+            } else if !force_charge_bq40_allowed {
+                "activation_force_charge_bq40_gate_blocked"
+            } else {
+                "activation_force_charge_safety_interlock"
+            };
+        }
+        let mut policy_target_vreg_mv = if force_charge_blocked {
+            None
+        } else {
+            allow_charge.then_some(CHARGE_POLICY_VREG_MV)
+        };
+        if allow_charge && !force_allow_charge && !auto_force_charge && !activation_pending {
+            let temperature_decision = self.bq40_charge_temperature_decision(charge_policy_now_ms);
+            if !temperature_decision.allows_charge() {
+                allow_charge = false;
+                policy_target_ichg_ma = None;
+                effective_policy_target_ichg_ma = None;
+                policy_target_vreg_mv = None;
+                policy_status_text = "TEMP";
+                policy_detail_status_text = "TEMP";
+                policy_notice_text = "bq40_cell_temperature_no_charge";
+            } else {
+                let target = charge_temperature::runtime_charge_target(
+                    charge_policy_now_ms,
+                    temperature_decision,
+                    self.bq40_charge_request,
+                    policy_target_ichg_ma.or(effective_policy_target_ichg_ma),
+                    CHARGE_POLICY_VREG_MV,
+                );
+                if let Some(target) = target {
+                    policy_target_ichg_ma = Some(target.current_ma);
+                    effective_policy_target_ichg_ma = Some(
+                        effective_policy_target_ichg_ma.map_or(target.current_ma, |current_ma| {
+                            current_ma.min(target.current_ma)
+                        }),
+                    );
+                    policy_target_vreg_mv = Some(target.voltage_mv);
+                } else {
+                    allow_charge = false;
+                    policy_target_ichg_ma = None;
+                    effective_policy_target_ichg_ma = None;
+                    policy_target_vreg_mv = None;
+                    policy_status_text = "LOCK";
+                    policy_detail_status_text = "LOCK";
+                    policy_notice_text = "bq40_charge_request_stale_or_invalid";
+                }
+            }
+        }
         let mut applied_ctrl0 = ctrl0;
         let mut applied_vreg_mv: Option<u16> = None;
         let mut applied_ichg_ma: Option<u16> = None;
@@ -14150,20 +14430,48 @@ where
         let mut applied_vbat_lowv_pct_x10: Option<u16> = None;
         let mut applied_iprechg_ma: Option<u16> = None;
         let mut applied_iterm_ma: Option<u16> = None;
-        let policy_low_current_charge = allow_charge
+        let current_at_eoc_ma = self
+            .bms_cached_lock_diag
+            .and_then(|diag| diag.current_at_eoc_ma)
+            .and_then(bq25792::valid_termination_current_ma);
+        let termination_policy = bq25792::charge_termination_policy(
+            allow_charge && !force_allow_charge && !auto_force_charge && !activation_pending,
+            effective_policy_target_ichg_ma,
+            current_at_eoc_ma,
+        );
+        if matches!(
+            termination_policy,
+            bq25792::ChargeTerminationPolicy::Blocked
+        ) && allow_charge
             && !force_allow_charge
             && !auto_force_charge
             && !activation_pending
-            && effective_policy_target_ichg_ma.is_some_and(|target_ma| target_ma <= 100);
-        let policy_term_target_ma = if force_allow_charge || auto_force_charge || activation_pending
         {
-            None
-        } else if policy_low_current_charge {
-            Some(CHARGE_POLICY_100MA_ITERM_MA)
-        } else {
-            self.bms_cached_lock_diag
-                .and_then(|diag| diag.current_at_eoc_ma)
-                .map(bq25792::align_termination_current_ma)
+            allow_charge = false;
+            policy_target_ichg_ma = None;
+            effective_policy_target_ichg_ma = None;
+            policy_target_vreg_mv = None;
+            policy_status_text = "LOCK";
+            policy_detail_status_text = "LOCK";
+            policy_notice_text = "bq40_current_at_eoc_unavailable";
+        }
+        let termination_policy = bq25792::charge_termination_policy(
+            allow_charge && !force_allow_charge && !auto_force_charge && !activation_pending,
+            effective_policy_target_ichg_ma,
+            current_at_eoc_ma,
+        );
+        let policy_low_current_charge = matches!(
+            termination_policy,
+            bq25792::ChargeTerminationPolicy::LowCurrent
+        );
+        let requested_policy_target_ichg_ma = policy_target_ichg_ma;
+        let policy_term_target_ma = match termination_policy {
+            bq25792::ChargeTerminationPolicy::LowCurrent => Some(CHARGE_POLICY_100MA_ITERM_MA),
+            bq25792::ChargeTerminationPolicy::Normal { current_at_eoc_ma } => {
+                Some(current_at_eoc_ma)
+            }
+            bq25792::ChargeTerminationPolicy::NotApplicable
+            | bq25792::ChargeTerminationPolicy::Blocked => None,
         };
 
         fn decode_voltage_mv(reg: u16) -> u16 {
@@ -14175,6 +14483,28 @@ where
         }
 
         if !force_allow_charge && !auto_force_charge && !activation_pending {
+            // Disable termination before programming the 40 mA low-current
+            // setting. This prevents the charger from observing a transient
+            // termination-enabled state with the low-current ITERM value.
+            if policy_low_current_charge && (applied_ctrl0 & bq25792::ctrl0::EN_TERM) != 0 {
+                let ctrl0_without_term = applied_ctrl0 & !bq25792::ctrl0::EN_TERM;
+                match bq25792::write_u8(
+                    &mut self.i2c,
+                    bq25792::reg::CHARGER_CONTROL_0,
+                    ctrl0_without_term,
+                ) {
+                    Ok(()) => applied_ctrl0 = ctrl0_without_term,
+                    Err(e) => {
+                        self.mark_charger_poll_failed(now);
+                        defmt::error!(
+                            "charger: bq25792 err stage=ctrl0_disable_term err={}",
+                            i2c_error_kind(e)
+                        );
+                        return;
+                    }
+                }
+            }
+
             match bq25792::set_precharge_control(
                 &mut self.i2c,
                 bq25792::VBAT_LOWV_71P4,
@@ -14262,10 +14592,7 @@ where
                     return;
                 }
 
-                match bq25792::set_charge_voltage_limit_mv(
-                    &mut self.i2c,
-                    BMS_ACTIVATION_FORCE_VREG_MV,
-                ) {
+                match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, force_charge_voltage_mv) {
                     Ok(v) => applied_vreg_mv = Some(decode_voltage_mv(v)),
                     Err(e) => {
                         self.mark_charger_poll_failed(now);
@@ -14277,10 +14604,7 @@ where
                     }
                 }
 
-                match bq25792::set_charge_current_limit_ma(
-                    &mut self.i2c,
-                    BMS_ACTIVATION_FORCE_ICHG_MA,
-                ) {
+                match bq25792::set_charge_current_limit_ma(&mut self.i2c, force_charge_current_ma) {
                     Ok(v) => applied_ichg_ma = Some(decode_cur_ma(v)),
                     Err(e) => {
                         self.mark_charger_poll_failed(now);
@@ -14330,7 +14654,12 @@ where
 
             // Charge is enabled only when both `EN_CHG=1` and `CE=LOW`.
             let mut desired_ctrl0 = (ctrl0 | bq25792::ctrl0::EN_CHG) & !bq25792::ctrl0::EN_HIZ;
-            if policy_low_current_charge {
+            if force_allow_charge || auto_force_charge || activation_pending {
+                // The 200mA activation/boot-diagnostic current is a wake
+                // state, not product taper. Do not inherit a stale or
+                // oversized ITERM value and terminate the wake prematurely.
+                desired_ctrl0 &= !bq25792::ctrl0::EN_TERM;
+            } else if policy_low_current_charge {
                 desired_ctrl0 &= !bq25792::ctrl0::EN_TERM;
             } else {
                 desired_ctrl0 |= bq25792::ctrl0::EN_TERM;
@@ -14381,8 +14710,8 @@ where
 
             if !force_allow_charge && !auto_force_charge && !activation_pending {
                 if let Some(target_ichg_ma) = effective_policy_target_ichg_ma {
-                    match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, CHARGE_POLICY_VREG_MV)
-                    {
+                    let target_vreg_mv = policy_target_vreg_mv.unwrap_or(CHARGE_POLICY_VREG_MV);
+                    match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, target_vreg_mv) {
                         Ok(v) => applied_vreg_mv = Some(decode_voltage_mv(v)),
                         Err(e) => {
                             self.mark_charger_poll_failed(now);
@@ -14931,17 +15260,12 @@ where
                 && self.bms_activation_state != BmsActivationState::Pending
                 && !activation_force_charge
             {
-                if let Some(restore_chg_enabled) =
-                    self.restore_bms_activation_charger_backup("auto_force_charge_complete")
-                {
-                    if restore_chg_enabled {
-                        self.chg_ce.set_low();
-                        self.chg_enabled = true;
-                    } else {
-                        self.chg_ce.set_high();
-                        self.chg_enabled = false;
-                    }
-                }
+                let _ = self.restore_bms_activation_charger_backup("auto_force_charge_complete");
+                // The restored historical CE state is intentionally ignored.
+                // A subsequent ordinary poll is the only path allowed to
+                // re-enable the charger after the diagnostic wake hold.
+                self.chg_ce.set_high();
+                self.chg_enabled = false;
             }
             self.bms_activation_auto_force_charge_programmed = false;
         }
@@ -14950,6 +15274,8 @@ where
     }
 
     fn mark_charger_poll_failed(&mut self, now: Instant) {
+        self.chg_ce.set_high();
+        self.chg_enabled = false;
         if self.bms_activation_state == BmsActivationState::Pending {
             self.finish_bms_activation(BmsResultKind::NotDetected, "charger_poll_failed");
         }
@@ -14991,7 +15317,10 @@ where
     }
 
     fn maybe_poll_bms(&mut self, irq: &IrqSnapshot) -> bool {
-        const POLL_PERIOD: Duration = Duration::from_secs(2);
+        // Charge-temperature safety owns the cell-temperature freshness
+        // window, so the monitoring poll must not leave DA_STATUS2 stale for
+        // longer than one second between refresh opportunities.
+        const POLL_PERIOD: Duration = BMS_CHARGE_TEMP_REFRESH_PERIOD;
         const INT_MIN_INTERVAL: Duration = Duration::from_millis(100);
 
         let now = Instant::now();
@@ -15150,6 +15479,7 @@ where
                             Some(now + self.cfg.retry_backoff)
                         };
                         self.clear_bms_charge_policy_inputs();
+                        self.mark_charger_poll_failed(now);
                         if self.should_hold_no_battery_result() {
                             self.hold_no_battery_result_audio_state();
                         } else {
@@ -15212,6 +15542,7 @@ where
                             Some(now + self.cfg.retry_backoff)
                         };
                         self.clear_bms_charge_policy_inputs();
+                        self.mark_charger_poll_failed(now);
                         if self.should_hold_no_battery_result() {
                             self.hold_no_battery_result_audio_state();
                         } else {
@@ -15534,47 +15865,107 @@ where
         let (op_status, op_status_raw_len, op_status_raw_bytes) =
             read_bq40_op_status_with_raw_trace(&mut self.i2c, addr);
         let mut da_status2 = self.bms_cached_da_status2;
-        let mut bms_detail_refreshed = false;
-        if !bms_detail_refreshed && now >= self.bms_next_da_status2_refresh_at {
+        let mut bms_slow_detail_refreshed = false;
+        if now >= self.bms_next_da_status2_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
-            if let Ok(snapshot) = bq40z50::read_da_status2(&mut self.i2c, addr) {
-                da_status2 = snapshot;
-                self.bms_cached_da_status2 = snapshot;
+            let da_status2_read_succeeded = match bq40z50::read_da_status2(&mut self.i2c, addr) {
+                Ok(snapshot) => {
+                    let read_succeeded = snapshot.is_some();
+                    da_status2 = snapshot;
+                    self.bms_cached_da_status2 = snapshot;
+                    self.bms_cached_da_status2_at_ms = Some(self.fan_now_ms());
+                    read_succeeded
+                }
+                Err(_) => {
+                    da_status2 = None;
+                    self.bms_cached_da_status2 = None;
+                    self.bms_cached_da_status2_at_ms = None;
+                    self.bms_temperature_configuration_ok = None;
+                    false
+                }
+            };
+            let temperature_enable = bq40z50::read_data_flash_u8(
+                &mut self.i2c,
+                addr,
+                bq40z50::data_flash::TEMPERATURE_ENABLE,
+            )
+            .ok()
+            .flatten();
+            let temperature_mode = bq40z50::read_data_flash_u8(
+                &mut self.i2c,
+                addr,
+                bq40z50::data_flash::TEMPERATURE_MODE,
+            )
+            .ok()
+            .flatten();
+            let temperature_configuration_ok =
+                charge_temperature::bq40_temperature_configuration_status(
+                    temperature_enable,
+                    temperature_mode,
+                );
+            self.bq40_charge_evidence
+                .observe_temperature(da_status2_read_succeeded, temperature_configuration_ok);
+            if self.bms_temperature_configuration_ok != temperature_configuration_ok {
+                match temperature_configuration_ok {
+                    Some(true) => {
+                        defmt::info!(
+                        "bms: charge_temperature_config verified temperature_enable=0x{=u8:x} temperature_mode=0x{=u8:x}",
+                        temperature_enable.unwrap_or(0),
+                        temperature_mode.unwrap_or(0),
+                    );
+                    }
+                    Some(false) => {
+                        defmt::error!(
+                        "bms: charge_temperature_config invalid temperature_enable={=?} temperature_mode={=?} expected_enable=0x{=u8:x} expected_mode=0x{=u8:x} charge_allowed=false",
+                        temperature_enable,
+                        temperature_mode,
+                        charge_temperature::BQ40_PROJECT_TEMPERATURE_ENABLE,
+                        charge_temperature::BQ40_PROJECT_TEMPERATURE_MODE,
+                    );
+                    }
+                    None => {
+                        defmt::warn!(
+                            "bms: charge_temperature_config unavailable temperature_enable={=?} temperature_mode={=?} charge_allowed=false",
+                            temperature_enable,
+                            temperature_mode,
+                        );
+                    }
+                }
             }
-            self.bms_next_da_status2_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
-            bms_detail_refreshed = true;
+            self.bms_temperature_configuration_ok = temperature_configuration_ok;
+            self.bms_next_da_status2_refresh_at = now + BMS_CHARGE_TEMP_REFRESH_PERIOD;
         }
         let mut filter_capacity = self.bms_cached_filter_capacity;
-        if !bms_detail_refreshed && now >= self.bms_next_filter_capacity_refresh_at {
+        if !bms_slow_detail_refreshed && now >= self.bms_next_filter_capacity_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             if let Ok(snapshot) = bq40z50::read_filter_capacity(&mut self.i2c, addr) {
                 filter_capacity = snapshot;
                 self.bms_cached_filter_capacity = snapshot;
             }
             self.bms_next_filter_capacity_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
-            bms_detail_refreshed = true;
+            bms_slow_detail_refreshed = true;
         }
         let mut balance_config = self.bms_cached_balance_config;
-        if !bms_detail_refreshed && now >= self.bms_next_balance_config_refresh_at {
+        if !bms_slow_detail_refreshed && now >= self.bms_next_balance_config_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             if let Ok(snapshot) = bq40z50::read_balance_config(&mut self.i2c, addr) {
                 balance_config = snapshot;
                 self.bms_cached_balance_config = snapshot;
             }
             self.bms_next_balance_config_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
-            bms_detail_refreshed = true;
+            bms_slow_detail_refreshed = true;
         }
         let mut gauging_status = self.bms_cached_gauging_status;
-        if !bms_detail_refreshed && now >= self.bms_next_gauging_status_refresh_at {
+        if !bms_slow_detail_refreshed && now >= self.bms_next_gauging_status_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             if let Ok(snapshot) = bq40z50::read_gauging_status(&mut self.i2c, addr) {
                 gauging_status = snapshot;
                 self.bms_cached_gauging_status = snapshot;
             }
             self.bms_next_gauging_status_refresh_at = now + BMS_DETAIL_MAC_REFRESH_PERIOD;
-            bms_detail_refreshed = true;
+            bms_slow_detail_refreshed = true;
         }
-        if !bms_detail_refreshed && now >= self.bms_next_lock_diag_refresh_at {
+        if !bms_slow_detail_refreshed && now >= self.bms_next_lock_diag_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             let snapshot = read_bq40_lock_diag_snapshot_runtime(&mut self.i2c, addr);
             self.bms_cached_lock_diag = Some(snapshot);

@@ -899,7 +899,6 @@ function compatManualChargeCurrentMa(
   speed: DeviceSettings["manual_charge"]["speed"],
 ): number {
   if (speed === "ma_100") return 100;
-  if (speed === "ma_1000") return 1000;
   return 500;
 }
 
@@ -1937,7 +1936,6 @@ function manualChargeCurrentMa(
   speed: DeviceSettings["manual_charge"]["speed"],
 ): number {
   if (speed === "ma_100") return 100;
-  if (speed === "ma_1000") return 1_000;
   return 500;
 }
 

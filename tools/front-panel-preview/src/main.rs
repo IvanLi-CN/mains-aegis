@@ -821,7 +821,7 @@ fn manual_charge_snapshot_for_state(
         ManualChargePreviewState::Default => {}
         ManualChargePreviewState::AutoCharging => {
             snapshot.dashboard_detail.manual_charge.prefs.speed =
-                front_panel_scene::ManualChargeSpeed::Ma1000;
+                front_panel_scene::ManualChargeSpeed::Ma500;
             snapshot.dashboard_detail.charger_active = Some(true);
             snapshot.dashboard_detail.charger_status = Some("CHG500");
             snapshot.dashboard_detail.charger_home_status = Some("CHG500");
@@ -885,7 +885,7 @@ fn manual_charge_snapshot_for_state(
             snapshot.dashboard_detail.manual_charge.prefs.target =
                 front_panel_scene::ManualChargeTarget::Rsoc80;
             snapshot.dashboard_detail.manual_charge.prefs.speed =
-                front_panel_scene::ManualChargeSpeed::Ma1000;
+                front_panel_scene::ManualChargeSpeed::Ma500;
             snapshot.dashboard_detail.manual_charge.prefs.timer_limit =
                 front_panel_scene::ManualChargeTimerLimit::H6;
         }

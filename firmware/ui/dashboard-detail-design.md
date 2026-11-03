@@ -83,7 +83,7 @@
 ### `Charger`
 
 - 顶栏标题：`CHARGER DETAIL`
-- 状态 chip：`CHG1A / CHG500 / CHG100 / RECOV / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC / WARN / FAULT`
+- 状态 chip：`CHG500 / CHG100 / RECOV / WAIT / FULL / WARM / TEMP / LOAD / LOCK / NOAC / WARN / FAULT`
 - 主区：输入来源图标 + `IN W`；电池图标 + `CHARGE W`
 - 次区：charging state / source select / status detail
 - 底栏：charger abnormal summary
@@ -96,7 +96,7 @@
 - 返回方式：底部 `BACK`、`LEFT/CENTER`
 - 中部三条横向 segmented rows：
   - `TARGET`: `3.7V / 80% / 100%`
-  - `SPEED`: `100mA / 500mA / 1A`
+  - `SPEED`: `100mA / 500mA`
   - `TIMER`: `1h / 2h / 6h`
 - 三组字段不再绘制外层卡片边框，直接用 label + segmented options，优先保证小屏可读性与点击面积。
 - 底部唯一操作条：左侧 `BACK`，中部 footer notice，右侧 `START/STOP`

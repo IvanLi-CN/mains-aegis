@@ -5405,7 +5405,6 @@ function PowerPage({ record }: { record: DeviceRecord }) {
                 options={[
                   ["ma_100", "100mA"],
                   ["ma_500", "500mA"],
-                  ["ma_1000", "1A"],
                 ]}
                 onChange={(speed) =>
                   setManualPrefs((current) => ({
@@ -5608,7 +5607,6 @@ function manualChargeTargetLabel(target: string): string {
 function manualChargeSpeedLabel(speed: string): string {
   if (speed === "ma_100") return "100mA";
   if (speed === "ma_500") return "500mA";
-  if (speed === "ma_1000") return "1A";
   return speed;
 }
 

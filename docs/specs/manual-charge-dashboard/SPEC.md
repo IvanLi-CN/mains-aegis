@@ -16,13 +16,13 @@
 - 在 `CHARGER DETAIL` 左侧会话面板新增三级入口，进入 `MANUAL CHARGE` 页面。
 - `MANUAL CHARGE` 页面单屏展示：
   - `TARGET`: `3.7V / 80% / 100%`
-  - `SPEED`: `100mA / 500mA / 1A`
+  - `SPEED`: `100mA / 500mA`
   - `TIMER`: `1h / 2h / 6h`
   - 底部动作：`BACK + START/STOP`
 - 仅持久化 `ManualChargePrefs`：默认值固定为 `100% / 500mA / 2h`。
 - 所有手动会话状态（`active / takeover / stop_inhibit / deadline / last_stop_reason`）只保存在运行时 RAM；MCU 复位后回到自动策略。
 - 手动 `START` 必须先显示“USB-C 输入未与 UPS OUT 回环”的前面板确认弹窗；取消不得创建会话，确认才产生新的手动会话。
-- 确认后的 RAM 会话保留用户选择的 `100 / 500 / 1000mA`，并只绕过 USB Backup 新增的 `<2W`、两次 TPS 缺样和 `>3W` 回环门。
+- 确认后的 RAM 会话保留用户选择的 `100 / 500mA`，并只绕过 USB Backup 新增的 `<2W`、两次 TPS 缺样和 `>3W` 回环门。
 - 手动会话可接管主线 charger state machine，但不绕过已有硬安全门。
 - 在 EEPROM 中落地通用布局：`superblock + record table + ManualChargePrefsV1 + reserved future area`。
 
@@ -81,7 +81,7 @@
   - 右侧：charger status chip
 - 中部使用 3 条横向 segmented rows，尽量把可点面积留给选项：
   - `TARGET` row：`3.7V / 80% / 100%`
-  - `SPEED` row：`100mA / 500mA / 1A`
+  - `SPEED` row：`100mA / 500mA`
   - `TIMER` row：`1h / 2h / 6h`
 - 三组字段不再额外包一层 row card，只保留左侧标签与右侧可点选项，减少小屏视觉噪声。
 - 底部统一为唯一操作条：`BACK + footer notice + START/STOP`。
@@ -121,9 +121,9 @@
   - 不保留 `stop_inhibit`
   - 页面需保留 `SAFETY STOP` 提示供用户观察
 - 手动会话期间：
-  - 目标充电电流映射为 `100 / 500 / 1000mA`
+  - 目标充电电流映射为 `100 / 500mA`
   - 允许依据现有 DC derate 逻辑降档到 `100mA`
-  - UI status chip 可显示 `CHG100 / CHG500 / CHG1A`
+  - UI status chip 可显示 `CHG100 / CHG500`
   - `loopback_override=true` 时仅忽略 USB Backup 的低输出准入、两次 TPS 缺样和 `>3W` 停充；BMS、温度、PD、输入故障与既有通用输出过载仍可立即终止会话
 - `loopback_override` 在用户 `STOP`、目标/计时器/安全停止、运行模式变化、真实 USB-C detach 或 MCU 复位后失效；USB-C detach 后的新手动操作必须重新确认，不能恢复旧会话。
 - MCU 每次上电或复位：
@@ -159,7 +159,7 @@
 
 - byte `0`: record version (`1`)
 - byte `1`: target (`0=3.7V`, `1=80%`, `2=100%`)
-- byte `2`: speed (`0=100mA`, `1=500mA`, `2=1A`)
+- byte `2`: speed (`0=100mA`, `1=500mA`); legacy raw `2` is normalized to `500mA` when loaded
 - byte `3`: timer (`0=1h`, `1=2h`, `2=6h`)
 - byte `31`: CRC8
 
@@ -167,7 +167,7 @@
 
 - `front_panel_scene`
   - `DashboardRoute::ManualCharge`
-  - `DashboardTouchTarget::{ChargerManualEntry, ManualBack, ManualTarget3V7, ManualTarget80, ManualTarget100, ManualSpeed100, ManualSpeed500, ManualSpeed1A, ManualTimer1h, ManualTimer2h, ManualTimer6h, ManualStart, ManualStop}`
+  - `DashboardTouchTarget::{ChargerManualEntry, ManualBack, ManualTarget3V7, ManualTarget80, ManualTarget100, ManualSpeed100, ManualSpeed500, ManualTimer1h, ManualTimer2h, ManualTimer6h, ManualStart, ManualStop}`
   - `ManualChargeUiAction::{Start, StartConfirmedLoopback}`
   - `ManualChargePrefs`
   - `ManualChargeRuntimeState`
@@ -202,12 +202,12 @@
 - Given 用户在本次运行中执行 `STOP`，When charger 下一轮 poll，Then 自动策略不得立刻恢复充电。
 - Given MCU 在手动会话中复位，When 系统重新启动，Then 手动会话状态与停止抑制必须全部清空。
 - Given 用户点按 `START`，When 回环确认弹窗出现后选择 `CANCEL`，Then 不得发送实际启动 action 或创建手动会话。
-- Given 用户在弹窗中选择 `CONFIRM`，When 当前会话处于 USB Backup，Then 用户选择的 `100 / 500 / 1000mA` 档位可工作且前面板显示 `LOOP OK`；该会话可越过 `<2W`、两次 TPS 缺样和 `>3W` 新回环门。
+- Given 用户在弹窗中选择 `CONFIRM`，When 当前会话处于 USB Backup，Then 用户选择的 `100 / 500mA` 档位可工作且前面板显示 `LOOP OK`；该会话可越过 `<2W`、两次 TPS 缺样和 `>3W` 新回环门。
 - Given 已确认的手动会话，When BMS、温度、PD、输入故障或既有通用输出过载门命中，Then 仍必须立即结束会话，确认不得绕过这些安全门。
 - Given 已确认的手动会话，When 模式变化、真实 USB-C detach、用户停止或 MCU 复位，Then `loopback_override` 必须失效；下一次 `START` 必须再次确认。
 - Given 用户执行手动充电 `START/STOP`，When monitor 正在运行，Then 普通串口输出必须记录 `manual_charge` 事件、目标档位、速度、计时器与 takeover 状态，便于确认前面板动作已送达运行态。
-- Given 手动速度偏好为 `1A` 且输入侧超出 derate 阈值，When charger runtime 决策，Then 允许降为 `100mA`，同时状态文案更新为实际 runtime token。
-- Given 手动速度偏好为 `1A` 且策略已写入 `ICHG=1000mA`，When 实测 `IBAT/BMS current` 持续明显低于目标且 `IINDPM/VINDPM` 表明输入侧调节，Then monitor 必须输出 `charger: delivery_diag`，明确这是输入/电源路径限流导致的 under-delivery，而不是手动档位未生效。
+- Given 外部请求携带 `1000mA` 手动速度，When USB/API 参数校验，Then 必须返回 `unsupported`，不得建立手动会话。
+- Given 旧 EEPROM 偏好携带 raw speed `2`，When 偏好加载，Then 必须归一为 `500mA` 并继续使用安全的两档 UI。
 
 ## 实现记录
 
@@ -221,7 +221,7 @@
 - 已新增 `ManualChargePrefs`、`ManualChargeRuntimeState`、`ManualChargeUiSnapshot`，并把 runtime 状态保持在 `PowerManager` RAM 中。
 - 已把手动会话接到 charger state machine，支持：用户启动/停止、目标完成停充、timer expiry、safety blocked、stop inhibit 与自动恢复。
 - 已将手动 `START/STOP` 事件镜像到普通串口输出，便于在不依赖 defmt 解码的 monitor 中确认手动动作是否进入固件。
-- 已为手动 `1A` 场景补齐 under-delivery 诊断：当目标电流已生效但实际充电电流持续不足时，日志保留手动档位、目标/实测电流、PD 合约、BQ25792 限流寄存器和 `IINDPM/VINDPM` 状态。
+- 手动 `500mA` 场景仍保留 under-delivery 诊断：当目标电流已生效但实际充电电流持续不足时，日志保留手动档位、目标/实测电流、PD 合约、BQ25792 限流寄存器和 `IINDPM/VINDPM` 状态。
 - 已修正 BQ25792 16-bit 配置寄存器字节序，避免 `ICHG/IINDPM/VREG` 写成 byte-swapped 值，导致日志显示软件目标已应用但芯片读回 `REG03/REG06` 实际为错误字段。
 - 已在 EEPROM 中实现 `schema_version + record table + ManualChargePrefsV1` 布局，并在设置变化时仅写入 prefs record，避免每次偏好调整都重写 superblock / table。
 - 已将手动 `START` 变为确认前置动作；确认 flag 仅属于 `ManualChargeRuntime` RAM，会话结束、模式切换、USB-C detach 和复位都会清除它，不写入 EEPROM。

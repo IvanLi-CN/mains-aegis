@@ -1,12 +1,13 @@
 # 充电器设计（BQ25792 + Type‑C/PD 控制器（需 PPS），双输入）
 
-本文档描述本项目基于 **TI BQ25792**（buck-boost 充电管理）实现的充电器方案：主 USB‑C + DC5025（直流输入）双输入；支持 1A / 500mA / 100mA 三档充电电流；支持 BQ25792 OTG（VBUS 输出）能力；不使用 Ship MOSFET；充电器电路 + BMS + `4S1P` 电池组共板（`10 cm × 10 cm` 四层 PCB），电芯通过 `4×21700` 电池座连接，可免工具拆装。
+本文档描述本项目基于 **TI BQ25792**（buck-boost 充电管理）实现的充电器方案：主 USB‑C + DC5025（直流输入）双输入；项目正常充电目标为 `500mA`，电芯低温策略为 `100mA`；支持 BQ25792 OTG（VBUS 输出）能力；不使用 Ship MOSFET；充电器电路 + BMS + `4S1P` 电池组共板（`10 cm × 10 cm` 四层 PCB），电芯通过 `4×21700` 电池座连接，可免工具拆装。
 
 > 术语澄清：本文档的 **OTG** 一词专指 `BQ25792` 的 **VBUS 输出**（USB‑C/PD Source 或独立 5V/专用输出口）；项目的 **UPS 主输出（12V/19V）** 是系统对外供电母线，建议不要通过 `SYS`。
 
 **重要约束（项目硬性需求）**：主 USB‑C 口需要同时支持 **USB PD PPS（Sink PPS/APDO）** 与 **USB PD PPS（Source PPS/APDO）**，因此 Type‑C/PD 控制器必须明确支持 PPS/APDO（或具备可验证的 PPS 实现路径）。
 
 > 电池包与 BMS 设计背景：`docs/hardware-selection.md`、`docs/bms-design.md`  
+> BQ40 温度 profile SoT：`docs/specs/bq40-charge-temperature-profile/SPEC.md`
 > BQ25792 资料：`docs/datasheets/BQ25792/BQ25792.md`  
 > CH224Q（备选，仅受电）资料：`docs/datasheets/ch224q/CH224Q.md`
 > FUSB302B（作为 PD PHY：PPS 由软件堆栈实现，需验证）资料：`docs/datasheets/FUSB302B/FUSB302B.md`
@@ -18,10 +19,10 @@
 - 电池包：`4S1P`，满充 `16.8V`，截止放电 `10.0V`（见 `docs/hardware-selection.md`）
 - UPS 主输出（系统对外供电）：`12V` / `19V` 两种目标电压配置（软件选择输出目标电压）
 - 充电电流档位：
-  - 常规：`1.0A`（默认）
-  - 预留：`2.0A`（硬件能力预留，后续可通过固件放开）
-  - 低速：`500mA`
-  - 超低速：`100mA`
+  - 正常温度（`15–45°C`）：`500mA`
+  - 低温（`0–15°C`）：`100mA`
+  - `≥45°C` 或 `<0°C`：禁止充电
+  - `1A/2A` 仅为器件能力或历史候选，不属于当前产品 profile
 - 双输入：
   - `VIN1`：主 USB‑C 口（Type‑C/PD 控制器负责 CC/PD 协商：固定 PDO + PPS/APDO；可选把 `D+/D-` 通过 `CH442E` 切到 `BQ25792 D+/D-` 做 DPDM/传统适配器检测）
   - `VIN2`：DC5025 圆孔 DC 输入（纯输入）
@@ -97,14 +98,24 @@ MCU (host) ─ I2C ─ Type-C/PD Controller (attach/orientation/role/PD+PPS)
 
 #### 2.3.2 充电电流
 
-BQ25792 充电电流寄存器分辨率为 `10mA`（范围 `50mA~5000mA`），因此 `1A/500mA/100mA` 可直接落到寄存器配置。
+BQ25792 充电电流寄存器分辨率为 `10mA`（范围 `50mA~5000mA`）。本项目由 BQ40 温度 profile 决定请求值，BQ25792 只执行不高于该请求的安全目标：
 
-推荐把“低速/超低速”作为固件可切换策略，而不是硬件固定：
+- `0–15°C`：`ICHG=100mA`，`VREG=16.8V`
+- `15–45°C`：`ICHG=500mA`，`VREG=16.8V`
+- `<0°C` 或 `≥45°C`：禁充
+- `1A/2A` 不属于当前 profile，不得由普通固件路径启用
 
-- 预留：`ICHG=2000mA`（硬件能力预留；默认固件不放开）
-- 常规：`ICHG=1000mA`
-- 低速：`ICHG=500mA`
-- 超低速：`ICHG=100mA`
+主固件必须读取 BQ40 `ChargingCurrent()` `0x14` 和 `ChargingVoltage()` `0x15`，以不超过 1 秒的周期更新请求，并将 BQ25792 `ICHG/VREG` 限制为：
+
+```text
+min(runtime_policy_target, BQ40_ChargingCurrent/Voltage)
+```
+
+BQ40 profile 的字段地址、编码和温度区间以 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md) 为准。
+
+activation/recovery 的 `200mA` wake 仅是维护态唤醒电流，不属于普通 UI、USB 或 backup 产品充电。它必须同时满足 BQ25792 `TS_COLD/TS_COOL/TS_WARM/TS_HOT` 全部未置位；若 BQ40 已经提供请求、温度或配置证据（即使 detail cache 发生瞬态 reset），还必须使用新鲜有效请求与 `15–45°C` 正常温度证据，wake 的 `ICHG/VREG` 取不超过请求的值；明确读到的错误配置在新的有效配置读回前持续阻断。普通产品充电已使能后，主循环每个 tick 仍会复核 BQ40 证据的新鲜度；过期时先调度立即 charger poll，由该 poll 先刷新请求再决定是否拉高 `CE`，避免有效期边界导致充电反复开关；刷新失败或证据仍无效时仍 fail-closed。boot-diagnostic auto-force 只有在尚无 BQ40 温度或配置观察时保留 JEITA fallback，观察到 BQ40 后同样受 tick 联锁。恢复完成后 charger register image 可以恢复，但 `CE` 必须保持高电平，直到下一次普通轮询重新通过温度、BQ40 请求、CurrentAtEOC、PD 和产品策略门控。
+
+下面的输入功率估算仅保留为 BQ25792 器件能力背景；当前产品 profile 不启用 `1A/2A`，不会因为输入功率充足而自动提高到这些档位。
 
 输入功率约束要点（决定“2A 是否跑得满”）：
 
@@ -269,13 +280,13 @@ BQ25792 的典型连接（手册命名：`RT1/RT2`）：
 - `RTS2`（`RT2`）：`TS → GND`
 - `NTC`：`TS → GND`（与 `RTS2` 并联）
 
-本项目初始选值（面向 `10k β3380`，目标 `T1≈0°C` / `T5≈60°C` 的温度窗）：
+本项目硬件初始选值（面向 `10k β3380`）仍为：
 
 - `RTS1 = 5.23 kΩ`（你现有料，`±1%`）
-- `RTS2 = 30.1 kΩ`（`±1%`，E96；若物料/采购更偏好 `30.0 kΩ` 亦可作为备选）
+- `RTS2 = 30.1 kΩ`（`±1%`，E96）
 - `NTC = 10 kΩ@25°C(103), β=3380`（与 BMS 同曲线）
 
-> 说明：BQ25792 的 `VT1/VT5` 为“相对 `REGN` 的固定百分比阈值”，`TS_COOL/TS_WARM` 仅调整 `VT2/VT3`。因此 `RTS1/RTS2/NTC` 决定了 `T1/T5` 与阈值斜率；寄存器决定 `T2/T3` 以及 JEITA 降额策略（见 7.1.1）。
+> 说明：`RTS1/RTS2/NTC` 决定 BQ25792 TS 输入的物理电压范围；本项目的电芯充电温度真相源是 BQ40 `TS2~TS4`。BQ25792 采用 `TS_COOL=15°C`、`TS_WARM=45°C` 作为外层门控，不代表支持 45～55°C 充电。
 
 ### 5.6 D+/D- 与 CC1/CC2 的“功能归属”建议（避免冲突）
 
@@ -303,29 +314,34 @@ BQ25792 的典型连接（手册命名：`RT1/RT2`）：
 2. 通过 ADC/寄存器确认电池存在、无 TS fault、BMS 允许充电
 3. 选择输入源（VAC1/VAC2），设置 `IINDPM/VINDPM`
 4. 若 `VAC1=USB-C`，则在 Type-C/PD/PPS 协商或重协商期间保持禁充；只有输入能力被判定为稳定（稳定 5V，或 `Accept + PS_RDY` 后的稳定 PD/PPS 合同）才允许继续；若最终只能稳定在 5V，则 `IINDPM/VINDPM` 也必须同步回落到 5V 安全窗口，优先遵循 source 广告的 5V 电流上限，拿不到时使用保守默认限流
-5. 根据档位设置 `ICHG=2000/1000/500/100mA`（默认不启用 2A，作为预留）
+5. 根据 BQ40 profile 设置 `ICHG=500mA` 或 `100mA`；`<0°C`、`≥45°C`、BMS 请求值为 0 或无效时保持禁充
 6. 拉低 `CE` 并置位 `EN_CHG`
 
-#### 7.1.1 TS/JEITA（温度窗与降额策略，需在 bring-up 阶段明确）
+#### 7.1.1 TS/JEITA（固定温度窗与降额策略）
 
 BQ25792 的温度相关寄存器集中在 `REG17/REG18/REG1F/REG24/REG2B`（见 `docs/datasheets/BQ25792/BQ25792.md:1378`、`:1420`、`:1514`、`:1636`、`:1730`）。本项目已确定硬件侧使用 `10k(103) β3380`（见 5.5.2），寄存器侧建议按 JEITA 常用窗口做初始落值，并在样机阶段用温箱/热风枪实测确认温度点：
 
 1. **温度窗（阈值点）**
    - `REG18_NTC_Control_1`（Offset `18h`）
      - `TS_IGNORE=0`：不忽略 TS（默认即为 0；建议保持）
-     - `TS_COOL_1:0`：选择 `T2`（默认 `10°C` 档位；可选 `5/10/15/20°C` 档位）
-     - `TS_WARM_1:0`：选择 `T3`（默认 `45°C` 档位；可选 `40/45/50/55°C` 档位）
+     - `TS_COOL_1:0`：选择 `15°C` 档位
+     - `TS_WARM_1:0`：选择 `45°C` 档位
      - `BHOT_1:0` / `BCOLD`：OTG 模式温度窗（默认 `TBHOT=60°C`、`TBCOLD=-10°C`）
-   - 说明：`TS_COOL/TS_WARM` 的温度对照表以 `103AT + RT1=5.24k/RT2=30.31k` 为参考标定（见 `docs/datasheets/BQ25792/BQ25792.md:1420`）。本项目使用 `β=3380` 时温度点会有轻微偏移，但在工程上通常可先沿用该档位，再在样机阶段据实测微调档位或 `RTS1/RTS2`。
+   - 说明：`TS_COOL/TS_WARM` 的温度对照表以 `103AT + RT1=5.24k/RT2=30.31k` 为厂商参考标定（见 `docs/datasheets/BQ25792/BQ25792.md:1420`），不是本项目的 BOM 或校准值。本项目已锁定 `β=3380`、`RTS1=5.23kΩ`、`RTS2=30.1kΩ`；本 profile 不授权把参考值替换为项目值，也不授权在此处改动分压或温度策略。
 
 2. **JEITA 降额（充电电流/电压）**
    - `REG17_NTC_Control_0`（Offset `17h`）
      - `JEITA_ISETC_1:0`：低温段（`T1~T2`）充电电流倍率（可选：Suspend / `20%` / `40%` / `100%`）
      - `JEITA_ISETH_1:0`：高温段（`T3~T5`）充电电流倍率（可选：Suspend / `20%` / `40%` / `100%`）
      - `JEITA_VSET_2:0`：高温段（`T3~T5`）充电电压偏移（可选：Suspend / `VREG-800mV` … `VREG-100mV` / `VREG unchanged`；默认 `VREG-400mV`）
-   - 本项目初始建议：
-     - 低温段：`JEITA_ISETC` 先用默认 `20%`（更保守，避免低温大电流充电）
-     - 高温段：`JEITA_VSET` 保持默认 `VREG-400mV`（在 `4S` 下约等效 `4.10V/cell` 的降压充电）；`JEITA_ISETH` 建议至少降到 `40%`，具体以电芯温升/散热实测为准
+   - 本项目固定策略：
+     - 低温段：`JEITA_ISETC=100%`，避免 BQ40 的 `100mA` 请求再被 BQ25792 二次乘以 `20%`
+     - 高温段：`JEITA_ISETH=Suspend`，`TS_WARM=45°C` 后禁止充电；不使用 `VREG-400mV` 作为 45°C 以上的替代充电策略
+     - `TS_IGNORE=0`
+
+BQ40/BQ25792 的完整温度 profile 与终止策略边界见 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md)。低电流模式继续使用 `ITERM=40mA`、禁用 `EN_TERM` 和现有 restart 行为；正常模式不因 T1～T6 改动而改变现有 `CurrentAtEOC` 对齐路径，但 `CurrentAtEOC` 对齐值必须严格低于最终 `ICHG`，否则保持禁充。activation/boot-diagnostic 的 `200mA` 仅是唤醒电流，明确禁用 `EN_TERM`，不继承历史 termination 值。
+
+目标设备已完成 BQ40 七字段温度 profile 的显式 Data Flash 写入并恢复 canonical 固件。canonical HIL 期间 BQ40 报告 `xchg=true`、`chg_fet=false`、`chg_ready=false`，电芯最低/最高约 `3152/3870mV`，主固件因此保持禁充；这属于 BQ40 安全阻断和电芯压差问题，不是 BQ25792 JEITA 将 `100mA/500mA` 误降为零。温箱/热风枪仍需在独立硬件验证中完成，当前不能把 HIL 的常温读数当作 JEITA 全温区证明。
 
 3. **状态/告警（用于 bring-up 验证，不是配置项）**
    - `REG1F_Charger_Status_4`（Offset `1Fh`）：`TS_COLD_STAT / TS_COOL_STAT / TS_WARM_STAT / TS_HOT_STAT`（当前温区）
@@ -359,7 +375,8 @@ BQ25792 的温度相关寄存器集中在 `REG17/REG18/REG1F/REG24/REG2B`（见 
 
 - 双输入互斥：USB 与 DC 同时接入时无反灌、无异常发热
 - PD 受电：插入 PD 适配器可稳定协商到 `12/15/20V`（按固件策略）；插入非 PD 源时能稳定得到默认 `5V`
-- 充电三档：`1A/500mA/100mA` 可稳定进入 CC/CV；热调节/安全计时器行为可复现
-- 预留 2A：在 `12~20V` 输入下可进入 `2A` 档（若受 `IINDPM/VINDPM` 约束会自动降流，行为符合预期）
+- 充电温度 profile：`0–15°C` 请求 `100mA`，`15–45°C` 请求 `500mA`，`≥45°C` 禁充
+- BQ40 `ChargingCurrent/ChargingVoltage`：主固件每秒至少读取一次，并且 BQ25792 不得超过 BQ40 请求
+- 低电流终止：`ICHG=100mA` 时 `ITERM=40mA`、`EN_TERM=0`，不得因 `termination_done` 错误锁死恢复充电
 - “无电池”场景：电池拔掉后不会反复触发保护；固件能检测并保持禁充
 - OTG：无输入时 OTG 输出稳定，过流/短路保护有效

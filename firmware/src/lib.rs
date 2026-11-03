@@ -32,6 +32,7 @@ pub mod ina3221 {
 pub mod boot_recovery;
 pub mod bq25792;
 pub mod bq40z50;
+pub mod charge_temperature;
 pub mod display_pipeline;
 pub mod display_power;
 pub mod fan;

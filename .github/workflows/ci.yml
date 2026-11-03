@@ -13,6 +13,9 @@ on:
       - "docs-site/**"
       - "README.md"
 
+permissions:
+  contents: read
+
 jobs:
   rustfmt:
     name: Rust fmt check
@@ -65,3 +68,13 @@ jobs:
         run: cargo check --manifest-path tools/mains-aegis-host/Cargo.toml --all-targets
       - name: Test host tools
         run: cargo test --manifest-path tools/mains-aegis-host/Cargo.toml
+
+  hil-contracts:
+    name: Read-only HIL contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Run deterministic HIL decoder tests
+        run: python3 -m unittest discover -s tools/hil -p 'test_diag_snapshot_readonly.py'

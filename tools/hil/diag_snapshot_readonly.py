@@ -97,6 +97,9 @@ def package_payload(response: dict[str, Any], package_id: str) -> dict[str, Any]
     payload = package.get("payload")
     if not isinstance(payload, dict):
         raise ValueError(f"diag-snapshot package {package_id} missing object payload")
+    decoded = payload.get("decoded")
+    if isinstance(decoded, dict):
+        return decoded
     return payload
 
 

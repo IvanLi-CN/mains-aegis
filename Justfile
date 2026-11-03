@@ -79,7 +79,25 @@ host-test:
 
 # Run firmware host-side unit tests.
 firmware-host-test:
-    cargo test --manifest-path firmware/host-unit-tests/Cargo.toml
+    cd firmware && bash scripts/run-host-unit-tests.sh
+
+# Run the host-only BQ40 charge-temperature writer contract tests.
+bq40-charge-profile-test:
+    rustc --edition=2021 --test tools/bq40-comm-tool/firmware/src/charge_profile.rs -o /tmp/mains-aegis-bq40-charge-profile-test
+    /tmp/mains-aegis-bq40-charge-profile-test
+    cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-rom-recover-disable,bms-charge-temperature-profile,bms-charge-temperature-apply
+    cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-rom-recover-force
+    cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-df-repair-afe-default
+    cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-rom-repair-asset-df-mainboard
+    bash tools/bq40-comm-tool/bin/profile-contract-test.sh
+
+# Run deterministic read-only HIL decoder contract tests without hardware.
+hil-diag-snapshot-test:
+    python3 -m unittest discover -s tools/hil -p 'test_diag_snapshot_readonly.py'
+
+# Validate the canonical topic specification through the public agent-toolkit checker.
+spec-contract-check:
+    bash scripts/spec-contract-check.sh
 
 # Check ESP firmware.
 firmware-check:
@@ -171,5 +189,5 @@ flash-current-real-hil-19v device confirm: host-tools-build
     cargo run --manifest-path {{ host_manifest }} --bin mains-aegis -- --ipc {{ devd_ipc }} device {{ device }} flash --real
 
 # Run the standard local validation set.
-check: web-check host-test firmware-host-test firmware-check
+check: web-check host-test firmware-host-test bq40-charge-profile-test hil-diag-snapshot-test spec-contract-check firmware-check
     git diff --check

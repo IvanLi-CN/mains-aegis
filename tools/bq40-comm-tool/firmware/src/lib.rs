@@ -6,4 +6,5 @@ pub mod ina3221 {
 
 pub mod bq25792;
 pub mod bq40z50;
+pub mod charge_profile;
 pub mod tmp112;

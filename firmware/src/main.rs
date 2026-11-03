@@ -3090,7 +3090,6 @@ const fn manual_charge_speed_api_value(
     match speed {
         front_panel_scene::ManualChargeSpeed::Ma100 => "ma_100",
         front_panel_scene::ManualChargeSpeed::Ma500 => "ma_500",
-        front_panel_scene::ManualChargeSpeed::Ma1000 => "ma_1000",
     }
 }
 

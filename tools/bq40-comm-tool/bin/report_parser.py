@@ -22,6 +22,8 @@ PREEXISTING_END_EVENT = "preexisting_segment_end"
 
 LOG_LEVEL_PREFIX = r"(?:\[[A-Z ]+\]\s+)?"
 
+CHARGE_PROFILE_PREFIX_RE = re.compile(rf"^{LOG_LEVEL_PREFIX}bms_df_apply:")
+
 SAMPLE_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"temp_c_x10=(?P<temp>-?\d+) voltage_mv=(?P<voltage>\d+) "
@@ -37,16 +39,166 @@ POLL_RETRY_RE = re.compile(
     rf"stage=poll_snapshot_retry_(?P<result>ok|fail) first_err=(?P<first>[a-zA-Z0-9_]+)"
     rf"(?: retry_err=(?P<retry>[a-zA-Z0-9_]+))?"
 )
-LIVE_DF_APPLY_RE = re.compile(
+CHARGE_PROFILE_APPLY_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
     rf"profile=(?P<profile>[a-zA-Z0-9_]+) stage=(?P<stage>[a-zA-Z0-9_]+)"
-    rf"(?: .*?(?:writes|fields)=(?P<count>\d+))?"
+    rf"(?:\s.*)?$"
 )
-BMS_DF_CFG_RE = re.compile(
-    rf"{LOG_LEVEL_PREFIX}bms_df_cfg: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    rf".*?\bfet_options=0x(?P<fet_options>[0-9a-fA-F]+)\b"
-    rf".*?\bprot_cfg=0x(?P<prot_cfg>[0-9a-fA-F]+)\b"
-    rf".*?\bcuv_recovery=0x(?P<cuv_recovery>[0-9a-fA-F]+)\b"
+CHARGE_PROFILE_APPLY_ANY_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=(?P<profile>[^\s]+) stage=(?P<stage>[^\s]+)(?:\s.*)?$"
+)
+
+
+def charge_profile_evidence_shape_is_valid(text: str) -> bool:
+    """Require every apparent profile event to use the complete key=value grammar."""
+    prefix = CHARGE_PROFILE_PREFIX_RE.match(text)
+    if prefix is None:
+        return False
+    tokens = text[prefix.end() :].strip().split()
+    if len(tokens) < 3:
+        return False
+    if re.fullmatch(r"addr=0x[0-9a-fA-F]+", tokens[0]) is None:
+        return False
+    if re.fullmatch(r"profile=\S+", tokens[1]) is None:
+        return False
+    if re.fullmatch(r"stage=\S+", tokens[2]) is None:
+        return False
+    stage = tokens[2].split("=", 1)[1]
+    tail = tokens[3:]
+
+    def matches(patterns: tuple[str, ...]) -> bool:
+        return len(tail) == len(patterns) and all(
+            re.fullmatch(pattern, token) is not None
+            for pattern, token in zip(patterns, tail)
+        )
+
+    if stage in {"snapshot_before_hex", "final_after_hex"}:
+        return len(tail) == 32 and all(
+            re.fullmatch(rf"b{index}=0x[0-9a-fA-F]{{1,2}}", token) is not None
+            for index, token in enumerate(tail)
+        )
+    if stage == "field_verify":
+        return matches(
+            (
+                r"field=[a-zA-Z0-9_]+",
+                r"df_addr=0x[0-9a-fA-F]+",
+                r"declared_len=\d+",
+                r"payload_len=\d+",
+                r"raw_lo=0x[0-9a-fA-F]{1,2}",
+                r"raw_hi=0x[0-9a-fA-F]{1,2}",
+                r"decoded=0x[0-9a-fA-F]{1,4}",
+            )
+        )
+    if stage == "done":
+        return matches(
+            (
+                r"fields=\d+",
+                r"snapshot_addr=0x[0-9a-fA-F]+",
+                r"snapshot_len=\d+",
+                r"final_addr=0x[0-9a-fA-F]+",
+                r"final_len=\d+",
+            )
+        )
+    if stage in {
+        "security_unseal_0414",
+        "security_unseal_3672",
+        "security_full_access_ffff_1",
+        "security_full_access_ffff_2",
+    }:
+        return matches((r"write=ok",))
+    if stage == "charge_disabled":
+        return matches((r"ce_high=true", r"charger_enabled=false"))
+    if stage == "provenance":
+        return matches((r"probe_mode=strict", r"rom_image=r2", r"mode=canonical"))
+    if stage == "identity_verified":
+        return matches((r"manufacturer=texas", r"device=bq40"))
+    if stage == "security_after":
+        return matches((r"op=0x[0-9a-fA-F]+", r"sec=\S+"))
+    if stage in {
+        "identity_mfg_error",
+        "identity_device_error",
+        "security_error",
+        "snapshot_transport",
+        "snapshot_address",
+        "snapshot_length",
+        "echo_address",
+        "echo_length",
+        "echo_raw",
+        "echo_decoded",
+        "final_transport",
+        "final_address",
+        "final_length",
+        "final_raw",
+        "final_decoded",
+    }:
+        return matches((r"err=\S+",))
+    if stage == "write_transport":
+        return matches((r"via=direct", r"df_addr=0x[0-9a-fA-F]+", r"err=\S+"))
+    if stage == "identity_error":
+        return matches((r"reason=\S+",))
+    if stage == "error":
+        return matches((r"error=\S+",))
+    if stage == "halt":
+        return matches((r"reason=(?:complete|profile_failed)", r"charger_enabled=false"))
+
+    # Unknown stages are rejected semantically below. Keep their shape check
+    # conservative so a bare stage can still produce the explicit unknown-stage
+    # reason, while arbitrary trailing text cannot be mistaken for evidence.
+    return all(re.fullmatch(r"[a-zA-Z0-9_]+=[^\s]+", token) for token in tail)
+
+
+CHARGE_PROFILE_SNAPSHOT_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=(?P<stage>snapshot_before_hex|final_after_hex) "
+    + " ".join(
+        rf"b{index}=0x(?P<b{index}>[0-9a-fA-F]{{1,2}})" for index in range(32)
+    )
+    + r"$"
+)
+CHARGE_PROFILE_DONE_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=done fields=(?P<fields>\d+) "
+    rf"snapshot_addr=0x(?P<snapshot_addr>[0-9a-fA-F]+) snapshot_len=(?P<snapshot_len>\d+) "
+    rf"final_addr=0x(?P<final_addr>[0-9a-fA-F]+) final_len=(?P<final_len>\d+)$"
+)
+CHARGE_PROFILE_FIELD_VERIFY_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=field_verify field=(?P<field>[a-zA-Z0-9_]+) "
+    rf"df_addr=0x(?P<df_addr>[0-9a-fA-F]+) "
+    rf"declared_len=(?P<declared_len>\d+) payload_len=(?P<payload_len>\d+) "
+    rf"raw_lo=0x(?P<raw_lo>[0-9a-fA-F]{{1,2}}) "
+    rf"raw_hi=0x(?P<raw_hi>[0-9a-fA-F]{{1,2}}) decoded=0x(?P<decoded>[0-9a-fA-F]{{1,4}})$"
+)
+CHARGE_PROFILE_ERROR_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=(?P<profile>[a-zA-Z0-9_]+) stage=error error=(?P<error>[a-zA-Z0-9_]+)$"
+)
+CHARGE_PROFILE_CE_DISABLED_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=charge_disabled "
+    rf"ce_high=(?P<ce_high>true|false) charger_enabled=(?P<charger_enabled>true|false)$"
+)
+CHARGE_PROFILE_POST_HALT_CHARGE_ENABLE_RE = re.compile(
+    r"(?:\bcharger:\s+enabled=true\b|\bcharger_enabled=true\b|\bce_low=true\b|\bEN_CHG=1\b)",
+    re.IGNORECASE,
+)
+CHARGE_PROFILE_IDENTITY_VERIFIED_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=identity_verified "
+    rf"manufacturer=(?P<manufacturer>[a-zA-Z0-9_]+) device=(?P<device>[a-zA-Z0-9_]+)$"
+)
+CHARGE_PROFILE_PROVENANCE_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=provenance "
+    rf"probe_mode=(?P<probe_mode>strict|mac-only) "
+    rf"rom_image=(?P<rom_image>r2|r3|r5) "
+    rf"mode=(?P<mode>canonical|dual-diag)$"
+)
+CHARGE_PROFILE_SECURITY_AFTER_RE = re.compile(
+    rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
+    rf"profile=bq40_charge_temperature stage=security_after "
+    rf"op=0x(?P<op>[0-9a-fA-F]+) sec=(?P<sec>[a-zA-Z0-9_]+)$"
 )
 ROM_DETECTED_RE = re.compile(
     r"stage=(?:rom_mode_detected(?:_after_enter|_post_flash)?|wake_window_rom_entered|wake_window_rom_signature)\b"
@@ -61,7 +213,104 @@ ROM_FW_INVALID_RUNTIME_RE = re.compile(r"stage=probe_rom_post_flash_fw_invalid_r
 ROM_RUNTIME_STATUS_UNCONFIRMED_RE = re.compile(
     r"stage=(?:probe_rom_post_flash_runtime_status_unavailable|probe_rom_post_flash_fw_seen_status_unconfirmed|probe_rom_post_flash_fw_invalid_runtime_status_unconfirmed)\b"
 )
+# The explicit ROM event flags above feed the human-readable summary.  The
+# profile verdict uses this broader boundary because ROM/repair paths have
+# several terminal and failure stages; accepting an unlisted one would let a
+# mixed recovery/profile log pass offline verification.
+ROM_OR_RECOVERY_EVENT_RE = re.compile(
+    r"(?:\bstage=[^\s]*(?:rom|wake|post_flash|recovery|recover|flash|mode_exit|emshut|addr_scan)[^\s]*"
+    r"|\brom=[^\s]+|\brecover=[^\s]+|\bbms_df_(?:repair|prepare):)",
+    re.IGNORECASE,
+)
 ADDR16_RE = re.compile(r"addr=0x16\b")
+
+CHARGE_PROFILE_EXPECTED_FIELDS = {
+    "t1": (0x4A0B, (0xAC, 0x0A), 0x0AAC),
+    "t2": (0x4A0D, (0x42, 0x0B), 0x0B42),
+    "t5": (0x4A0F, (0x74, 0x0B), 0x0B74),
+    "t6": (0x4A11, (0x0A, 0x0C), 0x0C0A),
+    "t3": (0x4A13, (0x3C, 0x0C), 0x0C3C),
+    "t4": (0x4A15, (0x6E, 0x0C), 0x0C6E),
+    "hysteresis": (0x4A17, (0x14, 0x00), 0x0014),
+}
+CHARGE_PROFILE_KNOWN_STAGES = {
+    "snapshot_before_hex",
+    "final_after_hex",
+    "field_verify",
+    "done",
+    "security_unseal_0414",
+    "security_unseal_3672",
+    "security_full_access_ffff_1",
+    "security_full_access_ffff_2",
+    "security_after",
+    "charge_disabled",
+    "provenance",
+    "identity_verified",
+    "security_error",
+    "identity_mfg_error",
+    "identity_device_error",
+    "identity_error",
+    "snapshot_transport",
+    "snapshot_address",
+    "snapshot_length",
+    "write_transport",
+    "echo_address",
+    "echo_length",
+    "echo_raw",
+    "echo_decoded",
+    "final_transport",
+    "final_address",
+    "final_length",
+    "final_raw",
+    "final_decoded",
+    "error",
+    "halt",
+}
+CHARGE_PROFILE_SECURITY_STAGE_ORDER = (
+    "security_unseal_0414",
+    "security_unseal_3672",
+    "security_full_access_ffff_1",
+    "security_full_access_ffff_2",
+)
+
+
+def charge_profile_address_allowed(mode: str, address: int) -> bool:
+    return mode == "canonical" and address == 0x0B
+
+
+def charge_profile_final_vectors_match(payload_hex: Optional[str]) -> bool:
+    if payload_hex is None or len(payload_hex) != 64:
+        return False
+    payload = bytes.fromhex(payload_hex)
+    for address, raw, _decoded in CHARGE_PROFILE_EXPECTED_FIELDS.values():
+        offset = address - 0x4A00
+        if payload[offset : offset + 2] != bytes(raw):
+            return False
+    return True
+
+
+def charge_profile_non_allowlisted_bytes_unchanged(
+    before_hex: Optional[str], after_hex: Optional[str]
+) -> bool:
+    if (
+        before_hex is None
+        or after_hex is None
+        or len(before_hex) != 64
+        or len(after_hex) != 64
+    ):
+        return False
+    before = bytes.fromhex(before_hex)
+    after = bytes.fromhex(after_hex)
+    allowlisted_offsets = {
+        offset
+        for address, _raw, _decoded in CHARGE_PROFILE_EXPECTED_FIELDS.values()
+        for offset in (address - 0x4A00, address - 0x4A00 + 1)
+    }
+    return all(
+        before[offset] == after[offset]
+        for offset in range(32)
+        if offset not in allowlisted_offsets
+    )
 
 
 @dataclass
@@ -108,6 +357,16 @@ def dedupe_key(entry: dict, text: str) -> Optional[tuple[int, str]]:
     return (round(entry_ts * 1000), text)
 
 
+def is_mirrored_profile_evidence(
+    seen_sources: set[str], source: object
+) -> bool:
+    """Identify the trace/log mirror of one defmt event without hiding real duplicates."""
+    if source not in {"trace", "log"}:
+        return False
+    other_source = "log" if source == "trace" else "trace"
+    return seen_sources == {other_source}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -125,7 +384,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rom-image", choices=["r2", "r3", "r5"])
     parser.add_argument(
         "--repair-profile",
-        choices=["none", "afe-default", "live-df-mainboard", "asset-df-mainboard"],
+        choices=["none", "afe-default", "bq40-charge-temperature", "asset-df-mainboard"],
         required=True,
     )
     parser.add_argument("--report-out", required=True)
@@ -134,6 +393,44 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+
+    if args.repair_profile == "bq40-charge-temperature" and args.action not in {
+        "apply-df",
+        "verify",
+    }:
+        print(
+            "bq40-charge-temperature profile verification requires apply-df or verify action",
+            file=sys.stderr,
+        )
+        return 24
+
+    if args.repair_profile == "bq40-charge-temperature" and args.mode != "canonical":
+        print(
+            "bq40-charge-temperature profile verification requires canonical mode; "
+            "dual-diag is diagnostic-only",
+            file=sys.stderr,
+        )
+        return 24
+
+    if args.repair_profile == "bq40-charge-temperature":
+        if args.action == "apply-df" and (
+            args.probe_mode != "strict" or args.rom_image != "r2"
+        ):
+            print(
+                "bq40-charge-temperature apply-df verification requires strict probe "
+                "and r2 ROM provenance",
+                file=sys.stderr,
+            )
+            return 24
+        if args.action == "verify" and any(
+            value is not None
+            for value in (args.force_min_charge, args.probe_mode, args.rom_image)
+        ):
+            print(
+                "bq40-charge-temperature verify does not accept live run provenance flags",
+                file=sys.stderr,
+            )
+            return 24
 
     monitor_file = Path(args.monitor_file).expanduser().resolve()
     report_out = Path(args.report_out).expanduser().resolve()
@@ -151,21 +448,47 @@ def main() -> int:
     rom_fw_seen = False
     rom_fw_invalid_runtime = False
     rom_runtime_status_unconfirmed = False
-    live_df_apply_attempted = False
-    live_df_apply_done = False
-    live_df_apply_applied = False
-    live_df_apply_writes = 0
-    live_df_apply_errors: Counter[str] = Counter()
-    live_df_readback_seen = False
-    live_df_readback_fet_options: Optional[int] = None
-    live_df_readback_prot_cfg: Optional[int] = None
-    live_df_readback_cuv_recovery: Optional[int] = None
+    charge_profile_provenance_conflict = False
+    charge_profile_apply_attempted = False
+    charge_profile_apply_done = False
+    charge_profile_apply_writes = 0
+    charge_profile_apply_errors: Counter[str] = Counter()
+    charge_profile_readback_seen = False
+    charge_profile_snapshot_before_hex: Optional[str] = None
+    charge_profile_final_after_hex: Optional[str] = None
+    charge_profile_addresses: set[int] = set()
+    charge_profile_done_fields: Optional[int] = None
+    charge_profile_done_snapshot_addr: Optional[int] = None
+    charge_profile_done_snapshot_len: Optional[int] = None
+    charge_profile_done_final_addr: Optional[int] = None
+    charge_profile_done_final_len: Optional[int] = None
+    charge_profile_verified_fields: set[str] = set()
+    charge_profile_snapshot_before_count = 0
+    charge_profile_final_after_count = 0
+    charge_profile_done_count = 0
+    charge_profile_field_verify_counts: Counter[str] = Counter()
+    charge_profile_field_order: list[str] = []
+    charge_profile_sequence_error = False
+    charge_profile_unknown_stage = False
+    charge_profile_ce_disabled = False
+    charge_profile_provenance_verified = False
+    charge_profile_provenance_count = 0
+    charge_profile_identity_verified = False
+    charge_profile_full_access_verified = False
+    charge_profile_security_stages_seen: set[str] = set()
+    charge_profile_security_stage_index = 0
+    charge_profile_ce_disabled_count = 0
+    charge_profile_identity_verified_count = 0
+    charge_profile_security_after_count = 0
+    charge_profile_halt_seen = False
+    charge_profile_post_halt_charge_enabled = False
     canonical_touched_0x16 = False
     last_sample_ts: Optional[float] = None
     in_preexisting_segment = False
     parse_preexisting_segment = False
     allow_preexisting_parse = False
     seen_entries: set[tuple[int, str]] = set()
+    seen_charge_profile_entries: dict[tuple[int, str], set[str]] = {}
     allowed_addrs = {0x0B} if args.mode == "canonical" else {0x0B, 0x16}
 
     run_config = {
@@ -182,6 +505,17 @@ def main() -> int:
         print(f"monitor file not found: {monitor_file}", file=sys.stderr)
         return 3
 
+    is_charge_profile_requested = args.repair_profile == "bq40-charge-temperature"
+
+    def mark_malformed_charge_profile_evidence(kind: str) -> None:
+        nonlocal charge_profile_apply_attempted
+        nonlocal charge_profile_sequence_error
+        nonlocal charge_profile_unknown_stage
+        charge_profile_apply_attempted = True
+        charge_profile_sequence_error = True
+        charge_profile_unknown_stage = True
+        charge_profile_apply_errors[kind] += 1
+
     try:
         with monitor_file.open("r", encoding="utf-8") as fh:
             for line in fh:
@@ -191,6 +525,13 @@ def main() -> int:
                 try:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
+                    if is_charge_profile_requested and "bms_df_apply:" in line:
+                        mark_malformed_charge_profile_evidence("malformed_json")
+                    continue
+
+                if not isinstance(entry, dict):
+                    if is_charge_profile_requested and "bms_df_apply:" in line:
+                        mark_malformed_charge_profile_evidence("malformed_entry")
                     continue
 
                 if entry.get("src") == "meta":
@@ -212,6 +553,13 @@ def main() -> int:
                         parse_preexisting_segment = False
                         continue
                     if event == SESSION_BOUNDARY_EVENT:
+                        if is_charge_profile_requested and charge_profile_apply_attempted:
+                            # A profile verdict must never be assembled from evidence emitted by
+                            # multiple monitor sessions. Ordinary telemetry may span re-attaches,
+                            # but the non-atomic Data Flash audit stream must remain single-session.
+                            charge_profile_provenance_conflict = True
+                            charge_profile_sequence_error = True
+                            charge_profile_apply_errors["session_boundary"] += 1
                         # Only treat reset attaches (or older logs without the flag) as streak
                         # discontinuities. Re-attaches without a reset can still build a valid
                         # streak across the combined log.
@@ -227,12 +575,42 @@ def main() -> int:
 
                 text = entry.get("text", "")
                 if not isinstance(text, str):
+                    if is_charge_profile_requested and "text" in entry:
+                        mark_malformed_charge_profile_evidence("malformed_text")
                     continue
+                if (
+                    is_charge_profile_requested
+                    and charge_profile_halt_seen
+                    and CHARGE_PROFILE_POST_HALT_CHARGE_ENABLE_RE.search(text)
+                ):
+                    charge_profile_post_halt_charge_enabled = True
+                    charge_profile_sequence_error = True
+                    charge_profile_apply_errors["post_halt_charge_enable"] += 1
+                if is_charge_profile_requested and ROM_OR_RECOVERY_EVENT_RE.search(text):
+                    charge_profile_provenance_conflict = True
+                is_charge_profile_evidence = "bms_df_apply:" in text
+                if (
+                    is_charge_profile_requested
+                    and is_charge_profile_evidence
+                    and not charge_profile_evidence_shape_is_valid(text)
+                ):
+                    mark_malformed_charge_profile_evidence("malformed_evidence")
                 key = dedupe_key(entry, text)
                 if key is not None:
-                    if key in seen_entries:
-                        continue
-                    seen_entries.add(key)
+                    if is_charge_profile_evidence:
+                        source = entry.get("src")
+                        source_name = source if isinstance(source, str) else ""
+                        profile_sources = seen_charge_profile_entries.setdefault(key, set())
+                        if is_mirrored_profile_evidence(profile_sources, source_name):
+                            profile_sources.add(source_name)
+                            continue
+                        profile_sources.add(source_name)
+                    else:
+                        # Ordinary monitor telemetry can be duplicated when a session tail is
+                        # reattached.
+                        if key in seen_entries:
+                            continue
+                        seen_entries.add(key)
 
                 if ADDR16_RE.search(text):
                     canonical_touched_0x16 = True
@@ -252,40 +630,268 @@ def main() -> int:
                 if ROM_RUNTIME_STATUS_UNCONFIRMED_RE.search(text):
                     rom_runtime_status_unconfirmed = True
 
-                live_df_match = LIVE_DF_APPLY_RE.search(text)
-                if live_df_match and live_df_match.group("profile") == "live_df_mainboard":
-                    live_df_apply_attempted = True
-                    stage = live_df_match.group("stage")
-                    count = live_df_match.group("count")
-                    if stage == "field_written":
-                        live_df_apply_applied = True
-                        live_df_apply_writes += 1
-                    elif stage == "done":
-                        live_df_apply_done = True
-                        if count is not None:
-                            live_df_apply_writes = max(live_df_apply_writes, int(count))
-                        if live_df_apply_writes > 0:
-                            live_df_apply_applied = True
+                charge_profile_match = CHARGE_PROFILE_APPLY_RE.search(text)
+                charge_profile_any_match = CHARGE_PROFILE_APPLY_ANY_RE.search(text)
+                if charge_profile_any_match:
+                    any_profile = charge_profile_any_match.group("profile")
+                    any_stage = charge_profile_any_match.group("stage")
+                    if any_profile != "bq40_charge_temperature":
+                        charge_profile_apply_attempted = True
+                        charge_profile_addresses.add(
+                            int(charge_profile_any_match.group("addr"), 16)
+                        )
+                        charge_profile_sequence_error = True
+                        charge_profile_unknown_stage = True
+                        charge_profile_apply_errors["unknown_profile"] += 1
+                    elif (
+                        charge_profile_match is None
+                        or charge_profile_match.group("profile") != any_profile
+                        or charge_profile_match.group("stage") != any_stage
+                    ):
+                        charge_profile_apply_attempted = True
+                        charge_profile_addresses.add(
+                            int(charge_profile_any_match.group("addr"), 16)
+                        )
+                        charge_profile_sequence_error = True
+                        charge_profile_unknown_stage = True
+                        charge_profile_apply_errors["malformed_evidence"] += 1
+                if charge_profile_match and charge_profile_match.group("profile") == "bq40_charge_temperature":
+                    charge_profile_apply_attempted = True
+                    charge_profile_addresses.add(int(charge_profile_match.group("addr"), 16))
+                    stage = charge_profile_match.group("stage")
+                    if stage == "charge_disabled":
+                        charge_profile_ce_disabled_count += 1
+                        gate_match = CHARGE_PROFILE_CE_DISABLED_RE.search(text)
+                        if (
+                            charge_profile_ce_disabled_count != 1
+                            or gate_match is None
+                            or gate_match.group("ce_high") != "true"
+                            or gate_match.group("charger_enabled") != "false"
+                        ):
+                            charge_profile_sequence_error = True
+                        else:
+                            charge_profile_ce_disabled = True
+                    elif stage == "provenance":
+                        charge_profile_provenance_count += 1
+                        provenance_match = CHARGE_PROFILE_PROVENANCE_RE.search(text)
+                        if (
+                            not charge_profile_ce_disabled
+                            or charge_profile_provenance_count != 1
+                            or provenance_match is None
+                            or provenance_match.group("probe_mode") != "strict"
+                            or provenance_match.group("rom_image") != "r2"
+                            or provenance_match.group("mode") != "canonical"
+                        ):
+                            charge_profile_sequence_error = True
+                        else:
+                            charge_profile_provenance_verified = True
+                    elif stage == "identity_verified":
+                        charge_profile_identity_verified_count += 1
+                        identity_match = CHARGE_PROFILE_IDENTITY_VERIFIED_RE.search(text)
+                        if (
+                            not charge_profile_ce_disabled
+                            or not charge_profile_provenance_verified
+                            or charge_profile_identity_verified_count != 1
+                            or identity_match is None
+                            or identity_match.group("manufacturer") != "texas"
+                            or identity_match.group("device") != "bq40"
+                        ):
+                            charge_profile_sequence_error = True
+                        else:
+                            charge_profile_identity_verified = True
                     elif stage in {
-                        "read_err",
-                        "write_err",
-                        "verify_err",
-                        "verify_mismatch",
-                        "field_failed",
-                        "reset_err",
+                        "security_unseal_0414",
+                        "security_unseal_3672",
+                        "security_full_access_ffff_1",
+                        "security_full_access_ffff_2",
                     }:
-                        live_df_apply_errors[stage] += 1
+                        if (
+                            not charge_profile_identity_verified
+                            or stage in charge_profile_security_stages_seen
+                            or charge_profile_security_stage_index
+                            >= len(CHARGE_PROFILE_SECURITY_STAGE_ORDER)
+                            or stage
+                            != CHARGE_PROFILE_SECURITY_STAGE_ORDER[
+                                charge_profile_security_stage_index
+                            ]
+                        ):
+                            charge_profile_sequence_error = True
+                        else:
+                            charge_profile_security_stage_index += 1
+                        charge_profile_security_stages_seen.add(stage)
+                    elif stage == "security_after":
+                        charge_profile_security_after_count += 1
+                        security_match = CHARGE_PROFILE_SECURITY_AFTER_RE.search(text)
+                        if (
+                            not charge_profile_identity_verified
+                            or charge_profile_security_after_count != 1
+                            or len(charge_profile_security_stages_seen) != 4
+                            or charge_profile_security_stage_index
+                            != len(CHARGE_PROFILE_SECURITY_STAGE_ORDER)
+                            or security_match is None
+                            or security_match.group("sec") != "full_access"
+                        ):
+                            charge_profile_sequence_error = True
+                        else:
+                            op = int(security_match.group("op"), 16)
+                            if ((op >> 8) & 0x3) != 0b01:
+                                charge_profile_sequence_error = True
+                                charge_profile_apply_errors["full_access_op"] += 1
+                                continue
+                            charge_profile_full_access_verified = True
+                    elif stage == "snapshot_before_hex":
+                        if (
+                            charge_profile_snapshot_before_count != 0
+                            or charge_profile_final_after_count != 0
+                            or charge_profile_done_count != 0
+                            or not charge_profile_full_access_verified
+                        ):
+                            charge_profile_sequence_error = True
+                        charge_profile_snapshot_before_count += 1
+                    elif stage == "final_after_hex":
+                        if (
+                            charge_profile_snapshot_before_count != 1
+                            or charge_profile_final_after_count != 0
+                            or charge_profile_done_count != 0
+                            or not charge_profile_full_access_verified
+                        ):
+                            charge_profile_sequence_error = True
+                        charge_profile_final_after_count += 1
+                    elif stage == "field_verify":
+                        if (
+                            charge_profile_snapshot_before_count != 1
+                            or charge_profile_final_after_count != 1
+                            or charge_profile_done_count != 0
+                            or not charge_profile_full_access_verified
+                        ):
+                            charge_profile_sequence_error = True
+                    elif stage == "done":
+                        if (
+                            charge_profile_snapshot_before_count != 1
+                            or charge_profile_final_after_count != 1
+                            or charge_profile_done_count != 0
+                        ):
+                            charge_profile_sequence_error = True
+                        charge_profile_done_count += 1
+                    elif stage in {
+                        "security_error",
+                        "identity_mfg_error",
+                        "identity_device_error",
+                        "identity_error",
+                        "snapshot_transport",
+                        "snapshot_address",
+                        "snapshot_length",
+                        "write_transport",
+                        "echo_address",
+                        "echo_length",
+                        "echo_raw",
+                        "echo_decoded",
+                        "final_transport",
+                        "final_address",
+                        "final_length",
+                        "final_raw",
+                        "final_decoded",
+                        "error",
+                    }:
+                        charge_profile_apply_errors[stage] += 1
+                    elif stage == "halt":
+                        halt_match = re.search(
+                            r"\bstage=halt reason=(?P<reason>complete|profile_failed) "
+                            r"charger_enabled=false$",
+                            text,
+                        )
+                        if halt_match is None or halt_match.group("reason") != "complete":
+                            charge_profile_apply_errors[stage] += 1
+                        else:
+                            charge_profile_halt_seen = True
+                    elif stage not in CHARGE_PROFILE_KNOWN_STAGES:
+                        charge_profile_unknown_stage = True
+                        charge_profile_sequence_error = True
+                        charge_profile_apply_errors["unknown_stage"] += 1
 
-                bms_df_cfg_match = BMS_DF_CFG_RE.search(text)
-                if bms_df_cfg_match and int(bms_df_cfg_match.group("addr"), 16) in allowed_addrs:
-                    live_df_readback_seen = True
-                    live_df_readback_fet_options = int(
-                        bms_df_cfg_match.group("fet_options"), 16
+                charge_profile_done_match = CHARGE_PROFILE_DONE_RE.search(text)
+                if charge_profile_done_match:
+                    charge_profile_apply_attempted = True
+                    charge_profile_apply_done = True
+                    charge_profile_addresses.add(
+                        int(charge_profile_done_match.group("addr"), 16)
                     )
-                    live_df_readback_prot_cfg = int(bms_df_cfg_match.group("prot_cfg"), 16)
-                    live_df_readback_cuv_recovery = int(
-                        bms_df_cfg_match.group("cuv_recovery"), 16
+                    charge_profile_done_fields = int(charge_profile_done_match.group("fields"))
+                    charge_profile_done_snapshot_addr = int(
+                        charge_profile_done_match.group("snapshot_addr"), 16
                     )
+                    charge_profile_done_snapshot_len = int(
+                        charge_profile_done_match.group("snapshot_len")
+                    )
+                    charge_profile_done_final_addr = int(
+                        charge_profile_done_match.group("final_addr"), 16
+                    )
+                    charge_profile_done_final_len = int(
+                        charge_profile_done_match.group("final_len")
+                    )
+                    charge_profile_apply_writes = max(
+                        charge_profile_apply_writes, charge_profile_done_fields
+                    )
+
+                charge_profile_field_match = CHARGE_PROFILE_FIELD_VERIFY_RE.search(text)
+                if charge_profile_field_match:
+                    charge_profile_apply_attempted = True
+                    address = int(charge_profile_field_match.group("addr"), 16)
+                    charge_profile_addresses.add(address)
+                    field_name = charge_profile_field_match.group("field")
+                    charge_profile_field_verify_counts[field_name] += 1
+                    expected_field_order = tuple(CHARGE_PROFILE_EXPECTED_FIELDS)
+                    if (
+                        charge_profile_field_verify_counts[field_name] != 1
+                        or len(charge_profile_field_order) >= len(expected_field_order)
+                        or field_name != expected_field_order[len(charge_profile_field_order)]
+                    ):
+                        charge_profile_sequence_error = True
+                    charge_profile_field_order.append(field_name)
+                    expected = CHARGE_PROFILE_EXPECTED_FIELDS.get(field_name)
+                    actual = (
+                        int(charge_profile_field_match.group("df_addr"), 16),
+                        int(charge_profile_field_match.group("declared_len")),
+                        int(charge_profile_field_match.group("payload_len")),
+                        (
+                            int(charge_profile_field_match.group("raw_lo"), 16),
+                            int(charge_profile_field_match.group("raw_hi"), 16),
+                        ),
+                        int(charge_profile_field_match.group("decoded"), 16),
+                    )
+                    if (
+                        expected is None
+                        or actual[0] != expected[0]
+                        or actual[1:3] != (32, 32)
+                        or actual[3:] != expected[1:]
+                    ):
+                        charge_profile_apply_errors["field_verify"] += 1
+                    else:
+                        charge_profile_verified_fields.add(field_name)
+
+                charge_profile_snapshot_match = CHARGE_PROFILE_SNAPSHOT_RE.search(text)
+                if charge_profile_snapshot_match:
+                    charge_profile_apply_attempted = True
+                    charge_profile_addresses.add(
+                        int(charge_profile_snapshot_match.group("addr"), 16)
+                    )
+                    payload_hex = bytes(
+                        int(charge_profile_snapshot_match.group(f"b{index}"), 16)
+                        for index in range(32)
+                    ).hex()
+                    if charge_profile_snapshot_match.group("stage") == "snapshot_before_hex":
+                        charge_profile_snapshot_before_hex = payload_hex
+                    else:
+                        charge_profile_final_after_hex = payload_hex
+                        charge_profile_readback_seen = True
+
+                charge_profile_error_match = CHARGE_PROFILE_ERROR_RE.search(text)
+                if (
+                    charge_profile_error_match
+                    and charge_profile_error_match.group("profile") == "bq40_charge_temperature"
+                ):
+                    charge_profile_apply_attempted = True
+                    charge_profile_apply_errors[charge_profile_error_match.group("error")] += 1
 
                 err_match = POLL_ERR_RE.search(text)
                 if err_match:
@@ -338,32 +944,80 @@ def main() -> int:
         print(f"failed to read monitor file: {exc}", file=sys.stderr)
         return 4
 
-    is_live_df_mainboard_apply = (
-        args.action == "apply-df" and args.repair_profile == "live-df-mainboard"
-    )
-    live_df_readback_matches = (
-        live_df_readback_seen
-        and live_df_readback_fet_options == 0x19
-        and live_df_readback_prot_cfg == 0x00
-        and live_df_readback_cuv_recovery == 0x09F6
-    )
-
     reasons: list[str] = []
-    if samples_total == 0 and not (is_live_df_mainboard_apply and live_df_readback_matches):
+    if samples_total == 0 and not (
+        is_charge_profile_requested and charge_profile_apply_done
+    ):
         reasons.append("no_bms_samples")
-    if max_streak < 10 and not is_live_df_mainboard_apply:
+    if max_streak < 10 and not is_charge_profile_requested:
         reasons.append("max_valid_streak_lt_10")
     if args.mode == "canonical" and canonical_touched_0x16:
         reasons.append("canonical_mode_touched_0x16")
-    if is_live_df_mainboard_apply:
-        if not live_df_apply_done:
-            reasons.append("live_df_apply_not_done")
-        if live_df_apply_errors:
-            reasons.append("live_df_apply_errors")
-        if not live_df_readback_seen:
-            reasons.append("live_df_readback_missing")
-        elif not live_df_readback_matches:
-            reasons.append("live_df_readback_mismatch")
+    if is_charge_profile_requested:
+        if not charge_profile_ce_disabled:
+            reasons.append("charge_profile_ce_disabled_evidence_missing")
+        if not charge_profile_provenance_verified:
+            reasons.append("charge_profile_provenance_missing")
+        if (
+            charge_profile_provenance_conflict
+            or rom_detected
+            or rom_flash_attempted
+            or rom_flash_image_done
+            or rom_flash_done
+            or rom_fw_seen
+            or rom_fw_invalid_runtime
+            or rom_runtime_status_unconfirmed
+        ):
+            reasons.append("charge_profile_provenance_conflict")
+        if not charge_profile_identity_verified:
+            reasons.append("charge_profile_identity_evidence_missing")
+        if not charge_profile_full_access_verified:
+            reasons.append("charge_profile_full_access_evidence_missing")
+        if not charge_profile_apply_done:
+            reasons.append("charge_profile_apply_not_done")
+        if charge_profile_apply_writes != 7:
+            reasons.append("charge_profile_field_count_not_7")
+        if charge_profile_done_fields != 7:
+            reasons.append("charge_profile_done_evidence_invalid")
+        if charge_profile_done_snapshot_addr != 0x4A00:
+            reasons.append("charge_profile_snapshot_address_missing")
+        if charge_profile_done_snapshot_len != 32:
+            reasons.append("charge_profile_snapshot_length_missing")
+        if charge_profile_done_final_addr != 0x4A00:
+            reasons.append("charge_profile_final_address_missing")
+        if charge_profile_done_final_len != 32:
+            reasons.append("charge_profile_final_length_missing")
+        if charge_profile_apply_errors:
+            reasons.append("charge_profile_apply_errors")
+        if not charge_profile_readback_seen:
+            reasons.append("charge_profile_readback_missing")
+        if charge_profile_snapshot_before_hex is None:
+            reasons.append("charge_profile_snapshot_missing")
+        if not charge_profile_final_after_hex:
+            reasons.append("charge_profile_final_snapshot_missing")
+        if not charge_profile_final_vectors_match(charge_profile_final_after_hex):
+            reasons.append("charge_profile_final_vectors_mismatch")
+        if not charge_profile_non_allowlisted_bytes_unchanged(
+            charge_profile_snapshot_before_hex, charge_profile_final_after_hex
+        ):
+            reasons.append("charge_profile_non_allowlisted_bytes_changed")
+        if charge_profile_sequence_error:
+            reasons.append("charge_profile_evidence_sequence_invalid")
+        if charge_profile_unknown_stage:
+            reasons.append("charge_profile_unknown_stage")
+        if charge_profile_field_order != list(CHARGE_PROFILE_EXPECTED_FIELDS):
+            reasons.append("charge_profile_field_order_invalid")
+        if charge_profile_addresses and not all(
+            charge_profile_address_allowed(args.mode, address)
+            for address in charge_profile_addresses
+        ):
+            reasons.append("charge_profile_address_invalid")
+        if len(charge_profile_addresses) != 1:
+            reasons.append("charge_profile_address_inconsistent")
+        if set(CHARGE_PROFILE_EXPECTED_FIELDS) != charge_profile_verified_fields:
+            reasons.append("charge_profile_field_verification_missing")
+        if charge_profile_post_halt_charge_enabled:
+            reasons.append("charge_profile_post_halt_charge_enable")
 
     verdict_pass = len(reasons) == 0
     verdict_reason = "ok" if verdict_pass else ";".join(reasons)
@@ -385,19 +1039,27 @@ def main() -> int:
             "runtime_invalid": rom_fw_invalid_runtime,
             "runtime_status_unconfirmed": rom_runtime_status_unconfirmed,
         },
-        "live_df_apply": {
-            "attempted": live_df_apply_attempted,
-            "applied": live_df_apply_applied,
-            "done": live_df_apply_done,
-            "writes": live_df_apply_writes,
-            "errors": dict(sorted(live_df_apply_errors.items())),
-            "readback": {
-                "seen": live_df_readback_seen,
-                "fet_options": live_df_readback_fet_options,
-                "prot_cfg": live_df_readback_prot_cfg,
-                "cuv_recovery": live_df_readback_cuv_recovery,
-                "matches_live_df_mainboard": live_df_readback_matches,
-            },
+        "charge_temperature_apply": {
+            "attempted": charge_profile_apply_attempted,
+            "done": charge_profile_apply_done,
+            "ce_disabled": charge_profile_ce_disabled,
+            "provenance_verified": charge_profile_provenance_verified,
+            "provenance_conflict": "charge_profile_provenance_conflict" in reasons,
+            "identity_verified": charge_profile_identity_verified,
+            "full_access_verified": charge_profile_full_access_verified,
+            "writes": charge_profile_apply_writes,
+            "errors": dict(sorted(charge_profile_apply_errors.items())),
+            "readback_seen": charge_profile_readback_seen,
+            "snapshot_before_hex": charge_profile_snapshot_before_hex,
+            "final_after_hex": charge_profile_final_after_hex,
+            "snapshot_before_count": charge_profile_snapshot_before_count,
+            "final_after_count": charge_profile_final_after_count,
+            "done_count": charge_profile_done_count,
+            "field_order": charge_profile_field_order,
+            "evidence_sequence_error": charge_profile_sequence_error,
+            "unknown_stage": charge_profile_unknown_stage,
+            "addresses": [f"0x{address:02x}" for address in sorted(charge_profile_addresses)],
+            "verified_fields": sorted(charge_profile_verified_fields),
         },
         "verdict": {
             "pass": verdict_pass,
@@ -418,11 +1080,6 @@ def main() -> int:
     def fmt_cfg_str(value: Optional[str]) -> str:
         return value if value is not None else "unknown"
 
-    def fmt_hex(value: Optional[int]) -> str:
-        if value is None:
-            return "unknown"
-        return f"0x{value:x}"
-
     md = [
         "# BQ40 Communication Summary",
         "",
@@ -440,6 +1097,9 @@ def main() -> int:
         f"- probe_mode: `{fmt_cfg_str(run_config['probe_mode'])}`",
         f"- rom_image: `{fmt_cfg_str(run_config['rom_image'])}`",
         f"- repair_profile: `{fmt_cfg_str(run_config['repair_profile'])}`",
+        f"- charge_temperature_snapshot_before_hex: `{fmt_cfg_str(summary['charge_temperature_apply']['snapshot_before_hex'])}`",
+        f"- charge_temperature_final_after_hex: `{fmt_cfg_str(summary['charge_temperature_apply']['final_after_hex'])}`",
+        f"- charge_temperature_verified_fields: `{', '.join(summary['charge_temperature_apply']['verified_fields']) or 'none'}`",
         "",
         "## Poll Errors",
         "",
@@ -464,22 +1124,17 @@ def main() -> int:
             f"- runtime_invalid: `{summary['rom_events']['runtime_invalid']}`",
             f"- runtime_status_unconfirmed: `{summary['rom_events']['runtime_status_unconfirmed']}`",
             "",
-            "## Live DF Apply",
+            "## BQ40 Charge Temperature Apply",
             "",
-            f"- attempted: `{summary['live_df_apply']['attempted']}`",
-            f"- applied: `{summary['live_df_apply']['applied']}`",
-            f"- done: `{summary['live_df_apply']['done']}`",
-            f"- writes: `{summary['live_df_apply']['writes']}`",
-            f"- readback_seen: `{summary['live_df_apply']['readback']['seen']}`",
-            f"- readback_fet_options: `{fmt_hex(summary['live_df_apply']['readback']['fet_options'])}`",
-            f"- readback_prot_cfg: `{fmt_hex(summary['live_df_apply']['readback']['prot_cfg'])}`",
-            f"- readback_cuv_recovery: `{fmt_hex(summary['live_df_apply']['readback']['cuv_recovery'])}`",
-            f"- readback_matches_live_df_mainboard: `{summary['live_df_apply']['readback']['matches_live_df_mainboard']}`",
+            f"- attempted: `{summary['charge_temperature_apply']['attempted']}`",
+            f"- done: `{summary['charge_temperature_apply']['done']}`",
+            f"- writes: `{summary['charge_temperature_apply']['writes']}`",
+            f"- readback_seen: `{summary['charge_temperature_apply']['readback_seen']}`",
         ]
     )
 
-    if summary["live_df_apply"]["errors"]:
-        for key, value in summary["live_df_apply"]["errors"].items():
+    if summary["charge_temperature_apply"]["errors"]:
+        for key, value in summary["charge_temperature_apply"]["errors"].items():
             md.append(f"- {key}: {value}")
     else:
         md.append("- errors: none")

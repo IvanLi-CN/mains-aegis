@@ -31,7 +31,7 @@
 - 工作模式固定四态：`BYPASS / STANDBY / ASSIST / BACKUP`。
 - 充电策略以主线 charger state machine 为准；`UpsMode` 不再直接冻结 `CHARGE` 卡状态。
 - `BACKUP` 默认显示非充电语义；仅 VIN 已确认无市电的受控 USB-C 低输出会话可显示 runtime `CHG`，不改变顶部 `BACKUP` mode 词形。
-- 首页 `CHARGE` 卡只做紧凑映射：`CHG1A/CHG500/CHG100/RECOV -> CHG`，其余 runtime token 保留 `WAIT/FULL/WARM/TEMP/LOAD/LOCK/NOAC`。
+- 首页 `CHARGE` 卡只做紧凑映射：`CHG500/CHG100/RECOV -> CHG`，其余 runtime token 保留 `WAIT/FULL/WARM/TEMP/LOAD/LOCK/NOAC`。
 - 右侧三卡语义固定，不与负载侧字段混用。
 - 首页 5 个模块同时承担二级仪表盘入口：主 KPI=`Output`、次级信息=`Thermal`、`BATTERY`=`Cells`、`CHARGE`=`Charger`、`DISCHG`=`Battery Flow`。
 - 首页新增 `DashboardHomeFocus`，五向开关只在上述 5 个入口卡片之间移动；`WiFi` 图标继续保持触摸独立入口，不并入卡片焦点网格。

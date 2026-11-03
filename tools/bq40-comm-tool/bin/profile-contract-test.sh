@@ -1,0 +1,286 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+TOOL_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+REPO_ROOT=$(cd "$TOOL_ROOT/../.." && pwd)
+
+expect_exit_with_text() {
+  local expected_status="$1"
+  local expected_text="$2"
+  shift 2
+
+  local output
+  local status
+  set +e
+  output=$("$@" 2>&1)
+  status=$?
+  set -e
+
+  if [[ "$status" != "$expected_status" ]]; then
+    echo "expected exit $expected_status, got $status: $*" >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+  fi
+  if [[ "$output" != *"$expected_text"* ]]; then
+    echo "expected output to contain '$expected_text': $*" >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+  fi
+}
+
+expect_exit_with_text 23 \
+  "live-df-mainboard was retired" \
+  "$SCRIPT_DIR/build.sh" --repair-profile live-df-mainboard
+
+expect_exit_with_text 23 \
+  "live-df-mainboard was retired" \
+  "$SCRIPT_DIR/run.sh" apply-df --repair-profile live-df-mainboard
+
+expect_exit_with_text 20 \
+  "apply-df requires --repair-profile bq40-charge-temperature" \
+  "$SCRIPT_DIR/run.sh" apply-df --repair-profile none
+
+expect_exit_with_text 25 \
+  "requires explicit --action apply-df" \
+  "$SCRIPT_DIR/build.sh" --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 25 \
+  "requires explicit --action apply-df" \
+  "$SCRIPT_DIR/build.sh" --action diagnose --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 21 \
+  "cannot be combined with --recover if-rom" \
+  "$SCRIPT_DIR/build.sh" --action apply-df --mode dual-diag --recover if-rom --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 24 \
+  "requires the strict identity probe" \
+  "$SCRIPT_DIR/build.sh" --action apply-df --probe-mode mac-only --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 24 \
+  "requires the strict identity probe" \
+  "$SCRIPT_DIR/run.sh" apply-df --probe-mode mac-only --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 24 \
+  "requires canonical mode" \
+  "$SCRIPT_DIR/build.sh" --action apply-df --mode dual-diag --recover never --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 24 \
+  "requires canonical mode" \
+  "$SCRIPT_DIR/run.sh" apply-df --mode dual-diag --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 24 \
+  "requires apply-df or verify action" \
+  "$SCRIPT_DIR/report.sh" --action diagnose --monitor-file /tmp/mains-aegis-missing-charge-profile-log --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 24 \
+  "requires apply-df or verify action" \
+  "$SCRIPT_DIR/report.sh" --action recover --monitor-file /tmp/mains-aegis-missing-charge-profile-log --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 21 \
+  "cannot be combined with --rom-image r3" \
+  "$SCRIPT_DIR/build.sh" --action apply-df --rom-image r3 --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 12 \
+  "monitor file not found" \
+  "$SCRIPT_DIR/run.sh" verify --monitor-file /tmp/mains-aegis-missing-charge-profile-log --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 24 \
+  "requires canonical mode" \
+  "$SCRIPT_DIR/run.sh" verify --mode dual-diag --monitor-file /tmp/mains-aegis-missing-charge-profile-log --repair-profile bq40-charge-temperature
+
+expect_exit_with_text 17 \
+  "Invalid --repair-profile" \
+  "$SCRIPT_DIR/run.sh" verify --monitor-file /tmp/mains-aegis-missing-charge-profile-log --repair-profile asset-df-mainboard
+
+for required_path in \
+  "$REPO_ROOT/firmware/src" \
+  "$REPO_ROOT/web/src" \
+  "$TOOL_ROOT/firmware/src"; do
+  if [[ ! -d "$required_path" ]]; then
+    echo "required contract path is missing: $required_path" >&2
+    exit 1
+  fi
+done
+
+for required in \
+  "bms-rom-recover-force" \
+  "bms-df-repair-afe-default" \
+  "bms-rom-repair-asset-df-mainboard" \
+  "bms-rom-image-r3"; do
+  if ! rg -q "$required" "$SCRIPT_DIR/build.sh"; then
+    echo "recovery feature path missing from build.sh: $required" >&2
+    exit 1
+  fi
+done
+
+if ! rg -q 'bms-charge-temperature-profile requires the strict identity probe and cannot be combined with mac-only, BQ40 recovery, ROM image, or repair features' \
+  "$TOOL_ROOT/firmware/src/output/mod.rs"; then
+  echo "profile/recovery compile-time conflict guard is missing" >&2
+  exit 1
+fi
+
+if ! rg -q 'bms-charge-temperature-apply' "$TOOL_ROOT/firmware/Cargo.toml" "$SCRIPT_DIR/build.sh"; then
+  echo "explicit charge-temperature maintenance feature is missing from the firmware/build contract" >&2
+  exit 1
+fi
+
+if ! rg -q 'start_monitor_with_retry\(monitor_start_path\)' "$SCRIPT_DIR/monitor.sh"; then
+  echo "maintenance monitor fallback does not preserve the selected start profile" >&2
+  exit 1
+fi
+
+if ! rg -q '\-\-action \"\$subcommand\"' "$SCRIPT_DIR/run.sh"; then
+  echo "run.sh does not pass its explicit action to build.sh" >&2
+  exit 1
+fi
+
+if ! rg -q 'requires explicit \-\-action apply-df' "$SCRIPT_DIR/build.sh"; then
+  echo "build.sh does not enforce the explicit apply-df action gate" >&2
+  exit 1
+fi
+
+if ! rg -q 'bms-charge-temperature-apply requires bms-charge-temperature-profile' \
+  "$TOOL_ROOT/firmware/src/output/mod.rs"; then
+  echo "charge-temperature maintenance trigger guard is missing" >&2
+  exit 1
+fi
+
+if profile_only_output=$(
+  cd "$TOOL_ROOT/firmware"
+  cargo +esp check --features bms-charge-temperature-profile 2>&1
+); then
+  echo "profile-only build unexpectedly compiled without bms-rom-recover-disable" >&2
+  printf '%s\n' "$profile_only_output" >&2
+  exit 1
+fi
+if [[ "$profile_only_output" != *"requires bms-rom-recover-disable"* ]]; then
+  echo "profile-only build did not enforce the ROM-recovery disable guard" >&2
+  printf '%s\n' "$profile_only_output" >&2
+  exit 1
+fi
+
+if incompatible_output=$(
+  cd "$TOOL_ROOT/firmware"
+  cargo +esp check --features bms-charge-temperature-profile,bms-rom-recover-force 2>&1
+); then
+  echo "profile/recovery feature combination unexpectedly compiled" >&2
+  printf '%s\n' "$incompatible_output" >&2
+  exit 1
+fi
+if [[ "$incompatible_output" != *"bms-charge-temperature-profile requires the strict identity probe"* ]]; then
+  echo "profile/recovery compile-time conflict was not enforced by cargo" >&2
+  printf '%s\n' "$incompatible_output" >&2
+  exit 1
+fi
+
+if incompatible_output=$(
+  cd "$TOOL_ROOT/firmware"
+  cargo +esp check --features bms-charge-temperature-profile,bms-rom-image-r3 2>&1
+); then
+  echo "profile/ROM-image feature combination unexpectedly compiled" >&2
+  printf '%s\n' "$incompatible_output" >&2
+  exit 1
+fi
+if [[ "$incompatible_output" != *"cannot be combined with mac-only, BQ40 recovery, ROM image, or repair features"* ]]; then
+  echo "profile/ROM-image compile-time conflict was not enforced by cargo" >&2
+  printf '%s\n' "$incompatible_output" >&2
+  exit 1
+fi
+
+python3 "$SCRIPT_DIR/report-parser-test.py"
+
+if rg -n "Ma1000|ManualSpeed1A|CHG1A" \
+  "$REPO_ROOT/firmware/src" \
+  "$REPO_ROOT/web/src" \
+  "$TOOL_ROOT/firmware/src"; then
+  echo "retired 1A ordinary UI/USB path is still present" >&2
+  exit 1
+fi
+
+if rg -n "ma_1000" \
+  --glob '!usb_cdc_protocol.rs' \
+  "$REPO_ROOT/firmware/src" \
+  "$REPO_ROOT/web/src" \
+  "$TOOL_ROOT/firmware/src"; then
+  echo "retired 1A ordinary UI/USB value is still present outside its rejection test" >&2
+  exit 1
+fi
+
+poll_writer_refs=$(awk '
+  /^    fn maybe_poll_bms/ { in_poll = 1; next }
+  in_poll && /^    fn / { exit }
+  in_poll && /maybe_apply_bq40_charge_temperature_profile/ { print }
+' "$TOOL_ROOT/firmware/src/output/mod.rs")
+if [[ -n "$poll_writer_refs" ]]; then
+  echo "charge-temperature Data Flash writer is still reachable from ordinary BMS polling" >&2
+  printf '%s\n' "$poll_writer_refs" >&2
+  exit 1
+fi
+
+working_writer_refs=$(awk '
+  /^    fn mark_bms_working/ { in_working = 1; next }
+  in_working && /^    fn / { exit }
+  in_working && /maybe_apply_bq40_charge_temperature_profile/ { print }
+' "$TOOL_ROOT/firmware/src/output/mod.rs")
+if [[ -n "$working_writer_refs" ]]; then
+  echo "charge-temperature Data Flash writer is still reachable from automatic BMS discovery" >&2
+  printf '%s\n' "$working_writer_refs" >&2
+  exit 1
+fi
+
+if ! rg -q 'run_bq40_charge_temperature_maintenance\(\);' \
+  "$TOOL_ROOT/firmware/src/output/mod.rs"; then
+  echo "explicit charge-temperature maintenance startup hook is missing" >&2
+  exit 1
+fi
+
+profile_transport=$(awk '
+  /struct Bq40ChargeTemperatureTransport/ { in_profile = 1 }
+  in_profile && /^fn read_bms_block_u32/ { exit }
+  in_profile { print }
+' "$TOOL_ROOT/firmware/src/output/mod.rs")
+if [[ "$profile_transport" == *"read_bms_df_block_via_mb44"* ]]; then
+  echo "charge-temperature profile transport still uses retrying MB44 block reads" >&2
+  exit 1
+fi
+
+profile_field_writer=$(awk '
+  /^fn write_bms_charge_profile_field_once/ { in_writer = 1 }
+  in_writer && /^struct Bq40ChargeTemperatureTransport/ { exit }
+  in_writer { print }
+' "$TOOL_ROOT/firmware/src/output/mod.rs")
+if [[ "$profile_field_writer" == *"BmsDfWriteVia::Pec"* ]]; then
+  echo "charge-temperature profile writer still retries through PEC" >&2
+  exit 1
+fi
+if [[ "$profile_field_writer" != *"BmsDfWriteVia::Direct"* ]]; then
+  echo "charge-temperature profile writer lost its direct transport contract" >&2
+  exit 1
+fi
+
+charger_poll=$(awk '
+  /^    fn maybe_poll_charger/ { in_poll = 1 }
+  in_poll && /^    fn / && !/maybe_poll_charger/ { exit }
+  in_poll { print }
+' "$TOOL_ROOT/firmware/src/output/mod.rs")
+if [[ "$charger_poll" != *"bms_charge_temperature_profile_applied"* || "$charger_poll" != *"bms_charge_temperature_profile_failed"* ]]; then
+  echo "charge-temperature maintenance result is not a terminal charger inhibit" >&2
+  exit 1
+fi
+if [[ "$charger_poll" != *"bms_charge_temperature_apply_pending"* ]]; then
+  echo "charge-temperature pending apply is not an early charger inhibit" >&2
+  exit 1
+fi
+
+maintenance_arm=$(awk '
+  /^    fn run_bq40_charge_temperature_maintenance/ { in_arm = 1 }
+  in_arm && /^    fn / && !/run_bq40_charge_temperature_maintenance/ { exit }
+  in_arm { print }
+' "$TOOL_ROOT/firmware/src/output/mod.rs")
+if [[ "$maintenance_arm" != *"self.charger_allowed = false"* ]]; then
+  echo "charge-temperature maintenance arming does not close charger recovery" >&2
+  exit 1
+fi
+
+echo "bq40 profile shell contract: ok"

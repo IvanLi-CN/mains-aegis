@@ -81,9 +81,9 @@ usage() {
   cat <<USAGE
 Usage:
   $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default] [--monitor-file PATH] [--report-out DIR]
-  $(basename "$0") apply-df [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--repair-profile live-df-mainboard] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") apply-df [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--repair-profile bq40-charge-temperature] [--monitor-file PATH] [--report-out DIR]
   $(basename "$0") recover  [--mode dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default|asset-df-mainboard] [--monitor-file PATH] [--report-out DIR]
-  $(basename "$0") verify   --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--report-out DIR]
+  $(basename "$0") verify   --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--repair-profile none|bq40-charge-temperature] [--report-out DIR]
 USAGE
 }
 
@@ -244,9 +244,34 @@ if [[ "$subcommand" != "verify" ]]; then
   esac
 fi
 
-if [[ "$subcommand" == "apply-df" && "$repair_profile" != "live-df-mainboard" ]]; then
-  echo "apply-df requires --repair-profile live-df-mainboard" >&2
+if [[ "$repair_profile" == "live-df-mainboard" ]]; then
+  echo "--repair-profile live-df-mainboard was retired; use bq40-charge-temperature" >&2
+  exit 23
+fi
+
+if [[ "$subcommand" == "apply-df" && "$repair_profile" != "bq40-charge-temperature" ]]; then
+  echo "apply-df requires --repair-profile bq40-charge-temperature" >&2
   exit 20
+fi
+
+if [[ "$subcommand" == "apply-df" && "$probe_mode" == "mac-only" ]]; then
+  echo "--repair-profile bq40-charge-temperature requires the strict identity probe; mac-only is diagnostic-only" >&2
+  exit 24
+fi
+
+if [[ "$repair_profile" == "bq40-charge-temperature" && "$mode" != "canonical" ]]; then
+  echo "--repair-profile bq40-charge-temperature requires canonical mode; dual-diag is diagnostic-only" >&2
+  exit 24
+fi
+
+if [[ "$subcommand" == "verify" ]]; then
+  case "$repair_profile" in
+    none|bq40-charge-temperature) ;;
+    *)
+      echo "Invalid --repair-profile: $repair_profile" >&2
+      exit 17
+      ;;
+  esac
 fi
 
 if [[ "$subcommand" == "recover" ]]; then
@@ -371,7 +396,7 @@ else
     diagnose)
       case "$repair_profile" in
         none|afe-default) ;;
-        live-df-mainboard|asset-df-mainboard)
+        bq40-charge-temperature|asset-df-mainboard)
           echo "diagnose mode does not accept --repair-profile $repair_profile; use apply-df or recover" >&2
           exit 21
           ;;
@@ -384,8 +409,8 @@ else
     recover)
       case "$repair_profile" in
         none|afe-default|asset-df-mainboard) ;;
-        live-df-mainboard)
-          echo "recover mode does not accept --repair-profile live-df-mainboard; use apply-df" >&2
+        bq40-charge-temperature)
+          echo "recover mode does not accept --repair-profile bq40-charge-temperature; use apply-df" >&2
           exit 22
           ;;
         *)
@@ -396,7 +421,7 @@ else
       ;;
     *)
       case "$repair_profile" in
-        none|afe-default|live-df-mainboard|asset-df-mainboard) ;;
+        none|afe-default|bq40-charge-temperature|asset-df-mainboard) ;;
         *)
           echo "Invalid --repair-profile: $repair_profile" >&2
           exit 17
@@ -410,7 +435,7 @@ else
     exit 9
   fi
 
-  "$SCRIPT_DIR/build.sh" --mode "$mode" --recover "$recover_policy" --force-min-charge "$force_min_charge" --probe-mode "$probe_mode" --rom-image "$rom_image" --repair-profile "$repair_profile"
+  "$SCRIPT_DIR/build.sh" --action "$subcommand" --mode "$mode" --recover "$recover_policy" --force-min-charge "$force_min_charge" --probe-mode "$probe_mode" --rom-image "$rom_image" --repair-profile "$repair_profile"
 
   artifact_manifest_path=$(find_manifest "$TOOL_ROOT/firmware/target/bq40-comm-tool-artifacts")
 
@@ -424,6 +449,9 @@ else
     initial_stdout_timeout_sec="$POST_FLASH_BOOT_QUIET_SEC"
   fi
   monitor_args=(--duration-sec "$duration_sec" --after-flash "$flash" --reset-on-attach "$monitor_reset_on_attach")
+  if [[ "$repair_profile" == "bq40-charge-temperature" ]]; then
+    monitor_args+=(--maintenance-profile bq40-charge-temperature)
+  fi
   if [[ -n "$initial_stdout_timeout_sec" ]]; then
     monitor_args+=(--initial-stdout-timeout-sec "$initial_stdout_timeout_sec")
   fi

@@ -18,6 +18,8 @@ pub mod reg {
     pub const INPUT_CURRENT_LIMIT: u8 = 0x06;
     pub const PRECHARGE_CONTROL: u8 = 0x08;
     pub const TERMINATION_CONTROL: u8 = 0x09;
+    pub const NTC_CONTROL_0: u8 = 0x17;
+    pub const NTC_CONTROL_1: u8 = 0x18;
 
     pub const CHARGER_CONTROL_0: u8 = 0x0F;
     pub const CHARGER_CONTROL_1: u8 = 0x10;
@@ -141,6 +143,84 @@ pub mod status4 {
     pub const TS_COOL_STAT: u8 = 1 << 2;
     pub const TS_WARM_STAT: u8 = 1 << 1;
     pub const TS_HOT_STAT: u8 = 1 << 0;
+}
+
+pub mod ntc_control0 {
+    pub const JEITA_VSET_MASK: u8 = 0b111 << 5;
+    pub const JEITA_ISETH_MASK: u8 = 0b11 << 3;
+    pub const JEITA_ISETC_MASK: u8 = 0b11 << 1;
+
+    pub const JEITA_SUSPEND: u8 = 0;
+    pub const JEITA_CURRENT_UNCHANGED: u8 = 3;
+    pub const JEITA_VREG_UNCHANGED: u8 = 7;
+}
+
+pub mod ntc_control1 {
+    pub const TS_COOL_MASK: u8 = 0b11 << 6;
+    pub const TS_WARM_MASK: u8 = 0b11 << 4;
+    pub const TS_IGNORE: u8 = 1 << 0;
+
+    pub const TS_COOL_15C: u8 = 2;
+    pub const TS_WARM_45C: u8 = 1;
+}
+
+pub const BATTERY_NTC_R25_OHM: u32 = 10_000;
+pub const BATTERY_NTC_BETA: u16 = 3_380;
+pub const JEITA_RTS1_OHM: u32 = 5_230;
+pub const JEITA_RTS2_OHM: u32 = 30_100;
+
+pub const fn encode_jeita_ntc_control_0() -> u8 {
+    (ntc_control0::JEITA_SUSPEND << 5)
+        | (ntc_control0::JEITA_SUSPEND << 3)
+        | (ntc_control0::JEITA_CURRENT_UNCHANGED << 1)
+}
+
+pub const fn encode_jeita_ntc_control_1() -> u8 {
+    (ntc_control1::TS_COOL_15C << 6) | (ntc_control1::TS_WARM_45C << 4)
+}
+
+/// Return whether the charger-side JEITA state is in the normal 15–45°C
+/// window. Activation may use a small wake current only under this hardware
+/// interlock; any asserted cold/cool/warm/hot status keeps CE disabled.
+pub const fn jeita_normal_window_allows_charge(
+    ts_cold: bool,
+    ts_cool: bool,
+    ts_warm: bool,
+    ts_hot: bool,
+) -> bool {
+    !ts_cold && !ts_cool && !ts_warm && !ts_hot
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JeitaProfileState {
+    pub ntc_control_0: u8,
+    pub ntc_control_1: u8,
+}
+
+/// Apply the project-selected BQ25792 JEITA semantics while preserving the
+/// unrelated BHOT/BCOLD bits in REG18.
+pub fn ensure_eve_jeita_profile<I2C>(i2c: &mut I2C) -> Result<JeitaProfileState, I2C::Error>
+where
+    I2C: embedded_hal::i2c::I2c,
+{
+    let ntc_control_0 = update_u8(
+        i2c,
+        reg::NTC_CONTROL_0,
+        ntc_control0::JEITA_VSET_MASK
+            | ntc_control0::JEITA_ISETH_MASK
+            | ntc_control0::JEITA_ISETC_MASK,
+        encode_jeita_ntc_control_0(),
+    )?;
+    let ntc_control_1 = update_u8(
+        i2c,
+        reg::NTC_CONTROL_1,
+        ntc_control1::TS_COOL_MASK | ntc_control1::TS_WARM_MASK | ntc_control1::TS_IGNORE,
+        encode_jeita_ntc_control_1(),
+    )?;
+    Ok(JeitaProfileState {
+        ntc_control_0,
+        ntc_control_1,
+    })
 }
 
 pub const TERMINATION_CURRENT_MIN_MA: u16 = 40;
@@ -798,6 +878,55 @@ mod tests {
     use core::convert::Infallible;
     use std::vec::Vec;
 
+    struct RegisterByteI2c {
+        values: [u8; 256],
+        selected_reg: Option<u8>,
+        writes: Vec<Vec<u8>>,
+    }
+
+    impl RegisterByteI2c {
+        fn new(values: &[(u8, u8)]) -> Self {
+            let mut registers = [0u8; 256];
+            for &(reg, value) in values {
+                registers[reg as usize] = value;
+            }
+            Self {
+                values: registers,
+                selected_reg: None,
+                writes: Vec::new(),
+            }
+        }
+    }
+
+    impl embedded_hal::i2c::ErrorType for RegisterByteI2c {
+        type Error = Infallible;
+    }
+
+    impl embedded_hal::i2c::I2c for RegisterByteI2c {
+        fn transaction(
+            &mut self,
+            _address: u8,
+            operations: &mut [embedded_hal::i2c::Operation<'_>],
+        ) -> Result<(), Self::Error> {
+            for operation in operations {
+                match operation {
+                    embedded_hal::i2c::Operation::Read(buffer) => {
+                        let reg = self.selected_reg.unwrap_or_default();
+                        buffer.fill(self.values[reg as usize]);
+                    }
+                    embedded_hal::i2c::Operation::Write(bytes) => {
+                        self.selected_reg = bytes.first().copied();
+                        self.writes.push(bytes.to_vec());
+                        if bytes.len() == 2 {
+                            self.values[bytes[0] as usize] = bytes[1];
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
     struct RegisterWordI2c {
         read_bytes: [u8; 2],
         writes: Vec<Vec<u8>>,
@@ -919,6 +1048,66 @@ mod tests {
     }
 
     #[test]
+    fn eve_jeita_profile_encodes_selected_threshold_actions() {
+        assert_eq!(encode_jeita_ntc_control_0(), 0x06);
+        assert_eq!(encode_jeita_ntc_control_1(), 0x90);
+
+        let ntc_control_0_before = 0x80;
+        let ntc_control_0_after = (ntc_control_0_before
+            & !(ntc_control0::JEITA_VSET_MASK
+                | ntc_control0::JEITA_ISETH_MASK
+                | ntc_control0::JEITA_ISETC_MASK))
+            | encode_jeita_ntc_control_0();
+        assert_eq!(ntc_control_0_after, 0x06);
+
+        let ntc_control_1_before = 0x0f;
+        let ntc_control_1_after = (ntc_control_1_before
+            & !(ntc_control1::TS_COOL_MASK | ntc_control1::TS_WARM_MASK | ntc_control1::TS_IGNORE))
+            | encode_jeita_ntc_control_1();
+        assert_eq!(ntc_control_1_after, 0x9e);
+        assert_eq!(ntc_control_1_after & 0x0e, ntc_control_1_before & 0x0e);
+    }
+
+    #[test]
+    fn activation_wake_requires_the_normal_jeita_window() {
+        assert!(jeita_normal_window_allows_charge(
+            false, false, false, false
+        ));
+        assert!(!jeita_normal_window_allows_charge(
+            true, false, false, false
+        ));
+        assert!(!jeita_normal_window_allows_charge(
+            false, true, false, false
+        ));
+        assert!(!jeita_normal_window_allows_charge(
+            false, false, true, false
+        ));
+        assert!(!jeita_normal_window_allows_charge(
+            false, false, false, true
+        ));
+    }
+
+    #[test]
+    fn ensure_eve_jeita_profile_updates_selected_registers_and_preserves_unrelated_bits() {
+        let mut i2c =
+            RegisterByteI2c::new(&[(reg::NTC_CONTROL_0, 0x81), (reg::NTC_CONTROL_1, 0x8f)]);
+
+        let state = ensure_eve_jeita_profile(&mut i2c).unwrap();
+
+        assert_eq!(state.ntc_control_0, 0x07);
+        assert_eq!(state.ntc_control_1, 0x9e);
+        assert_eq!(
+            i2c.writes,
+            [
+                std::vec![reg::NTC_CONTROL_0],
+                std::vec![reg::NTC_CONTROL_0, 0x07],
+                std::vec![reg::NTC_CONTROL_1],
+                std::vec![reg::NTC_CONTROL_1, 0x9e],
+            ]
+        );
+    }
+
+    #[test]
     fn set_input_current_limit_writes_msb_first_field() {
         let mut i2c = RegisterWordI2c::new([0x00, 0x00]);
 
@@ -969,6 +1158,45 @@ mod tests {
         assert_eq!(align_termination_current_ma(109), 80);
         assert_eq!(align_termination_current_ma(200), 200);
         assert_eq!(align_termination_current_ma(1001), 1000);
+    }
+
+    #[test]
+    fn valid_termination_current_rejects_zero_and_out_of_range_values() {
+        assert_eq!(valid_termination_current_ma(0), None);
+        assert_eq!(valid_termination_current_ma(40), Some(40));
+        assert_eq!(valid_termination_current_ma(41), Some(40));
+        assert_eq!(valid_termination_current_ma(1000), Some(1000));
+        assert_eq!(valid_termination_current_ma(1001), None);
+    }
+
+    #[test]
+    fn charge_termination_policy_separates_low_normal_and_blocked_modes() {
+        assert_eq!(
+            charge_termination_policy(true, Some(100), None),
+            ChargeTerminationPolicy::LowCurrent
+        );
+        assert_eq!(
+            charge_termination_policy(true, Some(500), Some(200)),
+            ChargeTerminationPolicy::Normal {
+                current_at_eoc_ma: 200
+            }
+        );
+        assert_eq!(
+            charge_termination_policy(true, Some(500), Some(500)),
+            ChargeTerminationPolicy::Blocked
+        );
+        assert_eq!(
+            charge_termination_policy(true, Some(200), Some(200)),
+            ChargeTerminationPolicy::Blocked
+        );
+        assert_eq!(
+            charge_termination_policy(true, Some(500), None),
+            ChargeTerminationPolicy::Blocked
+        );
+        assert_eq!(
+            charge_termination_policy(false, Some(500), None),
+            ChargeTerminationPolicy::NotApplicable
+        );
     }
 
     #[test]
@@ -1201,6 +1429,48 @@ pub const fn align_termination_current_ma(target_ma: u16) -> u16 {
         target_ma
     };
     (clamped / TERMINATION_CURRENT_STEP_MA) * TERMINATION_CURRENT_STEP_MA
+}
+
+pub const fn valid_termination_current_ma(raw_ma: u16) -> Option<u16> {
+    if raw_ma < TERMINATION_CURRENT_MIN_MA || raw_ma > TERMINATION_CURRENT_MAX_MA {
+        None
+    } else {
+        Some(align_termination_current_ma(raw_ma))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChargeTerminationPolicy {
+    NotApplicable,
+    LowCurrent,
+    Normal { current_at_eoc_ma: u16 },
+    Blocked,
+}
+
+/// Select the termination behavior for a managed runtime charge request.
+/// Low-current charging owns a fixed 40 mA taper value and disables EN_TERM;
+/// normal charging must have a valid BQ40 CurrentAtEOC value before it may
+/// enable termination. Non-managed flows leave the existing behavior alone.
+pub const fn charge_termination_policy(
+    managed_charge: bool,
+    target_ichg_ma: Option<u16>,
+    current_at_eoc_ma: Option<u16>,
+) -> ChargeTerminationPolicy {
+    if !managed_charge {
+        return ChargeTerminationPolicy::NotApplicable;
+    }
+    let Some(target_ichg_ma) = target_ichg_ma else {
+        return ChargeTerminationPolicy::NotApplicable;
+    };
+    if target_ichg_ma <= 100 {
+        return ChargeTerminationPolicy::LowCurrent;
+    }
+    match current_at_eoc_ma {
+        Some(current_at_eoc_ma) if current_at_eoc_ma < target_ichg_ma => {
+            ChargeTerminationPolicy::Normal { current_at_eoc_ma }
+        }
+        Some(_) | None => ChargeTerminationPolicy::Blocked,
+    }
 }
 
 pub const fn encode_termination_current_bits(target_ma: u16) -> u8 {
