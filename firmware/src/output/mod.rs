@@ -7118,6 +7118,7 @@ where
     fn finish_front_panel_bms_discharge_authorization_recovery(&mut self, reason: &'static str) {
         let result = self.front_panel_bms_discharge_authorization_result();
         self.bms_activation_last_reason = Some(reason);
+        self.bms_activation_result_is_activation = false;
         self.bms_activation_state = BmsActivationState::Result(result);
         self.ui_snapshot.bq40z50_last_result = Some(result);
         defmt::info!(

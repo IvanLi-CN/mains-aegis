@@ -63,4 +63,4 @@
 - host-tools 提供 CLI `device <id> recovery bms-activation [--status]`、IPC `device.recovery.bms_activation` 与 devd HTTP `POST|GET /api/v1/devices/{id}/recovery/bms-activation`。USB-only，无 companion LAN 回退；启动响应不确定时不自动重发。
 - 协议解析、CLI 映射和 devd transport 测试覆盖启动/查询分离、pending 原样返回、mock/LAN/unknown 拒绝及不确定响应不重发。
 
-USB activation 结果归属独立于可复位的活动请求种类保存；共享终态属于放电授权时，状态查询返回 `different_recovery_active`。纯状态解析测试覆盖其他恢复的成功/失败、自己的终态以及 Idle/Pending。
+USB activation 结果归属独立于可复位的活动请求种类保存；共享终态属于放电授权时，状态查询返回 `different_recovery_active`。面板独立恢复的同步结束、拒绝和异步 EMSHUT 完成路径均通过统一完成函数标记放电授权归属。纯状态解析测试覆盖其他恢复的成功/失败、自己的终态以及 Idle/Pending；host 回归测试编译并执行生产完成函数，覆盖不同前置状态、完成原因与成功/失败结果，防止遗漏终态归属赋值。
