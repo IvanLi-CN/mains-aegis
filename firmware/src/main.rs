@@ -1639,7 +1639,10 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
         thermal_protection_enabled: !TMP_HW_PROTECT_TEST_MODE,
         tmp_hw_protect_test_mode: TMP_HW_PROTECT_TEST_MODE,
         charger_probe_ok: self_test.charger_probe_ok,
-        charger_enabled: self_test.charger_enabled,
+        // Module availability is persistent; the boot BMS-missing charge
+        // inhibition is not. Runtime policy re-evaluates BMS/temperature/
+        // request evidence before enabling CE, including after activation.
+        charger_enabled: self_test.charger_probe_ok,
         initial_audio_charge_phase: self_test.initial_audio_charge_phase,
         initial_bms_protection_active: self_test.initial_bms_protection_active,
         initial_tps_a_over_voltage: self_test.initial_tps_a_over_voltage,
@@ -2749,6 +2752,16 @@ fn handle_web_serial_frame<'d, I2C>(
                     mains_aegis_firmware::net::finish_usb_diag_capture();
                 }
                 render_diag_stream_end_json(&mut frame, request_id.as_str(), expected_packages);
+                write_web_serial_line(serial, frame.as_str());
+            }
+            UsbCdcRequest::ActivateBms | UsbCdcRequest::GetBmsActivation => {
+                let body = if matches!(op, UsbCdcRequest::ActivateBms) {
+                    power.activate_bms_json::<WEB_SERIAL_RESPONSE_BODY_CAP>()
+                } else {
+                    power.bms_activation_json::<WEB_SERIAL_RESPONSE_BODY_CAP>()
+                };
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
                 write_web_serial_line(serial, frame.as_str());
             }
             UsbCdcRequest::RecoverBmsDischargeAuthorization => {

@@ -55,6 +55,14 @@ In this project another concrete failure mode was a BQ25792 register byte-order 
 - Track TPS sampling attempts, not charger poll frequency. A stale missing sample must not be counted repeatedly just because BQ25792 is polled faster than TPS telemetry.
 - Emit the resulting policy notice through status, diag-snapshot, normal charger trace, and the front-panel detail footer. This preserves a distinguishable path for low-output allowance, high-output latch, telemetry latch, and confirmed manual session.
 
+## BMS 离线唤醒后仍无充电电流
+
+先区分 BQ40 通信失败与 BQ25792 轮询失败；前者必须使普通充电 fail-closed，但不能把健康充电芯片记为 `charger_poll_failed`，也不能破坏正在执行的受限离线唤醒。
+
+BMS 切断 PACK 后，充电端的低 BAT 电压不等于电芯缺失。显式离线 Activation 允许在绝对截止时间内用受限维护 profile 唤醒，仍保留输入、JEITA、已观察 BQ40 证据与超时联锁；普通充电不共享低 VBAT 例外。使用 `just cli device <bound-device> recovery bms-activation` 请求同一个面板入口，随后用 `--status` 只读查询；控制结果不确定时不得盲目重发。
+
+通信恢复而普通充电仍为零时，检查启动自检是否把临时禁充错误地保存成永久模块禁用。再比较新鲜 VIN、配置的恢复阈值与输入门状态；常规 BMS 轮询不能饿死 VIN 采样，跳过计数的时钟不能推迟实际采样截止时间。必须观察实际电流和输入门自动恢复，不能仅以 `ICHG` 写入成功验收。
+
 ## Guardrails / Reuse Notes
 
 - Do not treat a low actual current as proof that manual charge preferences failed to apply. First verify target propagation, register writes, and PD demand.

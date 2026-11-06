@@ -14,6 +14,10 @@
 - `hardware-selection.md` 中旧的 NTC“待定”表述由后续 BMS/charger 设计中的已选 `10kΩ/β3380` 方案覆盖。
 - 既有 `bq40-comm-tool` live baseline 是协议实现参考，不是本主题的 golden profile。
 
+## 离线唤醒边界
+
+把 `VBAT_PRESENT_STAT=1` 同时作为普通充电和离线唤醒的前提，会在 BMS 切断 PACK 路径时形成循环依赖：需要外部充电源唤醒，却因 PACK 低压而不施加充电源。低电压例外因此仅属于受限的显式离线 Activation，温度和已观察到的 BQ40 安全证据仍保持原有 fail-closed 合同。
+
 ## Related Changes
 
 - None

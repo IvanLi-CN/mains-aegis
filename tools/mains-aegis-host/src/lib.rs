@@ -1043,6 +1043,10 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
             post(device_recover_bms_discharge_authorization),
         )
         .route(
+            "/api/v1/devices/{id}/recovery/bms-activation",
+            post(device_activate_bms).get(device_bms_activation_status),
+        )
+        .route(
             "/api/v1/devices/{id}/output-bypass",
             post(device_output_bypass),
         )
@@ -1915,6 +1919,14 @@ async fn dispatch_ipc_request(
             json_result(
                 device_diag_snapshot_inner(params.read, state.clone(), id, params.packages).await,
             )
+        }
+        "device.recovery.bms_activation" => {
+            let id = require_param(&params, "device_id")?;
+            let status = params
+                .get("status")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            json_result(device_bms_activation_inner(state.clone(), id, status).await)
         }
         "device.recovery.bms_discharge_authorization" => {
             let id = require_param(&params, "device_id")?;
@@ -4460,6 +4472,63 @@ async fn device_diag_snapshot(
 ) -> Result<Json<Value>, HttpError> {
     let packages = diag_snapshot_packages_from_raw_query(raw_query.as_deref());
     device_diag_snapshot_inner(query, state, id, packages).await
+}
+
+async fn device_activate_bms(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    device_bms_activation_inner(state, id, false).await
+}
+
+async fn device_bms_activation_status(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    device_bms_activation_inner(state, id, true).await
+}
+
+async fn device_bms_activation_inner(
+    state: AppState,
+    id: String,
+    status_only: bool,
+) -> Result<Json<Value>, HttpError> {
+    ensure_bound_device_record(&state, &id)?;
+    let transport = {
+        let guard = state.inner.lock().expect("state lock");
+        guard
+            .devices
+            .get(&id)
+            .expect("known device")
+            .transport
+            .clone()
+    };
+    match transport {
+        DeviceTransport::Mock => Ok(Json(json!({
+            "ok": false, "accepted": false, "result": "rejected", "reason": "mock_device"
+        }))),
+        DeviceTransport::Lan => Err(HttpError::non_retryable(
+            "usb_activation_required",
+            "BMS activation requires the bound native USB device; LAN fallback is disabled",
+        )),
+        DeviceTransport::NativeSerial => {
+            // Starting and observing are separate operations. Never replay the
+            // start request while polling, and never redirect this write to LAN.
+            let op = if status_only {
+                "get_bms_activation"
+            } else {
+                "activate_bms"
+            };
+            let value = send_device_cdc_request_frame(
+                &state,
+                &id,
+                json!({ "type": "request", "op": op }),
+                "devd-bms-act",
+            )
+            .await?;
+            Ok(Json(value))
+        }
+    }
 }
 
 async fn device_recover_bms_discharge_authorization(
@@ -7409,7 +7478,10 @@ async fn send_device_cdc_request_frame_with_timeouts(
         .await
         {
             Ok(response) => response,
-            Err(error) if is_native_monitor_command_error(&error) => {
+            Err(error)
+                if is_native_monitor_command_error(&error)
+                    && frame.get("op").and_then(Value::as_str) != Some("activate_bms") =>
+            {
                 let monitor = stop_native_monitor_after_command_failure(state, device_id, &error);
                 wait_for_native_monitor_stop(&monitor);
                 let port_path = port_path.ok_or_else(|| {
@@ -15986,6 +16058,123 @@ mod tests {
         assert_eq!(event.kind, "host_power");
         assert_eq!(event.payload["action"], "profile");
         assert_eq!(event.payload["dry_run"], true);
+    }
+
+    #[tokio::test]
+    async fn activation_uses_usb_start_once_then_read_only_status() {
+        let (events, _) = broadcast::channel(8);
+        let state = test_app_state(events);
+        seed_mock_device(&state);
+        let (tx, rx) = mpsc::channel();
+        {
+            let mut guard = state.inner.lock().unwrap();
+            let device = guard.devices.get_mut("mock-devkit").unwrap();
+            device.transport = DeviceTransport::NativeSerial;
+            // An explicit LAN companion must not redirect activation off USB.
+            device.lan_address = Some("192.0.2.1".into());
+            guard.monitors.insert(
+                "mock-devkit".into(),
+                MonitorHandle {
+                    stop: Arc::new(AtomicBool::new(false)),
+                    done: Arc::new(AtomicBool::new(false)),
+                    command_tx: Some(tx),
+                },
+            );
+        }
+        let peer = std::thread::spawn(move || {
+            for (op, result) in [
+                ("activate_bms", "pending"),
+                ("get_bms_activation", "failed"),
+            ] {
+                let NativeMonitorCommand::SendFrame {
+                    frame, response_tx, ..
+                } = rx.recv_timeout(Duration::from_secs(5)).unwrap()
+                else {
+                    panic!("expected frame");
+                };
+                assert_eq!(frame["op"], op);
+                assert!(frame["request_id"].as_str().unwrap().len() <= 32);
+                response_tx.send(Ok(json!({"type":"response","ok":true,"result":{"accepted":true,"result":result,"reason":"fixture"}}))).unwrap();
+            }
+        });
+        let start = device_bms_activation_inner(state.clone(), "mock-devkit".into(), false)
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(start["result"], "pending");
+        let status = device_bms_activation_inner(state, "mock-devkit".into(), true)
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(status["result"], "failed");
+        peer.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn activation_does_not_replay_start_after_uncertain_monitor_failure() {
+        let (events, _) = broadcast::channel(8);
+        let state = test_app_state(events);
+        seed_mock_device(&state);
+        let (tx, rx) = mpsc::channel();
+        {
+            let mut guard = state.inner.lock().unwrap();
+            guard.devices.get_mut("mock-devkit").unwrap().transport = DeviceTransport::NativeSerial;
+            guard.monitors.insert(
+                "mock-devkit".into(),
+                MonitorHandle {
+                    stop: Arc::new(AtomicBool::new(false)),
+                    done: Arc::new(AtomicBool::new(false)),
+                    command_tx: Some(tx),
+                },
+            );
+        }
+        let peer = std::thread::spawn(move || {
+            let NativeMonitorCommand::SendFrame { response_tx, .. } = rx.recv().unwrap() else {
+                panic!("expected frame");
+            };
+            response_tx
+                .send(Err(HttpError::retryable(
+                    "native_monitor_command_disconnected",
+                    "uncertain write",
+                )))
+                .unwrap();
+        });
+        let err = device_bms_activation_inner(state, "mock-devkit".into(), false)
+            .await
+            .unwrap_err();
+        assert_eq!(err.0.code, "native_monitor_command_disconnected");
+        peer.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn activation_rejects_mock_lan_and_unknown_devices() {
+        let (events, _) = broadcast::channel(8);
+        let state = test_app_state(events);
+        seed_mock_device(&state);
+        for status in [false, true] {
+            let result = device_bms_activation_inner(state.clone(), "mock-devkit".into(), status)
+                .await
+                .unwrap()
+                .0;
+            assert_eq!(result["reason"], "mock_device");
+            assert_eq!(result["accepted"], false);
+        }
+        state
+            .inner
+            .lock()
+            .unwrap()
+            .devices
+            .get_mut("mock-devkit")
+            .unwrap()
+            .transport = DeviceTransport::Lan;
+        let err = device_bms_activation_inner(state.clone(), "mock-devkit".into(), false)
+            .await
+            .unwrap_err();
+        assert_eq!(err.0.code, "usb_activation_required");
+        let err = device_bms_activation_inner(state, "unknown".into(), false)
+            .await
+            .unwrap_err();
+        assert_eq!(err.0.code, "device_not_found");
     }
 
     #[test]

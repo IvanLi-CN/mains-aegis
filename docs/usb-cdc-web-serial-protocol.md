@@ -11,8 +11,9 @@ The device LAN API is the canonical management contract for current HTTP-capable
 - Owner-facing `charge-control` detail read / preview / action.
 - Device log level.
 - Identity and status reads.
+- Bounded front-panel BMS activation and read-only activation status.
 
-High-risk operations such as output enable/disable and fault clear are not part of this protocol. Manual charge `START/STOP` is allowed only through the bounded `charge-control` contract.
+High-risk operations such as output enable/disable and fault clear are not part of this protocol. Manual charge `START/STOP` is allowed only through the bounded `charge-control` contract. BMS activation is allowed only through the existing front-panel activation state machine; it does not provide arbitrary charger register writes, forced outputs, or protection overrides.
 
 ## Mains Aegis Device Daemon
 
@@ -217,3 +218,18 @@ The firmware stores WiFi credentials in EEPROM plaintext by current project deci
 - When `net_http` is enabled, the firmware loads this EEPROM record before starting WiFi and updates the running WiFi task after a successful USB write. Clearing the record wipes the EEPROM slot, disconnects WiFi immediately, and leaves WiFi disabled until new credentials are written over USB.
 
 The UI must clear the PSK field after submit and must not display stored PSK values.
+
+## Bounded BMS activation
+
+The `hello.capabilities.bms_activation` flag advertises these USB-only operations:
+
+```json
+{"type":"request","request_id":"wake-1","op":"activate_bms"}
+{"type":"request","request_id":"wake-status-1","op":"get_bms_activation"}
+```
+
+`activate_bms` invokes the same firmware entry as the self-check screen's Activate button. It returns immediately with `accepted`, `result`, `reason`, `recovery_action`, `activation_state`, `activation_phase`, `activation_last_reason`, charger telemetry/gates and `bms_state`. A running recovery is rejected as `recovery_already_pending`; an online BMS that does not need activation is rejected as `activation_not_needed`. Input, temperature, current, timeout and protection gates remain authoritative. Only a manually requested offline Activation charge phase before its deadline may wake with `VBAT_PRESENT_STAT=0`; an isolated BMS PACK terminal can read low despite installed cells. Ordinary charging, online discharge authorization and automatic boot diagnostics retain their battery-path checks. The bounded target is `VREG<=16.8V / ICHG<=200mA / IINDPM=500mA`; the charger still applies its native trickle/precharge stages, so this is not a promise of measured 200mA. `activation_low_vbat_wake` identifies this permitted exception without falsifying the raw battery-presence telemetry. Activation does not imply discharge authorization or output restoration.
+
+`get_bms_activation` is read-only and never starts or restarts activation. `result` is `idle`, `pending`, `success`, `failed` or `rejected`; only `success` has `ok=true`. `accepted=true,result=pending` means the attempt started, not that charging or the BMS recovered. State describes the live firmware recovery state machine until another recovery or a front-panel state clear replaces it; it is not a durable transaction history. A different recovery kind returns `different_recovery_active`.
+
+The host command `mains-aegis device <id> recovery bms-activation` starts one attempt; append `--status` to observe it. devd IPC uses `device.recovery.bms_activation` with `status=false|true`. The optional devd HTTP bridge offers `POST|GET /api/v1/devices/{id}/recovery/bms-activation`. These routes require the selected native USB transport and never redirect to a companion LAN address. LAN-only devices are rejected with `usb_activation_required`; mock devices return `mock_device`. If a start response is lost, query status before deciding whether to start another attempt; devd does not replay an uncertain activation write.

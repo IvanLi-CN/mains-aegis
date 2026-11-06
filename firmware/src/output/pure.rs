@@ -771,11 +771,14 @@ pub(super) const fn activation_force_charge_allows_ce(
     usb_pd_unsafe_latched: bool,
     force_charge_jeita_allowed: bool,
     force_charge_bq40_allowed: bool,
+    allow_low_vbat_wake: bool,
 ) -> bool {
     force_charge_requested
         && charger_enable_safety_gate(
             input_present,
-            status_vbat_present,
+            // Only the caller's bounded offline activation context can
+            // waive battery-path presence. All other interlocks still apply.
+            status_vbat_present || allow_low_vbat_wake,
             ts_cold,
             ts_hot,
             usb_pd_unsafe_latched,
@@ -4488,13 +4491,50 @@ mod tests {
     }
 
     #[test]
-    fn activation_force_charge_without_vbat_keeps_ce_high() {
+    fn activation_without_low_vbat_exception_keeps_ce_high() {
         assert!(!activation_force_charge_allows_ce(
-            true, true, false, false, false, false, true, true,
+            true, true, false, false, false, false, true, true, false,
         ));
         assert!(activation_force_charge_allows_ce(
-            true, true, true, false, false, false, true, true,
+            true, true, true, false, false, false, true, true, false,
         ));
+    }
+
+    #[test]
+    fn bounded_offline_activation_can_wake_a_disconnected_pack() {
+        assert!(activation_force_charge_allows_ce(
+            true, true, false, false, false, false, true, true, true,
+        ));
+        // Product charging must still reject an absent battery path.
+        assert!(!charger_enable_safety_gate(
+            true, false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn low_vbat_wake_keeps_all_other_charge_interlocks() {
+        // request, input, cold, hot, unsafe, JEITA, BQ40 evidence
+        for (request, input, cold, hot, unsafe_source, jeita, bq40) in [
+            (false, true, false, false, false, true, true),
+            (true, false, false, false, false, true, true),
+            (true, true, true, false, false, true, true),
+            (true, true, false, true, false, true, true),
+            (true, true, false, false, true, true, true),
+            (true, true, false, false, false, false, true),
+            (true, true, false, false, false, true, false),
+        ] {
+            assert!(!activation_force_charge_allows_ce(
+                request,
+                input,
+                false,
+                cold,
+                hot,
+                unsafe_source,
+                jeita,
+                bq40,
+                true,
+            ));
+        }
     }
 
     #[test]
