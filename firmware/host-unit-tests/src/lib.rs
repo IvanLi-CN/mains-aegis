@@ -940,6 +940,83 @@ pub mod output {
         }
     }
 
+    #[cfg(test)]
+    mod front_panel_recovery_completion {
+        use crate::front_panel_scene::{BmsActivationState, BmsResultKind};
+
+        struct Snapshot {
+            bq40z50_last_result: Option<BmsResultKind>,
+        }
+
+        struct RecoveryHarness {
+            bms_activation_last_reason: Option<&'static str>,
+            bms_activation_state: BmsActivationState,
+            bms_activation_result_is_activation: bool,
+            ui_snapshot: Snapshot,
+            result: BmsResultKind,
+        }
+
+        impl RecoveryHarness {
+            // Substitute hardware fact collection, not the completion method.
+            fn front_panel_bms_discharge_authorization_result(&mut self) -> BmsResultKind {
+                self.result
+            }
+        }
+
+        fn bms_result_name(_: BmsResultKind) -> &'static str {
+            "fixture"
+        }
+
+        include!(concat!(
+            env!("OUT_DIR"),
+            "/front_panel_recovery_completion.rs"
+        ));
+
+        #[test]
+        fn independent_panel_completion_never_reports_an_activation_result() {
+            use super::pure::bms_activation_status;
+            for prior in [
+                BmsActivationState::Idle,
+                BmsActivationState::Pending,
+                BmsActivationState::Result(BmsResultKind::Success),
+            ] {
+                for result in [
+                    BmsResultKind::Success,
+                    BmsResultKind::Abnormal,
+                    BmsResultKind::NotDetected,
+                ] {
+                    for reason in [
+                        "front_panel_recovery_completed",
+                        "front_panel_recovery_rejected",
+                    ] {
+                        let mut fixture = RecoveryHarness {
+                            bms_activation_last_reason: None,
+                            bms_activation_state: prior,
+                            bms_activation_result_is_activation: true,
+                            ui_snapshot: Snapshot {
+                                bq40z50_last_result: None,
+                            },
+                            result,
+                        };
+                        fixture.finish_front_panel_bms_discharge_authorization_recovery(reason);
+                        assert!(fixture.bms_activation_state == BmsActivationState::Result(result));
+                        assert!(fixture.ui_snapshot.bq40z50_last_result == Some(result));
+                        assert_eq!(fixture.bms_activation_last_reason, Some(reason));
+                        assert_eq!(
+                            bms_activation_status(
+                                fixture.bms_activation_state,
+                                true,
+                                fixture.bms_activation_result_is_activation,
+                                fixture.bms_activation_last_reason
+                            ),
+                            (false, "rejected", "different_recovery_active")
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     pub mod channel {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),

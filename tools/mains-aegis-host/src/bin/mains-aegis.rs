@@ -187,6 +187,11 @@ enum AlertsCommand {
 
 #[derive(Debug, Subcommand)]
 enum RecoveryCommand {
+    /// Start the bounded front-panel BMS activation, or read its state without restarting it.
+    BmsActivation {
+        #[arg(long)]
+        status: bool,
+    },
     BmsDischargeAuthorization,
 }
 
@@ -906,6 +911,10 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
             ),
         ),
         DeviceCommand::Recovery { command } => match command {
+            RecoveryCommand::BmsActivation { status } => (
+                "device.recovery.bms_activation",
+                json!({ "device_id": device_id, "status": status }),
+            ),
             RecoveryCommand::BmsDischargeAuthorization => (
                 "device.recovery.bms_discharge_authorization",
                 json!({ "device_id": device_id }),
@@ -1088,6 +1097,32 @@ mod tests {
                 }
             }
         ));
+    }
+
+    #[test]
+    fn cli_maps_bms_activation_start_and_status_to_ipc() {
+        for status in [false, true] {
+            let mut args = vec![
+                "mains-aegis",
+                "device",
+                "serial-test",
+                "recovery",
+                "bms-activation",
+            ];
+            if status {
+                args.push("--status");
+            }
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Command::Device { device_id, command } = cli.command else {
+                panic!("expected device");
+            };
+            let (method, params) = device_to_ipc(device_id, command);
+            assert_eq!(method, "device.recovery.bms_activation");
+            assert_eq!(
+                params,
+                json!({"device_id": "serial-test", "status": status})
+            );
+        }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::front_panel_scene::{
-    is_bq40_activation_needed, BmsRecoveryUiAction, BmsResultKind, DashboardChargerProtocol,
-    DashboardInputSource, ManualChargePowerPath, ManualChargeSpeed, ManualChargeStopReason,
-    SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+    is_bq40_activation_needed, BmsActivationState, BmsRecoveryUiAction, BmsResultKind,
+    DashboardChargerProtocol, DashboardInputSource, ManualChargePowerPath, ManualChargeSpeed,
+    ManualChargeStopReason, SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
 };
 use mains_aegis_firmware::bq40z50;
 use mains_aegis_firmware::charge_temperature;
@@ -18,6 +18,35 @@ use super::{
     AudioChargePhase, AudioMainsSource, Bq40z50Snapshot, ChargerInputPowerSample,
     ChargerInputSampleIssue, OutputRuntimeState, StableMainsState, CHARGER_INPUT_POWER_ANOMALY_W10,
 };
+
+/// Resolve the shared recovery state without attributing another action's
+/// terminal result to Activation after the active request context is reset.
+pub(super) fn bms_activation_status(
+    state: BmsActivationState,
+    request_is_activation: bool,
+    result_is_activation: bool,
+    last_reason: Option<&'static str>,
+) -> (bool, &'static str, &'static str) {
+    let own_state = match state {
+        BmsActivationState::Result(_) => result_is_activation,
+        _ => request_is_activation,
+    };
+    if !own_state {
+        return (false, "rejected", "different_recovery_active");
+    }
+    match state {
+        BmsActivationState::Idle => (false, "idle", "no_activation"),
+        BmsActivationState::Pending => (true, "pending", "activation_in_progress"),
+        BmsActivationState::Result(BmsResultKind::Success) => (
+            true,
+            "success",
+            last_reason.unwrap_or("activation_complete"),
+        ),
+        BmsActivationState::Result(_) => {
+            (true, "failed", last_reason.unwrap_or("activation_failed"))
+        }
+    }
+}
 
 /// Runtime latches shared by the product and activation charge gates.
 ///
@@ -771,11 +800,14 @@ pub(super) const fn activation_force_charge_allows_ce(
     usb_pd_unsafe_latched: bool,
     force_charge_jeita_allowed: bool,
     force_charge_bq40_allowed: bool,
+    allow_low_vbat_wake: bool,
 ) -> bool {
     force_charge_requested
         && charger_enable_safety_gate(
             input_present,
-            status_vbat_present,
+            // Only the caller's bounded offline activation context can
+            // waive battery-path presence. All other interlocks still apply.
+            status_vbat_present || allow_low_vbat_wake,
             ts_cold,
             ts_hot,
             usb_pd_unsafe_latched,
@@ -4488,13 +4520,101 @@ mod tests {
     }
 
     #[test]
-    fn activation_force_charge_without_vbat_keeps_ce_high() {
+    fn activation_status_rejects_another_recoverys_terminal_result() {
+        for result in [BmsResultKind::Success, BmsResultKind::NotDetected] {
+            // finish restores the active request kind to Activation, but the
+            // completed result still belongs to DischargeAuthorization.
+            assert_eq!(
+                bms_activation_status(
+                    BmsActivationState::Result(result),
+                    true,
+                    false,
+                    Some("discharge_authorization_complete")
+                ),
+                (false, "rejected", "different_recovery_active")
+            );
+        }
+    }
+
+    #[test]
+    fn activation_status_preserves_own_result_and_live_state() {
+        assert_eq!(
+            bms_activation_status(
+                BmsActivationState::Result(BmsResultKind::Success),
+                true,
+                true,
+                Some("bq40_ready")
+            ),
+            (true, "success", "bq40_ready")
+        );
+        assert_eq!(
+            bms_activation_status(
+                BmsActivationState::Result(BmsResultKind::NotDetected),
+                true,
+                true,
+                Some("probe_miss")
+            ),
+            (true, "failed", "probe_miss")
+        );
+        assert_eq!(
+            bms_activation_status(BmsActivationState::Pending, false, true, None),
+            (false, "rejected", "different_recovery_active")
+        );
+        assert_eq!(
+            bms_activation_status(BmsActivationState::Pending, true, false, None),
+            (true, "pending", "activation_in_progress")
+        );
+        assert_eq!(
+            bms_activation_status(BmsActivationState::Idle, true, false, None),
+            (false, "idle", "no_activation")
+        );
+    }
+
+    #[test]
+    fn activation_without_low_vbat_exception_keeps_ce_high() {
         assert!(!activation_force_charge_allows_ce(
-            true, true, false, false, false, false, true, true,
+            true, true, false, false, false, false, true, true, false,
         ));
         assert!(activation_force_charge_allows_ce(
-            true, true, true, false, false, false, true, true,
+            true, true, true, false, false, false, true, true, false,
         ));
+    }
+
+    #[test]
+    fn bounded_offline_activation_can_wake_a_disconnected_pack() {
+        assert!(activation_force_charge_allows_ce(
+            true, true, false, false, false, false, true, true, true,
+        ));
+        // Product charging must still reject an absent battery path.
+        assert!(!charger_enable_safety_gate(
+            true, false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn low_vbat_wake_keeps_all_other_charge_interlocks() {
+        // request, input, cold, hot, unsafe, JEITA, BQ40 evidence
+        for (request, input, cold, hot, unsafe_source, jeita, bq40) in [
+            (false, true, false, false, false, true, true),
+            (true, false, false, false, false, true, true),
+            (true, true, true, false, false, true, true),
+            (true, true, false, true, false, true, true),
+            (true, true, false, false, true, true, true),
+            (true, true, false, false, false, false, true),
+            (true, true, false, false, false, true, false),
+        ] {
+            assert!(!activation_force_charge_allows_ce(
+                request,
+                input,
+                false,
+                cold,
+                hot,
+                unsafe_source,
+                jeita,
+                bq40,
+                true,
+            ));
+        }
     }
 
     #[test]

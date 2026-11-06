@@ -4131,6 +4131,7 @@ pub struct PowerManager<'d, I2C> {
 
     next_telemetry_at: Instant,
     next_vin_telemetry_skip_at: Instant,
+    next_vin_telemetry_refresh_at: Instant,
     next_fan_temp_refresh_at: Instant,
     last_fault_log_at: Option<Instant>,
     last_input_power_anomaly_log_at: Option<Instant>,
@@ -4230,6 +4231,7 @@ pub struct PowerManager<'d, I2C> {
     bms_activation_auto_attempted: bool,
     bms_activation_current_is_auto: bool,
     bms_activation_request_kind: BmsRecoveryRequestKind,
+    bms_activation_result_is_activation: bool,
     bms_activation_auto_force_charge_until: Option<Instant>,
     bms_activation_auto_force_charge_programmed: bool,
     bms_activation_auto_defer_logged: bool,
@@ -4933,6 +4935,7 @@ where
 
             next_telemetry_at: now,
             next_vin_telemetry_skip_at: now,
+            next_vin_telemetry_refresh_at: now,
             next_fan_temp_refresh_at: now,
             last_fault_log_at: None,
             last_input_power_anomaly_log_at: None,
@@ -5046,6 +5049,7 @@ where
             bms_activation_auto_attempted: !bms_auto_recovery_enabled,
             bms_activation_current_is_auto: false,
             bms_activation_request_kind: BmsRecoveryRequestKind::Activation,
+            bms_activation_result_is_activation: true,
             bms_activation_auto_force_charge_until: if bms_auto_recovery_enabled
                 && BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE
             {
@@ -5462,6 +5466,13 @@ where
             self.update_fan_state(irq);
             self.refresh_audio_signals();
             return false;
+        }
+        // A regular BMS snapshot can consume the whole telemetry interval.
+        // Refresh input evidence before that poll so a transient INA cutoff
+        // can accumulate fresh recovery samples even while BMS stays online.
+        // Explicit activation/isolation paths above retain their bus isolation.
+        if Instant::now() >= self.next_vin_telemetry_refresh_at {
+            self.refresh_vin_telemetry(Instant::now());
         }
         let mut bms_i2c_active = self.maybe_poll_bms(irq);
         bms_i2c_active |= self.maybe_track_bms_activation();
@@ -7107,6 +7118,7 @@ where
     fn finish_front_panel_bms_discharge_authorization_recovery(&mut self, reason: &'static str) {
         let result = self.front_panel_bms_discharge_authorization_result();
         self.bms_activation_last_reason = Some(reason);
+        self.bms_activation_result_is_activation = false;
         self.bms_activation_state = BmsActivationState::Result(result);
         self.ui_snapshot.bq40z50_last_result = Some(result);
         defmt::info!(
@@ -7882,6 +7894,58 @@ where
 
     pub fn request_bms_activation(&mut self) {
         self.request_bms_recovery(BmsRecoveryRequestKind::Activation, false, false);
+    }
+
+    pub fn activate_bms_json<const N: usize>(&mut self) -> String<N> {
+        if self.bms_activation_state == BmsActivationState::Pending
+            || self.bms_discharge_authorization_manual_recovery.is_some()
+        {
+            return self.render_bms_activation_json(false, "rejected", "recovery_already_pending");
+        }
+        if !is_bq40_activation_needed(&self.ui_snapshot) {
+            return self.render_bms_activation_json(false, "rejected", "activation_not_needed");
+        }
+        // Exactly the front-panel Activate entry, without diagnostic overrides.
+        self.request_bms_activation();
+        self.bms_activation_json()
+    }
+
+    pub fn bms_activation_json<const N: usize>(&self) -> String<N> {
+        let (accepted, result, reason) = bms_activation_status(
+            self.bms_activation_state,
+            self.bms_activation_request_kind == BmsRecoveryRequestKind::Activation,
+            self.bms_activation_result_is_activation,
+            self.bms_activation_last_reason,
+        );
+        self.render_bms_activation_json(accepted, result, reason)
+    }
+
+    fn render_bms_activation_json<const N: usize>(
+        &self,
+        accepted: bool,
+        result: &str,
+        reason: &str,
+    ) -> String<N> {
+        let mut body = String::new();
+        let _ = write!(
+            body,
+            r#"{{"ok":{},"accepted":{},"result":"{}","reason":"{}","recovery_action":"{}","activation_state":"{}","activation_phase":"{}","activation_last_reason":"{}","charger_poll_valid":{},"charger_enabled":{},"charger_vbat_present":{},"charger_policy_notice":"{}","bms_state":"{}","output_gate_reason":"{}"}}"#,
+            result == "success",
+            accepted,
+            result,
+            reason,
+            if accepted { "activation" } else { "none" },
+            bms_activation_state_name(self.bms_activation_state),
+            bms_activation_phase_name(self.bms_activation_phase),
+            self.bms_activation_last_reason.unwrap_or("none"),
+            self.diag_snapshot.charger.poll_valid,
+            self.chg_enabled,
+            self.diag_snapshot.charger.vbat_present,
+            self.diag_snapshot.policy.notice,
+            self_check_comm_state_name(self.ui_snapshot.bq40z50),
+            self.output_state.gate_reason.as_str(),
+        );
+        body
     }
 
     pub fn request_bms_recovery_action(&mut self, action: BmsRecoveryUiAction) {
@@ -11714,6 +11778,12 @@ where
             self.chg_enabled
         );
         if !self.chg_enabled {
+            defmt::warn!(
+                "bms: activation min_charge_blocked charger_poll_valid={=bool} policy_notice={} vbat_present={=bool}",
+                self.diag_snapshot.charger.poll_valid,
+                self.diag_snapshot.policy.notice,
+                self.diag_snapshot.charger.vbat_present
+            );
             return Err("enable_charger_for_activation_failed");
         }
         Ok(())
@@ -11722,6 +11792,8 @@ where
     fn finish_bms_activation(&mut self, result: BmsResultKind, reason: &'static str) {
         self.bms_activation_last_reason = Some(reason);
         let request_kind = self.bms_activation_request_kind;
+        self.bms_activation_result_is_activation =
+            request_kind == BmsRecoveryRequestKind::Activation;
         if result == BmsResultKind::Success
             && request_kind == BmsRecoveryRequestKind::DischargeAuthorization
         {
@@ -13248,6 +13320,7 @@ where
 
     fn refresh_vin_telemetry(&mut self, now: Instant) {
         self.next_vin_telemetry_skip_at = now + self.cfg.telemetry_period;
+        self.next_vin_telemetry_refresh_at = now + self.cfg.telemetry_period;
         if self.cfg.telemetry_include_vin_ch3 {
             if self.ina_ready {
                 let bus = ina3221::read_bus_mv(&mut self.i2c, ina3221::Channel::Ch3);
@@ -14041,6 +14114,18 @@ where
         let force_charge_jeita_allowed =
             bq25792::jeita_normal_window_allows_charge(ts_cold, ts_cool, ts_warm, ts_hot);
         let force_charge_bq40_allowed = self.bq40_activation_wake_gate(charge_policy_now_ms);
+        // A manually requested, bounded offline wake must be able to apply
+        // a charger to a PACK terminal isolated by the BMS FETs. A low BAT
+        // reading is expected here, not evidence that the cells are absent.
+        // Do not extend this exception to boot diagnostics, discharge
+        // authorization, ordinary charging, or a known online gauge.
+        let allow_low_vbat_activation_wake = activation_force_charge
+            && !self.bms_activation_current_is_auto
+            && self.bms_activation_request_kind == BmsRecoveryRequestKind::Activation
+            && self.bms_addr.is_none()
+            && self
+                .bms_activation_deadline
+                .is_some_and(|deadline| now < deadline);
         let force_allow_charge = activation_force_charge_allows_ce(
             force_charge_requested,
             input_present,
@@ -14050,6 +14135,7 @@ where
             usb_pd_unsafe_latched,
             force_charge_jeita_allowed,
             force_charge_bq40_allowed,
+            allow_low_vbat_activation_wake,
         );
         let force_charge_blocked = force_charge_requested && !force_allow_charge;
         let force_charge_voltage_mv = self
@@ -14145,6 +14231,8 @@ where
             "usb_pd_wait_stable_input"
         } else if force_charge_blocked {
             "activation_force_charge_safety_interlock"
+        } else if force_allow_charge && !status_vbat_present {
+            "activation_low_vbat_wake"
         } else if force_allow_charge {
             "activation_force_charge"
         } else if activation_force_charge_off {
@@ -14178,6 +14266,12 @@ where
                 "activation_force_charge_bq25792_jeita_blocked"
             } else if !force_charge_bq40_allowed {
                 "activation_force_charge_bq40_gate_blocked"
+            } else if !input_present {
+                "activation_input_missing"
+            } else if usb_pd_unsafe_latched {
+                "activation_unsafe_source_latched"
+            } else if !status_vbat_present && !allow_low_vbat_activation_wake {
+                "activation_battery_path_absent"
             } else {
                 "activation_force_charge_safety_interlock"
             };
@@ -14376,6 +14470,12 @@ where
                 "activation_force_charge_bq25792_jeita_blocked"
             } else if !force_charge_bq40_allowed {
                 "activation_force_charge_bq40_gate_blocked"
+            } else if !input_present {
+                "activation_input_missing"
+            } else if usb_pd_unsafe_latched {
+                "activation_unsafe_source_latched"
+            } else if !status_vbat_present && !allow_low_vbat_activation_wake {
+                "activation_battery_path_absent"
             } else {
                 "activation_force_charge_safety_interlock"
             };
@@ -15478,8 +15578,6 @@ where
                         } else {
                             Some(now + self.cfg.retry_backoff)
                         };
-                        self.clear_bms_charge_policy_inputs();
-                        self.mark_charger_poll_failed(now);
                         if self.should_hold_no_battery_result() {
                             self.hold_no_battery_result_audio_state();
                         } else {
@@ -15541,8 +15639,6 @@ where
                         } else {
                             Some(now + self.cfg.retry_backoff)
                         };
-                        self.clear_bms_charge_policy_inputs();
-                        self.mark_charger_poll_failed(now);
                         if self.should_hold_no_battery_result() {
                             self.hold_no_battery_result_audio_state();
                         } else {
@@ -15589,7 +15685,29 @@ where
                 }
             }
         }
+        self.handle_bms_poll_failure(now);
         true
+    }
+
+    fn handle_bms_poll_failure(&mut self, now: Instant) {
+        self.clear_bms_charge_policy_inputs();
+        // Losing gauge telemetry must stop ordinary charging immediately, but
+        // does not invalidate a successful BQ25792 poll. In particular, an
+        // offline activation expects BQ40 NACKs while applying its bounded
+        // wake profile; treating those as charger failures aborts the wake.
+        if self.bms_activation_state != BmsActivationState::Pending {
+            self.chg_ce.set_high();
+            self.chg_enabled = false;
+            self.ui_snapshot.bq25792_allow_charge = Some(false);
+            self.diag_snapshot.charger.enabled = false;
+            self.diag_snapshot.charger.allow_charge = false;
+            self.diag_snapshot.policy.status = "blocked";
+            self.diag_snapshot.policy.notice = "bms_telemetry_unavailable";
+        }
+        // Re-evaluate charge policy with the invalidated BMS inputs. Leave
+        // genuine charger-error retry backoff and telemetry untouched.
+        self.chg_next_poll_at = now;
+        self.recompute_ui_mode();
     }
 
     fn is_bq40_snapshot_reasonable(s: &Bq40z50Snapshot) -> bool {

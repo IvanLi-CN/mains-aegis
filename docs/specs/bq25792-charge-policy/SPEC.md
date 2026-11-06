@@ -1,8 +1,8 @@
 # BQ25792 500mA 充电策略与 DC 过流降档
 
-> 当前有效规范以本文为准；实现覆盖与当前状态见 `./IMPLEMENTATION.md`，关键演进原因见 `./HISTORY.md`。
+> 本主题已归档，保留产品充电策略参考；温度/请求边界与离线激活以活动 [温度合同](../bq40-charge-temperature-profile/SPEC.md) 为准；实现覆盖与当前状态见 `./IMPLEMENTATION.md`，关键演进原因见 `./HISTORY.md`。
 
-## 背景 / 问题陈述
+## Context and Scope
 
 - 主线固件此前只做 `BQ25792` 的安全门控，没有把“何时开始充电、何时继续、何时停充、何时降档”固化成明确的运行时策略。
 - 设计文档里曾有 `1A/500mA/100mA` 多档设想，但当前产品需求已经收敛为“常规 `500mA`、`DC5025` 过流时降到 `100mA`、快充暂不做”。
@@ -53,9 +53,11 @@
 - 任何硬件改板、电阻档位调整、输入源优先级改动。
 - 将预览图以外的 UI 视觉语言重做。
 
-## 需求（Requirements）
+## Requirements
 
 ### MUST
+
+- REQ-BQ25792-POLICY-WAKE: 普通产品充电必须保留有效电池路径与 BQ40 遥测门控；显式离线 Activation 是独立有界维护状态，必须按温度合同允许低 PACK 电压启动，不能把普通 `blocked_no_bms` 当作离线唤醒的全局否决条件。
 
 - 正常充电目标电流固定为 `500mA`。
 - `RSOC < 80%` 或 `cell_min_mv < 3700` 时启动充电。
@@ -114,7 +116,7 @@
 
 ### Edge cases / errors
 
-- `BQ40Z50` 快照不可用、最低单体缺失、`VBAT_PRESENT=false` 时，策略统一进入 `blocked_no_bms`，停止任何已有的充电保持态。
+- 对普通产品充电，`BQ40Z50` 快照不可用、最低单体缺失或有效电池路径缺失时，策略进入 `blocked_no_bms`，停止普通充电保持态；这不否决显式有界离线 Activation 的低 PACK 电压唤醒。BQ40 通信失败也不得伪造为 BQ25792 通信失败。
 - `charge_ready=false` 但不满足 CUV recovery 例外条件时，策略统一进入 `blocked_no_bms`；如果 USB-C 是当前输入源，也不得启动 CUV 预充。
 - `TS_COLD` 或 `TS_HOT` 时，策略进入 `blocked_temp`。
 - 输入消失时，策略进入 `blocked_no_input`。
@@ -122,13 +124,15 @@
 - 任一路输出已开启但聚合输出功率不可可信计算时，策略仍进入 `blocked_output_over_limit`，但运行时原因必须区分为 `blocked_output_power_unknown`。
 - `BACKUP + USB-C` 的专用遥测缺样只能在已经自动放行且输出开启时按 TPS 采样尝试计数；首次放行阶段缺样只保持等待，不能把旧样本当作新鲜样本。
 - 双输入遥测允许共存；当实际 charger/DC 路由已落在 `VAC2/DCIN` 且 `VAC2` 为约 `12V`、`VAC1/VBUS` 仅为并行 `5V` 遥测时，input source 必须记为 `dcin`，不得因 USB 共存误记为 `Auto` 或 `usbc`。
-- BMS activation / recovery 的强制 `200mA` 唤醒路径保持独立优先级，不被正常充电策略篡改。
+- BMS activation / recovery 的强制 `200mA` 寄存器目标保持独立优先级，不被正常充电策略篡改；实际涓流/预充电流由 BQ25792 按 BAT 电压和对应寄存器调节，不保证实测 `200mA`。只有显式手动、BQ40 离线、允许充电阶段且在绝对 deadline 内的 Activation 可豁免原始电池在位位；所有温度、BQ40 已观察安全证据和结束后禁充行为仍保持。
 
 ## 接口契约（Interfaces & Contracts）
 
 None。
 
-## 验收标准（Acceptance Criteria）
+## Verification
+
+- VER-BQ25792-POLICY-WAKE，覆盖: REQ-BQ25792-POLICY-WAKE。普通门控与离线激活例外必须分别测试；实机需证明低压激活能够使能、保留真实在位和电流遥测、终态或超时后停止唤醒，不能把寄存器设置成功报告为 BMS 已恢复。
 
 - Given 空闲且输入/BMS/温度均允许，When `RSOC = 79%` 且 `cell_min_mv >= 3700`，Then 系统进入 `charging_500ma` 并把目标 `ICHG` 写成 `500mA`。
 - Given 空闲且输入/BMS/温度均允许，When `RSOC >= 80%` 但 `cell_min_mv = 3690`，Then 系统仍进入 `charging_500ma`。
@@ -317,3 +321,7 @@ PR: none
 - `COOLDOWN`: `TPS 总输出电流` 或其它输入压力在 `100mA` 起步档仍无法恢复时，Input 面板显示 `cooldown`，Charger 面板继续保留根因与阈值证据，Charger 面板显示停充等待窗口与 `cooldown_retry_wait`。
 
 ![DC IN cooldown pressure](./assets/power-pressure-cooldown.png)
+
+## Related ADRs
+
+None

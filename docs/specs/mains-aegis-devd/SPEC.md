@@ -8,7 +8,7 @@
 - 其中 `session`、`/api/v1/serial/session`、localhost settings 兼容面，以及 devd 如何接入设备本体 LAN 管理 API，已转由 [`lan-management-convergence`](../lan-management-convergence/SPEC.md) 重设计。
 - 本规格保留 devd 作为本机 USB owner、host power、artifact/flash/reset/monitor foundation 的历史基线。
 
-## 背景 / 问题陈述
+## Context and Scope
 
 `mcu-agentd` 曾承担烧录、reset 与 defmt monitor，但 Web App 的 USB CDC 业务通信也需要独占同一 USB Serial/JTAG CDC 口。多个进程同时抢串口会导致日志、配网、状态读取和烧录互相干扰。
 
@@ -38,7 +38,7 @@
 - 不在无硬件环境执行真机烧录、reset 或 monitor。
 - 不把 suspend/sleep 归类为低功耗运行；低功耗运行必须保持主机 awake，devd 和监听程序仍可继续工作。
 
-## 功能规格
+## Requirements
 
 ### devd API
 
@@ -52,6 +52,8 @@
 - `GET /api/v1/devices/{id}/status`: 返回设备 owner-facing status。该接口同时通过 IPC `device.status` 暴露给 `mains-aegis device <id> status`；CLI 必须支持单次读和 `--watch` 连续 JSONL 采样，正式 Power Validation 的 UPS 状态采集不得因为 HTTP 或 IPC 原始方法更方便而绕过 CLI 能力缺口。固件 full 与 compact status JSON 必须包含 `host.power_profile`，取值为 `power_saver|balanced|performance|null`；`restore_previous` 仅是 devd 请求动作，不得作为设备状态值暴露。
 - `GET /api/v1/devices/{id}/diag-snapshot?package=<id>`: 通过 USB CDC `get_diag_snapshot` 获取只读 package 化诊断快照，并缓存到设备 session；重复 `package=` 选择多个 package，空 package 默认读取轻量 `core`。
 - `GET /api/v1/devices/{id}/diag-snapshot` 同时通过 IPC `device.diag_snapshot` 暴露给 `mains-aegis device <id> diag-snapshot --package <id>`；CLI 必须提供与 `status` 同构的 `--fresh`、`--cache-only`、`--include-meta`、`--watch`、`--interval-ms` 与 `--samples` 参数。
+- REQ-USB-BMS-ACTIVATION: `POST|GET /api/v1/devices/{id}/recovery/bms-activation`：仅通过选定的 native USB transport 调用 CDC `activate_bms` / `get_bms_activation`，不得回退或重定向 companion LAN。POST 复用前面板 Activate 的受限离线激活状态机；GET 只读状态，不重新触发。返回 `accepted/result/reason/recovery_action/activation_state/activation_phase/activation_last_reason` 与充电门控摘要；`pending` 仅表示启动，只有 `success` 才能报告 `ok=true`。正在恢复或不需要激活时明确拒绝；输入、温度、电流和超时保护保持固件权威；只有手动请求、BQ40 离线且在绝对 deadline 内的 Activation 充电阶段允许 `VBAT_PRESENT_STAT=0`，以向 BMS 隔离的 PACK 端施加受限唤醒源，不能据该位判定电芯缺失。普通充电、在线放电授权恢复与 boot-diagnostic 不获得低电压例外；`activation_low_vbat_wake` 用于区分允许的低压唤醒，原始 `charger_vbat_present` 仍如实返回。响应丢失后不得自动重发启动命令；应查询状态。LAN-only 返回 `usb_activation_required`，mock 返回 `mock_device`。此入口与放电授权恢复分离，不直接恢复输出；状态反映共享的实时状态机，可能被后续恢复或前面板清除操作替换。
+- `get_bms_activation` 必须检查终态所属的恢复种类；放电授权恢复结束并复位活动请求上下文后，仍必须拒绝将其结果归属为 Activation，返回 `different_recovery_active`。
 - `POST /api/v1/devices/{id}/recovery/bms-discharge-authorization`: 触发受限 BMS 放电授权恢复。native serial 设备只有在存在显式绑定的 companion LAN 地址时才可先走设备 LAN HTTP `POST /api/v1/recovery/bms-discharge-authorization`，不可用时走 USB CDC `recover_bms_discharge_authorization`；缓存的 `identity/status.network.ipv4` 只是 telemetry，不得作为恢复写目标。LAN-only 设备直接调用设备本体 HTTP。devd 必须等待固件返回终态结果，不能把 `pending` 当作失败或成功；成功或失败后应刷新 status 与 diag-snapshot cache。
 - `POST /api/v1/devices/{id}/tps-en/release`: 仅释放 MCU 对 `THERM_KILL_N -> TPS_EN` 的开漏拉低。请求体必须为 `{ "confirm":"release-tps-en", "lease_id":"..." }`，且必须持有该 native USB CDC 设备的有效 Web lease；无 lease、错误确认令牌和 LAN target 分别返回结构化拒绝。该操作只发送 USB CDC `release_tps_en`，不提供设备 LAN 写入口，不清 TPS 故障锁存、不探测 TPS、也不恢复输出。
 - `GET|POST /api/v1/devices/{id}/artifact`: 查询或选择 artifact manifest。
@@ -189,7 +191,9 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
   - `rated_vout_mv`
 - devd 匹配规则：只有 `build_id`、build profile 与 feature set 都和 selected artifact 精确匹配才可标记 `log_decode.status=verified`；`git_sha` 只能作为 provenance 展示，不能单独证明 defmt artifact 匹配。
 
-## 验收标准
+## Verification
+
+- VER-USB-BMS-ACTIVATION，覆盖: REQ-USB-BMS-ACTIVATION。协议与主机测试必须证明启动和只读查询分离、pending 不等于成功、不确定响应不重发启动、拒绝非 USB transport；实机测试应记录激活阶段、终态原因及充电门控，不得将命令送达报告为恢复成功。
 
 - `tools/mains-aegis-host` 能编译并通过单元测试。
 - devd 可无端口启动；无硬件验证通过 dry-run API 与单元测试中的 synthetic in-memory device state 覆盖设备管理、artifact selection、dry-run flash 与 session API。
@@ -224,7 +228,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 
 ## Related ADRs
 
-- None
+None
 
 
 ## Visual Evidence

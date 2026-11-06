@@ -54,6 +54,8 @@ pub enum UsbCdcRequest {
     GetChargeControl,
     GetDiagSnapshot(DiagSnapshotRequest),
     RecoverBmsDischargeAuthorization,
+    ActivateBms,
+    GetBmsActivation,
     SetLogLevel(LogLevel),
     SetHostPowerProfile(Option<HostPowerProfile>),
     SetManualChargePrefs(ManualChargePrefsCommand),
@@ -427,7 +429,7 @@ pub fn render_hello_json<const N: usize>(
     let _ = buf.push_str(r#""protocol":""#);
     let _ = buf.push_str(PROTOCOL_NAME);
     let _ = buf.push_str(
-        r#"","framing":"jsonl","capabilities":{"status":true,"structured_logs":true,"settings":true,"wifi_config":true,"psk_echo":false,"host_power_profile":true},"identity":"#,
+        r#"","framing":"jsonl","capabilities":{"status":true,"structured_logs":true,"settings":true,"wifi_config":true,"psk_echo":false,"host_power_profile":true,"bms_activation":true},"identity":"#,
     );
     let _ = buf.push_str(identity_json);
     let _ = buf.push('}');
@@ -675,6 +677,8 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
         "recover_bms_discharge_authorization" => {
             Ok(UsbCdcRequest::RecoverBmsDischargeAuthorization)
         }
+        "activate_bms" => Ok(UsbCdcRequest::ActivateBms),
+        "get_bms_activation" => Ok(UsbCdcRequest::GetBmsActivation),
         "set_log_level" => {
             let level =
                 json_string_field::<16>(line, "level")?.ok_or(UsbCdcProtocolError::MissingField)?;
@@ -1341,6 +1345,28 @@ mod tests {
                 op: UsbCdcRequest::GetDiagSnapshot(DiagSnapshotRequest { packages }),
             }
         );
+    }
+
+    #[test]
+    fn activation_start_and_status_are_distinct_requests() {
+        for (op, expected) in [
+            ("activate_bms", UsbCdcRequest::ActivateBms),
+            ("get_bms_activation", UsbCdcRequest::GetBmsActivation),
+        ] {
+            let line =
+                std::format!(r#"{{"type":"request","request_id":"activation","op":"{op}"}}"#);
+            assert_eq!(
+                parse_frame(&line).unwrap(),
+                UsbCdcFrame::Request {
+                    request_id: String::try_from("activation").unwrap(),
+                    op: expected,
+                }
+            );
+        }
+        let mut hello = String::<4096>::new();
+        render_hello_json(&mut hello, None, "{}");
+        let parsed: serde_json::Value = serde_json::from_str(hello.as_str()).unwrap();
+        assert_eq!(parsed["capabilities"]["bms_activation"], true);
     }
 
     #[test]

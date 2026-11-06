@@ -74,6 +74,29 @@ struct I16Bounds {
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    // Compile the actual production completion method against a hardware-free
+    // fixture so regressions in its ownership assignment are observable.
+    let output_path = manifest_dir.join("../src/output/mod.rs");
+    println!("cargo:rerun-if-changed={}", output_path.display());
+    let output_source = fs::read_to_string(output_path).expect("read production output module");
+    let start = output_source
+        .find("    fn finish_front_panel_bms_discharge_authorization_recovery(")
+        .expect("find front-panel completion method");
+    let end = output_source[start..]
+        .find("\n    pub fn poll_front_panel_bms_discharge_authorization_recovery(")
+        .map(|offset| start + offset)
+        .expect("find completion method boundary");
+    let completion = format!(
+        "impl RecoveryHarness {{\n{}\n}}\n",
+        &output_source[start..end]
+    );
+    fs::write(
+        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"))
+            .join("front_panel_recovery_completion.rs"),
+        completion,
+    )
+    .expect("write production completion fixture");
+
     let profiles_path = manifest_dir.join("../../schemas/runtime_mode_profiles.json");
     println!("cargo:rerun-if-changed={}", profiles_path.display());
 

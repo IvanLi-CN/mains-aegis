@@ -8,7 +8,7 @@
 - 其中 CLI `device session` 用户命令面、`session/safeSettings` 历史模型，以及新的 `connection / identity / status / settings / trace` 查询面，已转由 [`lan-management-convergence`](../lan-management-convergence/SPEC.md) 接管。
 - 当前默认推进路径为：在当前 PR #80 上先完成该新规格与契约收敛，再视差异规模继续增量实现。
 
-## 背景 / 问题陈述
+## Context and Scope
 
 Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时容易把源码构建、localhost HTTP、Web 控制面和未来 CLI 混成同一件事。对齐后的主机工具必须是一个可发布的 host-tools 产品：同一 Rust crate 产出 `mains-aegis` CLI 与 `mains-aegis-devd` daemon，用户操作依赖 release 包安装，开发操作才允许源码构建。
 
@@ -36,7 +36,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 - 不删除 Web Serial 作为正式 Web 路径。
 - 不把 devd HTTP service API-only 开发入口作为默认本地控制面。
 
-## 功能规格
+## Requirements
 
 ### Host tools crate
 
@@ -78,6 +78,7 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
   - `host power status|profile|suspend|shutdown`
 - `mains-aegis device <id> status` 与 `mains-aegis device <id> diag-snapshot` 是 UPS 只读观测的正式 CLI 面，必须通过 IPC 调用 devd，不得要求操作者直接拼 JSON-RPC 或依赖 HTTP service。
 - 两个只读命令都支持 `--fresh`、`--cache-only`、`--include-meta`、`--watch`、`--interval-ms` 与 `--samples`。`--fresh` 与 `--cache-only` 互斥；单次读取默认允许 devd 按自身策略使用 fresh 或 cache。`--watch` 的默认语义固定为 monitor-cache telemetry stream：优先按节拍返回 monitor cache，并通过 `meta.cache_fresh/sample_fresh` 标示新鲜度；若 monitor cache 尚不可用，则返回带 `miss=true` 的 JSONL miss 行，而不是隐式退回 direct CDC 读。需要逐样本强制 CDC fresh 读时，操作者必须显式传入 `--fresh`。
+- REQ-USB-BMS-ACTIVATION: `mains-aegis device <id> recovery bms-activation [--status]` 通过 IPC `device.recovery.bms_activation`（`status=false|true`）调用受限 USB 离线激活或只读状态查询。CLI 原样输出固件 JSON，不把 `accepted=true,result=pending` 当作恢复成功；后续只用 `--status` 观察，不轮询启动命令。devd 只使用指定 native USB，禁止 LAN fallback，且启动命令响应不确定时不自动重发。该命令与 `bms-discharge-authorization` 分离，安全门控和完成裁决由正常固件负责。
 - `mains-aegis device <id> recovery bms-discharge-authorization` 通过 IPC `device.recovery.bms_discharge_authorization` 调用 devd，不直接打开串口、不直接 force TPS 输出。CLI 必须原样输出固件裁决 JSON，包含 `ok`、`accepted`、`result`、`reason`、`status_before` 与 `status_after` 等恢复诊断字段；native serial 与 LAN 设备的 owner-facing 结果应一致。native serial 的恢复写路径只能使用绑定 USB CDC 或显式绑定 companion LAN，不得把缓存的 `identity/status.network.ipv4` 当作设备授权目标。
 - `mains-aegis device <id> tps-en release --confirm release-tps-en` 通过 IPC `device.tps_en.release` 调用 devd。它只能使用已绑定 USB CDC，且只请求固件释放 MCU 的 `THERM_KILL_N` 开漏；不得发送 LAN 写入、不得清 TPS 故障锁存、不得自动读取或恢复 TPS 输出。错误确认令牌必须被拒绝。
 
@@ -103,7 +104,9 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 
 - 跨 `Web App` / `mains-aegis-devd` / `mains-aegis` CLI 的通信方案优先级矩阵由 [`client-transport-priority`](../client-transport-priority/SPEC.md) 统一定义；本规格只记录 host-tools crate、IPC/HTTP 命令面与 release/install 对齐，不再重复定义跨客户端优先级表。
 
-## 验收标准
+## Verification
+
+- VER-USB-BMS-ACTIVATION，覆盖: REQ-USB-BMS-ACTIVATION。协议与主机测试必须证明启动和只读查询分离、pending 不等于成功、不确定响应不重发启动、拒绝非 USB transport；实机测试应记录激活阶段、终态原因及充电门控，不得将命令送达报告为恢复成功。
 
 - `cargo check --manifest-path tools/mains-aegis-host/Cargo.toml --all-targets` 通过。
 - `cargo test --manifest-path tools/mains-aegis-host/Cargo.toml` 通过。
@@ -175,3 +178,7 @@ PR: include
 PR: include
 
 ![TPS enable interlock mobile](./assets/tps-enable-interlock-mobile.png)
+
+## Related ADRs
+
+None
