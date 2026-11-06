@@ -161,6 +161,7 @@ jobs:
       - name: Publish GitHub Release firmware catalog
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           release_tag="firmware-${GITHUB_SHA}"
