@@ -298,6 +298,6 @@
     "Wake collection had a native_cdc_timeout; no activation retry was sent. Success was established from later fresh BMS reads and retained reason, not a captured success frame.",
     "Input transients occurred during the 80-second watch; recovery was automatic. INA PV/critical electrical cause remains unconfirmed.",
     "Cell imbalance and SOC calibration are not resolved by communication recovery.",
-    "This is a record of flashed dirty implementation builds, not proof of flashing the future PR commit."
+    "This records flashed dirty implementation builds. The later PR repair changes activation result ownership/rendering only; it was validated with host tests and ESP builds, not a new hardware reflash. Source hashes identify the original hardware implementation, not that later repair."
   ]
 }

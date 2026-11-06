@@ -4231,6 +4231,7 @@ pub struct PowerManager<'d, I2C> {
     bms_activation_auto_attempted: bool,
     bms_activation_current_is_auto: bool,
     bms_activation_request_kind: BmsRecoveryRequestKind,
+    bms_activation_result_is_activation: bool,
     bms_activation_auto_force_charge_until: Option<Instant>,
     bms_activation_auto_force_charge_programmed: bool,
     bms_activation_auto_defer_logged: bool,
@@ -5048,6 +5049,7 @@ where
             bms_activation_auto_attempted: !bms_auto_recovery_enabled,
             bms_activation_current_is_auto: false,
             bms_activation_request_kind: BmsRecoveryRequestKind::Activation,
+            bms_activation_result_is_activation: true,
             bms_activation_auto_force_charge_until: if bms_auto_recovery_enabled
                 && BMS_ACTIVATION_AUTO_BOOT_FORCE_CHARGE
             {
@@ -7908,25 +7910,12 @@ where
     }
 
     pub fn bms_activation_json<const N: usize>(&self) -> String<N> {
-        if self.bms_activation_request_kind != BmsRecoveryRequestKind::Activation {
-            return self.render_bms_activation_json(false, "rejected", "different_recovery_active");
-        }
-        let (accepted, result, reason) = match self.bms_activation_state {
-            BmsActivationState::Idle => (false, "idle", "no_activation"),
-            BmsActivationState::Pending => (true, "pending", "activation_in_progress"),
-            BmsActivationState::Result(BmsResultKind::Success) => (
-                true,
-                "success",
-                self.bms_activation_last_reason
-                    .unwrap_or("activation_complete"),
-            ),
-            BmsActivationState::Result(_) => (
-                true,
-                "failed",
-                self.bms_activation_last_reason
-                    .unwrap_or("activation_failed"),
-            ),
-        };
+        let (accepted, result, reason) = bms_activation_status(
+            self.bms_activation_state,
+            self.bms_activation_request_kind == BmsRecoveryRequestKind::Activation,
+            self.bms_activation_result_is_activation,
+            self.bms_activation_last_reason,
+        );
         self.render_bms_activation_json(accepted, result, reason)
     }
 
@@ -11802,6 +11791,8 @@ where
     fn finish_bms_activation(&mut self, result: BmsResultKind, reason: &'static str) {
         self.bms_activation_last_reason = Some(reason);
         let request_kind = self.bms_activation_request_kind;
+        self.bms_activation_result_is_activation =
+            request_kind == BmsRecoveryRequestKind::Activation;
         if result == BmsResultKind::Success
             && request_kind == BmsRecoveryRequestKind::DischargeAuthorization
         {

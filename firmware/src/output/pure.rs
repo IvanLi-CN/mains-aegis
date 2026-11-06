@@ -1,7 +1,7 @@
 use crate::front_panel_scene::{
-    is_bq40_activation_needed, BmsRecoveryUiAction, BmsResultKind, DashboardChargerProtocol,
-    DashboardInputSource, ManualChargePowerPath, ManualChargeSpeed, ManualChargeStopReason,
-    SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+    is_bq40_activation_needed, BmsActivationState, BmsRecoveryUiAction, BmsResultKind,
+    DashboardChargerProtocol, DashboardInputSource, ManualChargePowerPath, ManualChargeSpeed,
+    ManualChargeStopReason, SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
 };
 use mains_aegis_firmware::bq40z50;
 use mains_aegis_firmware::charge_temperature;
@@ -18,6 +18,35 @@ use super::{
     AudioChargePhase, AudioMainsSource, Bq40z50Snapshot, ChargerInputPowerSample,
     ChargerInputSampleIssue, OutputRuntimeState, StableMainsState, CHARGER_INPUT_POWER_ANOMALY_W10,
 };
+
+/// Resolve the shared recovery state without attributing another action's
+/// terminal result to Activation after the active request context is reset.
+pub(super) fn bms_activation_status(
+    state: BmsActivationState,
+    request_is_activation: bool,
+    result_is_activation: bool,
+    last_reason: Option<&'static str>,
+) -> (bool, &'static str, &'static str) {
+    let own_state = match state {
+        BmsActivationState::Result(_) => result_is_activation,
+        _ => request_is_activation,
+    };
+    if !own_state {
+        return (false, "rejected", "different_recovery_active");
+    }
+    match state {
+        BmsActivationState::Idle => (false, "idle", "no_activation"),
+        BmsActivationState::Pending => (true, "pending", "activation_in_progress"),
+        BmsActivationState::Result(BmsResultKind::Success) => (
+            true,
+            "success",
+            last_reason.unwrap_or("activation_complete"),
+        ),
+        BmsActivationState::Result(_) => {
+            (true, "failed", last_reason.unwrap_or("activation_failed"))
+        }
+    }
+}
 
 /// Runtime latches shared by the product and activation charge gates.
 ///
@@ -4488,6 +4517,57 @@ mod tests {
             Some(true),
             bq25792_effective_vbat_present(Some(false), Some(1_280))
         ));
+    }
+
+    #[test]
+    fn activation_status_rejects_another_recoverys_terminal_result() {
+        for result in [BmsResultKind::Success, BmsResultKind::NotDetected] {
+            // finish restores the active request kind to Activation, but the
+            // completed result still belongs to DischargeAuthorization.
+            assert_eq!(
+                bms_activation_status(
+                    BmsActivationState::Result(result),
+                    true,
+                    false,
+                    Some("discharge_authorization_complete")
+                ),
+                (false, "rejected", "different_recovery_active")
+            );
+        }
+    }
+
+    #[test]
+    fn activation_status_preserves_own_result_and_live_state() {
+        assert_eq!(
+            bms_activation_status(
+                BmsActivationState::Result(BmsResultKind::Success),
+                true,
+                true,
+                Some("bq40_ready")
+            ),
+            (true, "success", "bq40_ready")
+        );
+        assert_eq!(
+            bms_activation_status(
+                BmsActivationState::Result(BmsResultKind::NotDetected),
+                true,
+                true,
+                Some("probe_miss")
+            ),
+            (true, "failed", "probe_miss")
+        );
+        assert_eq!(
+            bms_activation_status(BmsActivationState::Pending, false, true, None),
+            (false, "rejected", "different_recovery_active")
+        );
+        assert_eq!(
+            bms_activation_status(BmsActivationState::Pending, true, false, None),
+            (true, "pending", "activation_in_progress")
+        );
+        assert_eq!(
+            bms_activation_status(BmsActivationState::Idle, true, false, None),
+            (false, "idle", "no_activation")
+        );
     }
 
     #[test]
