@@ -8077,7 +8077,9 @@ function deviceSectionHref(
   record: DeviceRecord,
   section: "battery" | "power",
 ): string {
-  return `/devices/${encodeURIComponent(record.target.deviceId)}/${section}`;
+  const href = `/devices/${encodeURIComponent(record.target.deviceId)}/${section}`;
+  const search = new URLSearchParams(window.location.search);
+  return search.get("demo") === "true" ? `${href}?demo=true` : href;
 }
 
 function inputSourceSummary(status: UpsStatus | null | undefined): {
