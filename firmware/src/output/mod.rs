@@ -6338,6 +6338,72 @@ where
             "IT_GAUGING_CONFIGURATION",
             &mut errors,
         );
+        self.diag_snapshot.bms.oc_threshold_mah = diag_bq40_optional(
+            bq40z50::read_data_flash_u16(&mut self.i2c, addr, bq40z50::data_flash::OC_THRESHOLD)
+                .map(|v| v.map(|v| v as i16)),
+            "OC_THRESHOLD",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.oc_recovery_mah = diag_bq40_optional(
+            bq40z50::read_data_flash_u16(&mut self.i2c, addr, bq40z50::data_flash::OC_RECOVERY)
+                .map(|v| v.map(|v| v as i16)),
+            "OC_RECOVERY",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.oc_rsoc_recovery_pct = diag_bq40_optional(
+            bq40z50::read_data_flash_u8(&mut self.i2c, addr, bq40z50::data_flash::OC_RSOC_RECOVERY),
+            "OC_RSOC_RECOVERY",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.design_capacity_mah = diag_bq40_optional(
+            bq40z50::read_data_flash_u16(
+                &mut self.i2c,
+                addr,
+                bq40z50::data_flash::DESIGN_CAPACITY_MAH,
+            ),
+            "DESIGN_CAPACITY",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.qmax_pack_mah = diag_bq40_optional(
+            bq40z50::read_data_flash_u16(&mut self.i2c, addr, bq40z50::data_flash::QMAX_PACK),
+            "QMAX_PACK",
+            &mut errors,
+        );
+        for index in 0..4 {
+            self.diag_snapshot.bms.qmax_cell_mah[index] = diag_bq40_optional(
+                bq40z50::read_data_flash_u16(
+                    &mut self.i2c,
+                    addr,
+                    bq40z50::data_flash::QMAX_CELL_1 + index as u16 * 2,
+                ),
+                "QMAX_CELL",
+                &mut errors,
+            );
+        }
+        self.diag_snapshot.bms.chemical_id_raw = diag_bq40_optional(
+            bq40z50::read_mac_block_raw(&mut self.i2c, addr, 0x0006)
+                .map(bq40z50::exact_mac_payload::<2>),
+            "chemical_id_raw",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.gauge_status1_raw = diag_bq40_optional(
+            bq40z50::read_mac_block_raw(&mut self.i2c, addr, 0x0073)
+                .map(bq40z50::exact_mac_payload::<32>),
+            "gauge_status1_raw",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.gauge_status2_raw = diag_bq40_optional(
+            bq40z50::read_mac_block_raw(&mut self.i2c, addr, 0x0074)
+                .map(bq40z50::exact_mac_payload::<32>),
+            "gauge_status2_raw",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.gauge_status3_raw = diag_bq40_optional(
+            bq40z50::read_mac_block_raw(&mut self.i2c, addr, 0x0075)
+                .map(bq40z50::exact_mac_payload::<24>),
+            "gauge_status3_raw",
+            &mut errors,
+        );
         self.diag_snapshot.bms.average_current_captured_at_ms = Some(self.fan_now_ms());
         self.diag_snapshot.bms.average_current_ma = diag_bq40_optional(
             bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::AVERAGE_CURRENT)
@@ -16164,6 +16230,16 @@ where
             charging_suspend: bq40_mac_bit(charging_status, bq40z50::charging_status::SU),
             charging_hv: bq40_mac_bit(charging_status, bq40z50::charging_status::HV),
             update_status: lock_diag.and_then(|diag| diag.update_status),
+            oc_threshold_mah: None,
+            oc_recovery_mah: None,
+            oc_rsoc_recovery_pct: None,
+            design_capacity_mah: None,
+            qmax_pack_mah: None,
+            qmax_cell_mah: [None; 4],
+            chemical_id_raw: None,
+            gauge_status1_raw: None,
+            gauge_status2_raw: None,
+            gauge_status3_raw: None,
             charge_term_taper_ma: lock_diag.and_then(|diag| diag.charge_term_taper_ma),
             charge_term_voltage_mv: None,
             chg_current_threshold_ma: None,

@@ -249,3 +249,5 @@ BQ40 诊断保留旧 `current_at_eoc_ma` 字段，并增加 `charge_term_taper_m
 连续充电观测使用 `bq40.charge`，仅新读 ChargingStatus、GaugingStatus、SafetyAlert/Status、PFStatus、AFE 均衡与 AverageCurrent；包内未读取的配置字段保持空值。温度字段 `cell_temperature_max_c_x10`、`cell_temperature_captured_at_ms`、`temperature_configuration_verified` 明确为安全缓存及其时间，不伪装成同步采样。完整 DF 与历史配置另用 `bq40.manufacturing` 读取，避免每两秒的观测被慢速配置读取占满。诊断导致温度缓存过期时，充电决策重新读取温度配置和 DAStatus2；读取失败仍禁充，有效期仍为 1 秒。
 
 `bq40.core` 同轮新读 BatteryMode(0x03)、RemainingCapacity(0x0F)、FullChargeCapacity(0x10)，保留寄存器原值与各自错误。`remaining_capacity_raw`、`full_charge_capacity_raw` 由 `capacity_unit` 解释：BatteryMode[CAPACITY_MODE]=0 为 `mAh`，置位为 `10mWh`；模式读取失败时单位为空，禁止猜测或直接标为 mAh。
+
+容量过充诊断在完整 `bq40.manufacturing` 读取中补充 `oc_threshold_mah`、`oc_recovery_mah`、`oc_rsoc_recovery_pct`、`design_capacity_mah`、`qmax_pack_mah`、`qmax_cell_mah`、`chemical_id_raw` 和 `gauge_status1_raw`/`gauge_status2_raw`/`gauge_status3_raw`。这些字段均为只读，不参与控制，不写入保护或学习配置。MAC 原始负载必须分别满足 2/32/32/24 字节长度，否则保留空值并报告读取错误。GaugeStatus1 的 TrueRemQ 与 TrueFCCQ 按 R2 TRM 解码；GaugeStatus2 的 DOD0 PassedQ 不能冒充 OC 内部计数器。完整包含多次顺序读取，应在停止充电时取得；充电中的两秒采样仍使用轻量 `bq40.charge`，完整包时间戳不代表各寄存器同时采样。

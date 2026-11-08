@@ -972,6 +972,46 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
     json_field_opt_bool(buf, "charging_suspend", diag.bms.charging_suspend, true);
     json_field_opt_bool(buf, "charging_hv", diag.bms.charging_hv, true);
     json_field_opt_u8(buf, "update_status", diag.bms.update_status, true);
+    json_field_opt_i16(buf, "oc_threshold_mah", diag.bms.oc_threshold_mah, true);
+    json_field_opt_i16(buf, "oc_recovery_mah", diag.bms.oc_recovery_mah, true);
+    json_field_opt_u8(
+        buf,
+        "oc_rsoc_recovery_pct",
+        diag.bms.oc_rsoc_recovery_pct,
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "design_capacity_mah",
+        diag.bms.design_capacity_mah,
+        true,
+    );
+    json_field_opt_u16(buf, "qmax_pack_mah", diag.bms.qmax_pack_mah, true);
+    json_field_opt_u16_array(buf, "qmax_cell_mah", diag.bms.qmax_cell_mah, true);
+    json_field_opt_u8_array(
+        buf,
+        "chemical_id_raw",
+        diag.bms.chemical_id_raw.as_ref().map(|v| v.as_slice()),
+        true,
+    );
+    json_field_opt_u8_array(
+        buf,
+        "gauge_status1_raw",
+        diag.bms.gauge_status1_raw.as_ref().map(|v| v.as_slice()),
+        true,
+    );
+    json_field_opt_u8_array(
+        buf,
+        "gauge_status2_raw",
+        diag.bms.gauge_status2_raw.as_ref().map(|v| v.as_slice()),
+        true,
+    );
+    json_field_opt_u8_array(
+        buf,
+        "gauge_status3_raw",
+        diag.bms.gauge_status3_raw.as_ref().map(|v| v.as_slice()),
+        true,
+    );
     json_field_opt_u16(
         buf,
         "charge_term_taper_ma",
@@ -1424,6 +1464,36 @@ fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowe
     json_field_opt_bool(buf, "charging_suspend", bms.charging_suspend, true);
     json_field_opt_bool(buf, "charging_hv", bms.charging_hv, true);
     json_field_opt_u8(buf, "update_status", bms.update_status, true);
+    json_field_opt_i16(buf, "oc_threshold_mah", bms.oc_threshold_mah, true);
+    json_field_opt_i16(buf, "oc_recovery_mah", bms.oc_recovery_mah, true);
+    json_field_opt_u8(buf, "oc_rsoc_recovery_pct", bms.oc_rsoc_recovery_pct, true);
+    json_field_opt_u16(buf, "design_capacity_mah", bms.design_capacity_mah, true);
+    json_field_opt_u16(buf, "qmax_pack_mah", bms.qmax_pack_mah, true);
+    json_field_opt_u16_array(buf, "qmax_cell_mah", bms.qmax_cell_mah, true);
+    json_field_opt_u8_array(
+        buf,
+        "chemical_id_raw",
+        bms.chemical_id_raw.as_ref().map(|v| v.as_slice()),
+        true,
+    );
+    json_field_opt_u8_array(
+        buf,
+        "gauge_status1_raw",
+        bms.gauge_status1_raw.as_ref().map(|v| v.as_slice()),
+        true,
+    );
+    json_field_opt_u8_array(
+        buf,
+        "gauge_status2_raw",
+        bms.gauge_status2_raw.as_ref().map(|v| v.as_slice()),
+        true,
+    );
+    json_field_opt_u8_array(
+        buf,
+        "gauge_status3_raw",
+        bms.gauge_status3_raw.as_ref().map(|v| v.as_slice()),
+        true,
+    );
     json_field_opt_u16(buf, "charge_term_taper_ma", bms.charge_term_taper_ma, true);
     json_field_opt_u16(
         buf,
