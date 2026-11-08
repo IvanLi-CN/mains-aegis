@@ -3902,14 +3902,20 @@ function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
   const status = record.status;
   const batteryIssue = status?.battery.issue_detail;
   const externalInput = inputSourceSummary(status);
+  const batteryGuidance = batteryIssue
+    ? batteryIssueGuidance(batteryIssue, status)
+    : null;
   return (
     <section className="page-flow" data-evidence-target="device-overview">
       {batteryIssue ? (
         <aside className="overview-health-callout" role="alert">
           <AlertTriangle size={20} aria-hidden="true" />
           <div>
-            <strong>Battery protection is blocking charge</strong>
-            <p>{batteryIssueExplanation(batteryIssue)}</p>
+            <strong>{batteryGuidance?.title}</strong>
+            <p>{batteryGuidance?.cause}</p>
+            <p className="overview-health-impact">
+              <b>Impact:</b> {batteryGuidance?.impact}
+            </p>
           </div>
           <a href={`${deviceSectionHref(record, "battery")}#issue-detail`}>Open battery details</a>
         </aside>
@@ -3955,7 +3961,14 @@ function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
           />
           <MetricLine label="Charge" value={status?.charger.allow_charge ? "allowed" : "blocked"} />
           <p id="issue-detail" className="panel-note">
-            {batteryIssue ? batteryIssueExplanation(batteryIssue) : "No active battery protection reported."}
+            {batteryGuidance ? (
+              <>
+                <strong>{batteryGuidance.title}</strong>
+                <span>{batteryGuidance.cause}</span>
+                <span><b>Impact:</b> {batteryGuidance.impact}</span>
+                <span><b>Next step:</b> {batteryGuidance.action}</span>
+              </>
+            ) : "No active battery protection reported."}
           </p>
         </InfoPanel>
         <InfoPanel title="Outputs" icon={Cable}>
@@ -5848,6 +5861,9 @@ function chargeControlEvidenceValue(
 
 function BatteryPage({ record }: { record: DeviceRecord }) {
   const battery = record.status?.battery;
+  const batteryGuidance = battery?.issue_detail
+    ? batteryIssueGuidance(battery.issue_detail, record.status)
+    : null;
   const cells = normalizeCellVoltages(battery?.cell_mv);
   const cellModel = buildCellBalanceModel(cells, battery);
   return (
@@ -5924,11 +5940,17 @@ function BatteryPage({ record }: { record: DeviceRecord }) {
           />
         </InfoPanel>
         <InfoPanel title="Issue detail" icon={AlertTriangle}>
-          <p className="panel-note">
-            {battery?.issue_detail
-              ? batteryIssueDetailSummary(battery.issue_detail)
-              : "No active battery issue reported by the v1 status snapshot."}
-          </p>
+          {batteryGuidance ? (
+            <div className="battery-issue-detail">
+              <strong>{batteryGuidance.title}</strong>
+              <p>{batteryGuidance.cause}</p>
+              <p><b>Impact:</b> {batteryGuidance.impact}</p>
+              <p><b>Next step:</b> {batteryGuidance.action}</p>
+              <small>Diagnostic code: {battery?.issue_detail}</small>
+            </div>
+          ) : (
+            <p className="panel-note">No active battery issue reported by the v1 status snapshot.</p>
+          )}
         </InfoPanel>
       </div>
     </section>
@@ -8070,6 +8092,65 @@ function batteryIssueExplanation(reason: string): string {
       return "The battery protection path is active. Charging or discharge is restricted until the BMS clears the protection state.";
     default:
       return batteryIssueDetailSummary(reason);
+  }
+}
+
+type BatteryIssueGuidance = {
+  title: string;
+  cause: string;
+  impact: string;
+  action: string;
+};
+
+function batteryIssueGuidance(
+  reason: string,
+  status: UpsStatus | null | undefined,
+): BatteryIssueGuidance {
+  const batteryCurrent = formatCurrent(status?.battery.current_ma);
+  const input = inputSourceSummary(status);
+  switch (reason) {
+    case "xchg_blocked":
+      return {
+        title: "Battery charging is blocked by the BMS",
+        cause: "The BMS asserted XCHG, its over-charge protection flag. This is a battery protection decision, not an indication that external power is missing.",
+        impact: `${input.title} is still available to run the system, but the battery is not being charged (battery current: ${batteryCurrent}).`,
+        action: "Check pack and cell voltages, then clear the BMS protection state only after the battery is confirmed safe.",
+      };
+    case "chg_fet_off":
+      return {
+        title: "Battery charging is disabled",
+        cause: "The battery charge FET is off, so the charger has no electrical path into the pack.",
+        impact: `${input.title} may still run the system, but charge current cannot reach the battery (battery current: ${batteryCurrent}).`,
+        action: "Check the BMS protection flags and charge FET state before retrying charge.",
+      };
+    case "no_battery":
+      return {
+        title: "Battery pack is not detected",
+        cause: "The charger and BMS do not report a connected battery pack.",
+        impact: `${input.title} can run the system, but there is no battery available for charging or backup.`,
+        action: "Check the battery connector, pack wiring, and VBAT measurement.",
+      };
+    case "permanent_failure":
+      return {
+        title: "Battery reports a permanent failure",
+        cause: "The BMS has latched a permanent-failure condition and is refusing normal battery operation.",
+        impact: "Charging and backup operation may be unavailable until the pack is inspected.",
+        action: "Stop repeated charge attempts and inspect or replace the battery pack.",
+      };
+    case "cell_undervoltage":
+      return {
+        title: "Battery is below its recovery voltage",
+        cause: "At least one cell is below the BMS undervoltage recovery threshold.",
+        impact: "The BMS is holding the charge path until the pack reaches a safe recovery state.",
+        action: "Inspect individual cell voltages and follow the pack recovery procedure; do not force charge blindly.",
+      };
+    default:
+      return {
+        title: batteryIssueDetailSummary(reason),
+        cause: batteryIssueExplanation(reason),
+        impact: `${input.title} is reported; battery current is ${batteryCurrent}.`,
+        action: "Open the battery diagnostics and check the BMS readiness and MOS states.",
+      };
   }
 }
 

@@ -507,6 +507,16 @@ a {
   color: var(--color-ink);
 }
 
+.overview-health-callout .overview-health-impact {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.overview-health-callout b,
+.battery-issue-detail b {
+  font-weight: 700;
+}
+
 .overview-health-callout a {
   color: inherit;
   font-weight: 700;
@@ -670,6 +680,33 @@ a {
 .panel-note,
 .table-row span {
   color: var(--color-muted);
+}
+
+.battery-issue-detail {
+  display: grid;
+  gap: 8px;
+  color: var(--color-ink);
+}
+
+.battery-issue-detail strong {
+  color: var(--color-critical);
+}
+
+.battery-issue-detail p,
+.battery-issue-detail small {
+  margin: 0;
+}
+
+.battery-issue-detail small {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.panel-note:has(> strong) {
+  display: grid;
+  gap: 8px;
+  color: var(--color-ink);
 }
 
 .card-topline p {
