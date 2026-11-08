@@ -40,23 +40,22 @@ jobs:
               - "tps55288"
               - "ina3221-async"
               - "tools/firmware-artifact/**"
+              - "tools/ci/**"
               - "web/public/firmware/**"
               - ".github/workflows/firmware.yml"
       - name: Skip (no firmware changes)
         if: steps.changes.outputs.firmware != 'true'
         run: echo "No firmware changes; skip build."
 
+      - name: Test release asset downloader
+        if: steps.changes.outputs.firmware == 'true'
+        run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
+
       - name: Install ESP Xtensa toolchain (esp)
         if: steps.changes.outputs.firmware == 'true'
-        uses: esp-rs/xtensa-toolchain@b989c80ffd4be88d30c09606ee9b449bd0d41958 # v1.5
-        with:
-          default: true
-          buildtargets: esp32s3
-          version: latest
-          # Both production and BQ40 maintenance firmware use no_std; ldproxy is std-only.
-          ldproxy: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/ci/install-esp-toolchain.sh
 
       - name: Install esptool
         if: steps.changes.outputs.firmware == 'true'
