@@ -116,8 +116,23 @@ BQ25792 的 40 mA 步进不能精确设为 100 mA；80/120 mA 都不应未经误
 
 2026-11-08 04:20:38～04:20:40 UTC 之间，SafetyAlert[OC] 从告警转为 SafetyStatus[OC]=1（0x00400000），XCHG=1、PFStatus=0。此前仍以约 500mA 恒流充电，VCT/FC 未成立，未观察到硬件 termination_done 或 FULL。停充后电流下降到 −6～0mA。该变化有明确安全状态对应，不能解释成均衡导致的伪电流。
 
-这里的 OC 是容量过充保护，不是 OCC/OCD 瞬时过流，也不是 COV 电芯过压。根据 [BQ40Z50-R2 TRM §2.17](../manuals/BQ40Z50-R2-TRM/BQ40Z50-R2-TRM.md#217-overcharge-protection)，容量达到满充容量后，内部累计充电量达到 OC 阈值会置位 OC/XCHG。保护后的日志原值为 FCC=2624、RemainingCapacity=2597、SOC=99%（容量单位待同轮 BatteryMode 读回核验），电芯约 4.001–4.036V；RSOCL=1 会在有效终止前限制对外 SOC/容量到 99%，不能仅凭这个显示值否认容量保护，也不能以 SOC99 证明真实电池已满。
+这里的 OC 是容量过充保护，不是 OCC/OCD 瞬时过流，也不是 COV 电芯过压。根据 [BQ40Z50-R2 TRM §2.17](../manuals/BQ40Z50-R2-TRM/BQ40Z50-R2-TRM.md#217-overcharge-protection)，容量达到满充容量后，内部累计充电量达到 OC 阈值会置位 OC/XCHG。保护后的日志为 FCC=2624mAh、RemainingCapacity=2597mAh、SOC=99%，电芯约 4.001–4.036V；RSOCL=1 会在有效终止前限制对外 SOC/容量到 99%，不能仅凭这个显示值否认容量保护，也不能以 SOC99 证明真实电池已满。
 
 OC 的真实阈值及内部累计量未读回，不用 TRM 默认值冒充实测。FCC、ChemID、容量标定、学习历史与电芯当前实际状态是否匹配，尚未形成根因结论；Qmax/Ra 更新计数非零也不等同于当前容量模型准确。不得把 FCC=2624 单独当成学习损坏的证明。
 
 本轮 A3 充电稳定性窗口和 A4 完整自然终止均未通过，120mA/80mA 的终止窗口尚未得到实机验证。已明确 STOP，保留保护与学习数据；不清保护、不强制放电、不自动重新 START、不放宽参数。配置和软件检查通过不能替代这项失败的经验验收。PR 保持 Draft，未启动要求通过实机门禁后的 Tier 4 正式审查，未达到 Step 5C Ready。
+
+只读诊断补充固件 b36ec377 同轮读取 BatteryMode、RemainingCapacity、FullChargeCapacity，确认容量单位为 mAh，FCC=2624mAh、RemainingCapacity=2597mAh。该补充未改充电控制或 BQ40 配置，未重新 START；OC/XCHG 仍置位，充电器关闭。
+
+停充过渡的第 838 秒，同轮 fresh Current=0mA、AverageCurrent=484mA、运行时缓存 Current=127mA，三者保留不同采样时间。这证明本轮停充过渡存在指标和时间不同步，不能将 AverageCurrent 当成瞬时电流；也不能倒推此前每个 Web App 480mA 读数的原因。
+
+保护后另外完成每 2 秒一轮、连续 10 分钟的停充观测：301 轮、零缺样和读取错误、无充电使能样本。mask=0/2/4/8 下的电流范围见下表；mask=1 未覆盖。该记录只验证停充后的电流稳定性，不替代 A3 的充电窗口或 A4 的自然终止验收。
+
+| mask | 样本数 | fresh Current 范围（mA） |
+|---|---:|---:|
+| 0 | 162 | -5～0 |
+| 2 | 48 | -5～0 |
+| 4 | 46 | -6～0 |
+| 8 | 45 | -5～0 |
+
+[结构化验证记录](charge-termination-validation.json) 保存候选来源、真实配置、容量单位、安全状态、过渡时序、缺样及停充统计。最终代码检查通过，固件 host 测试为 566 项；充电经验验收仍未通过，不能进入 merge-ready。

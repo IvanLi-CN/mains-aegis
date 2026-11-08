@@ -1,0 +1,378 @@
+{
+  "schema": "mains-aegis.charge-termination-observation.v1",
+  "acceptance": "A3/A4 not passed; OC interrupted active charging before qualification/termination",
+  "charging_run_sha": "adb8d0c9f043d67b4ad14a73d6c52035b155f67c",
+  "readonly_diagnostic_sha": "b36ec3777477b7d91339df8215a8c5c9c1fc00d5",
+  "device_id": "mains-aegis-198840",
+  "installed_build_id": "b36ec377-clean-8adca19b17c6bfde",
+  "configuration": {
+    "charge_term_taper_ma": 120,
+    "charge_term_voltage_mv": 100,
+    "chg_current_threshold_ma": 50,
+    "quit_current_ma": 10,
+    "fet_options": 25,
+    "sbs_gauging_configuration": 5,
+    "it_gauging_configuration": 53502,
+    "current_at_eoc_ma": 201
+  },
+  "capacity_readback": {
+    "captured_at_ms": 5614,
+    "battery_mode_register": {
+      "address": 3,
+      "raw": 24577
+    },
+    "measurements": {
+      "capacity_unit": "mAh",
+      "current_ma": 0,
+      "full_charge_capacity_raw": 2624,
+      "pack_mv": 16084,
+      "remaining_capacity_raw": 2597,
+      "soc_pct": 99
+    }
+  },
+  "protection_readback": {
+    "oc": true,
+    "xchg": true,
+    "safety_alert": 0,
+    "safety_status": 4194304,
+    "pf_status": 0,
+    "no_of_qmax_updates": 5,
+    "no_of_ra_updates": 23,
+    "update_status": 14
+  },
+  "application_limit": "First 250-to-120 apply lacks full startup transcript; fully captured idempotent 120-to-120 apply passed one-field/block-preservation parser. No original full-block claim.",
+  "active_charge_observation": {
+    "first_OC": {
+      "sampled_at_s": 838.0095835829852,
+      "utc": "2026-11-08T04:20:40.256713+00:00",
+      "device_captured_at_ms": 875585
+    },
+    "phase_mask_current_ma": [
+      {
+        "phase": "pre_stability_window",
+        "mask": 2,
+        "n": 39,
+        "min": 194,
+        "max": 502,
+        "mean": 474.79487179487177
+      },
+      {
+        "phase": "pre_stability_window",
+        "mask": 4,
+        "n": 42,
+        "min": 296,
+        "max": 503,
+        "mean": 496.07142857142856
+      },
+      {
+        "phase": "pre_stability_window",
+        "mask": 8,
+        "n": 42,
+        "min": 341,
+        "max": 503,
+        "mean": 497.3095238095238
+      },
+      {
+        "phase": "pre_stability_window",
+        "mask": 0,
+        "n": 39,
+        "min": 499,
+        "max": 503,
+        "mean": 500.97435897435895
+      },
+      {
+        "phase": "charging",
+        "mask": 0,
+        "n": 52,
+        "min": 499,
+        "max": 502,
+        "mean": 500.4423076923077
+      },
+      {
+        "phase": "charging",
+        "mask": 8,
+        "n": 68,
+        "min": 499,
+        "max": 503,
+        "mean": 500.6029411764706
+      },
+      {
+        "phase": "charging",
+        "mask": 2,
+        "n": 67,
+        "min": 498,
+        "max": 502,
+        "mean": 500.6865671641791
+      },
+      {
+        "phase": "charging",
+        "mask": 4,
+        "n": 66,
+        "min": 499,
+        "max": 503,
+        "mean": 500.530303030303
+      },
+      {
+        "phase": "OC_stop",
+        "mask": 4,
+        "n": 12,
+        "min": -6,
+        "max": 0,
+        "mean": -3.6666666666666665
+      },
+      {
+        "phase": "OC_stop",
+        "mask": 8,
+        "n": 10,
+        "min": -5,
+        "max": -3,
+        "mean": -4.1
+      },
+      {
+        "phase": "OC_stop",
+        "mask": 2,
+        "n": 11,
+        "min": -5,
+        "max": -3,
+        "mean": -4
+      },
+      {
+        "phase": "OC_stop",
+        "mask": 0,
+        "n": 6,
+        "min": -4,
+        "max": -3,
+        "mean": -3.6666666666666665
+      }
+    ]
+  },
+  "oc_transition_timeline": [
+    {
+      "at_s": 832.0056764580077,
+      "utc": "2026-11-08T04:20:34.252821+00:00",
+      "fresh_current_ma": 501,
+      "runtime_cached_current_ma": 502,
+      "average_current_ma": 501,
+      "mask": 4,
+      "safety_alert": 4194304,
+      "safety_status": 0,
+      "vct_fc": false,
+      "charger_enabled": true,
+      "charger_state": "fast_cc",
+      "policy_notice": "charging_500ma",
+      "fresh_core_at_ms": 869869,
+      "average_at_ms": 869866,
+      "mask_at_ms": 869846
+    },
+    {
+      "at_s": 834.0064063749742,
+      "utc": "2026-11-08T04:20:36.253542+00:00",
+      "fresh_current_ma": 501,
+      "runtime_cached_current_ma": 501,
+      "average_current_ma": 501,
+      "mask": 8,
+      "safety_alert": 4194304,
+      "safety_status": 0,
+      "vct_fc": false,
+      "charger_enabled": true,
+      "charger_state": "fast_cc",
+      "policy_notice": "charging_500ma",
+      "fresh_core_at_ms": 871633,
+      "average_at_ms": 871630,
+      "mask_at_ms": 871610
+    },
+    {
+      "at_s": 836.0049484169576,
+      "utc": "2026-11-08T04:20:38.252079+00:00",
+      "fresh_current_ma": 500,
+      "runtime_cached_current_ma": 501,
+      "average_current_ma": 501,
+      "mask": 0,
+      "safety_alert": 4194304,
+      "safety_status": 0,
+      "vct_fc": false,
+      "charger_enabled": true,
+      "charger_state": "fast_cc",
+      "policy_notice": "charging_500ma",
+      "fresh_core_at_ms": 873678,
+      "average_at_ms": 873675,
+      "mask_at_ms": 873655
+    },
+    {
+      "at_s": 838.0095835829852,
+      "utc": "2026-11-08T04:20:40.256713+00:00",
+      "fresh_current_ma": 0,
+      "runtime_cached_current_ma": 127,
+      "average_current_ma": 484,
+      "mask": 4,
+      "safety_alert": 0,
+      "safety_status": 4194304,
+      "vct_fc": false,
+      "charger_enabled": false,
+      "charger_state": "not_charging",
+      "policy_notice": "bq40_charge_request_stale_or_invalid",
+      "fresh_core_at_ms": 875682,
+      "average_at_ms": 875679,
+      "mask_at_ms": 875659
+    },
+    {
+      "at_s": 840.0064412080683,
+      "utc": "2026-11-08T04:20:42.253566+00:00",
+      "fresh_current_ma": -5,
+      "runtime_cached_current_ma": -6,
+      "average_current_ma": 393,
+      "mask": 8,
+      "safety_alert": 0,
+      "safety_status": 4194304,
+      "vct_fc": false,
+      "charger_enabled": false,
+      "charger_state": "not_charging",
+      "policy_notice": "none",
+      "fresh_core_at_ms": 877927,
+      "average_at_ms": 877924,
+      "mask_at_ms": 877904
+    },
+    {
+      "at_s": 842.0067036249675,
+      "utc": "2026-11-08T04:20:44.253818+00:00",
+      "fresh_current_ma": -4,
+      "runtime_cached_current_ma": -4,
+      "average_current_ma": 367,
+      "mask": 2,
+      "safety_alert": 0,
+      "safety_status": 4194304,
+      "vct_fc": false,
+      "charger_enabled": false,
+      "charger_state": "not_charging",
+      "policy_notice": "none",
+      "fresh_core_at_ms": 879688,
+      "average_at_ms": 879685,
+      "mask_at_ms": 879665
+    },
+    {
+      "at_s": 844.0064385000151,
+      "utc": "2026-11-08T04:20:46.253537+00:00",
+      "fresh_current_ma": -4,
+      "runtime_cached_current_ma": -3,
+      "average_current_ma": 319,
+      "mask": 4,
+      "safety_alert": 0,
+      "safety_status": 4194304,
+      "vct_fc": false,
+      "charger_enabled": false,
+      "charger_state": "not_charging",
+      "policy_notice": "none",
+      "fresh_core_at_ms": 881728,
+      "average_at_ms": 881725,
+      "mask_at_ms": 881705
+    },
+    {
+      "at_s": 846.0064747079741,
+      "utc": "2026-11-08T04:20:48.253572+00:00",
+      "fresh_current_ma": -4,
+      "runtime_cached_current_ma": -4,
+      "average_current_ma": 278,
+      "mask": 8,
+      "safety_alert": 0,
+      "safety_status": 4194304,
+      "vct_fc": false,
+      "charger_enabled": false,
+      "charger_state": "not_charging",
+      "policy_notice": "none",
+      "fresh_core_at_ms": 883734,
+      "average_at_ms": 883732,
+      "mask_at_ms": 883711
+    },
+    {
+      "at_s": 848.0048737920588,
+      "utc": "2026-11-08T04:20:50.251958+00:00",
+      "fresh_current_ma": -4,
+      "runtime_cached_current_ma": -4,
+      "average_current_ma": 241,
+      "mask": 2,
+      "safety_alert": 0,
+      "safety_status": 4194304,
+      "vct_fc": false,
+      "charger_enabled": false,
+      "charger_state": "not_charging",
+      "policy_notice": "none",
+      "fresh_core_at_ms": 885981,
+      "average_at_ms": 885978,
+      "mask_at_ms": 885958
+    }
+  ],
+  "transport_gaps": [
+    {
+      "at_s": 132.0033118330175,
+      "error": "Error: native_cdc_timeout: timed out waiting for CDC response from /dev/cu.usbmodem2111401"
+    },
+    {
+      "at_s": 160.0015812079655,
+      "error": "Error: native_cdc_timeout: timed out waiting for CDC response from /dev/cu.usbmodem2111401"
+    },
+    {
+      "at_s": 168.0040942080086,
+      "error": "Error: native_cdc_timeout: timed out waiting for CDC response from /dev/cu.usbmodem2111401"
+    },
+    {
+      "at_s": 206.0049002500018,
+      "error": "Error: native_cdc_timeout: timed out waiting for CDC response from /dev/cu.usbmodem2111401"
+    }
+  ],
+  "post_stop_observation": {
+    "source_sha": "adb8d0c9f043d67b4ad14a73d6c52035b155f67c",
+    "samples": 301,
+    "duration_s": 600.004557749955,
+    "read_or_sample_errors": 0,
+    "unexpected_enabled_samples": [],
+    "interval_s": {
+      "min": 1.991468249936588,
+      "max": 2.0088643330382183
+    },
+    "observed_masks": [
+      0,
+      2,
+      4,
+      8
+    ],
+    "uncovered_masks": [
+      1
+    ],
+    "by_mask_current_ma": {
+      "0": {
+        "samples": 162,
+        "min": -5,
+        "max": 0,
+        "mean": -2.3580246913580245
+      },
+      "4": {
+        "samples": 46,
+        "min": -6,
+        "max": 0,
+        "mean": -3.369565217391304
+      },
+      "8": {
+        "samples": 45,
+        "min": -5,
+        "max": 0,
+        "mean": -3.1333333333333333
+      },
+      "2": {
+        "samples": 48,
+        "min": -5,
+        "max": 0,
+        "mean": -3.2916666666666665
+      }
+    },
+    "raw_sha256": "dbeb6f2d713d2d27e235e3c96b0c7fc2d52f9590da072a67ec1d0000df9e9e6d",
+    "scope": "post-OC stopped-current stability only; not a passed A3/A4 charging run"
+  },
+  "unchanged_boundaries": [
+    "No ChemID/Qmax/Ra/calibration/protection writes",
+    "No learning reset",
+    "No BMS reset or forced discharge",
+    "Explicit STOP; no automatic START",
+    "No merge or release"
+  ],
+  "raw_record_sha256": "430c34327bbc8744ca00e1f72608404284c9aa594cc357c597fdf055bb58aed0"
+}
