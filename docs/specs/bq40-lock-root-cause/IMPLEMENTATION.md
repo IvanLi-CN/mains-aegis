@@ -57,3 +57,5 @@ CLI 的 device charge start|stop 映射既有 control.manual_charge IPC，以执
 主人明确将 A3/A4 改为合并后验收；原 OC 中断与未通过记录保留，不作为通过证据。合并前继续要求代码回归、配置 writer/parser 合同、配置应用证据、CI 与 Tier 4 独立审查。合并后观察必须绑定实际 merge SHA 及对应固件；在完整充电过程通过前，120mA/80mA 仍是候选组合。GaugeStatus3 读取失败和 blocked_no_bms 原因映射留待合并后排查，不清保护或自动 START。
 
 容量 profile 已仅对 DesignCapacity=5000mAh、IT Term Voltage=11200mV 定向应用，恢复既有正常固件后独立读回通过；完整成功审计是目标值的重复应用，不能替代首次写入的缺失证据，详见[配置应用记录](../../reports/bq40-capacity-configuration-application.md)。
+
+显式 START 与自动起充记录当前成功 BMS 样本代次，普通轮询仅在完整 BMS 读取成功后推进代次；旧 FC/VCT 缓存、重复充电器轮询及失败读取不能建立新会话的满充资格。回归覆盖旧缓存、先 done 异常、新样本后正常完成、自动起充与代次回绕。

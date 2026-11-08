@@ -1261,15 +1261,17 @@ pub(super) struct ChargePolicyMemory {
     pub(super) charge_latched: bool,
     pub(super) full_latched: bool,
     pub(super) bms_qualified: bool,
+    pub(super) qualification_after_sample_seq: Option<u32>,
     pub(super) termination_incomplete: bool,
 }
 
 impl ChargePolicyMemory {
     // Called only after the explicit START has passed runtime safety evaluation.
-    pub(super) fn start_explicit_session(&mut self) {
+    pub(super) fn start_explicit_session(&mut self, bms_sample_seq: u32) {
         self.charge_latched = true;
         self.full_latched = false;
         self.bms_qualified = false;
+        self.qualification_after_sample_seq = Some(bms_sample_seq);
         self.termination_incomplete = false;
     }
 }
@@ -2700,6 +2702,8 @@ pub(super) fn dcin_input_pressure_step(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ChargePolicyTelemetry {
+    /// Advances only after a successful complete BMS poll, never on a charger poll.
+    pub(super) bms_sample_seq: u32,
     pub(super) rsoc_pct: u16,
     pub(super) cell_min_mv: u16,
     pub(super) cell_max_mv: u16,
@@ -2879,7 +2883,11 @@ pub(super) fn charge_policy_step(
     }
 
     // A fresh FC + VCT sample is qualified only while this session is active.
-    if memory.charge_latched && !low_voltage_recovery_active && telemetry.bms_full {
+    if memory.charge_latched
+        && !low_voltage_recovery_active
+        && telemetry.bms_full
+        && memory.qualification_after_sample_seq != Some(telemetry.bms_sample_seq)
+    {
         memory.bms_qualified = true;
     }
     if !low_voltage_recovery_active
@@ -2941,6 +2949,7 @@ pub(super) fn charge_policy_step(
     if !memory.charge_latched {
         if start_reason.is_some() {
             memory.charge_latched = true;
+            memory.qualification_after_sample_seq = Some(telemetry.bms_sample_seq);
         } else {
             if !input.vbat_present {
                 derate.reset();
@@ -5008,6 +5017,7 @@ mod tests {
         cell_max_mv: u16,
     ) -> ChargePolicyTelemetry {
         ChargePolicyTelemetry {
+            bms_sample_seq: 1,
             rsoc_pct,
             cell_min_mv,
             cell_max_mv,
@@ -6343,14 +6353,14 @@ mod tests {
             charge_policy_step(&mut memory, &mut derate, &mut load, 2, input).state,
             ChargePolicyState::TerminationIncomplete
         );
-        memory.start_explicit_session(); // Accepted explicit START.
+        memory.start_explicit_session(0); // Accepted explicit START.
         assert!(charge_policy_step(&mut memory, &mut derate, &mut load, 3, input).allow_charge);
     }
 
     #[test]
     fn explicit_start_at_soc99_participates_in_joint_termination() {
         let mut memory = ChargePolicyMemory::default();
-        memory.start_explicit_session();
+        memory.start_explicit_session(0);
         let mut derate = ChargePolicyDerateTracker::default();
         let mut load = ChargePolicyOutputLoadTracker::default();
         let mut input = policy_input(
@@ -6366,6 +6376,77 @@ mod tests {
             charge_policy_step(&mut memory, &mut derate, &mut load, 2, input).state,
             ChargePolicyState::FullLatched
         );
+    }
+
+    #[test]
+    fn explicit_start_rejects_cached_full_qualification_until_new_bms_sample() {
+        for new_sample_before_done in [false, true] {
+            let mut memory = ChargePolicyMemory::default();
+            memory.start_explicit_session(7);
+            let mut derate = ChargePolicyDerateTracker::default();
+            let mut load = ChargePolicyOutputLoadTracker::default();
+            let mut input = policy_input(
+                Some(ChargePolicyTelemetry {
+                    bms_sample_seq: 7,
+                    bms_full: true,
+                    ..policy_telemetry(99, 4180, 4200)
+                }),
+                Some(DashboardInputSource::UsbC),
+                Some(100),
+            );
+            // Repeated charger polls (including after a failed BMS read) see
+            // the same cached sample and must not establish qualification.
+            for now in 0..3 {
+                assert!(
+                    charge_policy_step(&mut memory, &mut derate, &mut load, now, input)
+                        .allow_charge
+                );
+                assert!(!memory.bms_qualified);
+            }
+            if new_sample_before_done {
+                input.telemetry.as_mut().unwrap().bms_sample_seq = 8;
+                assert!(
+                    charge_policy_step(&mut memory, &mut derate, &mut load, 3, input).allow_charge
+                );
+                assert!(memory.bms_qualified);
+            }
+            input.charger_done = true;
+            let done = charge_policy_step(&mut memory, &mut derate, &mut load, 4, input);
+            assert_eq!(
+                done.state,
+                if new_sample_before_done {
+                    ChargePolicyState::FullLatched
+                } else {
+                    ChargePolicyState::TerminationIncomplete
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_start_also_requires_a_new_successful_bms_sample() {
+        let mut memory = ChargePolicyMemory::default();
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut load = ChargePolicyOutputLoadTracker::default();
+        let mut input = policy_input(
+            Some(ChargePolicyTelemetry {
+                bms_sample_seq: u32::MAX,
+                bms_full: true,
+                ..policy_telemetry(79, 3900, 4000)
+            }),
+            Some(DashboardInputSource::UsbC),
+            Some(100),
+        );
+        for now in 0..3 {
+            assert!(
+                charge_policy_step(&mut memory, &mut derate, &mut load, now, input).allow_charge
+            );
+            assert!(!memory.bms_qualified);
+        }
+        // A successful post-start poll remains new across sequence wraparound.
+        input.telemetry.as_mut().unwrap().bms_sample_seq = 0;
+        assert!(charge_policy_step(&mut memory, &mut derate, &mut load, 3, input).allow_charge);
+        assert!(memory.bms_qualified);
     }
 
     #[test]

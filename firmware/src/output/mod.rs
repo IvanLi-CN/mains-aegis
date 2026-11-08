@@ -4183,6 +4183,7 @@ pub struct PowerManager<'d, I2C> {
     bms_next_retry_at: Option<Instant>,
     bms_last_int_poll_at: Option<Instant>,
     bms_poll_seq: u32,
+    bms_charge_sample_seq: u32,
     bms_ok_streak: u16,
     bms_err_streak: u16,
     bms_cached_da_status2: Option<bq40z50::DaStatus2>,
@@ -4993,6 +4994,7 @@ where
             bms_next_retry_at: Some(now),
             bms_last_int_poll_at: None,
             bms_poll_seq: 0,
+            bms_charge_sample_seq: 0,
             bms_ok_streak: 0,
             bms_err_streak: 0,
             bms_cached_da_status2: None,
@@ -9039,7 +9041,8 @@ where
         };
         let now = Instant::now();
         let charging_active = self.current_charging_requested();
-        self.charge_policy.start_explicit_session();
+        self.charge_policy
+            .start_explicit_session(self.bms_charge_sample_seq);
         self.manual_charge_runtime.active = true;
         self.manual_charge_runtime.takeover = charging_active;
         self.manual_charge_runtime.loopback_override =
@@ -14405,6 +14408,7 @@ where
                     Some(bms_full),
                 ) if self.ui_snapshot.bq40z50_no_battery != Some(true) => {
                     Some(ChargePolicyTelemetry {
+                        bms_sample_seq: self.bms_charge_sample_seq,
                         rsoc_pct,
                         cell_min_mv,
                         cell_max_mv,
@@ -15932,6 +15936,7 @@ where
                     self.ui_snapshot.bq40z50_discharge_ready = effective_discharge_ready;
                     self.bms_charge_ready = bq40_decode_charge_path(s.op_status).0;
                     self.bms_full = Some((s.batt_status & bq40z50::battery_status::FC) != 0);
+                    self.bms_charge_sample_seq = self.bms_charge_sample_seq.wrapping_add(1);
                     self.bms_cell_min_mv = Some(bq40_cell_min_mv(&s));
                     self.bms_cell_max_mv = Some(bq40_cell_max_mv(&s));
                     self.apply_bms_detail_snapshot(&s);

@@ -22,7 +22,7 @@ BQ40 真实 Charge Term Taper Current MUST 为候选 120mA，BQ25792 普通 ITER
 
 ### REQ-BQ40-TERM-003
 
-FULL MUST 同时要求本轮有效新鲜 VCT/FC 资格与 charger_done。FC 单独出现 MUST NOT 提前切断硬件终止阶段；零请求及所有保护 MUST 始终优先。硬件先终止且资格未成立 MUST 停充并锁存 termination_incomplete，不自动反复重启；仅明确 START 且满足安全条件后可以重试。
+FULL MUST 同时要求本轮有效新鲜 VCT/FC 资格与 charger_done。启动时 MUST 记录最后成功 BMS 样本代次；只有启动后新的成功样本才可建立资格，重复充电器轮询或失败的 BMS 读取 MUST NOT 使旧 FC/VCT 缓存成为本轮资格。FC 单独出现 MUST NOT 提前切断硬件终止阶段；零请求及所有保护 MUST 始终优先。硬件先终止且资格未成立 MUST 停充并锁存 termination_incomplete，不自动反复重启；仅明确 START 且满足安全条件后可以重试。
 
 - covers: `VER-BQ40-TERM-001`
 
