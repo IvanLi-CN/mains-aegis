@@ -6386,6 +6386,16 @@ where
             "chemical_id_raw",
             &mut errors,
         );
+        self.diag_snapshot.bms.it_voltage_config_raw = diag_bq40_optional(
+            bq40z50::read_diagnostic_df_block(&mut self.i2c, addr, 0x4840),
+            "IT_VOLTAGE_CONFIG",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.it_capacity_config_raw = diag_bq40_optional(
+            bq40z50::read_diagnostic_df_block(&mut self.i2c, addr, 0x4910),
+            "IT_CAPACITY_CONFIG",
+            &mut errors,
+        );
         self.diag_snapshot.bms.gauge_status1_raw = diag_bq40_optional(
             bq40z50::read_mac_block_raw(&mut self.i2c, addr, 0x0073)
                 .map(bq40z50::exact_mac_payload::<32>),
@@ -16237,6 +16247,8 @@ where
             qmax_pack_mah: None,
             qmax_cell_mah: [None; 4],
             chemical_id_raw: None,
+            it_voltage_config_raw: None,
+            it_capacity_config_raw: None,
             gauge_status1_raw: None,
             gauge_status2_raw: None,
             gauge_status3_raw: None,

@@ -996,6 +996,24 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
     );
     json_field_opt_u8_array(
         buf,
+        "it_voltage_config_raw",
+        diag.bms
+            .it_voltage_config_raw
+            .as_ref()
+            .map(|v| v.as_slice()),
+        true,
+    );
+    json_field_opt_u8_array(
+        buf,
+        "it_capacity_config_raw",
+        diag.bms
+            .it_capacity_config_raw
+            .as_ref()
+            .map(|v| v.as_slice()),
+        true,
+    );
+    json_field_opt_u8_array(
+        buf,
         "gauge_status1_raw",
         diag.bms.gauge_status1_raw.as_ref().map(|v| v.as_slice()),
         true,
@@ -1474,6 +1492,18 @@ fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowe
         buf,
         "chemical_id_raw",
         bms.chemical_id_raw.as_ref().map(|v| v.as_slice()),
+        true,
+    );
+    json_field_opt_u8_array(
+        buf,
+        "it_voltage_config_raw",
+        bms.it_voltage_config_raw.as_ref().map(|v| v.as_slice()),
+        true,
+    );
+    json_field_opt_u8_array(
+        buf,
+        "it_capacity_config_raw",
+        bms.it_capacity_config_raw.as_ref().map(|v| v.as_slice()),
         true,
     );
     json_field_opt_u8_array(

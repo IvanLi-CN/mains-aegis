@@ -1657,6 +1657,8 @@ mod tests {
                 qmax_pack_mah: None,
                 qmax_cell_mah: [None; 4],
                 chemical_id_raw: None,
+                it_voltage_config_raw: None,
+                it_capacity_config_raw: None,
                 gauge_status1_raw: None,
                 gauge_status2_raw: None,
                 gauge_status3_raw: None,
