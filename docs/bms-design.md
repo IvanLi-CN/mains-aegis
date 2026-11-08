@@ -537,3 +537,7 @@ LT 的 Low/Med/High 电流字段全部使用 `100mA`；STL、RT、STH、HT 的 L
 - `docs/datasheets/CLM1612P1412/`
 - `docs/datasheets/UMW_SI2305A/`
 - `docs/datasheets/UMW_AO3400A/`
+
+### 充电终止配置与学习边界
+
+`Current at EoC` 是历史状态，不是 taper 配置。项目候选 `Charge Term Taper Current` 为 120mA（DF `0x4A6D`），BQ25792 ITERM 为 80mA；BQ40 的平均电流、电压资格与判定窗口仍决定有效满充，不能用瞬时电流替代。此修正不重置 Qmax、Ra 或学习历史，也不能据此认定此前 SOC 不准的唯一原因。配置写入使用独立 taper 白名单，温度 writer 仍只写原七字段；恢复 overlay 同值，正常固件只读。操作与验收见 [维护配置说明](../tools/bq40-comm-tool/docs/operations.md) 和 [终止决策](adr/0003-charge-termination-coordination.md)。

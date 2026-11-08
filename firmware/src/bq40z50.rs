@@ -28,6 +28,7 @@ pub mod cmd {
     pub const TEMPERATURE: u8 = 0x08;
     pub const VOLTAGE: u8 = 0x09;
     pub const CURRENT: u8 = 0x0A;
+    pub const AVERAGE_CURRENT: u8 = 0x0B;
     pub const RELATIVE_STATE_OF_CHARGE: u8 = 0x0D;
     pub const REMAINING_CAPACITY: u8 = 0x0F;
     pub const FULL_CHARGE_CAPACITY: u8 = 0x10;
@@ -95,6 +96,12 @@ pub mod mac {
 
 pub mod data_flash {
     pub const UPDATE_STATUS: u16 = 0x4312;
+    pub const CHARGE_TERM_TAPER_CURRENT: u16 = 0x4A6D;
+    pub const CHARGE_TERM_VOLTAGE: u16 = 0x4A71;
+    pub const CHG_CURRENT_THRESHOLD: u16 = 0x4A8B;
+    pub const QUIT_CURRENT: u16 = 0x4A8D;
+    pub const SBS_GAUGING_CONFIGURATION: u16 = 0x4888;
+    pub const IT_GAUGING_CONFIGURATION: u16 = 0x4917;
     pub const CURRENT_AT_EOC: u16 = 0x431B;
     pub const NO_VALID_CHARGE_TERM: u16 = 0x43D0;
     pub const LAST_VALID_CHARGE_TERM: u16 = 0x43D2;

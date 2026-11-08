@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受
+已被 [ADR 0003](0003-charge-termination-coordination.md) 取代；原温度、请求与维护唤醒边界由后继决策保留。
 
 ## 背景
 

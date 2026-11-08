@@ -267,7 +267,10 @@ enum ArtifactCommand {
 
 #[derive(Debug, Subcommand)]
 enum MonitorCommand {
-    Start,
+    Start {
+        #[arg(long, value_parser = ["bq40-charge-temperature", "bq40-charge-termination"])]
+        maintenance_profile: Option<String>,
+    },
     Stop,
 }
 
@@ -964,7 +967,12 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
         ),
         DeviceCommand::Reset => ("device.reset", json!({ "device_id": device_id })),
         DeviceCommand::Monitor { command } => match command {
-            MonitorCommand::Start => ("device.monitor.start", json!({ "device_id": device_id })),
+            MonitorCommand::Start {
+                maintenance_profile,
+            } => (
+                "device.monitor.start",
+                json!({ "device_id": device_id, "maintenance_profile": maintenance_profile }),
+            ),
             MonitorCommand::Stop => ("device.monitor.stop", json!({ "device_id": device_id })),
         },
     }

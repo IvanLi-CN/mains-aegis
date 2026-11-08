@@ -113,11 +113,11 @@ min(runtime_policy_target, BQ40_ChargingCurrent/Voltage)
 
 BQ40 profile 的字段地址、编码和温度区间以 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md) 为准。
 
-activation/recovery 的 `200mA` wake 仅是维护态唤醒电流，不属于普通 UI、USB 或 backup 产品充电。它必须同时满足 BQ25792 `TS_COLD/TS_COOL/TS_WARM/TS_HOT` 全部未置位；若 BQ40 已经提供请求、温度或配置证据（即使 detail cache 发生瞬态 reset），还必须使用新鲜有效请求与 `15–45°C` 正常温度证据，wake 的 `ICHG/VREG` 取不超过请求的值；明确读到的错误配置在新的有效配置读回前持续阻断。普通产品充电已使能后，主循环每个 tick 仍会复核 BQ40 证据的新鲜度；过期时先调度立即 charger poll，由该 poll 先刷新请求再决定是否拉高 `CE`，避免有效期边界导致充电反复开关；刷新失败或证据仍无效时仍 fail-closed。boot-diagnostic auto-force 只有在尚无 BQ40 温度或配置观察时保留 JEITA fallback，观察到 BQ40 后同样受 tick 联锁。恢复完成后 charger register image 可以恢复，但 `CE` 必须保持高电平，直到下一次普通轮询重新通过温度、BQ40 请求、CurrentAtEOC、PD 和产品策略门控。
+activation/recovery 的 `200mA` wake 仅是维护态唤醒电流，不属于普通 UI、USB 或 backup 产品充电。它必须同时满足 BQ25792 `TS_COLD/TS_COOL/TS_WARM/TS_HOT` 全部未置位；若 BQ40 已经提供请求、温度或配置证据（即使 detail cache 发生瞬态 reset），还必须使用新鲜有效请求与 `15–45°C` 正常温度证据，wake 的 `ICHG/VREG` 取不超过请求的值；明确读到的错误配置在新的有效配置读回前持续阻断。普通产品充电已使能后，主循环每个 tick 仍会复核 BQ40 证据的新鲜度；过期时先调度立即 charger poll，由该 poll 先刷新请求再决定是否拉高 `CE`，避免有效期边界导致充电反复开关；刷新失败或证据仍无效时仍 fail-closed。boot-diagnostic auto-force 只有在尚无 BQ40 温度或配置观察时保留 JEITA fallback，观察到 BQ40 后同样受 tick 联锁。恢复完成后 charger register image 可以恢复，但 `CE` 必须保持高电平，直到下一次普通轮询重新通过温度、BQ40 请求、真实 taper 配置、PD 和产品策略门控。
 
 显式离线 Activation 与普通充电的电池在位条件不同：BMS 双向切断 PACK 路径后，BQ25792 看到的低 BAT 电压不能证明电芯不存在。只有手动请求、BQ40 无已知在线地址、进入允许充电的激活阶段且未超过绝对截止时间时，才允许在 `VBAT_PRESENT_STAT=0` 下施加受限唤醒源；普通充电、在线放电授权恢复和 boot-diagnostic 不获得此例外。唤醒目标上限为 `VREG=16.8V / ICHG=200mA / IINDPM=500mA`，并保持 JEITA、已观察到的 BQ40 温度/请求证据和超时联锁。`ICHG` 是寄存器目标，不是实测电流承诺：BQ25792 低于 `VBAT_SHORT` 时使用固定约 `100mA` 涓流，进入预充后按 `IPRECHG` 调节，随后才按 `ICHG` 调节。成功与否必须分别核对充电使能、PACK 电压、电流、BQ40 通信和放电路径；只写入参数不算恢复成功。
 
-启动自检中的“当前不允许充电”不能作为运行期充电模块的永久开关：BMS 离线时应立即禁充，但健康 BQ25792 的模块能力必须保留。恢复 BMS 后，普通轮询重新检验温度、SBS 请求、CurrentAtEOC 和产品策略；safe mode 或充电模块本身不可用仍保持禁充。
+启动自检中的“当前不允许充电”不能作为运行期充电模块的永久开关：BMS 离线时应立即禁充，但健康 BQ25792 的模块能力必须保留。恢复 BMS 后，普通轮询重新检验温度、SBS 请求、真实 taper 配置 和产品策略；safe mode 或充电模块本身不可用仍保持禁充。
 
 常规 BMS 轮询不得饿死前级 VIN 的周期采样：即使一次 BMS 快照占满遥测周期，也必须保留新鲜 VIN 恢复检测，让瞬态 INA 输入告警后可以按原有阈值与连续样本数恢复 DC 输入。显式激活期间的总线隔离仍保留，缓存电压不得充当恢复样本。
 
@@ -346,7 +346,7 @@ BQ25792 的温度相关寄存器集中在 `REG17/REG18/REG1F/REG24/REG2B`（见 
      - 高温段：`JEITA_ISETH=Suspend`，`TS_WARM=45°C` 后禁止充电；不使用 `VREG-400mV` 作为 45°C 以上的替代充电策略
      - `TS_IGNORE=0`
 
-BQ40/BQ25792 的完整温度 profile 与终止策略边界见 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md)。低电流模式继续使用 `ITERM=40mA`、禁用 `EN_TERM` 和现有 restart 行为；正常模式不因 T1～T6 改动而改变现有 `CurrentAtEOC` 对齐路径，但 `CurrentAtEOC` 对齐值必须严格低于最终 `ICHG`，否则保持禁充。activation/boot-diagnostic 的 `200mA` 仅是唤醒电流，明确禁用 `EN_TERM`，不继承历史 termination 值。
+BQ40/BQ25792 的完整温度 profile 与终止策略边界见 [`bq40-charge-temperature-profile/SPEC.md`](specs/bq40-charge-temperature-profile/SPEC.md)。低电流模式继续使用 `ITERM=40mA`、禁用 `EN_TERM` 和现有 restart 行为；正常模式核验 BQ40 `Charge Term Taper Current=120mA`，固定 `ITERM=80mA` 并启用 `EN_TERM`，启动爬坡期间先关闭终止。历史 `Current at EoC` 只作诊断。普通目标保持最高 500mA，不按 SOC99/HV/CV 降至 200mA。activation/boot-diagnostic 的 `200mA` 仅是唤醒电流，明确禁用 `EN_TERM`，不继承历史 termination 值。
 
 目标设备已完成 BQ40 七字段温度 profile 的显式 Data Flash 写入并恢复 canonical 固件。canonical HIL 期间 BQ40 报告 `xchg=true`、`chg_fet=false`、`chg_ready=false`，电芯最低/最高约 `3152/3870mV`，主固件因此保持禁充；这属于 BQ40 安全阻断和电芯压差问题，不是 BQ25792 JEITA 将 `100mA/500mA` 误降为零。温箱/热风枪仍需在独立硬件验证中完成，当前不能把 HIL 的常温读数当作 JEITA 全温区证明。
 
@@ -387,3 +387,7 @@ BQ40/BQ25792 的完整温度 profile 与终止策略边界见 [`bq40-charge-temp
 - 低电流终止：`ICHG=100mA` 时 `ITERM=40mA`、`EN_TERM=0`，不得因 `termination_done` 错误锁死恢复充电
 - “无电池”场景：电池拔掉后不会反复触发保护；固件能检测并保持禁充
 - OTG：无输入时 OTG 输出稳定，过流/短路保护有效
+
+### 满充与异常终止
+
+本轮有效 BQ40 VCT/FC 资格先成立后，允许充电器继续完成硬件终止；两者共同成立才进入 FULL。FC 单独出现不提前切断，但零请求与保护仍优先。若硬件先终止而资格未成立，锁存 `termination_incomplete`，禁止自动反复启动，需明确 START 且满足安全条件后重试。参数间隔和真实判定窗口必须由完整自然充电观察验收，参见 [ADR 0003](adr/0003-charge-termination-coordination.md)。

@@ -2047,6 +2047,13 @@ where
         update_status: bq40z50::read_data_flash_u8(i2c, addr, bq40z50::data_flash::UPDATE_STATUS)
             .ok()
             .flatten(),
+        charge_term_taper_ma: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::CHARGE_TERM_TAPER_CURRENT,
+        )
+        .ok()
+        .flatten(),
         current_at_eoc_ma: bq40z50::read_data_flash_u16(
             i2c,
             addr,
@@ -2118,6 +2125,13 @@ where
         gauging_status: None,
         op_status: None,
         update_status: None,
+        charge_term_taper_ma: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::CHARGE_TERM_TAPER_CURRENT,
+        )
+        .ok()
+        .flatten(),
         current_at_eoc_ma: bq40z50::read_data_flash_u16(
             i2c,
             addr,
@@ -2246,6 +2260,13 @@ where
             "UPDATE_STATUS",
             errors,
         ),
+        charge_term_taper_ma: bq40z50::read_data_flash_u16(
+            i2c,
+            addr,
+            bq40z50::data_flash::CHARGE_TERM_TAPER_CURRENT,
+        )
+        .ok()
+        .flatten(),
         current_at_eoc_ma: diag_bq40_optional(
             bq40z50::read_data_flash_u16(i2c, addr, bq40z50::data_flash::CURRENT_AT_EOC),
             "CURRENT_AT_EOC",
@@ -6026,7 +6047,16 @@ where
             "VAC2_ADC",
             &mut errors,
         );
+        let termination_ctrl = diag_i2c_u16(bq25792::read_u16(
+            &mut self.i2c,
+            bq25792::reg::TERMINATION_CONTROL,
+        ));
+        if let Some(error) = termination_ctrl.error {
+            push_diag_read_error(&mut errors, "TERMINATION_CONTROL", error);
+        }
+        let termination_ctrl = termination_ctrl.raw;
         let charger = &mut self.diag_snapshot.charger;
+        charger.iterm_ma = termination_ctrl.map(bq25792::decode_termination_current_ma);
         charger.ctrl0 = ctrl0;
         charger.ctrl2 = ctrl2;
         charger.ctrl3 = ctrl3;
@@ -6076,6 +6106,7 @@ where
         let op_status = op_status.or(lock_diag.op_status);
         let charging_status = lock_diag.charging.and_then(|charging| charging.value);
         let charging_status_trace = charging_status_trace_snapshot(lock_diag.charging);
+        let afe_balance_captured_at_ms = self.fan_now_ms();
         let afe_register = diag_bq40_optional(
             bq40z50::read_afe_register(&mut self.i2c, addr),
             "AFE_REGISTER",
@@ -6094,6 +6125,7 @@ where
         self.diag_snapshot.bms.op_status = op_status;
         self.diag_snapshot.bms.op_status_raw_len = op_status_raw_len;
         self.diag_snapshot.bms.op_status_raw_bytes = op_status_raw_bytes;
+        self.diag_snapshot.bms.afe_balance_captured_at_ms = Some(afe_balance_captured_at_ms);
         self.diag_snapshot.bms.afe_fet_status = afe_register.map(|afe| afe.fet_status);
         self.diag_snapshot.bms.afe_fet_control = afe_register.map(|afe| afe.fet_control);
         self.diag_snapshot.bms.afe_latch_status = afe_register.map(|afe| afe.latch_status);
@@ -6160,6 +6192,68 @@ where
         self.diag_snapshot.bms.charging_hv =
             bq40_mac_bit(charging_status, bq40z50::charging_status::HV);
         self.diag_snapshot.bms.update_status = lock_diag.update_status;
+        self.diag_snapshot.bms.charge_term_taper_ma = diag_bq40_optional(
+            bq40z50::read_data_flash_u16(
+                &mut self.i2c,
+                addr,
+                bq40z50::data_flash::CHARGE_TERM_TAPER_CURRENT,
+            ),
+            "CHARGE_TERM_TAPER_CURRENT",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.charge_term_voltage_mv = diag_bq40_optional(
+            bq40z50::read_data_flash_u16(
+                &mut self.i2c,
+                addr,
+                bq40z50::data_flash::CHARGE_TERM_VOLTAGE,
+            ),
+            "CHARGE_TERM_VOLTAGE",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.chg_current_threshold_ma = diag_bq40_optional(
+            bq40z50::read_data_flash_u16(
+                &mut self.i2c,
+                addr,
+                bq40z50::data_flash::CHG_CURRENT_THRESHOLD,
+            ),
+            "CHG_CURRENT_THRESHOLD",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.quit_current_ma = diag_bq40_optional(
+            bq40z50::read_data_flash_u16(&mut self.i2c, addr, bq40z50::data_flash::QUIT_CURRENT),
+            "QUIT_CURRENT",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.fet_options = diag_bq40_optional(
+            bq40z50::read_data_flash_u8(&mut self.i2c, addr, bq40z50::data_flash::FET_OPTIONS),
+            "FET_OPTIONS",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.sbs_gauging_configuration = diag_bq40_optional(
+            bq40z50::read_data_flash_u8(
+                &mut self.i2c,
+                addr,
+                bq40z50::data_flash::SBS_GAUGING_CONFIGURATION,
+            ),
+            "SBS_GAUGING_CONFIGURATION",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.it_gauging_configuration = diag_bq40_optional(
+            bq40z50::read_data_flash_u16(
+                &mut self.i2c,
+                addr,
+                bq40z50::data_flash::IT_GAUGING_CONFIGURATION,
+            ),
+            "IT_GAUGING_CONFIGURATION",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.average_current_captured_at_ms = Some(self.fan_now_ms());
+        self.diag_snapshot.bms.average_current_ma = diag_bq40_optional(
+            bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::AVERAGE_CURRENT)
+                .map(|v| Some(v as i16)),
+            "AVERAGE_CURRENT",
+            &mut errors,
+        );
         self.diag_snapshot.bms.current_at_eoc_ma = lock_diag.current_at_eoc_ma;
         self.diag_snapshot.bms.no_valid_charge_term = lock_diag.no_valid_charge_term;
         self.diag_snapshot.bms.last_valid_charge_term = lock_diag.last_valid_charge_term;
@@ -8698,6 +8792,8 @@ where
         };
         let now = Instant::now();
         let charging_active = self.current_charging_requested();
+        self.charge_policy.termination_incomplete = false;
+        self.charge_policy.bms_qualified = false;
         self.manual_charge_runtime.active = true;
         self.manual_charge_runtime.takeover = charging_active;
         self.manual_charge_runtime.loopback_override =
@@ -14068,7 +14164,12 @@ where
                         cell_max_mv,
                         charge_ready,
                         bms_recovery_charge_allowed,
-                        bms_full,
+                        bms_full: bms_full
+                            && self
+                                .bms_cached_lock_diag
+                                .and_then(|diag| diag.charging)
+                                .and_then(|charging| charging.value)
+                                .is_some_and(|raw| raw & bq40z50::charging_status::VCT != 0),
                         hv: charge_policy_hv,
                     })
                 }
@@ -14100,10 +14201,12 @@ where
                             manual_loopback_override_for_policy,
                         ),
                     telemetry: charge_policy_telemetry,
-                    charger_done: matches!(
-                        audio_charge_phase_from_chg_stat(charger_chg_stat),
-                        AudioChargePhase::Completed
-                    ),
+                    charger_done: (ctrl0 & bq25792::ctrl0::EN_TERM) != 0
+                        && iterm_ma == Some(bq25792::NORMAL_ITERM_MA)
+                        && matches!(
+                            audio_charge_phase_from_chg_stat(charger_chg_stat),
+                            AudioChargePhase::Completed
+                        ),
                     charger_taper_cv: charger_chg_stat == 4,
                 },
             ))
@@ -14294,7 +14397,9 @@ where
                 || matches!(
                     policy_state,
                     Some(
-                        ChargePolicyState::BlockedOutputOverload | ChargePolicyState::BlockedNoBms
+                        ChargePolicyState::BlockedOutputOverload
+                            | ChargePolicyState::BlockedNoBms
+                            | ChargePolicyState::TerminationIncomplete
                     )
                 );
             let preserve_manual_safety_notice = manual_charge_safety_notice_active(
@@ -14530,48 +14635,42 @@ where
         let mut applied_vbat_lowv_pct_x10: Option<u16> = None;
         let mut applied_iprechg_ma: Option<u16> = None;
         let mut applied_iterm_ma: Option<u16> = None;
-        let current_at_eoc_ma = self
+        let charge_term_taper_ma = self
             .bms_cached_lock_diag
-            .and_then(|diag| diag.current_at_eoc_ma)
-            .and_then(bq25792::valid_termination_current_ma);
+            .and_then(|diag| diag.charge_term_taper_ma);
         let termination_policy = bq25792::charge_termination_policy(
             allow_charge && !force_allow_charge && !auto_force_charge && !activation_pending,
             effective_policy_target_ichg_ma,
-            current_at_eoc_ma,
+            charge_term_taper_ma,
         );
-        if matches!(
-            termination_policy,
-            bq25792::ChargeTerminationPolicy::Blocked
-        ) && allow_charge
-            && !force_allow_charge
-            && !auto_force_charge
-            && !activation_pending
-        {
+        if let bq25792::ChargeTerminationPolicy::Blocked(reason) = termination_policy {
             allow_charge = false;
             policy_target_ichg_ma = None;
             effective_policy_target_ichg_ma = None;
             policy_target_vreg_mv = None;
             policy_status_text = "LOCK";
             policy_detail_status_text = "LOCK";
-            policy_notice_text = "bq40_current_at_eoc_unavailable";
+            policy_notice_text = reason.as_str();
         }
         let termination_policy = bq25792::charge_termination_policy(
             allow_charge && !force_allow_charge && !auto_force_charge && !activation_pending,
             effective_policy_target_ichg_ma,
-            current_at_eoc_ma,
+            charge_term_taper_ma,
         );
         let policy_low_current_charge = matches!(
             termination_policy,
             bq25792::ChargeTerminationPolicy::LowCurrent
         );
+        let policy_term_ramp_hold = matches!(
+            dcin_pressure.limit_reason,
+            DcinChargeLimitReason::StartupRamp | DcinChargeLimitReason::RecoveryHold
+        );
         let requested_policy_target_ichg_ma = policy_target_ichg_ma;
         let policy_term_target_ma = match termination_policy {
             bq25792::ChargeTerminationPolicy::LowCurrent => Some(CHARGE_POLICY_100MA_ITERM_MA),
-            bq25792::ChargeTerminationPolicy::Normal { current_at_eoc_ma } => {
-                Some(current_at_eoc_ma)
-            }
+            bq25792::ChargeTerminationPolicy::Normal { iterm_ma } => Some(iterm_ma),
             bq25792::ChargeTerminationPolicy::NotApplicable
-            | bq25792::ChargeTerminationPolicy::Blocked => None,
+            | bq25792::ChargeTerminationPolicy::Blocked(_) => None,
         };
 
         fn decode_voltage_mv(reg: u16) -> u16 {
@@ -14586,7 +14685,12 @@ where
             // Disable termination before programming the 40 mA low-current
             // setting. This prevents the charger from observing a transient
             // termination-enabled state with the low-current ITERM value.
-            if policy_low_current_charge && (applied_ctrl0 & bq25792::ctrl0::EN_TERM) != 0 {
+            if (policy_low_current_charge
+                || policy_term_ramp_hold
+                || !self.chg_enabled
+                || self.diag_snapshot.charger.ichg_ma != effective_policy_target_ichg_ma)
+                && (applied_ctrl0 & bq25792::ctrl0::EN_TERM) != 0
+            {
                 let ctrl0_without_term = applied_ctrl0 & !bq25792::ctrl0::EN_TERM;
                 match bq25792::write_u8(
                     &mut self.i2c,
@@ -14752,6 +14856,35 @@ where
                 }
             }
 
+            if !force_allow_charge && !auto_force_charge && !activation_pending {
+                if let Some(target_ichg_ma) = effective_policy_target_ichg_ma {
+                    let target_vreg_mv = policy_target_vreg_mv.unwrap_or(CHARGE_POLICY_VREG_MV);
+                    match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, target_vreg_mv) {
+                        Ok(v) => applied_vreg_mv = Some(decode_voltage_mv(v)),
+                        Err(e) => {
+                            self.mark_charger_poll_failed(now);
+                            defmt::error!(
+                                "charger: bq25792 err stage=vreg_write err={}",
+                                i2c_error_kind(e)
+                            );
+                            return;
+                        }
+                    }
+
+                    match bq25792::set_charge_current_limit_ma(&mut self.i2c, target_ichg_ma) {
+                        Ok(v) => applied_ichg_ma = Some(decode_cur_ma(v)),
+                        Err(e) => {
+                            self.mark_charger_poll_failed(now);
+                            defmt::error!(
+                                "charger: bq25792 err stage=ichg_write err={}",
+                                i2c_error_kind(e)
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+
             // Charge is enabled only when both `EN_CHG=1` and `CE=LOW`.
             let mut desired_ctrl0 = (ctrl0 | bq25792::ctrl0::EN_CHG) & !bq25792::ctrl0::EN_HIZ;
             if force_allow_charge || auto_force_charge || activation_pending {
@@ -14759,7 +14892,7 @@ where
                 // state, not product taper. Do not inherit a stale or
                 // oversized ITERM value and terminate the wake prematurely.
                 desired_ctrl0 &= !bq25792::ctrl0::EN_TERM;
-            } else if policy_low_current_charge {
+            } else if policy_low_current_charge || policy_term_ramp_hold {
                 desired_ctrl0 &= !bq25792::ctrl0::EN_TERM;
             } else {
                 desired_ctrl0 |= bq25792::ctrl0::EN_TERM;
@@ -14808,31 +14941,38 @@ where
                 }
             }
 
-            if !force_allow_charge && !auto_force_charge && !activation_pending {
-                if let Some(target_ichg_ma) = effective_policy_target_ichg_ma {
-                    let target_vreg_mv = policy_target_vreg_mv.unwrap_or(CHARGE_POLICY_VREG_MV);
-                    match bq25792::set_charge_voltage_limit_mv(&mut self.i2c, target_vreg_mv) {
-                        Ok(v) => applied_vreg_mv = Some(decode_voltage_mv(v)),
-                        Err(e) => {
-                            self.mark_charger_poll_failed(now);
-                            defmt::error!(
-                                "charger: bq25792 err stage=vreg_write err={}",
-                                i2c_error_kind(e)
-                            );
-                            return;
-                        }
+            if let Some(expected_iterm_ma) = policy_term_target_ma {
+                let readback = bq25792::read_u8(&mut self.i2c, bq25792::reg::CHARGER_CONTROL_0)
+                    .and_then(|actual_ctrl0| {
+                        bq25792::read_u16(&mut self.i2c, bq25792::reg::TERMINATION_CONTROL)
+                            .map(|raw| (actual_ctrl0, bq25792::decode_termination_current_ma(raw)))
+                    });
+                match readback {
+                    Ok((actual_ctrl0, actual_iterm_ma))
+                        if bq25792::termination_registers_match(
+                            actual_ctrl0,
+                            desired_ctrl0,
+                            actual_iterm_ma,
+                            expected_iterm_ma,
+                        ) =>
+                    {
+                        applied_ctrl0 = actual_ctrl0;
+                        applied_iterm_ma = Some(actual_iterm_ma);
                     }
-
-                    match bq25792::set_charge_current_limit_ma(&mut self.i2c, target_ichg_ma) {
-                        Ok(v) => applied_ichg_ma = Some(decode_cur_ma(v)),
-                        Err(e) => {
-                            self.mark_charger_poll_failed(now);
-                            defmt::error!(
-                                "charger: bq25792 err stage=ichg_write err={}",
-                                i2c_error_kind(e)
-                            );
-                            return;
-                        }
+                    Ok(_) => {
+                        self.mark_charger_poll_failed(now);
+                        self.diag_snapshot.policy.notice = "charger_termination_register_conflict";
+                        defmt::error!("charger: bq25792 err stage=termination_register_conflict");
+                        return;
+                    }
+                    Err(e) => {
+                        self.mark_charger_poll_failed(now);
+                        self.diag_snapshot.policy.notice = "charger_termination_readback_failed";
+                        defmt::error!(
+                            "charger: bq25792 err stage=termination_readback err={}",
+                            i2c_error_kind(e)
+                        );
+                        return;
                     }
                 }
             }
@@ -15852,6 +15992,16 @@ where
             charging_suspend: bq40_mac_bit(charging_status, bq40z50::charging_status::SU),
             charging_hv: bq40_mac_bit(charging_status, bq40z50::charging_status::HV),
             update_status: lock_diag.and_then(|diag| diag.update_status),
+            charge_term_taper_ma: lock_diag.and_then(|diag| diag.charge_term_taper_ma),
+            charge_term_voltage_mv: None,
+            chg_current_threshold_ma: None,
+            quit_current_ma: None,
+            fet_options: None,
+            sbs_gauging_configuration: None,
+            it_gauging_configuration: None,
+            average_current_ma: None,
+            average_current_captured_at_ms: None,
+            afe_balance_captured_at_ms: None,
             current_at_eoc_ma: lock_diag.and_then(|diag| diag.current_at_eoc_ma),
             no_valid_charge_term: lock_diag.and_then(|diag| diag.no_valid_charge_term),
             last_valid_charge_term: lock_diag.and_then(|diag| diag.last_valid_charge_term),
@@ -16106,6 +16256,10 @@ where
         } else {
             None
         };
+        let fresh_charging = bq40z50::read_charging_status_trace(&mut self.i2c, addr).ok();
+        if let Some(diag) = self.bms_cached_lock_diag.as_mut() {
+            diag.charging = fresh_charging;
+        }
         Ok(Bq40z50Snapshot {
             battery_mode,
             temp_k_x10,
@@ -16351,6 +16505,7 @@ struct Bq40LockDiagSnapshot {
     gauging_status: Option<u32>,
     op_status: Option<u32>,
     update_status: Option<u8>,
+    charge_term_taper_ma: Option<u16>,
     current_at_eoc_ma: Option<u16>,
     no_valid_charge_term: Option<u16>,
     last_valid_charge_term: Option<u16>,

@@ -53,3 +53,7 @@ After an authorized hardware apply, retain the machine-readable `summary.json` e
 `writes=7`, `identity_verified=true`, `full_access_verified=true`, one 32-byte pre-write block,
 one 32-byte post-write block, and all seven verified field names. Reflash canonical firmware
 after the maintenance image and confirm the bound device identity before any runtime HIL.
+
+## 独立充电终止 profile
+
+`bq40-charge-termination` 与温度 profile 分离。唯一字段为 `Charge Term Taper Current`（`0x4A6D`，两字节 little-endian `78 00`，120mA），包含块为 `0x4A60`、32 字节。温度 profile 仍只有原七字段。恢复 `asset-df-mainboard` overlay 使用同一 taper，原厂二进制不变。构建、应用和验证步骤见 [operations.md](operations.md#充电终止配置)。

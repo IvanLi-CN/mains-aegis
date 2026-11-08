@@ -33,6 +33,7 @@ This folder stores project documentation and offline-renderable datasheets.
 - Speaker cue previews (status/warning/error): `docs/audio-cues-preview/README.md`
 - Marketing product render, social preview, and poster assets: `docs/marketing/mains-aegis/README.md`
 - ESP32-S3 GPIO assignment: `docs/hardware-selection/esp32-s3-fh4r2-gpio.md`
+- Investigation reports: [reports/README.md](reports/README.md)
 - Solutions index: `docs/solutions/README.md`
 
 ## UI docs

@@ -81,15 +81,20 @@ host-test:
 firmware-host-test:
     cd firmware && bash scripts/run-host-unit-tests.sh
 
-# Run the host-only BQ40 charge-temperature writer contract tests.
+# Run both independent BQ40 Data Flash writer contracts.
 bq40-charge-profile-test:
-    rustc --edition=2021 --test tools/bq40-comm-tool/firmware/src/charge_profile.rs -o /tmp/mains-aegis-bq40-charge-profile-test
+    rustc --edition=2021 --test tools/bq40-comm-tool/firmware/src/profile_tests.rs -o /tmp/mains-aegis-bq40-charge-profile-test
     /tmp/mains-aegis-bq40-charge-profile-test
     cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-rom-recover-disable,bms-charge-temperature-profile,bms-charge-temperature-apply
+    cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-rom-recover-disable,bms-charge-termination-apply
     cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-rom-recover-force
     cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-df-repair-afe-default
     cd tools/bq40-comm-tool/firmware && cargo +esp check --features bms-rom-repair-asset-df-mainboard
     bash tools/bq40-comm-tool/bin/profile-contract-test.sh
+
+# Build the explicitly armed taper-only maintenance image; does not flash.
+bq40-termination-artifact:
+    bash tools/bq40-comm-tool/bin/build.sh --action apply-df --recover never --repair-profile bq40-charge-termination
 
 # Run deterministic read-only HIL decoder contract tests without hardware.
 hil-diag-snapshot-test:

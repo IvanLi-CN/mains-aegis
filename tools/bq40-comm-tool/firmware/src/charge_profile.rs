@@ -104,10 +104,10 @@ pub struct FieldVerification {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ApplyReport {
+pub struct ApplyReport<const N: usize = FIELD_COUNT> {
     pub snapshot: BlockSnapshot,
     pub final_snapshot: BlockSnapshot,
-    pub field_verifications: [FieldVerification; FIELD_COUNT],
+    pub field_verifications: [FieldVerification; N],
     pub writes: u8,
 }
 
@@ -172,7 +172,15 @@ impl<E: Copy> ApplyError<E> {
 }
 
 pub fn apply_profile<T: Transport>(transport: &mut T) -> Result<ApplyReport, ApplyError<T::Error>> {
-    let snapshot = match transport.read_block(CONTAINING_BLOCK_ADDRESS) {
+    apply_definition(transport, CONTAINING_BLOCK_ADDRESS, FIELDS)
+}
+
+pub(crate) fn apply_definition<T: Transport, const N: usize>(
+    transport: &mut T,
+    block_address: u16,
+    fields: [Field; N],
+) -> Result<ApplyReport<N>, ApplyError<T::Error>> {
+    let snapshot = match transport.read_block(block_address) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             return Err(ApplyError::new(
@@ -181,7 +189,7 @@ pub fn apply_profile<T: Transport>(transport: &mut T) -> Result<ApplyReport, App
             ));
         }
     };
-    if snapshot.address != CONTAINING_BLOCK_ADDRESS {
+    if snapshot.address != block_address {
         return Err(ApplyError::new(
             ApplyErrorKind::SnapshotAddress,
             Some(snapshot),
@@ -202,8 +210,8 @@ pub fn apply_profile<T: Transport>(transport: &mut T) -> Result<ApplyReport, App
         payload_len: 0,
         raw: [0, 0],
         decoded: 0,
-    }; FIELD_COUNT];
-    for (index, field) in FIELDS.into_iter().enumerate() {
+    }; N];
+    for (index, field) in fields.into_iter().enumerate() {
         let echoed = match transport.write_field(field.address, field.raw) {
             Ok(echoed) => echoed,
             Err(error) => {
@@ -237,7 +245,7 @@ pub fn apply_profile<T: Transport>(transport: &mut T) -> Result<ApplyReport, App
         writes = writes.saturating_add(1);
     }
 
-    let final_snapshot = match transport.read_block(CONTAINING_BLOCK_ADDRESS) {
+    let final_snapshot = match transport.read_block(block_address) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             return Err(ApplyError::new(
@@ -246,7 +254,7 @@ pub fn apply_profile<T: Transport>(transport: &mut T) -> Result<ApplyReport, App
             ));
         }
     };
-    if final_snapshot.address != CONTAINING_BLOCK_ADDRESS {
+    if final_snapshot.address != block_address {
         return Err(ApplyError::new(
             ApplyErrorKind::FinalAddress,
             Some(snapshot),
@@ -263,7 +271,7 @@ pub fn apply_profile<T: Transport>(transport: &mut T) -> Result<ApplyReport, App
         .zip(final_snapshot.payload.iter())
         .enumerate()
     {
-        let expected = FIELDS.iter().find_map(|field| {
+        let expected = fields.iter().find_map(|field| {
             let offset = field.offset as usize;
             match index.checked_sub(offset) {
                 Some(0) => Some(field.raw[0]),
@@ -275,7 +283,7 @@ pub fn apply_profile<T: Transport>(transport: &mut T) -> Result<ApplyReport, App
             return Err(ApplyError::new(ApplyErrorKind::FinalRaw, Some(snapshot)));
         }
     }
-    for field in FIELDS {
+    for field in fields {
         let offset = field.offset as usize;
         if final_snapshot.payload[offset..offset + 2] != field.raw {
             return Err(ApplyError::new(ApplyErrorKind::FinalRaw, Some(snapshot)));

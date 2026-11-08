@@ -787,6 +787,14 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
     );
     json_field_opt_u16(buf, "iprechg_ma", diag.charger.iprechg_ma, true);
     json_field_opt_u16(buf, "iterm_ma", diag.charger.iterm_ma, true);
+    json_field_opt_bool(
+        buf,
+        "en_term",
+        diag.charger
+            .ctrl0
+            .map(|raw| raw & crate::bq25792::ctrl0::EN_TERM != 0),
+        true,
+    );
     json_field_str(buf, "chg_stat", diag.charger.chg_stat, true);
     json_field_str(buf, "vbus_stat", diag.charger.vbus_stat, true);
     json_field_str(buf, "ico_stat", diag.charger.ico_stat, true);
@@ -964,6 +972,51 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
     json_field_opt_bool(buf, "charging_suspend", diag.bms.charging_suspend, true);
     json_field_opt_bool(buf, "charging_hv", diag.bms.charging_hv, true);
     json_field_opt_u8(buf, "update_status", diag.bms.update_status, true);
+    json_field_opt_u16(
+        buf,
+        "charge_term_taper_ma",
+        diag.bms.charge_term_taper_ma,
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "charge_term_voltage_mv",
+        diag.bms.charge_term_voltage_mv,
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "chg_current_threshold_ma",
+        diag.bms.chg_current_threshold_ma,
+        true,
+    );
+    json_field_opt_u16(buf, "quit_current_ma", diag.bms.quit_current_ma, true);
+    json_field_opt_u8(buf, "fet_options", diag.bms.fet_options, true);
+    json_field_opt_u8(
+        buf,
+        "sbs_gauging_configuration",
+        diag.bms.sbs_gauging_configuration,
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "it_gauging_configuration",
+        diag.bms.it_gauging_configuration,
+        true,
+    );
+    json_field_opt_i16(buf, "average_current_ma", diag.bms.average_current_ma, true);
+    json_field_opt_u64(
+        buf,
+        "average_current_captured_at_ms",
+        diag.bms.average_current_captured_at_ms,
+        true,
+    );
+    json_field_opt_u64(
+        buf,
+        "afe_balance_captured_at_ms",
+        diag.bms.afe_balance_captured_at_ms,
+        true,
+    );
     json_field_opt_u16(buf, "current_at_eoc_ma", diag.bms.current_at_eoc_ma, true);
     json_field_opt_u16(
         buf,
@@ -1333,6 +1386,46 @@ fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowe
     json_field_opt_bool(buf, "charging_suspend", bms.charging_suspend, true);
     json_field_opt_bool(buf, "charging_hv", bms.charging_hv, true);
     json_field_opt_u8(buf, "update_status", bms.update_status, true);
+    json_field_opt_u16(buf, "charge_term_taper_ma", bms.charge_term_taper_ma, true);
+    json_field_opt_u16(
+        buf,
+        "charge_term_voltage_mv",
+        bms.charge_term_voltage_mv,
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "chg_current_threshold_ma",
+        bms.chg_current_threshold_ma,
+        true,
+    );
+    json_field_opt_u16(buf, "quit_current_ma", bms.quit_current_ma, true);
+    json_field_opt_u8(buf, "fet_options", bms.fet_options, true);
+    json_field_opt_u8(
+        buf,
+        "sbs_gauging_configuration",
+        bms.sbs_gauging_configuration,
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "it_gauging_configuration",
+        bms.it_gauging_configuration,
+        true,
+    );
+    json_field_opt_i16(buf, "average_current_ma", bms.average_current_ma, true);
+    json_field_opt_u64(
+        buf,
+        "average_current_captured_at_ms",
+        bms.average_current_captured_at_ms,
+        true,
+    );
+    json_field_opt_u64(
+        buf,
+        "afe_balance_captured_at_ms",
+        bms.afe_balance_captured_at_ms,
+        true,
+    );
     json_field_opt_u16(buf, "current_at_eoc_ma", bms.current_at_eoc_ma, true);
     json_field_opt_u16(buf, "no_valid_charge_term", bms.no_valid_charge_term, true);
     json_field_opt_u16(

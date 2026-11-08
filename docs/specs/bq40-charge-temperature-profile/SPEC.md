@@ -46,7 +46,7 @@
 
 - The main firmware MUST treat the BQ40 `ChargingCurrent()` and `ChargingVoltage()` values as temperature-policy upper bounds and MUST refresh them at least once per second when charging.
 - The BQ25792 target MUST be no greater than both the runtime policy target and the BQ40 request. A read failure, zero, invalid, or stale BQ40 request MUST produce an explicit no-charge state.
-- In the `100mA` mode, BQ25792 `ITERM` MUST be `40mA` and `EN_TERM` MUST remain disabled according to the existing low-current recovery behavior. Normal-mode termination policy MUST remain the existing BQ40 `CurrentAtEOC`-aligned path and is not part of the T1–T6 profile; an aligned `CurrentAtEOC` value MUST be strictly below the final runtime `ICHG`, otherwise normal charging MUST fail closed. Activation/boot-diagnostic wake charging MUST keep `EN_TERM` disabled because its `200mA` target is a maintenance wake state, not product taper.
+- In the `100mA` mode, BQ25792 `ITERM` MUST be `40mA` and `EN_TERM` MUST remain disabled according to the existing low-current recovery behavior. Normal charging MUST use BQ25792 `ITERM=80mA` only after verifying the real BQ40 `Charge Term Taper Current=120mA`; historical `CurrentAtEOC` MUST NOT select ITERM. This termination profile is independent of the T1–T6 seven-field writer; missing or incompatible configuration MUST fail closed. Activation/boot-diagnostic wake charging MUST keep `EN_TERM` disabled because its `200mA` target is a maintenance wake state, not product taper.
 - BQ25792 low-temperature JEITA MUST not apply a second current multiplier; `JEITA_ISETC` is `100%` because BQ40 already requests `100mA`. `TS_COOL=15°C`, `TS_WARM=45°C`, `TS_IGNORE=0`, and high-temperature JEITA behavior MUST suspend charging.
 - Activation/recovery wake charging is a separate maintenance state, not a product-charge override. Its fixed wake target MUST require the BQ25792 JEITA normal `15–45°C` window. A manually requested offline `Activation`, with no known BQ40 address, MAY enable the bounded wake profile while `VBAT_PRESENT_STAT=0`, but only during its charge-enabled phase and before its absolute deadline. A BMS-isolated PACK terminal can read low even when the cells are installed; `VBAT_PRESENT_STAT=0` MUST NOT by itself block this wake or imply missing cells. Ordinary charging, online discharge-authorization recovery and automatic boot-diagnostic charging MUST retain their existing battery-path gate. The wake limits are `VREG<=16800mV`, `ICHG<=200mA`, `IINDPM=500mA`, with `EN_TERM=0`; the BQ25792 still selects its own low-voltage trickle/precharge stages, so `ICHG=200mA` does not promise 200mA measured battery current. If any BQ40 request value has been observed, including zero or invalid values, or any temperature observation exists, the wake state MUST additionally require a fresh valid request and fresh normal-band BQ40 temperature evidence; a read failure after an observed request MUST remain a no-charge condition. When a request exists, the wake current and voltage MUST be clamped to it. After activation, restoring the saved charger registers MUST leave `CE` high until an ordinary poll re-evaluates the full product-charge gate. A boot-time BMS-missing decision MUST inhibit that moment’s charging, not permanently disable an otherwise reachable charger module; after BMS recovery, ordinary polling MUST be able to evaluate the complete product gate again. Firmware safe mode and an unavailable charger module MUST remain disabled.
 - covers: `VER-BQ40-CTP-004`
@@ -122,7 +122,7 @@
 
 ## Related ADRs
 
-- [`../../adr/0002-bq40-charge-temperature-profile.md`](../../adr/0002-bq40-charge-temperature-profile.md)
+- [`../../adr/0003-charge-termination-coordination.md`](../../adr/0003-charge-termination-coordination.md)
 
 ## Visual Evidence
 
@@ -132,7 +132,7 @@
 
 - `./IMPLEMENTATION.md`
 - `./HISTORY.md`
-- `../../adr/0002-bq40-charge-temperature-profile.md`
+- `../../adr/0003-charge-termination-coordination.md`
 - `../../../tools/bq40-comm-tool/docs/README.md`
 - `../../bms-design.md`
 - `../../charger-design.md`

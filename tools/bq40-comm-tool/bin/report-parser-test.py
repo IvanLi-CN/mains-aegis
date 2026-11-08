@@ -341,6 +341,7 @@ def run_parser(
     rom_image: str | None = None,
     force_min_charge: str | None = None,
     include_provenance: bool = True,
+    repair_profile: str = "bq40-charge-temperature",
 ) -> subprocess.CompletedProcess[str]:
     monitor = root / "monitor.jsonl"
     report = root / "report"
@@ -357,7 +358,7 @@ def run_parser(
         "--monitor-file",
         str(monitor),
         "--repair-profile",
-        "bq40-charge-temperature",
+        repair_profile,
         "--report-out",
         str(report),
     ]
@@ -378,8 +379,36 @@ def run_parser(
     )
 
 
+def termination_log() -> list[str]:
+    lines = []
+    for line in successful_log():
+        entry = json.loads(line)
+        text = entry["text"].replace("bq40_charge_temperature", "bq40_charge_termination")
+        if "stage=field_verify" in text:
+            continue
+        if "stage=final_after_hex" in text:
+            payload = bytearray([0xA5] * 32)
+            payload[13:15] = bytes((120, 0))
+            text = text[:text.index("b0=")] + " ".join(f"b{i}=0x{v:02x}" for i, v in enumerate(payload))
+        if "stage=done" in text:
+            lines.append(log("bms_df_apply: addr=0xb profile=bq40_charge_termination stage=field_verify field=charge_term_taper_current df_addr=0x4a6d declared_len=32 payload_len=32 raw_lo=0x78 raw_hi=0x0 decoded=0x78"))
+            text = text.replace("fields=7", "fields=1").replace("0x4a00", "0x4a60")
+        entry["text"] = text
+        lines.append(json.dumps(entry))
+    return lines
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="mains-aegis-report-parser-") as temp:
+        root = Path(temp)
+        passed = run_parser(termination_log(), root, repair_profile="bq40-charge-termination")
+        assert passed.returncode == 0, passed.stdout + passed.stderr
+        wrong_profile = run_parser(successful_log(), root, repair_profile="bq40-charge-termination")
+        assert wrong_profile.returncode == 20
+        mixed = termination_log() + [log("bms_df_apply: addr=0xb profile=bq40_charge_temperature stage=halt reason=complete charger_enabled=false")]
+        assert run_parser(mixed, root, repair_profile="bq40-charge-termination").returncode == 20
+        collateral = [line.replace("b0=0xa5", "b0=0xa6") if "final_after_hex" in line else line for line in termination_log()]
+        assert run_parser(collateral, root, repair_profile="bq40-charge-termination").returncode == 20
         root = Path(temp)
         good = run_parser(
             successful_log(),

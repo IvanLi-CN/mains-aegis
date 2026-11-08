@@ -2025,7 +2025,12 @@ async fn dispatch_ipc_request(
             let id = require_param(&params, "device_id")?;
             json_result(
                 monitor_start(
-                    Query(MonitorStartQuery::default()),
+                    Query(MonitorStartQuery {
+                        maintenance_profile: params
+                            .get("maintenance_profile")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                    }),
                     State(state.clone()),
                     Path(id),
                 )
@@ -6055,7 +6060,7 @@ async fn monitor_start(
     ensure_bound_device_record(&state, &id)?;
     let allow_unverified_maintenance = match query.maintenance_profile.as_deref() {
         None => false,
-        Some("bq40-charge-temperature") => true,
+        Some("bq40-charge-temperature" | "bq40-charge-termination") => true,
         Some(profile) => {
             return Err(HttpError::non_retryable(
                 "maintenance_profile_unsupported",
@@ -6074,16 +6079,15 @@ async fn monitor_start(
                 .selected_artifact_id
                 .as_ref()
                 .and_then(|artifact_id| guard.artifacts.get(artifact_id));
-            let is_charge_temperature_maintenance = selected_artifact.is_some_and(|artifact| {
-                artifact
-                    .features
-                    .iter()
-                    .any(|feature| feature == "bms-charge-temperature-apply")
-            });
-            if !is_charge_temperature_maintenance {
+            if !selected_artifact.is_some_and(|artifact| {
+                maintenance_profile_features_allowed(
+                    query.maintenance_profile.as_deref().unwrap_or_default(),
+                    &artifact.features,
+                )
+            }) {
                 return Err(HttpError::non_retryable(
                     "maintenance_artifact_required",
-                    "bq40-charge-temperature monitor mode requires the selected maintenance artifact",
+                    "BQ40 maintenance monitor mode requires the selected maintenance artifact",
                 ));
             }
         }
@@ -6096,7 +6100,7 @@ async fn monitor_start(
     if !maintenance_profile_transport_allowed(allow_unverified_maintenance, &transport) {
         return Err(HttpError::non_retryable(
             "maintenance_profile_transport_unsupported",
-            "bq40-charge-temperature monitor mode requires a native serial device",
+            "BQ40 maintenance monitor mode requires a native serial device",
         ));
     }
     let sample = if matches!(transport, DeviceTransport::NativeSerial) {
@@ -6157,6 +6161,16 @@ async fn monitor_start(
     Ok(Json(
         json!({"ok": true, "log_decode": decode, "trace_count": trace_count, "log_count": log_count, "initial_trace_count": sample.trace_count, "initial_log_count": sample.log_count, "already_running": sample.already_running}),
     ))
+}
+
+fn maintenance_profile_features_allowed(profile: &str, features: &[String]) -> bool {
+    let temperature = features.iter().any(|f| f == "bms-charge-temperature-apply");
+    let termination = features.iter().any(|f| f == "bms-charge-termination-apply");
+    match profile {
+        "bq40-charge-temperature" => temperature && !termination,
+        "bq40-charge-termination" => termination && !temperature,
+        _ => false,
+    }
 }
 
 fn maintenance_profile_transport_allowed(
@@ -11033,10 +11047,9 @@ fn load_native_monitor_defmt_table(
             device.identity.is_none(),
         )
     };
-    let is_charge_temperature_maintenance = artifact
-        .features
-        .iter()
-        .any(|feature| feature == "bms-charge-temperature-apply");
+    let is_charge_temperature_maintenance = artifact.features.iter().any(|feature| {
+        feature == "bms-charge-temperature-apply" || feature == "bms-charge-termination-apply"
+    });
     if !identity_verified
         && !(allow_unverified_maintenance && identity_absent && is_charge_temperature_maintenance)
     {
@@ -13050,6 +13063,38 @@ mod tests {
         assert_eq!(response.0["already_running"], true);
         assert_eq!(response.0["initial_trace_count"], 1);
         assert_eq!(response.0["initial_log_count"], 1);
+    }
+
+    #[test]
+    fn maintenance_profile_requires_exact_unambiguous_writer() {
+        let temp = vec!["bms-charge-temperature-apply".to_string()];
+        let term = vec!["bms-charge-termination-apply".to_string()];
+        let both = [temp.clone(), term.clone()].concat();
+        assert!(maintenance_profile_features_allowed(
+            "bq40-charge-termination",
+            &term
+        ));
+        assert!(maintenance_profile_features_allowed(
+            "bq40-charge-temperature",
+            &temp
+        ));
+        assert!(!maintenance_profile_features_allowed(
+            "bq40-charge-termination",
+            &temp
+        ));
+        assert!(!maintenance_profile_features_allowed(
+            "bq40-charge-temperature",
+            &term
+        ));
+        assert!(!maintenance_profile_features_allowed(
+            "bq40-charge-termination",
+            &both
+        ));
+        assert!(!maintenance_profile_features_allowed("unknown", &term));
+        assert!(!maintenance_profile_features_allowed(
+            "bq40-charge-termination",
+            &[]
+        ));
     }
 
     #[test]
