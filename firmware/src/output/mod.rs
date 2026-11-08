@@ -14266,6 +14266,8 @@ where
             .or(detected_input_source);
         let usb_c_path_present =
             ac1_present || matches!(self.usb_pd_state.vbus_present, Some(true));
+        let usb_c_input_voltage_present =
+            raw_vac1_adc_mv.is_some_and(|mv| mv >= USB_C_NON_PD_MIN_VBUS_MV);
         let usb_pd_charge_gate_path_present =
             usb_pd_charge_gate_path_present(input_source, usb_c_path_present);
         let usb_pd_unsafe_latched = usb_pd_runtime_unsafe_source_latched(
@@ -14311,20 +14313,22 @@ where
         let manual_loopback_override_for_policy = self.manual_charge_runtime.active
             && self.manual_charge_runtime.loopback_override
             && self.manual_charge_runtime.loopback_override_mode == Some(self.ui_snapshot.mode);
-        let requested_acdrv_path = if self.input_gate.cutoff {
-            bq25792::RequestedAcdrvPath::Disabled
-        } else {
-            match input_source {
-                Some(DashboardInputSource::DcIn) if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
-                Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
-                    if ac1_present || vbus_present =>
-                {
-                    bq25792::RequestedAcdrvPath::Ac1
-                }
-                _ if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
-                _ if ac1_present || vbus_present => bq25792::RequestedAcdrvPath::Ac1,
-                _ => bq25792::RequestedAcdrvPath::Disabled,
+        // The pre-TPS VIN gate protects the DCIN/output path. It must not
+        // disable the independent USB-C AC1 input path when DCIN is absent.
+        let requested_acdrv_path = match input_source {
+            Some(DashboardInputSource::DcIn) if ac2_present && !self.input_gate.cutoff => {
+                bq25792::RequestedAcdrvPath::Ac2
             }
+            Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
+                if ac1_present || vbus_present || usb_c_input_voltage_present =>
+            {
+                bq25792::RequestedAcdrvPath::Ac1
+            }
+            _ if ac2_present && !self.input_gate.cutoff => bq25792::RequestedAcdrvPath::Ac2,
+            _ if ac1_present || vbus_present || usb_c_input_voltage_present => {
+                bq25792::RequestedAcdrvPath::Ac1
+            }
+            _ => bq25792::RequestedAcdrvPath::Disabled,
         };
         let acdrv_state = match bq25792::set_acdrv_path(&mut self.i2c, requested_acdrv_path) {
             Ok(state) => state,
