@@ -18,7 +18,7 @@ device_id="${BQ40_TOOL_DEVICE_ID:-}"
 
 usage() {
   cat <<USAGE
-Usage: $(basename "$0") [--duration-sec N] [--output PATH] [--after-flash true|false] [--reset-on-attach true|false] [--maintenance-profile bq40-charge-temperature|bq40-charge-termination] [--initial-stdout-timeout-sec N]
+Usage: $(basename "$0") [--duration-sec N] [--output PATH] [--after-flash true|false] [--reset-on-attach true|false] [--maintenance-profile bq40-charge-temperature|bq40-charge-termination|bq40-capacity-model] [--initial-stdout-timeout-sec N]
 USAGE
 }
 
@@ -98,7 +98,7 @@ case "$reset_on_attach" in
 esac
 
 case "$maintenance_profile" in
-  ""|bq40-charge-temperature|bq40-charge-termination) ;;
+  ""|bq40-charge-temperature|bq40-charge-termination|bq40-capacity-model) ;;
   *)
     echo "Invalid --maintenance-profile: $maintenance_profile" >&2
     exit 6

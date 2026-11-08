@@ -46,8 +46,14 @@ CLI 的 device charge start|stop 映射既有 control.manual_charge IPC，以执
 
 `bq40.charge` 提供不含 DF 与历史读取的独立实时观测包，供每两秒采样使用；完整配置在采样前后单独读回，两个包的时间和错误不混用。
 
-实机候选 adb8d0c9 在约 500mA 充电时触发 OC 容量过充保护，未到 VCT/FC 与硬件正常终止；连续充电窗口不足 10 分钟，A3/A4 未通过。已明确 STOP，不修改保护与学习数据。配置和本地检查通过不构成经验验收通过，PR 保持 Draft；详见[分析报告](../../reports/charge-cycling-analysis.md#修正候选的实机结果)。
+实机候选 adb8d0c9 在约 500mA 充电时触发 OC 容量过充保护，未到 VCT/FC 与硬件正常终止；连续充电窗口不足 10 分钟，A3/A4 未通过。已明确 STOP，不修改保护与学习数据。配置和本地检查通过不构成经验验收通过；详见[分析报告](../../reports/charge-cycling-analysis.md#修正候选的实机结果)。
 
 为核验容量保护证据，bq40.core 增加同轮 BatteryMode、RemainingCapacity 与 FullChargeCapacity 原值及由模式解码的单位；不改写容量模式、保护或学习数据。单位读取失败保持未知。
 
 只读容量诊断进一步读取真实 OC 阈值/恢复、DesignCapacity、Qmax、ChemicalID 原始负载、GaugeStatus1/2/3，以及 IT 仿真截止电压、负载选择/模式与预留容量。每项缺失保持空值与错误，不作为 DF 写入入口；制造包在停充时单独采集。最终候选 7893fcad 连续三轮确认 TrueRemQ=3042mAh、TrueFCCQ=2624mAh、OC=300mAh，DesignCapacity=4400mAh、IT Term Voltage=9000mV 与项目配置资格未对齐。GaugeStatus3 严格长度校验失败，未将包判为完整成功；详见[容量过充诊断及边界](../../reports/bq40-oc-diagnosis.md)。
+
+## 验收阶段与后续工作
+
+主人明确将 A3/A4 改为合并后验收；原 OC 中断与未通过记录保留，不作为通过证据。合并前继续要求代码回归、配置 writer/parser 合同、配置应用证据、CI 与 Tier 4 独立审查。合并后观察必须绑定实际 merge SHA 及对应固件；在完整充电过程通过前，120mA/80mA 仍是候选组合。GaugeStatus3 读取失败和 blocked_no_bms 原因映射留待合并后排查，不清保护或自动 START。
+
+容量 profile 已仅对 DesignCapacity=5000mAh、IT Term Voltage=11200mV 定向应用，恢复既有正常固件后独立读回通过；完整成功审计是目标值的重复应用，不能替代首次写入的缺失证据，详见[配置应用记录](../../reports/bq40-capacity-configuration-application.md)。

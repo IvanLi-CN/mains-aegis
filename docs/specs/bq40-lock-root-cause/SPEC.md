@@ -57,11 +57,15 @@ ChgCurrentThreshold=50mA、QuitCurrent=10mA、CHGFET=0、RSOCL=1、CSYNC=1 MUST 
 
 ### VER-BQ40-TERM-003
 
+- Acceptance phase: `post_merge`（计划 A3 的充电稳定性观察）；配置应用证据仍在合并前审核。
+
 - covers: `REQ-BQ40-TERM-004`, `REQ-BQ40-TERM-005`
 - Method: 最终候选固件上每 2 秒一轮、连续 10 分钟；保存绑定身份、候选 SHA、配置前后块、fresh 电流、平均电流、均衡与安全状态。
 - Pass condition: taper 读回 120mA，稳定普通阶段 ITERM=80mA 且 EN_TERM=1；无无法解释的大幅跳变。未出现 mask 必须标注未覆盖，不强制开启均衡。
 
 ### VER-BQ40-TERM-004
+
+- Acceptance phase: `post_merge`（计划 A4）。
 
 - covers: `REQ-BQ40-TERM-002`, `REQ-BQ40-TERM-003`
 - Method: 同一最终候选自然充电至终止，最长观察 12 小时，再持续观察 10 分钟。

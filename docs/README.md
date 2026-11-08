@@ -4,6 +4,9 @@ This folder stores project documentation and offline-renderable datasheets.
 
 ## Project docs
 
+- 电池系统预期配置对账：[battery-configuration.md](battery-configuration.md)
+- 电芯与电池组资料：[battery-pack.md](battery-pack.md)
+
 - Hardware selection overview: `docs/hardware-selection.md`
 - Dashboard module design: `firmware/ui/dashboard-design.md`
 - Self-check module design: `firmware/ui/self-check-design.md`

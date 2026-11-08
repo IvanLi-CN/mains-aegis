@@ -384,7 +384,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rom-image", choices=["r2", "r3", "r5"])
     parser.add_argument(
         "--repair-profile",
-        choices=["none", "afe-default", "bq40-charge-temperature", "bq40-charge-termination", "asset-df-mainboard"],
+        choices=["none", "afe-default", "bq40-charge-temperature", "bq40-charge-termination", "bq40-capacity-model", "asset-df-mainboard"],
         required=True,
     )
     parser.add_argument("--report-out", required=True)
@@ -397,6 +397,9 @@ PROFILE_BLOCK_ADDRESS = 0x4A00
 def main() -> int:
     global EXPECTED_PROFILE_NAME, PROFILE_BLOCK_ADDRESS, CHARGE_PROFILE_EXPECTED_FIELDS
     args = parse_args()
+    if args.repair_profile == "bq40-capacity-model":
+        import capacity_report
+        return capacity_report.run(args, sys.modules[__name__])
     if args.repair_profile == "bq40-charge-termination":
         EXPECTED_PROFILE_NAME = "bq40_charge_termination"
         PROFILE_BLOCK_ADDRESS = 0x4A60

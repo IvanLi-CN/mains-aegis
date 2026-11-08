@@ -81,9 +81,9 @@ usage() {
   cat <<USAGE
 Usage:
   $(basename "$0") diagnose [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default] [--monitor-file PATH] [--report-out DIR]
-  $(basename "$0") apply-df [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--repair-profile bq40-charge-temperature|bq40-charge-termination] [--monitor-file PATH] [--report-out DIR]
+  $(basename "$0") apply-df [--mode canonical|dual-diag] [--duration-sec N] [--flash true|false] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--repair-profile bq40-charge-temperature|bq40-charge-termination|bq40-capacity-model] [--monitor-file PATH] [--report-out DIR]
   $(basename "$0") recover  [--mode dual-diag] [--duration-sec N] [--flash true|false] [--recover never|if-rom|force] [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5] [--repair-profile none|afe-default|asset-df-mainboard] [--monitor-file PATH] [--report-out DIR]
-  $(basename "$0") verify   --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--repair-profile none|bq40-charge-temperature] [--report-out DIR]
+  $(basename "$0") verify   --monitor-file PATH [--mode canonical|dual-diag] [--duration-sec N] [--repair-profile none|bq40-charge-temperature|bq40-charge-termination|bq40-capacity-model] [--report-out DIR]
 USAGE
 }
 
@@ -249,24 +249,24 @@ if [[ "$repair_profile" == "live-df-mainboard" ]]; then
   exit 23
 fi
 
-if [[ "$subcommand" == "apply-df" && "$repair_profile" != "bq40-charge-temperature" && "$repair_profile" != "bq40-charge-termination" ]]; then
+if [[ "$subcommand" == "apply-df" && "$repair_profile" != "bq40-charge-temperature" && "$repair_profile" != "bq40-charge-termination" && "$repair_profile" != "bq40-capacity-model" ]]; then
   echo "apply-df requires --repair-profile bq40-charge-temperature" >&2
   exit 20
 fi
 
 if [[ "$subcommand" == "apply-df" && "$probe_mode" == "mac-only" ]]; then
-  echo "--repair-profile bq40-charge-temperature requires the strict identity probe; mac-only is diagnostic-only" >&2
+  echo "--repair-profile $repair_profile requires the strict identity probe; mac-only is diagnostic-only" >&2
   exit 24
 fi
 
-if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" ) && "$mode" != "canonical" ]]; then
-  echo "--repair-profile bq40-charge-temperature requires canonical mode; dual-diag is diagnostic-only" >&2
+if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" || "$repair_profile" == "bq40-capacity-model" ) && "$mode" != "canonical" ]]; then
+  echo "--repair-profile $repair_profile requires canonical mode; dual-diag is diagnostic-only" >&2
   exit 24
 fi
 
 if [[ "$subcommand" == "verify" ]]; then
   case "$repair_profile" in
-    none|bq40-charge-temperature|bq40-charge-termination) ;;
+    none|bq40-charge-temperature|bq40-charge-termination|bq40-capacity-model) ;;
     *)
       echo "Invalid --repair-profile: $repair_profile" >&2
       exit 17
@@ -396,7 +396,7 @@ else
     diagnose)
       case "$repair_profile" in
         none|afe-default) ;;
-        bq40-charge-temperature|bq40-charge-termination|asset-df-mainboard)
+        bq40-charge-temperature|bq40-charge-termination|bq40-capacity-model|asset-df-mainboard)
           echo "diagnose mode does not accept --repair-profile $repair_profile; use apply-df or recover" >&2
           exit 21
           ;;
@@ -409,8 +409,8 @@ else
     recover)
       case "$repair_profile" in
         none|afe-default|asset-df-mainboard) ;;
-        bq40-charge-temperature|bq40-charge-termination)
-          echo "recover mode does not accept --repair-profile bq40-charge-temperature; use apply-df" >&2
+        bq40-charge-temperature|bq40-charge-termination|bq40-capacity-model)
+          echo "recover mode does not accept --repair-profile $repair_profile; use apply-df" >&2
           exit 22
           ;;
         *)
@@ -421,7 +421,7 @@ else
       ;;
     *)
       case "$repair_profile" in
-        none|afe-default|bq40-charge-temperature|bq40-charge-termination|asset-df-mainboard) ;;
+        none|afe-default|bq40-charge-temperature|bq40-charge-termination|bq40-capacity-model|asset-df-mainboard) ;;
         *)
           echo "Invalid --repair-profile: $repair_profile" >&2
           exit 17
@@ -449,7 +449,7 @@ else
     initial_stdout_timeout_sec="$POST_FLASH_BOOT_QUIET_SEC"
   fi
   monitor_args=(--duration-sec "$duration_sec" --after-flash "$flash" --reset-on-attach "$monitor_reset_on_attach")
-  if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" ) ]]; then
+  if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" || "$repair_profile" == "bq40-capacity-model" ) ]]; then
     monitor_args+=(--maintenance-profile "$repair_profile")
   fi
   if [[ -n "$initial_stdout_timeout_sec" ]]; then

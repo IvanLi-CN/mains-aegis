@@ -20,7 +20,7 @@ usage() {
   cat <<USAGE
 Usage: $(basename "$0") [--action diagnose|apply-df|recover] [--mode canonical|dual-diag] [--recover never|if-rom|force]
                          [--force-min-charge true|false] [--probe-mode strict|mac-only] [--rom-image r2|r3|r5]
-                         [--repair-profile none|afe-default|bq40-charge-temperature|bq40-charge-termination|asset-df-mainboard]
+                         [--repair-profile none|afe-default|bq40-charge-temperature|bq40-charge-termination|bq40-capacity-model|asset-df-mainboard]
 USAGE
 }
 
@@ -149,6 +149,10 @@ esac
 case "$repair_profile" in
   none) ;;
   afe-default) features+=("bms-df-repair-afe-default") ;;
+  bq40-capacity-model)
+    features+=("bms-capacity-model-profile")
+    if [[ "$action" == "apply-df" ]]; then features+=("bms-capacity-model-apply"); fi
+    ;;
   bq40-charge-termination)
     features+=("bms-charge-termination-profile")
     if [[ "$action" == "apply-df" ]]; then features+=("bms-charge-termination-apply"); fi
@@ -170,38 +174,38 @@ case "$repair_profile" in
     ;;
 esac
 
-if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" ) && "$force_min_charge" == "true" ]]; then
+if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" || "$repair_profile" == "bq40-capacity-model" ) && "$force_min_charge" == "true" ]]; then
   echo "Data Flash profiles require charging disabled; --force-min-charge is forbidden" >&2
   exit 2
 fi
 
-if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" ) && "$action" != "apply-df" ]]; then
-  echo "--repair-profile bq40-charge-temperature requires explicit --action apply-df" >&2
+if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" || "$repair_profile" == "bq40-capacity-model" ) && "$action" != "apply-df" ]]; then
+  echo "--repair-profile $repair_profile requires explicit --action apply-df" >&2
   exit 25
 fi
 
-if [[ "$action" == "apply-df" && "$repair_profile" != "bq40-charge-temperature" && "$repair_profile" != "bq40-charge-termination" ]]; then
+if [[ "$action" == "apply-df" && "$repair_profile" != "bq40-charge-temperature" && "$repair_profile" != "bq40-charge-termination" && "$repair_profile" != "bq40-capacity-model" ]]; then
   echo "--action apply-df requires --repair-profile bq40-charge-temperature" >&2
   exit 26
 fi
 
-if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" ) && "$recover" != "never" ]]; then
-  echo "--repair-profile bq40-charge-temperature cannot be combined with --recover $recover" >&2
+if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" || "$repair_profile" == "bq40-capacity-model" ) && "$recover" != "never" ]]; then
+  echo "--repair-profile $repair_profile cannot be combined with --recover $recover" >&2
   exit 21
 fi
 
-if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" ) && "$probe_mode" == "mac-only" ]]; then
-  echo "--repair-profile bq40-charge-temperature requires the strict identity probe; mac-only is diagnostic-only" >&2
+if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" || "$repair_profile" == "bq40-capacity-model" ) && "$probe_mode" == "mac-only" ]]; then
+  echo "--repair-profile $repair_profile requires the strict identity probe; mac-only is diagnostic-only" >&2
   exit 24
 fi
 
-if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" ) && "$mode" != "canonical" ]]; then
-  echo "--repair-profile bq40-charge-temperature requires canonical mode; dual-diag is diagnostic-only" >&2
+if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" || "$repair_profile" == "bq40-capacity-model" ) && "$mode" != "canonical" ]]; then
+  echo "--repair-profile $repair_profile requires canonical mode; dual-diag is diagnostic-only" >&2
   exit 24
 fi
 
-if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" ) && "$rom_image" != "r2" ]]; then
-  echo "--repair-profile bq40-charge-temperature cannot be combined with --rom-image $rom_image" >&2
+if [[ ( "$repair_profile" == "bq40-charge-temperature" || "$repair_profile" == "bq40-charge-termination" || "$repair_profile" == "bq40-capacity-model" ) && "$rom_image" != "r2" ]]; then
+  echo "--repair-profile $repair_profile cannot be combined with --rom-image $rom_image" >&2
   exit 21
 fi
 

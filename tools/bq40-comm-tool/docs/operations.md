@@ -175,3 +175,36 @@ Keep the devd bridge running in one terminal, then execute tool commands in anot
 稳定性验证每 2 秒采样，共 10 分钟，记录 fresh Current、AverageCurrent、独立采样时间的均衡 mask、保护、VCT/FC 和 charger_done。随后自然充电观察最长 12 小时，终止后继续 10 分钟。零请求和保护优先，硬件先终止但 BQ40 无本轮资格时锁存 termination_incomplete，不自动重新启动。未覆盖 mask、读取错误、中断和超时必须记录；未捕获完整过程不能判通过。120mA/80mA 未满足真实窗口时保留证据返回设计，不自动调参。
 
 维护 defmt-only 镜像不消费 CDC hello/status 请求。显式维护 monitor 必须只读日志，不发送产品 CDC 轮询；CDC 请求返回 maintenance_cdc_unavailable，硬件 reset 仍由 devd 生命周期处理。R2 身份核验使用 TRM 的 DDddVVvvBBbbTTZZzzRREE 高字节顺序，DF 两字节 taper 仍为 little-endian。
+
+## 容量模型配置
+
+`bq40-capacity-model` 只适用于 TI BQ40Z50-R2、4S、`CELL_TERM=0` 的项目电池组。它使用与温度、taper 独立的白名单：
+
+| 字段 | DF 地址 | 目标 | 小端字节 | 完整快照块 |
+| --- | --- | --- | --- | --- |
+| Design Capacity mAh | `0x48E5` | 5000mAh | `88 13` | `0x48E0`，32 字节 |
+| IT Term Voltage | `0x484A` | 11200mV | `C0 2B` | `0x4840`，32 字节 |
+
+写前验证 Texas/BQ40 身份及完整 R2 FirmwareVersion 响应、Full Access、CE 高和禁充；核对 4S 串数及整包终止模式，冲突即停止。两个快照必须均成功取得且地址／长度正确，之后才能写第一个字段。每次字段写入核验回显、长度、原始字节与解码值；全部写完后再读两个块，非白名单字节必须与写前一致。
+
+该操作跨两个 DF 块，不具有原子性。失败立即停止，保存已取得的快照，不自动回滚、重试或清理学习；存在部分成功时必须根据原始读回判断设备状态，不能以末尾缺失的成功日志推断未发生写入。
+
+从仓库根目录构建，不连接设备：
+
+```bash
+just bq40-capacity-artifact
+```
+
+真实应用仅在明确授权后进行：通过 `mains-aegis` CLI/devd 对既有绑定设备选择生成的 catalog manifest，执行 flash dry-run，再 flash；禁止直接烧录工具和端口试探。对维护镜像使用 `--maintenance-profile bq40-capacity-model` 启动监控。它是显式武装的一次性 writer，启动后保持禁充并只执行一次；不要把它作为普通运行固件保留。主机只允许该 profile 对应的单一 writer 特征，拒绝混合温度／taper／容量 writer。
+
+离线核验不连接设备：
+
+```bash
+./tools/bq40-comm-tool/bin/run.sh verify --mode canonical --duration-sec 120 --repair-profile bq40-capacity-model --monitor-file /absolute/path/to/maintenance.mon.ndjson --report-out /absolute/path/to/report
+```
+
+报告解析要求同一监控会话内完整、顺序一致的安全门控、R2 身份、前置配置、两块快照、两字段回显、两块最终读回、`done fields=2 blocks=2` 与禁充 halt。拒绝读取／写入错误、缺失或重复证据、地址／长度错误、非目标字节变化、混合 profile、恢复事件、跨会话拼接与 halt 后再启充。仅允许相同时间戳和内容的 trace/log 镜像去重。
+
+`summary.json` 的 `blocks` 按 `0x48E0`、`0x4840` 顺序记录 `snapshot_before_hex` 与 `final_after_hex`，`verified_fields` 为 `design_capacity_mah`、`term_voltage_mv`。报告通过只证明定向配置证据完整，不证明完整电池学习或自然终止已通过。
+
+应用后经同一 devd 生命周期恢复正式候选固件，核验设备身份、固件标识以及两个字段读回，再进行正常充电验证。配置流程不自动 START，不改写 ChemID、Qmax、Ra、校准、保护或历史。`asset-df-mainboard` overlay 使用同一组容量目标；原厂二进制资产保持原样，ROM 恢复仍不作为保留学习数据的定向配置方法。

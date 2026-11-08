@@ -189,6 +189,16 @@ pub(crate) fn apply_definition<T: Transport, const N: usize>(
             ));
         }
     };
+    apply_snapshot(transport, block_address, fields, snapshot)
+}
+
+/// Apply an already captured block after the caller has preflighted every block.
+pub(crate) fn apply_snapshot<T: Transport, const N: usize>(
+    transport: &mut T,
+    block_address: u16,
+    fields: [Field; N],
+    snapshot: BlockSnapshot,
+) -> Result<ApplyReport<N>, ApplyError<T::Error>> {
     if snapshot.address != block_address {
         return Err(ApplyError::new(
             ApplyErrorKind::SnapshotAddress,

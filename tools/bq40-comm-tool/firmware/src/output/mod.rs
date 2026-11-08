@@ -8,8 +8,18 @@ use esp_firmware::charge_profile;
 use esp_firmware::termination_profile as charge_profile;
 #[cfg(feature = "bms-charge-termination-profile")]
 const BMS_DF_PROFILE_NAME: &str = "bq40_charge_termination";
-#[cfg(not(feature = "bms-charge-termination-profile"))]
+#[cfg(all(
+    not(feature = "bms-charge-termination-profile"),
+    not(feature = "bms-capacity-model-profile")
+))]
 const BMS_DF_PROFILE_NAME: &str = "bq40_charge_temperature";
+#[cfg(feature = "bms-capacity-model-profile")]
+const BMS_DF_PROFILE_NAME: &str = "bq40_capacity_model";
+#[cfg(all(
+    feature = "bms-capacity-model-profile",
+    feature = "bms-charge-termination-profile"
+))]
+compile_error!("Select at most one BQ40 Data Flash profile");
 use esp_firmware::ina3221;
 use esp_firmware::tmp112;
 use esp_hal::gpio::{Flex, Input};
@@ -920,6 +930,11 @@ where
     let request = charge_profile::build_mb44_read_request(df_addr);
     i2c.write(addr, &request)
         .map_err(|_| bq40z50::BmsDiagError::I2cNack)?;
+    // Capacity maintenance spans distinct DF blocks. Give the mailbox time
+    // to replace its previous response; keep ordinary polling unchanged.
+    #[cfg(feature = "bms-capacity-model-profile")]
+    spin_delay(Duration::from_millis(22));
+    #[cfg(not(feature = "bms-capacity-model-profile"))]
     spin_delay(BMS_MAC_WRITE_SETTLE);
 
     let mut response = [0u8; 35];
@@ -974,6 +989,9 @@ fn patch_bms_df_section1_mainboard(section1: &mut [u8], calibration: BmsDfCalibr
     let patch_i16 = |buf: &mut [u8], addr: u16, value: i16| {
         patch_u16(buf, addr, value as u16);
     };
+    assert!(esp_firmware::capacity_profile::patch_restore_overlay(
+        section1
+    ));
     patch_u16(
         section1,
         BMS_DF_ADDR_CHARGE_TERM_TAPER_CURRENT,
@@ -1292,7 +1310,13 @@ where
     I2C: embedded_hal::i2c::I2c<Error = esp_hal::i2c::master::Error>,
 {
     match write_bms_df_bytes_via_mb44_once(i2c, addr, df_addr, &raw, BmsDfWriteVia::Direct) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            // Conservative DF commit budget before issuing a read command.
+            // This is not a retry and does not change the field allowlist.
+            #[cfg(feature = "bms-capacity-model-profile")]
+            spin_delay(Duration::from_millis(66));
+            Ok(())
+        }
         Err(err) => {
             defmt::warn!(
                 "bms_df_apply: addr=0x{=u8:x} profile={} stage=write_transport via=direct df_addr=0x{=u16:x} err={}",
@@ -5799,7 +5823,10 @@ where
                 false
             }
         };
-        #[cfg(feature = "bms-charge-termination-profile")]
+        #[cfg(any(
+            feature = "bms-charge-termination-profile",
+            feature = "bms-capacity-model-profile"
+        ))]
         let dev_ok = dev_ok
             && read_bms_mac_payload_via_mb44(&mut self.i2c, addr, 0x0002)
                 .ok()
@@ -5863,31 +5890,37 @@ where
                 return true;
             }
         }
-        let mut transport = Bq40ChargeTemperatureTransport {
-            i2c: &mut self.i2c,
-            addr,
-        };
-        match charge_profile::apply_profile(&mut transport) {
-            Ok(report) => {
-                self.bms_charge_temperature_profile_applied = true;
-                self.bms_charge_temperature_snapshot = Some(report.snapshot.payload);
-                log_bms_charge_temperature_snapshot(
-                    addr,
-                    "snapshot_before_hex",
-                    report.snapshot.payload,
-                );
-                log_bms_charge_temperature_snapshot(
-                    addr,
-                    "final_after_hex",
-                    report.final_snapshot.payload,
-                );
-                for (field, observed) in charge_profile::FIELDS
-                    .into_iter()
-                    .zip(report.field_verifications)
-                {
-                    log_bms_charge_temperature_field_verification(addr, field, observed);
-                }
-                defmt::info!(
+        #[cfg(feature = "bms-capacity-model-profile")]
+        {
+            return self.apply_bq40_capacity_model(addr);
+        }
+        #[cfg(not(feature = "bms-capacity-model-profile"))]
+        {
+            let mut transport = Bq40ChargeTemperatureTransport {
+                i2c: &mut self.i2c,
+                addr,
+            };
+            match charge_profile::apply_profile(&mut transport) {
+                Ok(report) => {
+                    self.bms_charge_temperature_profile_applied = true;
+                    self.bms_charge_temperature_snapshot = Some(report.snapshot.payload);
+                    log_bms_charge_temperature_snapshot(
+                        addr,
+                        "snapshot_before_hex",
+                        report.snapshot.payload,
+                    );
+                    log_bms_charge_temperature_snapshot(
+                        addr,
+                        "final_after_hex",
+                        report.final_snapshot.payload,
+                    );
+                    for (field, observed) in charge_profile::FIELDS
+                        .into_iter()
+                        .zip(report.field_verifications)
+                    {
+                        log_bms_charge_temperature_field_verification(addr, field, observed);
+                    }
+                    defmt::info!(
                     "bms_df_apply: addr=0x{=u8:x} profile={} stage=done fields={=u8} snapshot_addr=0x{=u16:x} snapshot_len={=u8} final_addr=0x{=u16:x} final_len={=u8}",
                     addr, BMS_DF_PROFILE_NAME,
                     report.writes,
@@ -5896,25 +5929,109 @@ where
                     report.final_snapshot.address,
                     report.final_snapshot.payload_len,
                 );
+                    false
+                }
+                Err(err) => {
+                    self.bms_charge_temperature_snapshot = err.snapshot.map(|snapshot| {
+                        log_bms_charge_temperature_snapshot(
+                            addr,
+                            "snapshot_before_hex",
+                            snapshot.payload,
+                        );
+                        snapshot.payload
+                    });
+                    defmt::warn!(
+                        "bms_df_apply: addr=0x{=u8:x} profile={} stage=error error={}",
+                        addr,
+                        BMS_DF_PROFILE_NAME,
+                        err.as_str(),
+                    );
+                    self.bms_charge_temperature_profile_failed = true;
+                    self.bms_next_poll_at = now + BMS_POLL_PERIOD;
+                    true
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "bms-capacity-model-profile")]
+    fn apply_bq40_capacity_model(&mut self, addr: u8) -> bool {
+        use esp_firmware::capacity_profile;
+        // Identity above includes the exact R2 firmware response. No chemical,
+        // calibration, learning, or protection field is repaired by this path.
+        defmt::info!("bms_df_apply: addr=0x{=u8:x} profile={} stage=firmware_verified device_type=0x4500 fw_major=2", addr, BMS_DF_PROFILE_NAME);
+        let guard_ok = match (
+            read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_DA_CONFIGURATION),
+            read_bms_df_u16_via_mb44(&mut self.i2c, addr, BMS_DF_ADDR_IT_GAUGING_CONFIGURATION),
+        ) {
+            (Ok(da), Ok(it)) => capacity_profile::prerequisites_ok(self.chg_enabled, da, it),
+            _ => false,
+        };
+        if !guard_ok {
+            self.bms_charge_temperature_profile_failed = true;
+            defmt::error!(
+                "bms_df_apply: addr=0x{=u8:x} profile={} stage=error error=prerequisite_mismatch",
+                addr,
+                BMS_DF_PROFILE_NAME
+            );
+            return true;
+        }
+        defmt::info!("bms_df_apply: addr=0x{=u8:x} profile={} stage=prerequisites_verified cell_count=4 cell_term=false", addr, BMS_DF_PROFILE_NAME);
+        let mut transport = Bq40ChargeTemperatureTransport {
+            i2c: &mut self.i2c,
+            addr,
+        };
+        match capacity_profile::apply_profile(&mut transport) {
+            Ok(reports) => {
+                for report in &reports {
+                    defmt::info!("bms_df_apply: addr=0x{=u8:x} profile={} stage=block_before df_addr=0x{=u16:x} len=32", addr, BMS_DF_PROFILE_NAME, report.snapshot.address);
+                    log_bms_charge_temperature_snapshot(
+                        addr,
+                        "snapshot_before_hex",
+                        report.snapshot.payload,
+                    );
+                }
+                for (field, report) in capacity_profile::FIELDS.into_iter().zip(&reports) {
+                    log_bms_charge_temperature_field_verification(
+                        addr,
+                        field,
+                        report.field_verifications[0],
+                    );
+                }
+                for report in &reports {
+                    defmt::info!("bms_df_apply: addr=0x{=u8:x} profile={} stage=block_after df_addr=0x{=u16:x} len=32", addr, BMS_DF_PROFILE_NAME, report.final_snapshot.address);
+                    log_bms_charge_temperature_snapshot(
+                        addr,
+                        "final_after_hex",
+                        report.final_snapshot.payload,
+                    );
+                }
+                self.bms_charge_temperature_profile_applied = true;
+                defmt::info!(
+                    "bms_df_apply: addr=0x{=u8:x} profile={} stage=done fields=2 blocks=2",
+                    addr,
+                    BMS_DF_PROFILE_NAME
+                );
                 false
             }
             Err(err) => {
-                self.bms_charge_temperature_snapshot = err.snapshot.map(|snapshot| {
+                use esp_firmware::charge_profile::ApplyErrorKind;
+                if let ApplyErrorKind::SnapshotTransport(cause)
+                | ApplyErrorKind::WriteTransport(cause)
+                | ApplyErrorKind::FinalTransport(cause) = err.kind
+                {
+                    defmt::error!("bms_df_apply: addr=0x{=u8:x} profile={} stage=transport_error df_addr=0x{=u16:x} err={}", addr, BMS_DF_PROFILE_NAME, err.block, cause);
+                }
+                for snapshot in err.snapshots.into_iter().flatten() {
+                    defmt::info!("bms_df_apply: addr=0x{=u8:x} profile={} stage=block_before df_addr=0x{=u16:x} len=32", addr, BMS_DF_PROFILE_NAME, snapshot.address);
                     log_bms_charge_temperature_snapshot(
                         addr,
                         "snapshot_before_hex",
                         snapshot.payload,
                     );
-                    snapshot.payload
-                });
-                defmt::warn!(
-                    "bms_df_apply: addr=0x{=u8:x} profile={} stage=error error={}",
-                    addr,
-                    BMS_DF_PROFILE_NAME,
-                    err.as_str(),
-                );
+                }
                 self.bms_charge_temperature_profile_failed = true;
-                self.bms_next_poll_at = now + BMS_POLL_PERIOD;
+                defmt::error!("bms_df_apply: addr=0x{=u8:x} profile={} stage=error error={} df_addr=0x{=u16:x}", addr, BMS_DF_PROFILE_NAME, err.as_str(), err.block);
                 true
             }
         }

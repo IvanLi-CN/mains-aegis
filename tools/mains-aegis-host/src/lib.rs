@@ -6060,7 +6060,7 @@ async fn monitor_start(
     ensure_bound_device_record(&state, &id)?;
     let allow_unverified_maintenance = match query.maintenance_profile.as_deref() {
         None => false,
-        Some("bq40-charge-temperature" | "bq40-charge-termination") => true,
+        Some("bq40-charge-temperature" | "bq40-charge-termination" | "bq40-capacity-model") => true,
         Some(profile) => {
             return Err(HttpError::non_retryable(
                 "maintenance_profile_unsupported",
@@ -6164,13 +6164,18 @@ async fn monitor_start(
 }
 
 fn maintenance_profile_features_allowed(profile: &str, features: &[String]) -> bool {
-    let temperature = features.iter().any(|f| f == "bms-charge-temperature-apply");
-    let termination = features.iter().any(|f| f == "bms-charge-termination-apply");
-    match profile {
-        "bq40-charge-temperature" => temperature && !termination,
-        "bq40-charge-termination" => termination && !temperature,
-        _ => false,
-    }
+    let writers = [
+        ("bq40-charge-temperature", "bms-charge-temperature-apply"),
+        ("bq40-charge-termination", "bms-charge-termination-apply"),
+        ("bq40-capacity-model", "bms-capacity-model-apply"),
+    ];
+    writers.iter().any(|(name, feature)| {
+        *name == profile
+            && features.iter().any(|f| f == feature)
+            && writers
+                .iter()
+                .all(|(other, flag)| other == name || !features.iter().any(|f| f == flag))
+    })
 }
 
 fn maintenance_profile_transport_allowed(
@@ -11061,7 +11066,9 @@ fn load_native_monitor_defmt_table(
         )
     };
     let is_charge_temperature_maintenance = artifact.features.iter().any(|feature| {
-        feature == "bms-charge-temperature-apply" || feature == "bms-charge-termination-apply"
+        feature == "bms-charge-temperature-apply"
+            || feature == "bms-charge-termination-apply"
+            || feature == "bms-capacity-model-apply"
     });
     if !identity_verified
         && !(allow_unverified_maintenance && identity_absent && is_charge_temperature_maintenance)
@@ -13108,6 +13115,29 @@ mod tests {
             "bq40-charge-termination",
             &[]
         ));
+    }
+
+    #[test]
+    fn capacity_maintenance_rejects_ambiguous_or_wrong_writer_features() {
+        let profiles = [
+            ("bq40-charge-temperature", "bms-charge-temperature-apply"),
+            ("bq40-charge-termination", "bms-charge-termination-apply"),
+            ("bq40-capacity-model", "bms-capacity-model-apply"),
+        ];
+        for (profile, own) in profiles {
+            for mask in 0..8 {
+                let features = profiles
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| mask & (1 << i) != 0)
+                    .map(|(_, (_, f))| f.to_string())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    maintenance_profile_features_allowed(profile, &features),
+                    features.len() == 1 && features[0] == own
+                );
+            }
+        }
     }
 
     #[test]

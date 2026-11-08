@@ -275,7 +275,7 @@ enum ArtifactCommand {
 #[derive(Debug, Subcommand)]
 enum MonitorCommand {
     Start {
-        #[arg(long, value_parser = ["bq40-charge-temperature", "bq40-charge-termination"])]
+        #[arg(long, value_parser = ["bq40-charge-temperature", "bq40-charge-termination", "bq40-capacity-model"])]
         maintenance_profile: Option<String>,
     },
     Stop,

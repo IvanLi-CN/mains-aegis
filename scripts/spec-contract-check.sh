@@ -2,7 +2,11 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-spec_path="docs/specs/bq40-charge-temperature-profile/SPEC.md"
+spec_paths=(
+  "docs/specs/bq40-charge-temperature-profile/SPEC.md"
+  "docs/specs/mains-aegis-devd/SPEC.md"
+  "docs/specs/mains-aegis-cli-devd-alignment/SPEC.md"
+)
 checker="${SPEC_CONTRACT_CHECK:-}"
 
 if [[ -z "$checker" && -n "${AGENT_TOOLKIT_ROOT:-}" ]]; then
@@ -17,4 +21,8 @@ if [[ -z "$checker" || ! -f "$checker" ]]; then
   exit 2
 fi
 
-exec bun "$checker" --repo-root "$repo_root" --path "$spec_path"
+args=(--repo-root "$repo_root")
+for spec_path in "${spec_paths[@]}"; do
+  args+=(--path "$spec_path")
+done
+exec bun "$checker" "${args[@]}"
