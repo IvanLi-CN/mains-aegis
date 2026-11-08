@@ -67,6 +67,7 @@ const HOST_POWER_PROFILE_TTL: Duration = Duration::from_secs(3);
 const BMS_ACTIVATION_FORCE_VREG_MV: u16 = 16_800;
 const BMS_ACTIVATION_FORCE_ICHG_MA: u16 = 200;
 const BMS_ACTIVATION_FORCE_IINDPM_MA: u16 = 500;
+const USB_C_NON_PD_MIN_VBUS_MV: u16 = 4_500;
 // Historical PASS samples needed a light-weight no-charge observe window before any wake bursts.
 // Keep regular activation on the old 2 s observe cadence, but let discharge authorization exercise
 // documented EMSHUT communication-exit promptly once we can already read a blocked gauge.
@@ -8384,7 +8385,11 @@ where
             if !usbc_present {
                 return Some("manual_charge_path_unavailable");
             }
-            if usbc_unsafe_source_latched || !self.usb_pd_state.charge_ready {
+            let stable_non_pd_5v = self
+                .usb_pd_vac1_mv
+                .is_some_and(|mv| mv >= USB_C_NON_PD_MIN_VBUS_MV);
+            if usbc_unsafe_source_latched || (!self.usb_pd_state.charge_ready && !stable_non_pd_5v)
+            {
                 return Some("manual_charge_path_not_qualified");
             }
         }
@@ -8433,7 +8438,14 @@ where
         let usbc_present = self.diag_snapshot.charger.ac1_present
             || self.usb_pd_state.attached
             || self.usb_pd_state.vbus_present == Some(true)
-            || self.ui_snapshot.fusb302_vbus_present == Some(true);
+            || self.ui_snapshot.fusb302_vbus_present == Some(true)
+            || self
+                .usb_pd_vac1_mv
+                .is_some_and(|mv| mv >= USB_C_NON_PD_MIN_VBUS_MV);
+        let usbc_charge_ready = self.usb_pd_state.charge_ready
+            || self
+                .usb_pd_vac1_mv
+                .is_some_and(|mv| mv >= USB_C_NON_PD_MIN_VBUS_MV);
         let usbc_unsafe_source_latched = usb_pd_runtime_unsafe_source_latched(
             self.usb_pd_state.unsafe_source_latched,
             usbc_present,
@@ -8443,7 +8455,7 @@ where
             prefs.power_path,
             dcin_present,
             usbc_present,
-            self.usb_pd_state.charge_ready,
+            usbc_charge_ready,
             usbc_unsafe_source_latched,
             self.usb_pd_state
                 .contract
@@ -14254,6 +14266,8 @@ where
             .or(detected_input_source);
         let usb_c_path_present =
             ac1_present || matches!(self.usb_pd_state.vbus_present, Some(true));
+        let usb_c_input_voltage_present =
+            raw_vac1_adc_mv.is_some_and(|mv| mv >= USB_C_NON_PD_MIN_VBUS_MV);
         let usb_pd_charge_gate_path_present =
             usb_pd_charge_gate_path_present(input_source, usb_c_path_present);
         let usb_pd_unsafe_latched = usb_pd_runtime_unsafe_source_latched(
@@ -14299,20 +14313,22 @@ where
         let manual_loopback_override_for_policy = self.manual_charge_runtime.active
             && self.manual_charge_runtime.loopback_override
             && self.manual_charge_runtime.loopback_override_mode == Some(self.ui_snapshot.mode);
-        let requested_acdrv_path = if self.input_gate.cutoff {
-            bq25792::RequestedAcdrvPath::Disabled
-        } else {
-            match input_source {
-                Some(DashboardInputSource::DcIn) if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
-                Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
-                    if ac1_present || vbus_present =>
-                {
-                    bq25792::RequestedAcdrvPath::Ac1
-                }
-                _ if ac2_present => bq25792::RequestedAcdrvPath::Ac2,
-                _ if ac1_present || vbus_present => bq25792::RequestedAcdrvPath::Ac1,
-                _ => bq25792::RequestedAcdrvPath::Disabled,
+        // The pre-TPS VIN gate protects the DCIN/output path. It must not
+        // disable the independent USB-C AC1 input path when DCIN is absent.
+        let requested_acdrv_path = match input_source {
+            Some(DashboardInputSource::DcIn) if ac2_present && !self.input_gate.cutoff => {
+                bq25792::RequestedAcdrvPath::Ac2
             }
+            Some(DashboardInputSource::UsbC | DashboardInputSource::Auto)
+                if ac1_present || vbus_present || usb_c_input_voltage_present =>
+            {
+                bq25792::RequestedAcdrvPath::Ac1
+            }
+            _ if ac2_present && !self.input_gate.cutoff => bq25792::RequestedAcdrvPath::Ac2,
+            _ if ac1_present || vbus_present || usb_c_input_voltage_present => {
+                bq25792::RequestedAcdrvPath::Ac1
+            }
+            _ => bq25792::RequestedAcdrvPath::Disabled,
         };
         let acdrv_state = match bq25792::set_acdrv_path(&mut self.i2c, requested_acdrv_path) {
             Ok(state) => state,
@@ -14551,9 +14567,13 @@ where
                 esp_println::println!("backup_usb_charge: latched reason={}", reason.notice());
             }
         }
+        // A manually confirmed USB-C session may use a stable non-PD 5 V source.
+        // Automatic charging still requires the normal PD/input qualification.
+        let manual_non_pd_input_override =
+            self.manual_charge_runtime.active && input_present && !usb_pd_unsafe_latched;
         let mut allow_charge = if usb_pd_unsafe_latched
             || activation_force_charge_off
-            || !usb_pd_charge_gate_ready
+            || (!usb_pd_charge_gate_ready && !manual_non_pd_input_override)
             || force_charge_blocked
         {
             false

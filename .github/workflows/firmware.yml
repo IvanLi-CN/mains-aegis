@@ -59,7 +59,7 @@ jobs:
 
       - name: Install esptool
         if: steps.changes.outputs.firmware == 'true'
-        run: python3 -m pip install --user --break-system-packages esptool
+        run: python3 -m pip install --user --break-system-packages -r tools/esptool-requirements.txt
 
       - name: cargo clippy (firmware)
         if: steps.changes.outputs.firmware == 'true'
