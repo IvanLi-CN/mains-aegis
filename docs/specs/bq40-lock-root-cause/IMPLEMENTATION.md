@@ -49,3 +49,5 @@ CLI 的 device charge start|stop 映射既有 control.manual_charge IPC，以执
 实机候选 adb8d0c9 在约 500mA 充电时触发 OC 容量过充保护，未到 VCT/FC 与硬件正常终止；连续充电窗口不足 10 分钟，A3/A4 未通过。已明确 STOP，不修改保护与学习数据。配置和本地检查通过不构成经验验收通过，PR 保持 Draft；详见[分析报告](../../reports/charge-cycling-analysis.md#修正候选的实机结果)。
 
 为核验容量保护证据，bq40.core 增加同轮 BatteryMode、RemainingCapacity 与 FullChargeCapacity 原值及由模式解码的单位；不改写容量模式、保护或学习数据。单位读取失败保持未知。
+
+只读容量诊断进一步读取真实 OC 阈值/恢复、DesignCapacity、Qmax、ChemicalID 原始负载、GaugeStatus1/2/3，以及 IT 仿真截止电压、负载选择/模式与预留容量。每项缺失保持空值与错误，不作为 DF 写入入口；制造包在停充时单独采集。最终候选 7893fcad 连续三轮确认 TrueRemQ=3042mAh、TrueFCCQ=2624mAh、OC=300mAh，DesignCapacity=4400mAh、IT Term Voltage=9000mV 与项目配置资格未对齐。GaugeStatus3 严格长度校验失败，未将包判为完整成功；详见[容量过充诊断及边界](../../reports/bq40-oc-diagnosis.md)。

@@ -118,7 +118,7 @@ BQ25792 的 40 mA 步进不能精确设为 100 mA；80/120 mA 都不应未经误
 
 这里的 OC 是容量过充保护，不是 OCC/OCD 瞬时过流，也不是 COV 电芯过压。根据 [BQ40Z50-R2 TRM §2.17](../manuals/BQ40Z50-R2-TRM/BQ40Z50-R2-TRM.md#217-overcharge-protection)，容量达到满充容量后，内部累计充电量达到 OC 阈值会置位 OC/XCHG。保护后的日志为 FCC=2624mAh、RemainingCapacity=2597mAh、SOC=99%，电芯约 4.001–4.036V；RSOCL=1 会在有效终止前限制对外 SOC/容量到 99%，不能仅凭这个显示值否认容量保护，也不能以 SOC99 证明真实电池已满。
 
-OC 的真实阈值及内部累计量未读回，不用 TRM 默认值冒充实测。FCC、ChemID、容量标定、学习历史与电芯当前实际状态是否匹配，尚未形成根因结论；Qmax/Ra 更新计数非零也不等同于当前容量模型准确。不得把 FCC=2624 单独当成学习损坏的证明。
+后续[容量过充诊断](bq40-oc-diagnosis.md)已读回真实 OC 阈值 300mAh、内部 TrueRemQ 约 3042mAh 和 TrueFCCQ 2624mAh，并确认 DesignCapacity=4400mAh 与项目 5000mAh 目标不符。OC 内部计数器未直接读回，不把两个内部容量的差值冒充该计数器。Qmax、ChemID、历史 DODEOC 与真实电芯是否匹配仍需独立验证；不得把 FCC=2624 单独当成学习损坏的证明。
 
 本轮 A3 充电稳定性窗口和 A4 完整自然终止均未通过，120mA/80mA 的终止窗口尚未得到实机验证。已明确 STOP，保留保护与学习数据；不清保护、不强制放电、不自动重新 START、不放宽参数。配置和软件检查通过不能替代这项失败的经验验收。PR 保持 Draft，未启动要求通过实机门禁后的 Tier 4 正式审查，未达到 Step 5C Ready。
 

@@ -2,9 +2,9 @@
   "schema": "mains-aegis.charge-termination-observation.v1",
   "acceptance": "A3/A4 not passed; OC interrupted active charging before qualification/termination",
   "charging_run_sha": "adb8d0c9f043d67b4ad14a73d6c52035b155f67c",
-  "readonly_diagnostic_sha": "b36ec3777477b7d91339df8215a8c5c9c1fc00d5",
+  "readonly_diagnostic_sha": "7893fcad",
   "device_id": "mains-aegis-198840",
-  "installed_build_id": "b36ec377-clean-8adca19b17c6bfde",
+  "installed_build_id": "7893fcad-clean-9b267bf06a67e379",
   "configuration": {
     "charge_term_taper_ma": 120,
     "charge_term_voltage_mv": 100,
@@ -374,5 +374,6 @@
     "Explicit STOP; no automatic START",
     "No merge or release"
   ],
-  "raw_record_sha256": "430c34327bbc8744ca00e1f72608404284c9aa594cc357c597fdf055bb58aed0"
+  "raw_record_sha256": "430c34327bbc8744ca00e1f72608404284c9aa594cc357c597fdf055bb58aed0",
+  "oc_diagnosis_evidence": "bq40-oc-diagnosis.json"
 }
