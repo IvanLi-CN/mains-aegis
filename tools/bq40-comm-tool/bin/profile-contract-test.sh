@@ -93,6 +93,17 @@ expect_exit_with_text 17 \
   "Invalid --repair-profile" \
   "$SCRIPT_DIR/run.sh" verify --monitor-file /tmp/mains-aegis-missing-charge-profile-log --repair-profile asset-df-mainboard
 
+for profile in bq40-capacity-model; do
+  expect_exit_with_text 25 "requires explicit --action apply-df" "$SCRIPT_DIR/build.sh" --repair-profile "$profile"
+  expect_exit_with_text 24 "requires the strict identity probe" "$SCRIPT_DIR/build.sh" --action apply-df --probe-mode mac-only --repair-profile "$profile"
+  expect_exit_with_text 24 "requires canonical mode" "$SCRIPT_DIR/build.sh" --action apply-df --mode dual-diag --recover never --repair-profile "$profile"
+  expect_exit_with_text 21 "cannot be combined with --rom-image r3" "$SCRIPT_DIR/build.sh" --action apply-df --rom-image r3 --repair-profile "$profile"
+  expect_exit_with_text 21 "cannot be combined with --recover force" "$SCRIPT_DIR/build.sh" --action apply-df --mode dual-diag --recover force --repair-profile "$profile"
+  expect_exit_with_text 2 "--force-min-charge is forbidden" "$SCRIPT_DIR/build.sh" --action apply-df --force-min-charge true --repair-profile "$profile"
+  expect_exit_with_text 24 "requires canonical mode" "$SCRIPT_DIR/run.sh" verify --mode dual-diag --monitor-file /tmp/mains-aegis-missing-capacity-log --repair-profile "$profile"
+  expect_exit_with_text 12 "monitor file not found" "$SCRIPT_DIR/run.sh" verify --monitor-file /tmp/mains-aegis-missing-capacity-log --repair-profile "$profile"
+done
+
 for required_path in \
   "$REPO_ROOT/firmware/src" \
   "$REPO_ROOT/web/src" \
@@ -188,7 +199,20 @@ if [[ "$incompatible_output" != *"cannot be combined with mac-only, BQ40 recover
   exit 1
 fi
 
+if conflict_output=$(
+  cd "$TOOL_ROOT/firmware"
+  cargo +esp check --features bms-rom-recover-disable,bms-capacity-model-apply,bms-charge-termination-apply 2>&1
+); then
+  echo "mixed capacity/termination writer unexpectedly compiled" >&2
+  exit 1
+fi
+if [[ "$conflict_output" != *"Select at most one BQ40 Data Flash profile"* ]]; then
+  printf '%s\n' "$conflict_output" >&2
+  exit 1
+fi
+
 python3 "$SCRIPT_DIR/report-parser-test.py"
+python3 "$SCRIPT_DIR/capacity-report-test.py"
 
 if rg -n "Ma1000|ManualSpeed1A|CHG1A" \
   "$REPO_ROOT/firmware/src" \

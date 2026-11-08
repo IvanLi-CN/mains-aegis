@@ -1412,6 +1412,7 @@ fn diag_package_supported(package: &str) -> bool {
         "core"
             | "mcu.runtime"
             | "bq40.core"
+            | "bq40.charge"
             | "bq40.manufacturing"
             | "bq25792.regs"
             | "tps55288.out_a"
@@ -1484,6 +1485,7 @@ fn diag_package_mask(packages: &[String<32>]) -> u32 {
         mask | match package.as_str() {
             "bq40.core" => 1 << 0,
             "bq40.manufacturing" => 1 << 1,
+            "bq40.charge" => 1 << 9,
             "bq25792.regs" => 1 << 2,
             "tps55288.out_a" => 1 << 3,
             "tps55288.out_b" => 1 << 4,
@@ -1588,6 +1590,9 @@ mod tests {
             "package=bq40.manufacturing&package=derived.power",
         ));
         assert_eq!(diag_package_mask(packages.as_slice()), 1 << 1);
+
+        let live = parse_diag_snapshot_query_packages(Some("package=bq40.charge"));
+        assert_eq!(diag_package_mask(live.as_slice()), 1 << 9);
 
         let packages = parse_diag_snapshot_query_packages(Some("package=derived.power"));
         assert_eq!(diag_package_mask(packages.as_slice()), 0);

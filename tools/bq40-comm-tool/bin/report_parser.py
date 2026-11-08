@@ -150,7 +150,7 @@ def charge_profile_evidence_shape_is_valid(text: str) -> bool:
 
 CHARGE_PROFILE_SNAPSHOT_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    rf"profile=bq40_charge_temperature stage=(?P<stage>snapshot_before_hex|final_after_hex) "
+    rf"profile=bq40_charge_(?:temperature|termination) stage=(?P<stage>snapshot_before_hex|final_after_hex) "
     + " ".join(
         rf"b{index}=0x(?P<b{index}>[0-9a-fA-F]{{1,2}})" for index in range(32)
     )
@@ -158,13 +158,13 @@ CHARGE_PROFILE_SNAPSHOT_RE = re.compile(
 )
 CHARGE_PROFILE_DONE_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    rf"profile=bq40_charge_temperature stage=done fields=(?P<fields>\d+) "
+    rf"profile=bq40_charge_(?:temperature|termination) stage=done fields=(?P<fields>\d+) "
     rf"snapshot_addr=0x(?P<snapshot_addr>[0-9a-fA-F]+) snapshot_len=(?P<snapshot_len>\d+) "
     rf"final_addr=0x(?P<final_addr>[0-9a-fA-F]+) final_len=(?P<final_len>\d+)$"
 )
 CHARGE_PROFILE_FIELD_VERIFY_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    rf"profile=bq40_charge_temperature stage=field_verify field=(?P<field>[a-zA-Z0-9_]+) "
+    rf"profile=bq40_charge_(?:temperature|termination) stage=field_verify field=(?P<field>[a-zA-Z0-9_]+) "
     rf"df_addr=0x(?P<df_addr>[0-9a-fA-F]+) "
     rf"declared_len=(?P<declared_len>\d+) payload_len=(?P<payload_len>\d+) "
     rf"raw_lo=0x(?P<raw_lo>[0-9a-fA-F]{{1,2}}) "
@@ -176,7 +176,7 @@ CHARGE_PROFILE_ERROR_RE = re.compile(
 )
 CHARGE_PROFILE_CE_DISABLED_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    rf"profile=bq40_charge_temperature stage=charge_disabled "
+    rf"profile=bq40_charge_(?:temperature|termination) stage=charge_disabled "
     rf"ce_high=(?P<ce_high>true|false) charger_enabled=(?P<charger_enabled>true|false)$"
 )
 CHARGE_PROFILE_POST_HALT_CHARGE_ENABLE_RE = re.compile(
@@ -185,19 +185,19 @@ CHARGE_PROFILE_POST_HALT_CHARGE_ENABLE_RE = re.compile(
 )
 CHARGE_PROFILE_IDENTITY_VERIFIED_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    rf"profile=bq40_charge_temperature stage=identity_verified "
+    rf"profile=bq40_charge_(?:temperature|termination) stage=identity_verified "
     rf"manufacturer=(?P<manufacturer>[a-zA-Z0-9_]+) device=(?P<device>[a-zA-Z0-9_]+)$"
 )
 CHARGE_PROFILE_PROVENANCE_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    rf"profile=bq40_charge_temperature stage=provenance "
+    rf"profile=bq40_charge_(?:temperature|termination) stage=provenance "
     rf"probe_mode=(?P<probe_mode>strict|mac-only) "
     rf"rom_image=(?P<rom_image>r2|r3|r5) "
     rf"mode=(?P<mode>canonical|dual-diag)$"
 )
 CHARGE_PROFILE_SECURITY_AFTER_RE = re.compile(
     rf"{LOG_LEVEL_PREFIX}bms_df_apply: addr=0x(?P<addr>[0-9a-fA-F]+) "
-    rf"profile=bq40_charge_temperature stage=security_after "
+    rf"profile=bq40_charge_(?:temperature|termination) stage=security_after "
     rf"op=0x(?P<op>[0-9a-fA-F]+) sec=(?P<sec>[a-zA-Z0-9_]+)$"
 )
 ROM_DETECTED_RE = re.compile(
@@ -283,7 +283,7 @@ def charge_profile_final_vectors_match(payload_hex: Optional[str]) -> bool:
         return False
     payload = bytes.fromhex(payload_hex)
     for address, raw, _decoded in CHARGE_PROFILE_EXPECTED_FIELDS.values():
-        offset = address - 0x4A00
+        offset = address - PROFILE_BLOCK_ADDRESS
         if payload[offset : offset + 2] != bytes(raw):
             return False
     return True
@@ -304,7 +304,7 @@ def charge_profile_non_allowlisted_bytes_unchanged(
     allowlisted_offsets = {
         offset
         for address, _raw, _decoded in CHARGE_PROFILE_EXPECTED_FIELDS.values()
-        for offset in (address - 0x4A00, address - 0x4A00 + 1)
+        for offset in (address - PROFILE_BLOCK_ADDRESS, address - PROFILE_BLOCK_ADDRESS + 1)
     }
     return all(
         before[offset] == after[offset]
@@ -384,17 +384,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rom-image", choices=["r2", "r3", "r5"])
     parser.add_argument(
         "--repair-profile",
-        choices=["none", "afe-default", "bq40-charge-temperature", "asset-df-mainboard"],
+        choices=["none", "afe-default", "bq40-charge-temperature", "bq40-charge-termination", "bq40-capacity-model", "asset-df-mainboard"],
         required=True,
     )
     parser.add_argument("--report-out", required=True)
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
+EXPECTED_PROFILE_NAME = "bq40_charge_temperature"
+PROFILE_BLOCK_ADDRESS = 0x4A00
 
-    if args.repair_profile == "bq40-charge-temperature" and args.action not in {
+def main() -> int:
+    global EXPECTED_PROFILE_NAME, PROFILE_BLOCK_ADDRESS, CHARGE_PROFILE_EXPECTED_FIELDS
+    args = parse_args()
+    if args.repair_profile == "bq40-capacity-model":
+        import capacity_report
+        return capacity_report.run(args, sys.modules[__name__])
+    if args.repair_profile == "bq40-charge-termination":
+        EXPECTED_PROFILE_NAME = "bq40_charge_termination"
+        PROFILE_BLOCK_ADDRESS = 0x4A60
+        CHARGE_PROFILE_EXPECTED_FIELDS = {"charge_term_taper_current": (0x4A6D, (120, 0), 120)}
+
+    if args.repair_profile in {"bq40-charge-temperature", "bq40-charge-termination"} and args.action not in {
         "apply-df",
         "verify",
     }:
@@ -404,7 +415,7 @@ def main() -> int:
         )
         return 24
 
-    if args.repair_profile == "bq40-charge-temperature" and args.mode != "canonical":
+    if args.repair_profile in {"bq40-charge-temperature", "bq40-charge-termination"} and args.mode != "canonical":
         print(
             "bq40-charge-temperature profile verification requires canonical mode; "
             "dual-diag is diagnostic-only",
@@ -412,7 +423,7 @@ def main() -> int:
         )
         return 24
 
-    if args.repair_profile == "bq40-charge-temperature":
+    if args.repair_profile in {"bq40-charge-temperature", "bq40-charge-termination"}:
         if args.action == "apply-df" and (
             args.probe_mode != "strict" or args.rom_image != "r2"
         ):
@@ -505,7 +516,7 @@ def main() -> int:
         print(f"monitor file not found: {monitor_file}", file=sys.stderr)
         return 3
 
-    is_charge_profile_requested = args.repair_profile == "bq40-charge-temperature"
+    is_charge_profile_requested = args.repair_profile in {"bq40-charge-temperature", "bq40-charge-termination"}
 
     def mark_malformed_charge_profile_evidence(kind: str) -> None:
         nonlocal charge_profile_apply_attempted
@@ -635,7 +646,7 @@ def main() -> int:
                 if charge_profile_any_match:
                     any_profile = charge_profile_any_match.group("profile")
                     any_stage = charge_profile_any_match.group("stage")
-                    if any_profile != "bq40_charge_temperature":
+                    if any_profile != EXPECTED_PROFILE_NAME:
                         charge_profile_apply_attempted = True
                         charge_profile_addresses.add(
                             int(charge_profile_any_match.group("addr"), 16)
@@ -655,7 +666,7 @@ def main() -> int:
                         charge_profile_sequence_error = True
                         charge_profile_unknown_stage = True
                         charge_profile_apply_errors["malformed_evidence"] += 1
-                if charge_profile_match and charge_profile_match.group("profile") == "bq40_charge_temperature":
+                if charge_profile_match and charge_profile_match.group("profile") == EXPECTED_PROFILE_NAME:
                     charge_profile_apply_attempted = True
                     charge_profile_addresses.add(int(charge_profile_match.group("addr"), 16))
                     stage = charge_profile_match.group("stage")
@@ -888,7 +899,7 @@ def main() -> int:
                 charge_profile_error_match = CHARGE_PROFILE_ERROR_RE.search(text)
                 if (
                     charge_profile_error_match
-                    and charge_profile_error_match.group("profile") == "bq40_charge_temperature"
+                    and charge_profile_error_match.group("profile") == EXPECTED_PROFILE_NAME
                 ):
                     charge_profile_apply_attempted = True
                     charge_profile_apply_errors[charge_profile_error_match.group("error")] += 1
@@ -975,15 +986,15 @@ def main() -> int:
             reasons.append("charge_profile_full_access_evidence_missing")
         if not charge_profile_apply_done:
             reasons.append("charge_profile_apply_not_done")
-        if charge_profile_apply_writes != 7:
-            reasons.append("charge_profile_field_count_not_7")
-        if charge_profile_done_fields != 7:
+        if charge_profile_apply_writes != len(CHARGE_PROFILE_EXPECTED_FIELDS):
+            reasons.append("charge_profile_field_count_not_7" if EXPECTED_PROFILE_NAME == "bq40_charge_temperature" else "charge_profile_field_count_not_1")
+        if charge_profile_done_fields != len(CHARGE_PROFILE_EXPECTED_FIELDS):
             reasons.append("charge_profile_done_evidence_invalid")
-        if charge_profile_done_snapshot_addr != 0x4A00:
+        if charge_profile_done_snapshot_addr != PROFILE_BLOCK_ADDRESS:
             reasons.append("charge_profile_snapshot_address_missing")
         if charge_profile_done_snapshot_len != 32:
             reasons.append("charge_profile_snapshot_length_missing")
-        if charge_profile_done_final_addr != 0x4A00:
+        if charge_profile_done_final_addr != PROFILE_BLOCK_ADDRESS:
             reasons.append("charge_profile_final_address_missing")
         if charge_profile_done_final_len != 32:
             reasons.append("charge_profile_final_length_missing")

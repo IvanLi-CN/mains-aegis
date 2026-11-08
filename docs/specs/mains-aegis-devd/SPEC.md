@@ -191,7 +191,13 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
   - `rated_vout_mv`
 - devd 匹配规则：只有 `build_id`、build profile 与 feature set 都和 selected artifact 精确匹配才可标记 `log_decode.status=verified`；`git_sha` 只能作为 provenance 展示，不能单独证明 defmt artifact 匹配。
 
+### BQ40 directed maintenance profile
+
+- REQ-BQ40-CAPACITY-MAINTENANCE: maintenance profile 选择接受 `bq40-capacity-model`，仅匹配 catalog 的 `bms-capacity-model-apply` writer；与温度或 taper writer 混合时拒绝。未核验应用身份的维护日志例外只适用于指定 native USB，不允许 LAN fallback；该例外不替代设备端 R2、Full Access 与禁充校验。DF 写入范围仅为 DesignCapacity=5000mAh 和 IT Term Voltage=11200mV；配置要求见[电池系统配置清单](../../battery-configuration.md)。普通固件不自动写 DF，主机不得把维护日志解析通过当作自然满充验收通过。
+
 ## Verification
+
+- VER-BQ40-CAPACITY-MAINTENANCE，覆盖: REQ-BQ40-CAPACITY-MAINTENANCE。离线测试覆盖三种 writer 特征的互斥选择、两块完整快照、唯一两字段写入、所有非目标字节保持、失败即停和跨会话／混合证据拒绝；维护构建与测试不得隐式连接设备。
 
 - VER-USB-BMS-ACTIVATION，覆盖: REQ-USB-BMS-ACTIVATION。协议与主机测试必须证明启动和只读查询分离、pending 不等于成功、不确定响应不重发启动、拒绝非 USB transport；实机测试应记录激活阶段、终态原因及充电门控，不得将命令送达报告为恢复成功。
 

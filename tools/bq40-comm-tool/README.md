@@ -31,7 +31,7 @@ export BQ40_TOOL_DEVICE_ID=<devd-device-id>
 
 ## Command contract
 
-`./bin/run.sh <diagnose|recover|verify> [options]`
+`./bin/run.sh <diagnose|apply-df|recover|verify> [options]`
 
 Options:
 - `--mode canonical|dual-diag` (`diagnose`/`verify` default to `canonical`; `recover` defaults to `dual-diag` unless explicitly overridden)
@@ -93,3 +93,15 @@ Required `summary.json` fields:
 - `docs/recovery-safety.md`
 - `docs/troubleshooting-notes.md`
 - `docs/references.md`
+
+## 项目容量模型配置
+
+独立 profile `bq40-capacity-model` 的使用、字节白名单和报告格式见[容量模型配置操作](docs/operations.md#容量模型配置)。项目目标统一见[电池系统配置清单](../../docs/battery-configuration.md)。该 profile 与温度、taper 分开选择；不修改 ChemID、Qmax、Ra、校准、保护或学习历史，不进入 ROM 恢复。
+
+仅构建维护镜像和 devd catalog，不连接设备：
+
+```bash
+just bq40-capacity-artifact
+```
+
+容量应用报告使用 `profile/run_config/blocks/verified_fields/writes/verdict`；`blocks` 保存两个完整前后快照。它不使用普通诊断或旧温度 profile 的 `charge_temperature_apply` 结构。

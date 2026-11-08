@@ -1170,33 +1170,52 @@ mod tests {
     }
 
     #[test]
-    fn charge_termination_policy_separates_low_normal_and_blocked_modes() {
+    fn charge_termination_policy_uses_configuration_not_eoc_history() {
+        use TerminationBlockReason::*;
         assert_eq!(
             charge_termination_policy(true, Some(100), None),
             ChargeTerminationPolicy::LowCurrent
         );
         assert_eq!(
-            charge_termination_policy(true, Some(500), Some(200)),
-            ChargeTerminationPolicy::Normal {
-                current_at_eoc_ma: 200
-            }
+            charge_termination_policy(true, Some(500), Some(120)),
+            ChargeTerminationPolicy::Normal { iterm_ma: 80 }
         );
-        assert_eq!(
-            charge_termination_policy(true, Some(500), Some(500)),
-            ChargeTerminationPolicy::Blocked
-        );
-        assert_eq!(
-            charge_termination_policy(true, Some(200), Some(200)),
-            ChargeTerminationPolicy::Blocked
-        );
+        for target in [200, 500] {
+            assert_eq!(
+                charge_termination_policy(true, Some(target), Some(201)),
+                ChargeTerminationPolicy::Blocked(Mismatch)
+            );
+        }
         assert_eq!(
             charge_termination_policy(true, Some(500), None),
-            ChargeTerminationPolicy::Blocked
+            ChargeTerminationPolicy::Blocked(Unavailable)
+        );
+        assert_eq!(
+            charge_termination_policy(true, Some(500), Some(0)),
+            ChargeTerminationPolicy::Blocked(Invalid)
+        );
+        assert_eq!(
+            charge_termination_policy(true, Some(110), Some(120)),
+            ChargeTerminationPolicy::Blocked(IncompatibleTarget)
         );
         assert_eq!(
             charge_termination_policy(false, Some(500), None),
             ChargeTerminationPolicy::NotApplicable
         );
+    }
+
+    #[test]
+    fn actual_termination_register_conflicts_are_rejected() {
+        let normal = ctrl0::EN_CHG | ctrl0::EN_TERM;
+        assert!(termination_registers_match(normal, normal, 80, 80));
+        assert!(!termination_registers_match(normal, normal, 120, 80));
+        assert!(!termination_registers_match(ctrl0::EN_CHG, normal, 80, 80));
+        assert!(termination_registers_match(
+            ctrl0::EN_CHG,
+            ctrl0::EN_CHG,
+            40,
+            40
+        ));
     }
 
     #[test]
@@ -1439,22 +1458,43 @@ pub const fn valid_termination_current_ma(raw_ma: u16) -> Option<u16> {
     }
 }
 
+pub const NORMAL_ITERM_MA: u16 = 80;
+pub const BQ40_TAPER_MA: u16 = 120;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminationBlockReason {
+    Unavailable,
+    Invalid,
+    Mismatch,
+    IncompatibleTarget,
+}
+
+impl TerminationBlockReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unavailable => "bq40_taper_unavailable",
+            Self::Invalid => "bq40_taper_invalid",
+            Self::Mismatch => "bq40_taper_mismatch",
+            Self::IncompatibleTarget => "termination_target_incompatible",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChargeTerminationPolicy {
     NotApplicable,
     LowCurrent,
-    Normal { current_at_eoc_ma: u16 },
-    Blocked,
+    Normal { iterm_ma: u16 },
+    Blocked(TerminationBlockReason),
 }
 
-/// Select the termination behavior for a managed runtime charge request.
-/// Low-current charging owns a fixed 40 mA taper value and disables EN_TERM;
-/// normal charging must have a valid BQ40 CurrentAtEOC value before it may
-/// enable termination. Non-managed flows leave the existing behavior alone.
+/// The gauge's configured taper qualifies charge before the charger's fixed
+/// lower termination threshold. CurrentAtEOC is history, never configuration.
+/// Low-current recovery retains ITERM=40mA and EN_TERM=0.
 pub const fn charge_termination_policy(
     managed_charge: bool,
     target_ichg_ma: Option<u16>,
-    current_at_eoc_ma: Option<u16>,
+    taper_ma: Option<u16>,
 ) -> ChargeTerminationPolicy {
     if !managed_charge {
         return ChargeTerminationPolicy::NotApplicable;
@@ -1465,11 +1505,20 @@ pub const fn charge_termination_policy(
     if target_ichg_ma <= 100 {
         return ChargeTerminationPolicy::LowCurrent;
     }
-    match current_at_eoc_ma {
-        Some(current_at_eoc_ma) if current_at_eoc_ma < target_ichg_ma => {
-            ChargeTerminationPolicy::Normal { current_at_eoc_ma }
+    match taper_ma {
+        None => ChargeTerminationPolicy::Blocked(TerminationBlockReason::Unavailable),
+        Some(0 | 32768..=65535) => {
+            ChargeTerminationPolicy::Blocked(TerminationBlockReason::Invalid)
         }
-        Some(_) | None => ChargeTerminationPolicy::Blocked,
+        Some(taper) if taper != BQ40_TAPER_MA => {
+            ChargeTerminationPolicy::Blocked(TerminationBlockReason::Mismatch)
+        }
+        Some(taper) if taper >= target_ichg_ma => {
+            ChargeTerminationPolicy::Blocked(TerminationBlockReason::IncompatibleTarget)
+        }
+        Some(_) => ChargeTerminationPolicy::Normal {
+            iterm_ma: NORMAL_ITERM_MA,
+        },
     }
 }
 
@@ -1479,6 +1528,17 @@ pub const fn encode_termination_current_bits(target_ma: u16) -> u8 {
 
 pub const fn decode_termination_current_ma(reg09: u16) -> u16 {
     (reg09 & 0x001f) * TERMINATION_CURRENT_STEP_MA
+}
+
+pub const fn termination_registers_match(
+    ctrl0: u8,
+    expected_ctrl0: u8,
+    iterm_ma: u16,
+    expected_iterm_ma: u16,
+) -> bool {
+    (ctrl0 & (ctrl0::EN_CHG | ctrl0::EN_TERM | ctrl0::EN_HIZ))
+        == (expected_ctrl0 & (ctrl0::EN_CHG | ctrl0::EN_TERM | ctrl0::EN_HIZ))
+        && iterm_ma == expected_iterm_ma
 }
 
 pub fn set_termination_current_ma<I2C>(i2c: &mut I2C, target_ma: u16) -> Result<u16, I2C::Error>

@@ -46,3 +46,7 @@
 
 - `./SPEC.md`
 - `./IMPLEMENTATION.md`
+
+## 容量配置维护契约
+
+增加独立 `bq40-capacity-model` 选择，沿用 native USB 维护日志例外与 catalog 生命周期；温度和 taper 的 writer 范围保持独立。

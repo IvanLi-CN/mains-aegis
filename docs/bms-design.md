@@ -1,5 +1,7 @@
 # BMS 设计（mains-aegis）
 
+电池系统预期值与实机差异统一见[配置对账清单](battery-configuration.md)，电芯来源与电池组使用边界见[电芯与电池组资料](battery-pack.md)。
+
 本文档用于把本项目的 BMS（Battery Management System）设计从“分散的选型与数据手册摘录”收敛为**一份可落地的系统级设计说明**，便于后续：
 
 - 原理图/PCB 绘制与评审
@@ -511,7 +513,7 @@ LT 的 Low/Med/High 电流字段全部使用 `100mA`；STL、RT、STH、HT 的 L
 - `ChemID`：必须通过 TI chemistry matching 流程确定，不从电芯型号臆填
 - `Design Capacity`：本项目固定为 `5000mAh`
 - `Design Voltage`：本项目固定为 `14600mV`（4S × 3.65V）
-- `Terminate Voltage`：保持独立 golden 配置，不属于本 profile
+- `Term Voltage`：本项目目标为 `11200mV`（4S × 2.8V）；独立于 `CUV=2500mV/cell` 保护，不属于温度 profile
 - `Remaining Capacity Alarm`
 - 充/放电温度窗口与恢复点：充电窗口由 `bq40-charge-temperature-profile` 规范固定
 - `COV/SCC/SCD` 与 `CUV/CUVC` trip/delay 的量产验证；`CUV Recovery=2550mV` 与 `CUV_RECOV_CHG=0` 已作为主板恢复基线冻结
@@ -537,3 +539,7 @@ LT 的 Low/Med/High 电流字段全部使用 `100mA`；STL、RT、STH、HT 的 L
 - `docs/datasheets/CLM1612P1412/`
 - `docs/datasheets/UMW_SI2305A/`
 - `docs/datasheets/UMW_AO3400A/`
+
+### 充电终止配置与学习边界
+
+`Current at EoC` 是历史状态，不是 taper 配置。项目候选 `Charge Term Taper Current` 为 120mA（DF `0x4A6D`），BQ25792 ITERM 为 80mA；BQ40 的平均电流、电压资格与判定窗口仍决定有效满充，不能用瞬时电流替代。此修正不重置 Qmax、Ra 或学习历史，也不能据此认定此前 SOC 不准的唯一原因。配置写入使用独立 taper 白名单，温度 writer 仍只写原七字段；恢复 overlay 同值，正常固件只读。操作与验收见 [维护配置说明](../tools/bq40-comm-tool/docs/operations.md) 和 [终止决策](adr/0003-charge-termination-coordination.md)。

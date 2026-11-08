@@ -59,3 +59,7 @@
 - 固件 CDC 提供 `activate_bms` 与 `get_bms_activation`，前者复用前面板 `request_bms_activation`，后者只读共享状态机。hello 通过 `bms_activation` capability 声明支持。
 - host-tools 提供 CLI `device <id> recovery bms-activation [--status]`、IPC `device.recovery.bms_activation` 与 devd HTTP `POST|GET /api/v1/devices/{id}/recovery/bms-activation`。USB-only，无 companion LAN 回退；启动响应不确定时不自动重发。
 - 协议解析、CLI 映射和 devd transport 测试覆盖启动/查询分离、pending 原样返回、mock/LAN/unknown 拒绝及不确定响应不重发。
+
+## BQ40 容量配置维护
+
+CLI/devd 支持 `bq40-capacity-model`，按 catalog 的显式 apply 特征拒绝混合 writer。容量维护镜像、两块校验及离线报告由 bq40-comm-tool 提供；相关 host 回归覆盖三种 writer 的所有组合。本实现不构成配置已经应用于设备的证据。

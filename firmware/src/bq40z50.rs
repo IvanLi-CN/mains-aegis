@@ -28,6 +28,7 @@ pub mod cmd {
     pub const TEMPERATURE: u8 = 0x08;
     pub const VOLTAGE: u8 = 0x09;
     pub const CURRENT: u8 = 0x0A;
+    pub const AVERAGE_CURRENT: u8 = 0x0B;
     pub const RELATIVE_STATE_OF_CHARGE: u8 = 0x0D;
     pub const REMAINING_CAPACITY: u8 = 0x0F;
     pub const FULL_CHARGE_CAPACITY: u8 = 0x10;
@@ -94,7 +95,19 @@ pub mod mac {
 }
 
 pub mod data_flash {
+    pub const OC_THRESHOLD: u16 = 0x49A9;
+    pub const OC_RECOVERY: u16 = 0x49AB;
+    pub const OC_RSOC_RECOVERY: u16 = 0x49AD;
+    pub const DESIGN_CAPACITY_MAH: u16 = 0x48E5;
+    pub const QMAX_CELL_1: u16 = 0x4306;
+    pub const QMAX_PACK: u16 = 0x430E;
     pub const UPDATE_STATUS: u16 = 0x4312;
+    pub const CHARGE_TERM_TAPER_CURRENT: u16 = 0x4A6D;
+    pub const CHARGE_TERM_VOLTAGE: u16 = 0x4A71;
+    pub const CHG_CURRENT_THRESHOLD: u16 = 0x4A8B;
+    pub const QUIT_CURRENT: u16 = 0x4A8D;
+    pub const SBS_GAUGING_CONFIGURATION: u16 = 0x4888;
+    pub const IT_GAUGING_CONFIGURATION: u16 = 0x4917;
     pub const CURRENT_AT_EOC: u16 = 0x431B;
     pub const NO_VALID_CHARGE_TERM: u16 = 0x43D0;
     pub const LAST_VALID_CHARGE_TERM: u16 = 0x43D2;
@@ -766,6 +779,16 @@ where
     }))
 }
 
+pub fn exact_mac_payload<const LEN: usize>(raw: Option<BlockReadRaw>) -> Option<[u8; LEN]> {
+    let raw = raw?;
+    if raw.payload_len as usize != LEN || LEN > raw.payload.len() {
+        return None;
+    }
+    let mut bytes = [0u8; LEN];
+    bytes.copy_from_slice(&raw.payload[..LEN]);
+    Some(bytes)
+}
+
 pub fn read_filter_capacity<I2C>(
     i2c: &mut I2C,
     addr: u8,
@@ -1065,6 +1088,23 @@ pub const fn temp_c_x10_from_k_x10(temp_k_x10: u16) -> i32 {
 mod tests {
     use super::*;
     use embedded_hal::i2c::{ErrorKind, ErrorType, I2c, Operation};
+
+    #[test]
+    fn diagnostic_mac_payload_rejects_truncated_or_wrong_sized_data() {
+        let mut raw = BlockReadRaw {
+            declared_len: 32,
+            payload_len: 32,
+            payload: [0; MAX_BLOCK_PAYLOAD_LEN],
+        };
+        raw.payload[0] = 0xfe;
+        raw.payload[1] = 0xff;
+        let data = exact_mac_payload::<32>(Some(raw)).unwrap();
+        assert_eq!(i16::from_le_bytes([data[0], data[1]]), -2);
+        assert_eq!(exact_mac_payload::<24>(Some(raw)), None);
+        raw.payload_len = 31;
+        assert_eq!(exact_mac_payload::<32>(Some(raw)), None);
+        assert_eq!(exact_mac_payload::<32>(None), None);
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct FakeError;

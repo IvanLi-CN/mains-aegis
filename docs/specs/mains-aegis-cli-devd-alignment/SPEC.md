@@ -104,7 +104,13 @@ Mains Aegis 过去只有 `mains-aegis-devd` HTTP daemon；用户机器安装时�
 
 - 跨 `Web App` / `mains-aegis-devd` / `mains-aegis` CLI 的通信方案优先级矩阵由 [`client-transport-priority`](../client-transport-priority/SPEC.md) 统一定义；本规格只记录 host-tools crate、IPC/HTTP 命令面与 release/install 对齐，不再重复定义跨客户端优先级表。
 
+### BQ40 directed maintenance profile
+
+- REQ-BQ40-CAPACITY-MAINTENANCE: maintenance profile 选择接受 `bq40-capacity-model`，仅匹配 catalog 的 `bms-capacity-model-apply` writer；与温度或 taper writer 混合时拒绝。未核验应用身份的维护日志例外只适用于指定 native USB，不允许 LAN fallback；该例外不替代设备端 R2、Full Access 与禁充校验。DF 写入范围仅为 DesignCapacity=5000mAh 和 IT Term Voltage=11200mV；配置要求见[电池系统配置清单](../../battery-configuration.md)。普通固件不自动写 DF，主机不得把维护日志解析通过当作自然满充验收通过。
+
 ## Verification
+
+- VER-BQ40-CAPACITY-MAINTENANCE，覆盖: REQ-BQ40-CAPACITY-MAINTENANCE。离线测试覆盖三种 writer 特征的互斥选择、两块完整快照、唯一两字段写入、所有非目标字节保持、失败即停和跨会话／混合证据拒绝；维护构建与测试不得隐式连接设备。
 
 - VER-USB-BMS-ACTIVATION，覆盖: REQ-USB-BMS-ACTIVATION。协议与主机测试必须证明启动和只读查询分离、pending 不等于成功、不确定响应不重发启动、拒绝非 USB transport；实机测试应记录激活阶段、终态原因及充电门控，不得将命令送达报告为恢复成功。
 

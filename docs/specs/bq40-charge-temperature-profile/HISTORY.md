@@ -18,6 +18,10 @@
 
 把 `VBAT_PRESENT_STAT=1` 同时作为普通充电和离线唤醒的前提，会在 BMS 切断 PACK 路径时形成循环依赖：需要外部充电源唤醒，却因 PACK 低压而不施加充电源。低电压例外因此仅属于受限的显式离线 Activation，温度和已观察到的 BQ40 安全证据仍保持原有 fail-closed 合同。
 
+## 终止语义
+
+历史 CurrentAtEOC 对齐路径已由 ADR 0003 的真实 taper=120mA / ITERM=80mA 合同取代。温度七字段白名单及 100mA 模式未扩大。
+
 ## Related Changes
 
 - None

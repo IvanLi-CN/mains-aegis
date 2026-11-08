@@ -1,0 +1,142 @@
+# 充电反复启停与均衡电流分析报告
+
+本报告前半部分记录原始固件的调查结论；修正后候选的实际配置与失败验收见文末，不能把历史采样当作最终候选通过证据。
+
+采集日期：2026-11-07（Asia/Shanghai）。设备：`mains-aegis-198840`。操作范围：经仓库 devd CLI 读取诊断；本次分析未改设置、未刷写固件。PCB 修改由设备所有者完成，内容为增强 BGND 与最低位电芯负极的连接。
+
+## 结论
+
+1. 反复充电的直接原因是固件两条规则冲突：接近满电时要求 200 mA 补电，同时要求从 BQ40 `Current at EoC` 推导的终止目标严格小于充电目标。实际读到 `Current at EoC=201 mA`，换算为 200 mA，不能通过 `200 < 200` 检查，固件主动禁充。
+2. BQ40 充电分区状态在 MV/HV 之间变化，固件因此在 500 mA 正常充电与 200 mA 补电之间切换。500 mA 通过上述检查，200 mA 被拦截，形成重复启停。MV/HV 为什么变化尚未完整定位；已有原始状态字能确认发生了分区变化，但不能据此认定是电压回落、配置、内部算法或协议问题中的哪一个。
+3. `bq40_current_at_eoc_unavailable` 提示不准确：本次 35 轮诊断中该字段均成功读到 201 mA，未见制造诊断读取错误；当前报错可以由“阈值不小于目标”触发，并不等于字段读取失败。
+4. 项目电芯 EVE INR21700/50E 的官方产品页给出的充电截止电流是 100 mA。4S1P 串联电流不变，包端仍为 100 mA。201 mA 不是可直接采用的电芯截止规格；相对该规格，200 mA 是两倍，不能仅以“0.04C 不算大”判为合理。
+5. PCB 接地增强后的 180 秒、90 个独立 fresh 快照中，均衡期间没有复现之前约 0.9～1.8 A 的异常大电流。该观察支持接地修改有效，但未覆盖 mask=8，也不是严格同步的均衡瞬态验证。
+
+## 证据与采集限制
+
+| 证据 | 内容 | 限制 |
+| --- | --- | --- |
+| [180 秒采样](charge-cycling-evidence/balance-current-180s.json) | 90 个独立 fresh 时间戳，电流、均衡、充电启停 | 均衡 mask 来自运行缓存，不与 fresh 电流严格同步 |
+| [终止策略专项采样](charge-cycling-evidence/termination-cycle.json) | 35 轮，约 116 秒，包含制造诊断和 ChargingStatus 原始轨迹 | 同一快照包内各项顺序采集；制造诊断还可能刷新派生诊断字段 |
+| [补充快照](charge-cycling-evidence/final-snapshot.json) | 制造状态、充电器寄存器解码及派生策略 | 瞬时状态，不替代历史周期 |
+
+早先密集读取中出现相同 `captured_at_ms`、`diag_capture_rate_limited`，不能把每次 CLI 返回都计为独立硬件采样。180 秒采样已拉开间隔，90 轮时间戳独立、未报告诊断限流。此前把 fresh 电流与缓存 mask 直接配对，进一步声称已证明具体均衡通道造成电气干扰，证据不足；本报告不沿用该因果断言。
+
+## 实际启停链
+
+专项采样中的一段完整变化如下，时间为该轮采样开始后的相对秒数。
+
+| 时间 | ChargingStatus | HV | 策略 | 实测 BQ40 电流 | 结果 |
+| --- | --- | --- | --- | --- | --- |
+| 65.4 s | `0x0808` | true | `charging_topoff_200ma` | −4 mA | `LOCK`，终止策略拦截 |
+| 69.0 s | `0x0408` | false | `charging_500ma`，启动爬坡 | 300 mA | 恢复充电 |
+| 75.5～86.0 s | `0x0408` | false | `charging_500ma` | 501～504 mA | 持续充电 |
+| 89.5 s | `0x0808` | true | `charging_topoff_200ma` | −6 mA | 再次 `LOCK` |
+
+上述状态字分别包含 HV 和 MV 分区位；HV 是高级充电算法的高电压分区，不等同于 COV 过压保护。该轮诊断的 `Current at EoC` 始终为 201 mA，`read_errors=[]`。结合代码，能定位是运行策略主动关充电，而非仅凭界面名称推测。
+
+旧固件代码路径（基线 `2038294afed4c49c1effbb696305844f8a064f38`；当前实现已替换）：
+
+- [补电选择](../../firmware/src/output/pure.rs)：`SOC >= 99%`、允许充电、未满充，且满足 CV/HV/最高电芯电压条件之一时，选择 200 mA。
+- [终止策略](../../firmware/src/bq25792.rs)：`valid_termination_current_ma(201)` 按 40 mA 步进得到 200 mA；正常模式只接受 `current_at_eoc_ma < target_ichg_ma`。
+- [运行时禁充](../../firmware/src/output/mod.rs)：终止策略返回 `Blocked` 后清除充电目标、设置 `allow_charge=false`，并输出 `bq40_current_at_eoc_unavailable`。
+
+因此，相同 201 mA 字段下，500 mA 目标可以通过检查，200 mA 目标不能通过。由于策略仍保留充电需求，分区回到 MV 后又选择 500 mA 并恢复充电；这不是一次完成满充后的正常再充电。
+
+## 三种电流参数必须分开
+
+| 参数 | 性质 | 本次证据 |
+| --- | --- | --- |
+| BQ40 `Current at EoC` | `Gas Gauging / State` 中的充电结束电流状态；不是 `Termination Config` 的 taper 阈值 | 读取为 201 mA |
+| BQ40 `Charge Term Taper Current` | BQ40 有效充电终止判定的配置阈值 | 当前已提供的诊断包未暴露该项，尚未读回实机配置 |
+| BQ25792 `ITERM` | 充电器自身的硬件终止阈值 | 补充快照为 120 mA，`term_ctrl=1507`；不能把代码计算的 200 mA 一概当作实际已写入值 |
+
+[BQ40Z50-R2 手册](../manuals/BQ40Z50-R2-TRM/BQ40Z50-R2-TRM.md) §15.13.8.4 将 `Current at EoC` 定义为充电结束电流；§15.4.10.1 将 `Charge Term Taper Current` 定义为有效充电终止的电流资格阈值。两个字段的默认值均为 250 mA，但同值不表示同义，更不能用默认值代替实机读回值。官方原文：[TI SLUUBK0B](https://www.ti.com/lit/ug/sluubk0b/sluubk0b.pdf)。
+
+BQ40 有效终止还要求充电方向、平均电流低于 taper 阈值、电芯电压资格、累计容量条件，并连续满足两个 40 秒窗口。任意把充电器先设为较大的 ITERM，可能让其在 BQ40 完成资格判断前停充；相反，也不能为了避免停充而无限禁用终止或随意调小阈值。
+
+现有 [温度充电策略 Spec](../specs/bq40-charge-temperature-profile/SPEC.md) 明确继承了 `CurrentAtEOC` 对齐路径；[历史锁定问题 Spec](../specs/bq40-lock-root-cause/SPEC.md) 记录过从 109 mA 换算到 80 mA 的处理。因此这不是单行实现误写，而是需要同时纠正参数语义、主题合同、运行逻辑和诊断提示的既有设计问题。
+
+## 电芯规格与合理阈值
+
+仓库 [BMS 设计](../bms-design.md) 声明电芯为 EVE INR21700/50E，电池组 4S1P、5000 mAh。EVE 官方产品规格给出：标准充电 1000 mA、截止电压 4.2 V、截止电流 100 mA。来源：[EVE 产品页](https://www.evemall.eu/power-battery/eu-warehouse/21700-50e)。此处依据官方网页规格，尚未核验当前电芯批次的签署规格书。
+
+| 电流 | 相对 5000 mAh 的倍率 | 应如何理解 |
+| --- | --- | --- |
+| 500 mA | 0.1C | 本次正常充电目标 |
+| 200 mA | 0.04C | 当前补电目标，以及由历史状态字段换算的终止计算值 |
+| 100 mA | 0.02C | EVE 官方产品页的电芯充电截止电流 |
+
+结论是：现有 200 mA 终止计算值缺乏正确的配置来源，且不符合官方 100 mA 截止规格的直接取值。200 mA 本身不意味着充电过流危险，但可能较早终止、影响满充资格；其实际容量影响不能凭当前数据量化。串联四节提高包电压，不把截止电流放大四倍。
+
+BQ25792 的 40 mA 步进不能精确设为 100 mA；80/120 mA 都不应未经误差及 BQ40 终止时序核算就定为量产值。已接受的候选为 BQ40 taper=120mA / ITERM=80mA，仍须实机验收；本报告不把候选当作已验证的量产值，也不建议改写 BQ40 历史状态来迁就当前代码。
+
+## 接地修改后的电流稳定性
+
+180 秒采样覆盖 mask=0/1/2/4，分别表示不均衡、C1、C2、C3。停止充电后，mask=0/2/4 时 BQ40 电流范围为 −6～0 mA；mask=1 时通常也在零附近，但一次刚停充的快照为 415 mA，同轮 BQ25792 为 258 mA，随后归零。该点应当保留为启停过渡，不能当作均衡伪电流，也不能假装两个 ADC 同步。
+
+稳定充电阶段，BQ40 约 500 mA，BQ25792 约 520 mA。未见此前的 0.9～1.8 A 跳变；两路约 20 mA 的差异尚未以同步外部仪表和芯片精度核验，不能宣称绝对电流已校准。mask=8（C4）未覆盖，完整通道验证尚未结束。
+
+180 秒内 `XCHG`、`OC` 均未置位。补充快照则出现 `safety_alert_oc=true`、`safety_status=0`、`OC=false`、`XCHG=false`：告警位与已经生效的安全保护不是一回事，该告警需后续跟踪，但不应据此改写本次已观测到的策略停充原因。
+
+## 对先前解释的修正
+
+- 缓存和 fresh 读数不同不能单独证明缓存损坏；二者不同步且原始电流曾跳变，必须用时间戳确认。早先“Web 只是显示缓存旧值”的解释不充分。
+- `not_qualified_adapter` 在已观测的 DCIN 供电过程中也出现；补充快照仍显示 `can_enable=true`、`normal_allow_charge=true`、`usb_pd_charge_gate_ready=true`。它不是本次启停的已证实阻塞原因，不能仅凭该字符串声称输入被固件拒绝。
+- 201 mA 是 `Current at EoC` 的实机状态值，不是已经读回并确认合理的 BQ40 taper 配置。
+- “200 mA 不大”和“本项目应采用 200 mA 终止”是两件事；电芯官方截止规格为 100 mA。
+
+## 建议处理与验收
+
+1. 扩充只读诊断，读回 BQ40 `Charge Term Taper Current`、`Charge Term Voltage`、Charging Configuration、LV/MV/HV 电压/SOC 边界和迟滞，以及 BQ25792 的实际 VREG、ICHG、ITERM、EN_TERM。记录每项采集时刻，避免把缓存与 fresh 信息拼成同一时刻。
+2. 按电芯规格和 BQ40 的有效终止时间要求，制定统一终止方案；停止将 `Current at EoC` 状态字段作为终止阈值的唯一来源。同步修订现有 Spec，区分字段缺失、数值非法、与目标冲突三类提示。
+3. 重新评估 200 mA 补电必要性。优先采用正常 CC/CV 及一致的满充终止管理；若保留补电，需明确进入/退出及终止条件，不能继续使用当前必然冲突的组合。
+4. 在一次完整充满过程中验证 VCT/FC、两路电流、实际电压及停止原因；确认充电器不会早于 BQ40 有效终止资格完成而误停。再验证满足再充电条件前不会周期重启。
+5. 补足 C4 均衡，并用电阻两端与 SRP/SRN 引脚处的同步测量核对残余干扰。外部表此前测得 0～0.01 mV 是测量证据，不排除仪表带宽之外的瞬态。
+
+软件现有 `just firmware-host-test` 已通过，但现有测试明确接受“200 mA 目标配 200 mA 终止阈值时 Blocked”，因此通过测试不能证明整个补电闭环正确。后续应增加穿过“分区变化 → 补电选择 → 终止策略 → 充电执行”的联合回归测试，并上板验证。
+
+本报告完成了对重复启停直接机制、阈值来源错误及接地修改后观测效果的分析；尚未完成真实 taper 配置读回、MV/HV 周期变化根因、完整充满验证和固件修复。不应把目前证据表述成故障已经修复。
+
+## 已接受的修正与未完成验收
+
+[ADR 0003](../adr/0003-charge-termination-coordination.md) 删除普通 200mA 补电，采用真实 taper=120mA、ITERM=80mA；FC/VCT 与硬件终止共同收口，硬件提前终止则锁存异常，不自动重试。独立配置 writer 只写 taper 两字节并检查其余块字节不变；原温度白名单和学习历史保持原边界。
+
+软件测试覆盖旧冲突、SOC99/HV、不同终止顺序、保护和低电流路径；配置合同覆盖回显及最终块校验。测试通过不等于实机验收：需绑定最终候选读取前后配置、每 2 秒采样 10 分钟，再捕获完整自然终止与终止后 10 分钟。缺失过程或未出现的 mask 应明确记录，不能宣称 Step 5C Ready。实机记录由同一候选的 PR 证据提供，未取得前保持未验收。
+
+## 修正候选的实机结果
+
+修正候选 `adb8d0c9` 已经 devd 恢复到绑定设备 `mains-aegis-198840`。真实 taper 从初始读回的 250mA 调整为 120mA，历史 Current at EoC 保持 201mA；普通 500mA 充电阶段实际 ITERM=80mA、EN_TERM=1。ChgCurrentThreshold=50mA、QuitCurrent=10mA、FET Options=0x19（CHGFET=0）、SBS Gauging Configuration=0x05（RSOCL=1）、IT Gauging Configuration=0xD0FE（CSYNC=1）。
+
+首次 250→120mA 应用缺少完整启动日志，因此不声称该次完整原始块证据可复现。后续完整捕获的 120→120mA 幂等应用通过身份、Full Access、CE 高、禁充、回显及前后 32 字节块校验，其他字节不变；parser 判定通过。原始厂商资产未修改，ChemID、Qmax、Ra、校准和保护阈值未人工改写。
+
+密集读取完整 manufacturing 会使温度缓存超过 1 秒并停充；普通充电决策现先刷新过期温度配置和 DAStatus2，读取失败仍禁充，1 秒有效期不变。连续观测改用不含 DF 和历史读取的 bq40.charge 包。持续 product monitor 与诊断并行曾造成 4 次 CDC 超时和采样延迟，缺样保留；关闭 monitor 后另起连续窗口，不把该段争用包装成器件电流异常。
+
+连续窗口从约第 332 秒开始。到第 836 秒，mask=0/2/4/8 的 fresh Current 为 498–503mA；AverageCurrent 接近 500mA，ITERM 和 EN_TERM 正确，没有无法解释的大电流跳变。mask=1 未覆盖，不作该通道通过结论。第 838 秒出现安全停充，打断了要求的连续 10 分钟充电窗口。
+
+2026-11-08 04:20:38～04:20:40 UTC 之间，SafetyAlert[OC] 从告警转为 SafetyStatus[OC]=1（0x00400000），XCHG=1、PFStatus=0。此前仍以约 500mA 恒流充电，VCT/FC 未成立，未观察到硬件 termination_done 或 FULL。停充后电流下降到 −6～0mA。该变化有明确安全状态对应，不能解释成均衡导致的伪电流。
+
+这里的 OC 是容量过充保护，不是 OCC/OCD 瞬时过流，也不是 COV 电芯过压。根据 [BQ40Z50-R2 TRM §2.17](../manuals/BQ40Z50-R2-TRM/BQ40Z50-R2-TRM.md#217-overcharge-protection)，容量达到满充容量后，内部累计充电量达到 OC 阈值会置位 OC/XCHG。保护后的日志为 FCC=2624mAh、RemainingCapacity=2597mAh、SOC=99%，电芯约 4.001–4.036V；RSOCL=1 会在有效终止前限制对外 SOC/容量到 99%，不能仅凭这个显示值否认容量保护，也不能以 SOC99 证明真实电池已满。
+
+后续[容量过充诊断](bq40-oc-diagnosis.md)已读回真实 OC 阈值 300mAh、内部 TrueRemQ 约 3042mAh 和 TrueFCCQ 2624mAh，并确认 DesignCapacity=4400mAh 与项目 5000mAh 目标不符。OC 内部计数器未直接读回，不把两个内部容量的差值冒充该计数器。Qmax、ChemID、历史 DODEOC 与真实电芯是否匹配仍需独立验证；不得把 FCC=2624 单独当成学习损坏的证明。
+
+本轮 A3 充电稳定性窗口和 A4 完整自然终止均未通过，120mA/80mA 的终止窗口尚未得到实机验证。已明确 STOP，保留保护与学习数据；不清保护、不强制放电、不自动重新 START、不放宽参数。配置和软件检查通过不能替代这项失败的经验验收。PR 保持 Draft，未启动要求通过实机门禁后的 Tier 4 正式审查，未达到 Step 5C Ready。
+
+只读诊断补充固件 b36ec377 同轮读取 BatteryMode、RemainingCapacity、FullChargeCapacity，确认容量单位为 mAh，FCC=2624mAh、RemainingCapacity=2597mAh。该补充未改充电控制或 BQ40 配置，未重新 START；OC/XCHG 仍置位，充电器关闭。
+
+停充过渡的第 838 秒，同轮 fresh Current=0mA、AverageCurrent=484mA、运行时缓存 Current=127mA，三者保留不同采样时间。这证明本轮停充过渡存在指标和时间不同步，不能将 AverageCurrent 当成瞬时电流；也不能倒推此前每个 Web App 480mA 读数的原因。
+
+保护后另外完成每 2 秒一轮、连续 10 分钟的停充观测：301 轮、零缺样和读取错误、无充电使能样本。mask=0/2/4/8 下的电流范围见下表；mask=1 未覆盖。该记录只验证停充后的电流稳定性，不替代 A3 的充电窗口或 A4 的自然终止验收。
+
+| mask | 样本数 | fresh Current 范围（mA） |
+|---|---:|---:|
+| 0 | 162 | -5～0 |
+| 2 | 48 | -5～0 |
+| 4 | 46 | -6～0 |
+| 8 | 45 | -5～0 |
+
+[结构化验证记录](charge-termination-validation.json) 保存候选来源、真实配置、容量单位、安全状态、过渡时序、缺样及停充统计。最终代码检查通过，固件 host 测试为 566 项；充电经验验收仍未通过，不能进入 merge-ready。
+
+## 后续验收阶段
+
+主人已明确批准将计划 A3/A4 调整为合并后验收。以上 OC 中断、窗口不足与自然终止未捕获的历史结论保持不变；它们不再单独阻止本 PR 的合并前收敛，也不因此成为通过证据。合并前保留软件回归、定向配置安全及证据审核、CI 和 Tier 4 独立审查。合并后须绑定实际 merge SHA 与对应固件重新取证；GaugeStatus3 读取失败及 blocked_no_bms 原因映射随后排查。容量配置修复和恢复正常固件的结果见[独立应用记录](bq40-capacity-configuration-application.md)。

@@ -31,3 +31,31 @@ None
 
 - `./SPEC.md`
 - `./HISTORY.md`
+
+## 终止与配置实现
+
+纯策略已删除普通 200mA 补电，并覆盖 FC 先到、硬件终止先到、满充锁存和明确 START 重试。BQ25792 正常 ITERM 固定 80mA，以真实 taper=120mA 作为配置前提；历史 EOC 保留兼容字段。独立单字段 writer、最终块校验、恢复 overlay 和 parser 共用 120mA 目标。实机稳定性和完整终止验收必须另有绑定候选固件的证据，不能由单元测试代替。
+
+维护 R2 身份门控按 TRM 的高字节格式解码 FirmwareVersion 完整响应，测试固定实机 45 00 02 11 00 34 00 04 75 02 00。显式维护 monitor 只读 defmt，不发送维护镜像无法消费的产品 CDC hello/status 轮询，CDC 请求明确拒绝，避免静默写入阻塞维护日志与停止流程。
+
+CLI 的 device charge start|stop 映射既有 control.manual_charge IPC，以执行授权的实机完整充电，默认不确认回路风险。维护镜像在启动后保留 30 秒禁充观察期，供 USB 重新枚举后附着日志；只重试同一绑定端口，不扫描或切换端口。
+
+安全校验通过的明确 START 建立新的策略会话，清除旧异常与资格；SOC99 的手动充电也参加联合终止。独立的旧 charger_done 不阻止异常后的 START，charger_done 只在本轮实际使能充电时消费，避免停充历史状态立即重新锁住重试。
+
+密集诊断与充电共享执行任务；诊断造成温度缓存超过 1 秒时，在充电决策边界重新读取温度配置与 DAStatus2，读取失败保持禁充，安全有效期仍为 1 秒。诊断附带 `cell_temperature_max_c_x10`、`cell_temperature_captured_at_ms` 和 `temperature_configuration_verified`，用于区分真实温度越界与证据过期。
+
+`bq40.charge` 提供不含 DF 与历史读取的独立实时观测包，供每两秒采样使用；完整配置在采样前后单独读回，两个包的时间和错误不混用。
+
+实机候选 adb8d0c9 在约 500mA 充电时触发 OC 容量过充保护，未到 VCT/FC 与硬件正常终止；连续充电窗口不足 10 分钟，A3/A4 未通过。已明确 STOP，不修改保护与学习数据。配置和本地检查通过不构成经验验收通过；详见[分析报告](../../reports/charge-cycling-analysis.md#修正候选的实机结果)。
+
+为核验容量保护证据，bq40.core 增加同轮 BatteryMode、RemainingCapacity 与 FullChargeCapacity 原值及由模式解码的单位；不改写容量模式、保护或学习数据。单位读取失败保持未知。
+
+只读容量诊断进一步读取真实 OC 阈值/恢复、DesignCapacity、Qmax、ChemicalID 原始负载、GaugeStatus1/2/3，以及 IT 仿真截止电压、负载选择/模式与预留容量。每项缺失保持空值与错误，不作为 DF 写入入口；制造包在停充时单独采集。最终候选 7893fcad 连续三轮确认 TrueRemQ=3042mAh、TrueFCCQ=2624mAh、OC=300mAh，DesignCapacity=4400mAh、IT Term Voltage=9000mV 与项目配置资格未对齐。GaugeStatus3 严格长度校验失败，未将包判为完整成功；详见[容量过充诊断及边界](../../reports/bq40-oc-diagnosis.md)。
+
+## 验收阶段与后续工作
+
+主人明确将 A3/A4 改为合并后验收；原 OC 中断与未通过记录保留，不作为通过证据。合并前继续要求代码回归、配置 writer/parser 合同、配置应用证据、CI 与 Tier 4 独立审查。合并后观察必须绑定实际 merge SHA 及对应固件；在完整充电过程通过前，120mA/80mA 仍是候选组合。GaugeStatus3 读取失败和 blocked_no_bms 原因映射留待合并后排查，不清保护或自动 START。
+
+容量 profile 已仅对 DesignCapacity=5000mAh、IT Term Voltage=11200mV 定向应用，恢复既有正常固件后独立读回通过；完整成功审计是目标值的重复应用，不能替代首次写入的缺失证据，详见[配置应用记录](../../reports/bq40-capacity-configuration-application.md)。
+
+显式 START 与自动起充记录当前成功 BMS 样本代次，普通轮询仅在完整 BMS 读取成功后推进代次；旧 FC/VCT 缓存、重复充电器轮询及失败读取不能建立新会话的满充资格。回归覆盖旧缓存、先 done 异常、新样本后正常完成、自动起充与代次回绕。

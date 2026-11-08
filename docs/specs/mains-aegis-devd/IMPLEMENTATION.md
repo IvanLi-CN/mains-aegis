@@ -64,3 +64,7 @@
 - 协议解析、CLI 映射和 devd transport 测试覆盖启动/查询分离、pending 原样返回、mock/LAN/unknown 拒绝及不确定响应不重发。
 
 USB activation 结果归属独立于可复位的活动请求种类保存；共享终态属于放电授权时，状态查询返回 `different_recovery_active`。面板独立恢复的同步结束、拒绝和异步 EMSHUT 完成路径均通过统一完成函数标记放电授权归属。纯状态解析测试覆盖其他恢复的成功/失败、自己的终态以及 Idle/Pending；host 回归测试编译并执行生产完成函数，覆盖不同前置状态、完成原因与成功/失败结果，防止遗漏终态归属赋值。
+
+## BQ40 容量配置维护
+
+CLI/devd 支持 `bq40-capacity-model`，按 catalog 的显式 apply 特征拒绝混合 writer。容量维护镜像、两块校验及离线报告由 bq40-comm-tool 提供；相关 host 回归覆盖三种 writer 的所有组合。本实现不构成配置已经应用于设备的证据。

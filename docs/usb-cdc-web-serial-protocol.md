@@ -235,3 +235,21 @@ The `hello.capabilities.bms_activation` flag advertises these USB-only operation
 The host command `mains-aegis device <id> recovery bms-activation` starts one attempt; append `--status` to observe it. devd IPC uses `device.recovery.bms_activation` with `status=false|true`. The optional devd HTTP bridge offers `POST|GET /api/v1/devices/{id}/recovery/bms-activation`. These routes require the selected native USB transport and never redirect to a companion LAN address. LAN-only devices are rejected with `usb_activation_required`; mock devices return `mock_device`. If a start response is lost, query status before deciding whether to start another attempt; devd does not replay an uncertain activation write.
 
 激活状态查询必须保留终态的恢复种类归属：即使活动请求上下文已复位，放电授权恢复的终态也必须返回 `different_recovery_active`，不得冒充 Activation 的成功或失败。面板清除共享终态后仍按现有 Idle 语义报告。
+
+### 终止与电流诊断
+
+BQ40 诊断保留旧 `current_at_eoc_ma` 字段，并增加 `charge_term_taper_ma`、`charge_term_voltage_mv`、`chg_current_threshold_ma`、`quit_current_ma`、`fet_options`、`sbs_gauging_configuration`、`it_gauging_configuration` 和 `average_current_ma`。`average_current_captured_at_ms` 和 `afe_balance_captured_at_ms` 分别是平均电流与均衡读取的设备单调时间；fresh `Current()` 使用 `bq40.core` 包的 `captured_at_ms`，不能把缓存电流、AverageCurrent 或均衡 mask 当作同步 ADC 结果。配置读取失败保留空值与 `read_errors`，不得填充默认值冒充读回。充电器诊断使用实际 ITERM 和 ctrl0 的 EN_TERM；启动爬坡禁终止，稳定普通阶段才应为 80mA/启用。
+
+策略 `termination_incomplete` 表示硬件终止未获得本轮有效 BQ40 满充资格，需明确 START 且通过安全门控才能重试。终止阻塞原因分别为 `bq40_taper_unavailable`、`bq40_taper_invalid`、`bq40_taper_mismatch`、`termination_target_incompatible`。实际 ITERM/EN_TERM 读回与目标冲突报告 `charger_termination_register_conflict`，读回失败为 `charger_termination_readback_failed`；两者均禁充。
+
+原生串口维护日志可由 CLI `device <id> monitor start --maintenance-profile bq40-charge-termination` 显式开启，仅接受所选 catalog 镜像对应的唯一 apply feature。未获得产品固件身份的 defmt 日志继续标记为未验证，不能据此冒充产品身份验证；应用后必须恢复正式候选固件并重读身份。
+
+显式 START/STOP 可经 `mains-aegis device <id> charge start|stop` 调用既有 `control.manual_charge` IPC。命令绑定设备、默认不确认回路风险，沿用既有安全校验；调整目标和速度仍经独立 settings 命令。该入口不绕过保护或自动重试异常终止。
+
+连续充电观测使用 `bq40.charge`，仅新读 ChargingStatus、GaugingStatus、SafetyAlert/Status、PFStatus、AFE 均衡与 AverageCurrent；包内未读取的配置字段保持空值。温度字段 `cell_temperature_max_c_x10`、`cell_temperature_captured_at_ms`、`temperature_configuration_verified` 明确为安全缓存及其时间，不伪装成同步采样。完整 DF 与历史配置另用 `bq40.manufacturing` 读取，避免每两秒的观测被慢速配置读取占满。诊断导致温度缓存过期时，充电决策重新读取温度配置和 DAStatus2；读取失败仍禁充，有效期仍为 1 秒。
+
+`bq40.core` 同轮新读 BatteryMode(0x03)、RemainingCapacity(0x0F)、FullChargeCapacity(0x10)，保留寄存器原值与各自错误。`remaining_capacity_raw`、`full_charge_capacity_raw` 由 `capacity_unit` 解释：BatteryMode[CAPACITY_MODE]=0 为 `mAh`，置位为 `10mWh`；模式读取失败时单位为空，禁止猜测或直接标为 mAh。
+
+容量过充诊断在完整 `bq40.manufacturing` 读取中补充 `oc_threshold_mah`、`oc_recovery_mah`、`oc_rsoc_recovery_pct`、`design_capacity_mah`、`qmax_pack_mah`、`qmax_cell_mah`、`chemical_id_raw` 和 `gauge_status1_raw`/`gauge_status2_raw`/`gauge_status3_raw`。这些字段均为只读，不参与控制，不写入保护或学习配置。MAC 原始负载必须分别满足 2/32/32/24 字节长度，否则保留空值并报告读取错误。GaugeStatus1 的 TrueRemQ 与 TrueFCCQ 按 R2 TRM 解码；GaugeStatus2 的 DOD0 PassedQ 不能冒充 OC 内部计数器。完整包含多次顺序读取，应在停止充电时取得；充电中的两秒采样仍使用轻量 `bq40.charge`，完整包时间戳不代表各寄存器同时采样。
+
+容量仿真只读参数 `it_term_voltage_mv`、`it_load_select`、`it_load_mode`、`it_reserve_capacity_mah` 分别读取 `0x484A`、`0x491D`、`0x491F`、`0x4924`。放电截止电压不得与充电 Charge Term Voltage 混用。读取失败为空，不补写默认值。
