@@ -41,3 +41,7 @@ None
 CLI 的 device charge start|stop 映射既有 control.manual_charge IPC，以执行授权的实机完整充电，默认不确认回路风险。维护镜像在启动后保留 30 秒禁充观察期，供 USB 重新枚举后附着日志；只重试同一绑定端口，不扫描或切换端口。
 
 安全校验通过的明确 START 建立新的策略会话，清除旧异常与资格；SOC99 的手动充电也参加联合终止。独立的旧 charger_done 不阻止异常后的 START，charger_done 只在本轮实际使能充电时消费，避免停充历史状态立即重新锁住重试。
+
+密集诊断与充电共享执行任务；诊断造成温度缓存超过 1 秒时，在充电决策边界重新读取温度配置与 DAStatus2，读取失败保持禁充，安全有效期仍为 1 秒。诊断附带 `cell_temperature_max_c_x10`、`cell_temperature_captured_at_ms` 和 `temperature_configuration_verified`，用于区分真实温度越界与证据过期。
+
+`bq40.charge` 提供不含 DF 与历史读取的独立实时观测包，供每两秒采样使用；完整配置在采样前后单独读回，两个包的时间和错误不混用。

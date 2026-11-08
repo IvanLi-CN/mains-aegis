@@ -1179,6 +1179,7 @@ pub struct HardwareDiagSnapshot {
     pub ina3221: Ina3221DiagSnapshot,
     pub tmp_a: Tmp112DiagSnapshot,
     pub tmp_b: Tmp112DiagSnapshot,
+    pub bq40_charge: Bq40ChargeDiagSnapshot,
     pub bq40_core: Bq40CoreDiagSnapshot,
     pub bq40_captured_at_ms: u64,
     pub bq40_duration_ms: u16,
@@ -1200,6 +1201,7 @@ impl HardwareDiagSnapshot {
             ina3221: Ina3221DiagSnapshot::empty(),
             tmp_a: Tmp112DiagSnapshot::empty(0x48),
             tmp_b: Tmp112DiagSnapshot::empty(0x49),
+            bq40_charge: Bq40ChargeDiagSnapshot::empty(),
             bq40_core: Bq40CoreDiagSnapshot::empty(),
             bq40_captured_at_ms: 0,
             bq40_duration_ms: 0,
@@ -1580,6 +1582,9 @@ pub struct DerivedPowerBmsSnapshot {
     pub fet_options: Option<u8>,
     pub sbs_gauging_configuration: Option<u8>,
     pub it_gauging_configuration: Option<u16>,
+    pub cell_temperature_max_c_x10: Option<i16>,
+    pub cell_temperature_captured_at_ms: Option<u64>,
+    pub temperature_configuration_verified: Option<bool>,
     pub average_current_ma: Option<i16>,
     pub average_current_captured_at_ms: Option<u64>,
     pub afe_balance_captured_at_ms: Option<u64>,
@@ -1663,6 +1668,9 @@ impl DerivedPowerBmsSnapshot {
             fet_options: None,
             sbs_gauging_configuration: None,
             it_gauging_configuration: None,
+            cell_temperature_max_c_x10: None,
+            cell_temperature_captured_at_ms: None,
+            temperature_configuration_verified: None,
             average_current_ma: None,
             average_current_captured_at_ms: None,
             afe_balance_captured_at_ms: None,
@@ -1913,5 +1921,24 @@ mod tests {
                 .default,
             11_300
         );
+    }
+}
+
+/// Live charge observations only. Configuration remains in manufacturing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Bq40ChargeDiagSnapshot {
+    pub bms: DerivedPowerBmsSnapshot,
+    pub captured_at_ms: u64,
+    pub duration_ms: u16,
+    pub errors: [Option<DiagReadError>; DIAG_READ_ERROR_CAP],
+}
+impl Bq40ChargeDiagSnapshot {
+    pub const fn empty() -> Self {
+        Self {
+            bms: DerivedPowerBmsSnapshot::empty(),
+            captured_at_ms: 0,
+            duration_ms: 0,
+            errors: [None; DIAG_READ_ERROR_CAP],
+        }
     }
 }

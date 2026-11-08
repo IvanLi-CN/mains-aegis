@@ -1004,6 +1004,24 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
         diag.bms.it_gauging_configuration,
         true,
     );
+    json_field_opt_i16(
+        buf,
+        "cell_temperature_max_c_x10",
+        diag.bms.cell_temperature_max_c_x10,
+        true,
+    );
+    json_field_opt_u64(
+        buf,
+        "cell_temperature_captured_at_ms",
+        diag.bms.cell_temperature_captured_at_ms,
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "temperature_configuration_verified",
+        diag.bms.temperature_configuration_verified,
+        true,
+    );
     json_field_opt_i16(buf, "average_current_ma", diag.bms.average_current_ma, true);
     json_field_opt_u64(
         buf,
@@ -1133,6 +1151,26 @@ fn render_diag_snapshot_package<'a, const N: usize>(
             render_diag_bms_payload(buf, diag.bms);
             let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[");
             render_diag_error_list(buf, &diag.hardware.bq40_errors);
+            let _ = buf.push_str("]}");
+        }
+        "bq40.charge" => {
+            begin_diag_v2_package_with_source(
+                buf,
+                emitted,
+                id,
+                diag.hardware.bq40_charge.errors.iter().all(Option::is_none),
+                "fresh_i2c",
+                diag.hardware.bq40_charge.captured_at_ms,
+                diag.hardware.bq40_charge.duration_ms,
+            );
+            let _ = write!(
+                buf,
+                "{{\"device\":{{\"address\":{}}},\"registers\":{{}},\"decoded\":",
+                diag.hardware.bq40_charge.bms.addr.unwrap_or(0)
+            );
+            render_diag_bms_payload(buf, diag.hardware.bq40_charge.bms);
+            let _ = buf.push_str(",\"measurements\":{},\"runtime\":{}},\"read_errors\":[");
+            render_diag_error_list(buf, &diag.hardware.bq40_charge.errors);
             let _ = buf.push_str("]}");
         }
         "bq25792.regs" => {
@@ -1411,6 +1449,24 @@ fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowe
         buf,
         "it_gauging_configuration",
         bms.it_gauging_configuration,
+        true,
+    );
+    json_field_opt_i16(
+        buf,
+        "cell_temperature_max_c_x10",
+        bms.cell_temperature_max_c_x10,
+        true,
+    );
+    json_field_opt_u64(
+        buf,
+        "cell_temperature_captured_at_ms",
+        bms.cell_temperature_captured_at_ms,
+        true,
+    );
+    json_field_opt_bool(
+        buf,
+        "temperature_configuration_verified",
+        bms.temperature_configuration_verified,
         true,
     );
     json_field_opt_i16(buf, "average_current_ma", bms.average_current_ma, true);

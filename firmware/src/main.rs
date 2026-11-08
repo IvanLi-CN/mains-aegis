@@ -1999,6 +1999,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                 for (bit, name) in [
                     (0, "bq40.core"),
                     (1, "bq40.manufacturing"),
+                    (9, "bq40.charge"),
                     (2, "bq25792.regs"),
                     (3, "tps55288.out_a"),
                     (4, "tps55288.out_b"),

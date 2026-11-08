@@ -1657,6 +1657,9 @@ mod tests {
                 fet_options: None,
                 sbs_gauging_configuration: None,
                 it_gauging_configuration: None,
+                cell_temperature_max_c_x10: Some(250),
+                cell_temperature_captured_at_ms: Some(1000),
+                temperature_configuration_verified: Some(true),
                 average_current_ma: None,
                 average_current_captured_at_ms: None,
                 afe_balance_captured_at_ms: None,
@@ -1797,6 +1800,52 @@ mod tests {
         assert_eq!(errors[0]["register"], "MODE");
         assert_eq!(errors[0]["code"], "i2c_nack_data");
         assert_eq!(errors[1]["register"], "VREF");
+    }
+
+    #[test]
+    fn charge_observation_is_independent_of_full_manufacturing_capture() {
+        let mut diag = DerivedPowerSnapshot::empty();
+        diag.bms.charge_term_taper_ma = Some(120);
+        diag.hardware.bq40_captured_at_ms = 10;
+        let live = &mut diag.hardware.bq40_charge;
+        live.captured_at_ms = 2000;
+        live.bms.average_current_ma = Some(497);
+        live.bms.afe_cell_balance_status = Some(4);
+        live.bms.average_current_captured_at_ms = Some(2100);
+        live.bms.afe_balance_captured_at_ms = Some(2050);
+        live.bms.cell_temperature_max_c_x10 = Some(251);
+        live.bms.cell_temperature_captured_at_ms = Some(1900);
+        live.errors[0] = Some(crate::net_types::DiagReadError {
+            register: "SAFETY_STATUS",
+            code: "i2c_nack_data",
+        });
+        let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+        packages
+            .push(String::try_from("bq40.manufacturing").unwrap())
+            .unwrap();
+        packages
+            .push(String::try_from("bq40.charge").unwrap())
+            .unwrap();
+        let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+        render_diag_snapshot_json(
+            &mut body,
+            packages.as_slice(),
+            UpsStatusSnapshot::empty(),
+            diag,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+        let live = &parsed["packages"]["bq40.charge"];
+        assert_eq!(live["captured_at_ms"], 2000);
+        assert_eq!(live["ok"], false);
+        assert_eq!(live["read_errors"][0]["register"], "SAFETY_STATUS");
+        let fields = &live["payload"]["decoded"];
+        assert_eq!(fields["average_current_ma"], 497);
+        assert_eq!(fields["afe_balance_captured_at_ms"], 2050);
+        assert_eq!(fields["cell_temperature_max_c_x10"], 251);
+        assert!(fields["charge_term_taper_ma"].is_null());
+        let full = &parsed["packages"]["bq40.manufacturing"];
+        assert_eq!(full["captured_at_ms"], 10);
+        assert_eq!(full["payload"]["decoded"]["charge_term_taper_ma"], 120);
     }
 
     #[test]

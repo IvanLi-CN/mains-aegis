@@ -5718,6 +5718,7 @@ where
             matches!(
                 package.as_str(),
                 "bq40.core"
+                    | "bq40.charge"
                     | "bq40.manufacturing"
                     | "bq25792.regs"
                     | "tps55288.out_a"
@@ -5737,6 +5738,12 @@ where
             .any(|package| package.as_str() == "bq40.manufacturing")
         {
             self.refresh_bq40_manufacturing_diag_snapshot();
+        }
+        if packages
+            .iter()
+            .any(|package| package.as_str() == "bq40.charge")
+        {
+            self.refresh_bq40_charge_diag_snapshot();
         }
         if packages
             .iter()
@@ -5880,6 +5887,66 @@ where
         snapshot.thigh = diag_i2c_u16(read_i2c_u16_be(&mut self.i2c, addr, 0x03));
         snapshot.duration_ms = started.elapsed().as_millis().min(u16::MAX as u64) as u16;
         snapshot
+    }
+
+    /// Bounded live-only capture for two-second observation; no history or DF reads.
+    fn refresh_bq40_charge_diag_snapshot(&mut self) {
+        let started = Instant::now();
+        let mut snapshot = mains_aegis_firmware::net_types::Bq40ChargeDiagSnapshot::empty();
+        snapshot.captured_at_ms = self.fan_now_ms();
+        if let Some(addr) = self.bms_addr {
+            let bms = &mut snapshot.bms;
+            let errors = &mut snapshot.errors;
+            bms.addr = Some(addr);
+            bms.state = "ok";
+            bms.charging_status = diag_bq40_optional(
+                bq40z50::read_charging_status(&mut self.i2c, addr),
+                "CHARGING_STATUS",
+                errors,
+            );
+            bms.gauging_status = diag_bq40_optional(
+                bq40z50::read_gauging_status(&mut self.i2c, addr),
+                "GAUGING_STATUS",
+                errors,
+            );
+            bms.safety_alert = diag_bq40_optional(
+                bq40z50::read_safety_alert(&mut self.i2c, addr),
+                "SAFETY_ALERT",
+                errors,
+            );
+            bms.safety_status = diag_bq40_optional(
+                bq40z50::read_safety_status(&mut self.i2c, addr),
+                "SAFETY_STATUS",
+                errors,
+            );
+            bms.pf_status = diag_bq40_optional(
+                bq40z50::read_pf_status(&mut self.i2c, addr),
+                "PF_STATUS",
+                errors,
+            );
+            bms.afe_balance_captured_at_ms = Some(self.fan_now_ms());
+            let afe = diag_bq40_optional(
+                bq40z50::read_afe_register(&mut self.i2c, addr),
+                "AFE_REGISTER",
+                errors,
+            );
+            bms.afe_cell_balance_status = afe.map(|value| value.cell_balance_status);
+            bms.average_current_captured_at_ms = Some(self.fan_now_ms());
+            bms.average_current_ma = diag_bq40_optional(
+                bq40z50::read_u16(&mut self.i2c, addr, bq40z50::cmd::AVERAGE_CURRENT)
+                    .map(|raw| Some(raw as i16)),
+                "AVERAGE_CURRENT",
+                errors,
+            );
+            bms.cell_temperature_max_c_x10 = self.diag_snapshot.bms.cell_temperature_max_c_x10;
+            bms.cell_temperature_captured_at_ms = self.bms_cached_da_status2_at_ms;
+            bms.temperature_configuration_verified = self.bms_temperature_configuration_ok;
+        } else {
+            snapshot.bms.state = "err";
+            push_diag_read_error(&mut snapshot.errors, "DEVICE", "bms_unavailable");
+        }
+        snapshot.duration_ms = started.elapsed().as_millis().min(u16::MAX as u64) as u16;
+        self.diag_snapshot.hardware.bq40_charge = snapshot;
     }
 
     fn refresh_bq40_core_diag_snapshot(&mut self) {
@@ -6741,6 +6808,78 @@ where
                 defmt::warn!("bms: bq40 charge_request read_failed err={}", error_kind);
             }
         }
+    }
+
+    /// Refresh safety evidence before applying a charge decision. A slow
+    /// diagnostic capture can otherwise expire DA_STATUS2 while SBS requests
+    /// are refreshed, causing diagnostic reads themselves to cycle charging.
+    /// Keep the one-second safety window and fail closed on any read failure.
+    fn refresh_bq40_charge_temperature(&mut self, addr: u8) {
+        let temperature_enable = bq40z50::read_data_flash_u8(
+            &mut self.i2c,
+            addr,
+            bq40z50::data_flash::TEMPERATURE_ENABLE,
+        )
+        .ok()
+        .flatten();
+        let temperature_mode =
+            bq40z50::read_data_flash_u8(&mut self.i2c, addr, bq40z50::data_flash::TEMPERATURE_MODE)
+                .ok()
+                .flatten();
+        let temperature_configuration_ok =
+            charge_temperature::bq40_temperature_configuration_status(
+                temperature_enable,
+                temperature_mode,
+            );
+        if self.bms_temperature_configuration_ok != temperature_configuration_ok {
+            match temperature_configuration_ok {
+                Some(true) => {
+                    defmt::info!(
+                    "bms: charge_temperature_config verified temperature_enable=0x{=u8:x} temperature_mode=0x{=u8:x}",
+                    temperature_enable.unwrap_or(0),
+                    temperature_mode.unwrap_or(0),
+                );
+                }
+                Some(false) => {
+                    defmt::error!(
+                    "bms: charge_temperature_config invalid temperature_enable={=?} temperature_mode={=?} expected_enable=0x{=u8:x} expected_mode=0x{=u8:x} charge_allowed=false",
+                    temperature_enable,
+                    temperature_mode,
+                    charge_temperature::BQ40_PROJECT_TEMPERATURE_ENABLE,
+                    charge_temperature::BQ40_PROJECT_TEMPERATURE_MODE,
+                );
+                }
+                None => {
+                    defmt::warn!(
+                        "bms: charge_temperature_config unavailable temperature_enable={=?} temperature_mode={=?} charge_allowed=false",
+                        temperature_enable,
+                        temperature_mode,
+                    );
+                }
+            }
+        }
+        self.bms_temperature_configuration_ok = temperature_configuration_ok;
+        let read_succeeded = match bq40z50::read_da_status2(&mut self.i2c, addr) {
+            Ok(snapshot) => {
+                self.bms_cached_da_status2 = snapshot;
+                self.bms_cached_da_status2_at_ms = snapshot.map(|_| self.fan_now_ms());
+                snapshot.is_some()
+            }
+            Err(_) => {
+                self.bms_cached_da_status2 = None;
+                self.bms_cached_da_status2_at_ms = None;
+                false
+            }
+        };
+        self.diag_snapshot.bms.cell_temperature_max_c_x10 = self
+            .bms_cached_da_status2
+            .and_then(|sample| charge_temperature::max_cell_temperature_k_x10(sample.ts_temp_k_x10))
+            .and_then(|raw| i16::try_from(bq40z50::temp_c_x10_from_k_x10(raw)).ok());
+        self.diag_snapshot.bms.cell_temperature_captured_at_ms = self.bms_cached_da_status2_at_ms;
+        self.diag_snapshot.bms.temperature_configuration_verified = temperature_configuration_ok;
+        self.bq40_charge_evidence
+            .observe_temperature(read_succeeded, temperature_configuration_ok);
+        self.bms_next_da_status2_refresh_at = Instant::now() + BMS_CHARGE_TEMP_REFRESH_PERIOD;
     }
 
     fn bq40_charge_temperature_decision(
@@ -14174,6 +14313,15 @@ where
                 _ => None,
             }
         };
+        // Diagnostics run on this same task. Refresh expired temperature
+        // evidence at the decision boundary, just like SBS charge requests.
+        if self.bms_cached_da_status2_at_ms.map_or(true, |observed| {
+            !charge_temperature::is_temperature_fresh(self.fan_now_ms(), observed)
+        }) {
+            if let Some(addr) = self.bms_addr {
+                self.refresh_bq40_charge_temperature(addr);
+            }
+        }
         let charge_policy_now_ms = self.fan_now_ms();
         let charger_chg_stat = bq25792::status1::chg_stat(status1);
         let charge_policy_decision = if activation_pending {
@@ -15998,6 +16146,14 @@ where
             fet_options: None,
             sbs_gauging_configuration: None,
             it_gauging_configuration: None,
+            cell_temperature_max_c_x10: self
+                .bms_cached_da_status2
+                .and_then(|sample| {
+                    charge_temperature::max_cell_temperature_k_x10(sample.ts_temp_k_x10)
+                })
+                .and_then(|raw| i16::try_from(bq40z50::temp_c_x10_from_k_x10(raw)).ok()),
+            cell_temperature_captured_at_ms: self.bms_cached_da_status2_at_ms,
+            temperature_configuration_verified: self.bms_temperature_configuration_ok,
             average_current_ma: None,
             average_current_captured_at_ms: None,
             afe_balance_captured_at_ms: None,
@@ -16135,72 +16291,8 @@ where
         let mut bms_slow_detail_refreshed = false;
         if now >= self.bms_next_da_status2_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
-            let da_status2_read_succeeded = match bq40z50::read_da_status2(&mut self.i2c, addr) {
-                Ok(snapshot) => {
-                    let read_succeeded = snapshot.is_some();
-                    da_status2 = snapshot;
-                    self.bms_cached_da_status2 = snapshot;
-                    self.bms_cached_da_status2_at_ms = Some(self.fan_now_ms());
-                    read_succeeded
-                }
-                Err(_) => {
-                    da_status2 = None;
-                    self.bms_cached_da_status2 = None;
-                    self.bms_cached_da_status2_at_ms = None;
-                    self.bms_temperature_configuration_ok = None;
-                    false
-                }
-            };
-            let temperature_enable = bq40z50::read_data_flash_u8(
-                &mut self.i2c,
-                addr,
-                bq40z50::data_flash::TEMPERATURE_ENABLE,
-            )
-            .ok()
-            .flatten();
-            let temperature_mode = bq40z50::read_data_flash_u8(
-                &mut self.i2c,
-                addr,
-                bq40z50::data_flash::TEMPERATURE_MODE,
-            )
-            .ok()
-            .flatten();
-            let temperature_configuration_ok =
-                charge_temperature::bq40_temperature_configuration_status(
-                    temperature_enable,
-                    temperature_mode,
-                );
-            self.bq40_charge_evidence
-                .observe_temperature(da_status2_read_succeeded, temperature_configuration_ok);
-            if self.bms_temperature_configuration_ok != temperature_configuration_ok {
-                match temperature_configuration_ok {
-                    Some(true) => {
-                        defmt::info!(
-                        "bms: charge_temperature_config verified temperature_enable=0x{=u8:x} temperature_mode=0x{=u8:x}",
-                        temperature_enable.unwrap_or(0),
-                        temperature_mode.unwrap_or(0),
-                    );
-                    }
-                    Some(false) => {
-                        defmt::error!(
-                        "bms: charge_temperature_config invalid temperature_enable={=?} temperature_mode={=?} expected_enable=0x{=u8:x} expected_mode=0x{=u8:x} charge_allowed=false",
-                        temperature_enable,
-                        temperature_mode,
-                        charge_temperature::BQ40_PROJECT_TEMPERATURE_ENABLE,
-                        charge_temperature::BQ40_PROJECT_TEMPERATURE_MODE,
-                    );
-                    }
-                    None => {
-                        defmt::warn!(
-                            "bms: charge_temperature_config unavailable temperature_enable={=?} temperature_mode={=?} charge_allowed=false",
-                            temperature_enable,
-                            temperature_mode,
-                        );
-                    }
-                }
-            }
-            self.bms_temperature_configuration_ok = temperature_configuration_ok;
-            self.bms_next_da_status2_refresh_at = now + BMS_CHARGE_TEMP_REFRESH_PERIOD;
+            self.refresh_bq40_charge_temperature(addr);
+            da_status2 = self.bms_cached_da_status2;
         }
         let mut filter_capacity = self.bms_cached_filter_capacity;
         if !bms_slow_detail_refreshed && now >= self.bms_next_filter_capacity_refresh_at {
