@@ -3900,13 +3900,36 @@ function manualChargeControlFeedback(
 
 function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
   const status = record.status;
+  const batteryIssue = status?.battery.issue_detail;
+  const externalInput = inputSourceSummary(status);
   return (
     <section className="page-flow" data-evidence-target="device-overview">
+      {batteryIssue ? (
+        <aside className="overview-health-callout" role="alert">
+          <AlertTriangle size={20} aria-hidden="true" />
+          <div>
+            <strong>Battery protection is blocking charge</strong>
+            <p>{batteryIssueExplanation(batteryIssue)}</p>
+          </div>
+          <a href={`${deviceSectionHref(record, "battery")}#issue-detail`}>Open battery details</a>
+        </aside>
+      ) : null}
+      <div className="overview-source-summary">
+        <div>
+          <span className="eyebrow">Current power path</span>
+          <strong>{externalInput.title}</strong>
+          <span>{externalInput.detail}</span>
+        </div>
+        <div className="overview-source-metrics">
+          <MetricLine label="VBUS" value={formatVoltage(status?.input.input_vbus_mv)} />
+          <MetricLine label="Battery" value={formatCurrent(status?.battery.current_ma)} />
+        </div>
+      </div>
       <div className="detail-grid">
         <InfoPanel title="Input" icon={PlugZap}>
           <MetricLine
-            label="Mains"
-            value={boolLabel(status?.input.mains_present, "present", "absent")}
+            label="External input"
+            value={externalInput.title}
           />
           <MetricLine
             label="VBUS"
@@ -3917,7 +3940,7 @@ function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
             value={formatCurrent(status?.input.input_ibus_ma)}
           />
         </InfoPanel>
-        <InfoPanel title="Battery" icon={BatteryCharging}>
+        <InfoPanel title="Battery health" icon={BatteryCharging}>
           <MetricLine
             label="SOC"
             value={formatPercent(status?.battery.soc_pct)}
@@ -3930,6 +3953,10 @@ function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
             label="Ready"
             value={boolLabel(status?.battery.discharge_ready, "yes", "no")}
           />
+          <MetricLine label="Charge" value={status?.charger.allow_charge ? "allowed" : "blocked"} />
+          <p id="issue-detail" className="panel-note">
+            {batteryIssue ? batteryIssueExplanation(batteryIssue) : "No active battery protection reported."}
+          </p>
         </InfoPanel>
         <InfoPanel title="Outputs" icon={Cable}>
           <MetricLine label="Active" value={status?.output.active ?? "--"} />
@@ -8029,6 +8056,50 @@ function powerReasonLabel(reason: string | null | undefined): string {
 function batteryIssueDetailSummary(reason: string): string {
   const label = powerReasonLabel(reason);
   return label === reason ? reason : `${label} (${reason})`;
+}
+
+function batteryIssueExplanation(reason: string): string {
+  switch (reason) {
+    case "xchg_blocked":
+      return "The BMS has asserted XCHG (over-charge protection). Charging is disabled while the pack remains protected; external power can still supply the UPS load.";
+    case "chg_fet_off":
+      return "The battery charge FET is off, so the charger cannot deliver current into the pack.";
+    case "permanent_failure":
+      return "The BMS reports a permanent failure. Keep charging disabled until the pack is inspected.";
+    case "battery_protection":
+      return "The battery protection path is active. Charging or discharge is restricted until the BMS clears the protection state.";
+    default:
+      return batteryIssueDetailSummary(reason);
+  }
+}
+
+function deviceSectionHref(
+  record: DeviceRecord,
+  section: "battery" | "power",
+): string {
+  return `/devices/${encodeURIComponent(record.target.deviceId)}/${section}`;
+}
+
+function inputSourceSummary(status: UpsStatus | null | undefined): {
+  title: string;
+  detail: string;
+} {
+  if (!status) return { title: "Unknown", detail: "Waiting for live status." };
+  const source = status.input.source === "usbc"
+    ? "USB-C input"
+    : status.input.source === "dcin"
+      ? "DCIN input"
+      : status.input.source === "auto"
+        ? "Automatic input"
+        : "No confirmed input";
+  const vbus = formatVoltage(status.input.input_vbus_mv);
+  if (status.input.input_vbus_mv && status.input.input_vbus_mv > 0) {
+    return {
+      title: `${source} active`,
+      detail: `${vbus} is feeding the system; battery current is ${formatCurrent(status.battery.current_ma)}.`,
+    };
+  }
+  return { title: source, detail: "No usable input voltage is reported." };
 }
 
 function manualChargeBmsBlockCause(

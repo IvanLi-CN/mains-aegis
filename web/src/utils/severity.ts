@@ -7,6 +7,7 @@ export function deviceSeverity(record: DeviceRecord): Severity {
   if (record.connectionState === "error" || record.status?.mode === "fault") return "critical";
   if (!record.status) return "info";
   if (record.status.battery.no_battery || !record.status.battery.discharge_ready) return "critical";
+  if (record.status.battery.issue_detail) return "critical";
   if (
     record.status.thermal?.tmp_a_state === "hot" ||
     record.status.thermal?.tmp_b_state === "hot"

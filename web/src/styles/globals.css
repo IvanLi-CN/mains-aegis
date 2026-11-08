@@ -484,6 +484,70 @@ a {
   max-width: 880px;
 }
 
+.overview-health-callout {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  border: 1px solid var(--color-critical-border);
+  border-radius: var(--radius-card);
+  background: var(--color-severity-critical-surface);
+  padding: 16px;
+  color: var(--color-critical);
+}
+
+.overview-health-callout strong,
+.overview-health-callout p {
+  display: block;
+  margin: 0;
+}
+
+.overview-health-callout p {
+  margin-top: 4px;
+  color: var(--color-ink);
+}
+
+.overview-health-callout a {
+  color: inherit;
+  font-weight: 700;
+  text-underline-offset: 3px;
+}
+
+.overview-source-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-card);
+  background: var(--color-panel);
+  padding: 18px 20px;
+}
+
+.overview-source-summary strong,
+.overview-source-summary span {
+  display: block;
+}
+
+.overview-source-summary strong {
+  margin-top: 3px;
+  font-size: 22px;
+}
+
+.overview-source-summary > div > span:last-child {
+  margin-top: 5px;
+  color: var(--color-muted);
+}
+
+.overview-source-metrics {
+  display: flex;
+  gap: 22px;
+}
+
+.overview-source-metrics .metric-line {
+  min-width: 92px;
+}
+
 .connect-wide {
   width: 100%;
   gap: 22px;
@@ -5292,6 +5356,17 @@ a {
   .connect-form,
   .status-band {
     grid-template-columns: 1fr;
+  }
+
+  .overview-health-callout,
+  .overview-source-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-source-summary,
+  .overview-source-metrics {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .charge-control-overview,
