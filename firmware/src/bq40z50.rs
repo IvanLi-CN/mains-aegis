@@ -779,17 +779,6 @@ where
     }))
 }
 
-pub fn read_diagnostic_df_block<I2C>(
-    i2c: &mut I2C,
-    addr: u8,
-    address: u16,
-) -> Result<Option<[u8; 32]>, I2C::Error>
-where
-    I2C: embedded_hal::i2c::I2c,
-{
-    read_mac_block_raw(i2c, addr, address).map(exact_mac_payload::<32>)
-}
-
 pub fn exact_mac_payload<const LEN: usize>(raw: Option<BlockReadRaw>) -> Option<[u8; LEN]> {
     let raw = raw?;
     if raw.payload_len as usize != LEN || LEN > raw.payload.len() {

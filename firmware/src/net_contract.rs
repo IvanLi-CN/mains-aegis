@@ -994,22 +994,13 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
         diag.bms.chemical_id_raw.as_ref().map(|v| v.as_slice()),
         true,
     );
-    json_field_opt_u8_array(
+    json_field_opt_u16(buf, "it_term_voltage_mv", diag.bms.it_term_voltage_mv, true);
+    json_field_opt_u8(buf, "it_load_select", diag.bms.it_load_select, true);
+    json_field_opt_u8(buf, "it_load_mode", diag.bms.it_load_mode, true);
+    json_field_opt_u16(
         buf,
-        "it_voltage_config_raw",
-        diag.bms
-            .it_voltage_config_raw
-            .as_ref()
-            .map(|v| v.as_slice()),
-        true,
-    );
-    json_field_opt_u8_array(
-        buf,
-        "it_capacity_config_raw",
-        diag.bms
-            .it_capacity_config_raw
-            .as_ref()
-            .map(|v| v.as_slice()),
+        "it_reserve_capacity_mah",
+        diag.bms.it_reserve_capacity_mah,
         true,
     );
     json_field_opt_u8_array(
@@ -1494,16 +1485,13 @@ fn render_diag_bms_payload<const N: usize>(buf: &mut String<N>, bms: DerivedPowe
         bms.chemical_id_raw.as_ref().map(|v| v.as_slice()),
         true,
     );
-    json_field_opt_u8_array(
+    json_field_opt_u16(buf, "it_term_voltage_mv", bms.it_term_voltage_mv, true);
+    json_field_opt_u8(buf, "it_load_select", bms.it_load_select, true);
+    json_field_opt_u8(buf, "it_load_mode", bms.it_load_mode, true);
+    json_field_opt_u16(
         buf,
-        "it_voltage_config_raw",
-        bms.it_voltage_config_raw.as_ref().map(|v| v.as_slice()),
-        true,
-    );
-    json_field_opt_u8_array(
-        buf,
-        "it_capacity_config_raw",
-        bms.it_capacity_config_raw.as_ref().map(|v| v.as_slice()),
+        "it_reserve_capacity_mah",
+        bms.it_reserve_capacity_mah,
         true,
     );
     json_field_opt_u8_array(

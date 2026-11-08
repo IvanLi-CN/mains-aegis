@@ -6386,14 +6386,24 @@ where
             "chemical_id_raw",
             &mut errors,
         );
-        self.diag_snapshot.bms.it_voltage_config_raw = diag_bq40_optional(
-            bq40z50::read_diagnostic_df_block(&mut self.i2c, addr, 0x4840),
-            "IT_VOLTAGE_CONFIG",
+        self.diag_snapshot.bms.it_term_voltage_mv = diag_bq40_optional(
+            bq40z50::read_data_flash_u16(&mut self.i2c, addr, 0x484A),
+            "it_term_voltage_mv",
             &mut errors,
         );
-        self.diag_snapshot.bms.it_capacity_config_raw = diag_bq40_optional(
-            bq40z50::read_diagnostic_df_block(&mut self.i2c, addr, 0x4910),
-            "IT_CAPACITY_CONFIG",
+        self.diag_snapshot.bms.it_load_select = diag_bq40_optional(
+            bq40z50::read_data_flash_u8(&mut self.i2c, addr, 0x491D),
+            "it_load_select",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.it_load_mode = diag_bq40_optional(
+            bq40z50::read_data_flash_u8(&mut self.i2c, addr, 0x491F),
+            "it_load_mode",
+            &mut errors,
+        );
+        self.diag_snapshot.bms.it_reserve_capacity_mah = diag_bq40_optional(
+            bq40z50::read_data_flash_u16(&mut self.i2c, addr, 0x4924),
+            "it_reserve_capacity_mah",
             &mut errors,
         );
         self.diag_snapshot.bms.gauge_status1_raw = diag_bq40_optional(
@@ -16247,8 +16257,10 @@ where
             qmax_pack_mah: None,
             qmax_cell_mah: [None; 4],
             chemical_id_raw: None,
-            it_voltage_config_raw: None,
-            it_capacity_config_raw: None,
+            it_term_voltage_mv: None,
+            it_load_select: None,
+            it_load_mode: None,
+            it_reserve_capacity_mah: None,
             gauge_status1_raw: None,
             gauge_status2_raw: None,
             gauge_status3_raw: None,

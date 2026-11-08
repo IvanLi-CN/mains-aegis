@@ -252,4 +252,4 @@ BQ40 诊断保留旧 `current_at_eoc_ma` 字段，并增加 `charge_term_taper_m
 
 容量过充诊断在完整 `bq40.manufacturing` 读取中补充 `oc_threshold_mah`、`oc_recovery_mah`、`oc_rsoc_recovery_pct`、`design_capacity_mah`、`qmax_pack_mah`、`qmax_cell_mah`、`chemical_id_raw` 和 `gauge_status1_raw`/`gauge_status2_raw`/`gauge_status3_raw`。这些字段均为只读，不参与控制，不写入保护或学习配置。MAC 原始负载必须分别满足 2/32/32/24 字节长度，否则保留空值并报告读取错误。GaugeStatus1 的 TrueRemQ 与 TrueFCCQ 按 R2 TRM 解码；GaugeStatus2 的 DOD0 PassedQ 不能冒充 OC 内部计数器。完整包含多次顺序读取，应在停止充电时取得；充电中的两秒采样仍使用轻量 `bq40.charge`，完整包时间戳不代表各寄存器同时采样。
 
-`it_voltage_config_raw` 与 `it_capacity_config_raw` 分别保留 DF `0x4840`、`0x4910` 起始的 32 字节只读块，用于核对 Term Voltage、Load Select、Load Mode、User Rate 和 Reserve Capacity；不得将放电截止电压与充电 Charge Term Voltage 混用。块长度不符则为空，不能据此补写默认值。
+容量仿真只读参数 `it_term_voltage_mv`、`it_load_select`、`it_load_mode`、`it_reserve_capacity_mah` 分别读取 `0x484A`、`0x491D`、`0x491F`、`0x4924`。放电截止电压不得与充电 Charge Term Voltage 混用。读取失败为空，不补写默认值。
