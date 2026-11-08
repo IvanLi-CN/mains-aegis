@@ -243,3 +243,5 @@ BQ40 诊断保留旧 `current_at_eoc_ma` 字段，并增加 `charge_term_taper_m
 策略 `termination_incomplete` 表示硬件终止未获得本轮有效 BQ40 满充资格，需明确 START 且通过安全门控才能重试。终止阻塞原因分别为 `bq40_taper_unavailable`、`bq40_taper_invalid`、`bq40_taper_mismatch`、`termination_target_incompatible`。实际 ITERM/EN_TERM 读回与目标冲突报告 `charger_termination_register_conflict`，读回失败为 `charger_termination_readback_failed`；两者均禁充。
 
 原生串口维护日志可由 CLI `device <id> monitor start --maintenance-profile bq40-charge-termination` 显式开启，仅接受所选 catalog 镜像对应的唯一 apply feature。未获得产品固件身份的 defmt 日志继续标记为未验证，不能据此冒充产品身份验证；应用后必须恢复正式候选固件并重读身份。
+
+显式 START/STOP 可经 `mains-aegis device <id> charge start|stop` 调用既有 `control.manual_charge` IPC。命令绑定设备、默认不确认回路风险，沿用既有安全校验；调整目标和速度仍经独立 settings 命令。该入口不绕过保护或自动重试异常终止。

@@ -173,6 +173,13 @@ enum DeviceCommand {
         real: bool,
     },
     Reset,
+    /// Request an explicit manual charge START/STOP through existing safety gates.
+    Charge {
+        #[arg(value_parser = ["start", "stop"])]
+        action: String,
+        #[arg(long)]
+        confirm_loop: bool,
+    },
     Monitor {
         #[command(subcommand)]
         command: MonitorCommand,
@@ -966,6 +973,13 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
             json!({ "device_id": device_id, "artifact_id": artifact_id, "dry_run": dry_run || !real }),
         ),
         DeviceCommand::Reset => ("device.reset", json!({ "device_id": device_id })),
+        DeviceCommand::Charge {
+            action,
+            confirm_loop,
+        } => (
+            "control.manual_charge",
+            json!({ "device_id": device_id, "action": action, "confirm_loop": confirm_loop }),
+        ),
         DeviceCommand::Monitor { command } => match command {
             MonitorCommand::Start {
                 maintenance_profile,
@@ -1240,6 +1254,25 @@ mod tests {
         assert_eq!(
             params,
             json!({"device_id": "serial-04f3bb3f5367", "confirm": "release-tps-en"})
+        );
+    }
+
+    #[test]
+    fn manual_charge_control_binds_device_and_never_implies_loop_confirmation() {
+        let cli = Cli::try_parse_from(["mains-aegis", "device", "fixture-ups", "charge", "start"])
+            .unwrap();
+        let Command::Device { device_id, command } = cli.command else {
+            panic!("device command")
+        };
+        let (method, params) = device_to_ipc(device_id, command);
+        assert_eq!(method, "control.manual_charge");
+        assert_eq!(
+            params,
+            json!({"device_id":"fixture-ups", "action":"start", "confirm_loop":false})
+        );
+        assert!(
+            Cli::try_parse_from(["mains-aegis", "device", "fixture-ups", "charge", "toggle"])
+                .is_err()
         );
     }
 

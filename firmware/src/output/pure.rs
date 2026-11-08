@@ -1264,6 +1264,16 @@ pub(super) struct ChargePolicyMemory {
     pub(super) termination_incomplete: bool,
 }
 
+impl ChargePolicyMemory {
+    // Called only after the explicit START has passed runtime safety evaluation.
+    pub(super) fn start_explicit_session(&mut self) {
+        self.charge_latched = true;
+        self.full_latched = false;
+        self.bms_qualified = false;
+        self.termination_incomplete = false;
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct ChargePolicyOutputLoadTracker {
     pub(super) blocked: bool,
@@ -6333,8 +6343,29 @@ mod tests {
             charge_policy_step(&mut memory, &mut derate, &mut load, 2, input).state,
             ChargePolicyState::TerminationIncomplete
         );
-        memory.termination_incomplete = false; // Accepted explicit START.
+        memory.start_explicit_session(); // Accepted explicit START.
         assert!(charge_policy_step(&mut memory, &mut derate, &mut load, 3, input).allow_charge);
+    }
+
+    #[test]
+    fn explicit_start_at_soc99_participates_in_joint_termination() {
+        let mut memory = ChargePolicyMemory::default();
+        memory.start_explicit_session();
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut load = ChargePolicyOutputLoadTracker::default();
+        let mut input = policy_input(
+            Some(policy_telemetry(99, 4180, 4200)),
+            Some(DashboardInputSource::UsbC),
+            Some(100),
+        );
+        assert!(charge_policy_step(&mut memory, &mut derate, &mut load, 0, input).allow_charge);
+        input.telemetry.as_mut().unwrap().bms_full = true;
+        assert!(charge_policy_step(&mut memory, &mut derate, &mut load, 1, input).allow_charge);
+        input.charger_done = true;
+        assert_eq!(
+            charge_policy_step(&mut memory, &mut derate, &mut load, 2, input).state,
+            ChargePolicyState::FullLatched
+        );
     }
 
     #[test]

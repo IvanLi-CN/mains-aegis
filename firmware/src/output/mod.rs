@@ -8160,7 +8160,6 @@ where
             ManualChargeTarget::Full100 => {
                 self.diag_snapshot.policy.full_reason.is_some()
                     || self.diag_snapshot.policy.full_latched
-                    || self.diag_snapshot.charger.chg_stat == "termination_done"
             }
             ManualChargeTarget::Rsoc80 => self
                 .ui_snapshot
@@ -8792,8 +8791,7 @@ where
         };
         let now = Instant::now();
         let charging_active = self.current_charging_requested();
-        self.charge_policy.termination_incomplete = false;
-        self.charge_policy.bms_qualified = false;
+        self.charge_policy.start_explicit_session();
         self.manual_charge_runtime.active = true;
         self.manual_charge_runtime.takeover = charging_active;
         self.manual_charge_runtime.loopback_override =
@@ -14201,7 +14199,8 @@ where
                             manual_loopback_override_for_policy,
                         ),
                     telemetry: charge_policy_telemetry,
-                    charger_done: (ctrl0 & bq25792::ctrl0::EN_TERM) != 0
+                    charger_done: self.chg_enabled
+                        && (ctrl0 & bq25792::ctrl0::EN_TERM) != 0
                         && iterm_ma == Some(bq25792::NORMAL_ITERM_MA)
                         && matches!(
                             audio_charge_phase_from_chg_stat(charger_chg_stat),
