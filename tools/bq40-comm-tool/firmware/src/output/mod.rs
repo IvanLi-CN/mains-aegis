@@ -5804,12 +5804,8 @@ where
             && read_bms_mac_payload_via_mb44(&mut self.i2c, addr, 0x0002)
                 .ok()
                 .and_then(|raw| {
-                    parse_bms_mac_payload(&raw, 0x0002).map(|payload| {
-                        payload.len() >= 4
-                            && u16::from_le_bytes([payload[0], payload[1]])
-                                == BMS_DEVICE_TYPE_BQ40Z50
-                            && u16::from_le_bytes([payload[2], payload[3]]) >> 8 == 2
-                    })
+                    parse_bms_mac_payload(&raw, 0x0002)
+                        .map(esp_firmware::termination_profile::firmware_is_r2)
                 })
                 .unwrap_or(false);
         if !(mfg_ok && dev_ok) {

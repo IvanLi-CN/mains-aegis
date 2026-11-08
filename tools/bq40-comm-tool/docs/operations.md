@@ -169,7 +169,9 @@ Keep the devd bridge running in one terminal, then execute tool commands in anot
 2. `just bq40-termination-artifact` 只构建 canonical/R2、禁止 ROM recovery 的 taper-only 镜像。目录内 catalog manifest 是选择依据，不直接调用 espflash。
 3. 使用 `mains-aegis device <id> artifact select --manifest-path <manifest>`、`flash --dry-run`，审核目标、ELF 与校验和；再执行已授权的 `flash --real`。
 4. `mains-aegis device <id> monitor start --maintenance-profile bq40-charge-termination` 收集维护 defmt 日志。产品身份缺失时日志保持未验证标记，必须关联先前绑定、所选镜像与 flash receipt。writer 先强制 CE 高并禁用 charger，核验身份、相关配置和 Full Access，保存完整块后仅写 `0x4A6D`；校验地址、长度、raw、解码和最终块，非 taper 字节必须不变。失败立即停止，保存日志，不自动整块覆盖回滚。
-5. 离线 parser 使用 `--repair-profile bq40-charge-termination`，要求唯一字段、`writes=1`、前后完整块和身份/权限证据；混用温度 profile 或其他写入均拒绝成功。共享报告结构的 `charge_temperature_apply` 键为兼容保留，必须同时核对其中的 profile 名称。
+5. 离线 parser 使用 `--repair-profile bq40-charge-termination`，要求唯一字段、`writes=1`、前后完整块和身份/权限证据；混用温度 profile 或其他写入均拒绝成功。共享报告结构的 `charge_temperature_apply` 键为兼容保留，必须同时核对报告请求的 repair_profile 名称。
 6. 停止维护 monitor，重新选择并 dry-run/flash 正式候选固件，核验产品身份与版本。再次 fresh 读回 taper=120mA；稳定普通充电应读回 ITERM=80mA、EN_TERM=1。100mA 与有界 200mA 维护唤醒禁用 EN_TERM，启动爬坡也暂禁终止。
 
 稳定性验证每 2 秒采样，共 10 分钟，记录 fresh Current、AverageCurrent、独立采样时间的均衡 mask、保护、VCT/FC 和 charger_done。随后自然充电观察最长 12 小时，终止后继续 10 分钟。零请求和保护优先，硬件先终止但 BQ40 无本轮资格时锁存 termination_incomplete，不自动重新启动。未覆盖 mask、读取错误、中断和超时必须记录；未捕获完整过程不能判通过。120mA/80mA 未满足真实窗口时保留证据返回设计，不自动调参。
+
+维护 defmt-only 镜像不消费 CDC hello/status 请求。显式维护 monitor 必须只读日志，不发送产品 CDC 轮询；CDC 请求返回 maintenance_cdc_unavailable，硬件 reset 仍由 devd 生命周期处理。R2 身份核验使用 TRM 的 DDddVVvvBBbbTTZZzzRREE 高字节顺序，DF 两字节 taper 仍为 little-endian。

@@ -10823,12 +10823,14 @@ fn run_native_monitor_inner(
     mut port: Box<dyn serialport::SerialPort>,
     allow_unverified_maintenance: bool,
 ) -> Result<(), HttpError> {
+    // Maintenance images emit defmt only and do not consume CDC requests.
+    let poll_cdc = NATIVE_MONITOR_POLL_STATUS && !allow_unverified_maintenance;
     let defmt_table = NATIVE_MONITOR_DECODE_DEFMT
         .then(|| load_native_monitor_defmt_table(state, device_id, allow_unverified_maintenance))
         .transpose()?
         .flatten();
     let mut defmt_decoder = defmt_table.as_ref().map(|table| table.new_stream_decoder());
-    let mut next_status_at = if NATIVE_MONITOR_POLL_STATUS {
+    let mut next_status_at = if poll_cdc {
         std::time::Instant::now() + Duration::from_millis(NATIVE_MONITOR_STATUS_INTERVAL_MS)
     } else {
         std::time::Instant::now() + Duration::from_secs(24 * 60 * 60)
@@ -10843,20 +10845,31 @@ fn run_native_monitor_inner(
     let mut byte = [0u8; 1];
     let hello_request_id = format!("devd-monitor-hello-{}", Utc::now().timestamp_millis());
     let hello_frame = format!(r#"{{"type":"hello","request_id":"{hello_request_id}"}}"#);
-    port.write_all(hello_frame.as_bytes())
-        .and_then(|_| port.write_all(b"\n"))
-        .map_err(|error| {
-            HttpError::retryable(
-                "native_monitor_write_failed",
-                format!("failed to start monitor session on {port_path}: {error}"),
-            )
-        })?;
-    append_monitor_trace(state, device_id, trace_entry("tx", &hello_frame), None);
+    if poll_cdc {
+        port.write_all(hello_frame.as_bytes())
+            .and_then(|_| port.write_all(b"\n"))
+            .map_err(|error| {
+                HttpError::retryable(
+                    "native_monitor_write_failed",
+                    format!("failed to start monitor session on {port_path}: {error}"),
+                )
+            })?;
+        append_monitor_trace(state, device_id, trace_entry("tx", &hello_frame), None);
+    }
     while !stop.load(Ordering::SeqCst) {
         while let Ok(command) = command_rx.try_recv() {
+            if allow_unverified_maintenance {
+                if let NativeMonitorCommand::SendFrame { response_tx, .. } = command {
+                    let _ = response_tx.send(Err(HttpError::non_retryable(
+                        "maintenance_cdc_unavailable",
+                        "maintenance image supports defmt only",
+                    )));
+                    continue;
+                }
+            }
             handle_native_monitor_command(state, device_id, port_path, &mut *port, command);
         }
-        if NATIVE_MONITOR_POLL_STATUS
+        if poll_cdc
             && status_request_in_flight
             && native_monitor_status_request_timed_out(status_request_sent_at, Instant::now())
             && last_status_timeout_trace_at.is_none_or(|last_trace| {
@@ -10881,7 +10894,7 @@ fn run_native_monitor_inner(
             status_request_id = None;
             next_status_at = std::time::Instant::now();
         }
-        if NATIVE_MONITOR_POLL_STATUS
+        if poll_cdc
             && native_monitor_status_request_due(
                 status_request_in_flight,
                 std::time::Instant::now(),

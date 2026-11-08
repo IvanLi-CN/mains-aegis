@@ -11918,7 +11918,7 @@ where
         // Restoring the pre-activation register image is not permission to
         // resume physical charging. Keep CE high; the next ordinary charger
         // poll must re-evaluate BQ40 temperature/request freshness, JEITA,
-        // CurrentAtEOC, and the product policy before enabling CE again.
+        // the real taper configuration, and product policy before enabling CE again.
         self.chg_ce.set_high();
         self.chg_enabled = false;
         self.bms_activation_deadline = None;

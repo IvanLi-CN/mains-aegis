@@ -14,6 +14,11 @@ pub const FIELDS: [Field; FIELD_COUNT] = [Field {
     offset: 13,
     raw: TAPER_MA.to_le_bytes(),
 }];
+/// TRM 14.1.3 uses DDddVVvvBBbbTTZZzzRREE (MSB first), unlike SBS words/DF.
+pub fn firmware_is_r2(payload: &[u8]) -> bool {
+    payload.len() == 11 && u16::from_be_bytes([payload[0], payload[1]]) == 0x4500 && payload[2] == 2
+}
+
 pub fn apply_profile<T: Transport>(
     transport: &mut T,
 ) -> Result<crate::charge_profile::ApplyReport<FIELD_COUNT>, ApplyError<T::Error>> {
@@ -23,6 +28,19 @@ pub fn apply_profile<T: Transport>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn r2_identity_uses_full_big_endian_firmware_response() {
+        let live = [0x45, 0, 2, 0x11, 0, 0x34, 0, 4, 0x75, 2, 0];
+        assert!(firmware_is_r2(&live));
+        assert!(!firmware_is_r2(&live[..4]));
+        let mut wrong = live;
+        wrong.swap(0, 1);
+        assert!(!firmware_is_r2(&wrong));
+        wrong = live;
+        wrong[2] = 5;
+        assert!(!firmware_is_r2(&wrong));
+    }
+
     struct Bus {
         block: [u8; 32],
         writes: usize,
