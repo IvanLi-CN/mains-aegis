@@ -53,6 +53,8 @@ jobs:
           default: true
           buildtargets: esp32s3
           version: latest
+          # Both production and BQ40 maintenance firmware use no_std; ldproxy is std-only.
+          ldproxy: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
