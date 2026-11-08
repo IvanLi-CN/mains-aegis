@@ -45,3 +45,7 @@ CLI 的 device charge start|stop 映射既有 control.manual_charge IPC，以执
 密集诊断与充电共享执行任务；诊断造成温度缓存超过 1 秒时，在充电决策边界重新读取温度配置与 DAStatus2，读取失败保持禁充，安全有效期仍为 1 秒。诊断附带 `cell_temperature_max_c_x10`、`cell_temperature_captured_at_ms` 和 `temperature_configuration_verified`，用于区分真实温度越界与证据过期。
 
 `bq40.charge` 提供不含 DF 与历史读取的独立实时观测包，供每两秒采样使用；完整配置在采样前后单独读回，两个包的时间和错误不混用。
+
+实机候选 adb8d0c9 在约 500mA 充电时触发 OC 容量过充保护，未到 VCT/FC 与硬件正常终止；连续充电窗口不足 10 分钟，A3/A4 未通过。已明确 STOP，不修改保护与学习数据。配置和本地检查通过不构成经验验收通过，PR 保持 Draft；详见[分析报告](../../reports/charge-cycling-analysis.md#修正候选的实机结果)。
+
+为核验容量保护证据，bq40.core 增加同轮 BatteryMode、RemainingCapacity 与 FullChargeCapacity 原值及由模式解码的单位；不改写容量模式、保护或学习数据。单位读取失败保持未知。

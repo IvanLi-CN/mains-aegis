@@ -1803,6 +1803,36 @@ mod tests {
     }
 
     #[test]
+    fn core_capacity_units_follow_fresh_battery_mode_and_fail_closed() {
+        for (mode, unit) in [
+            (Some(0), serde_json::json!("mAh")),
+            (Some(0x8000), serde_json::json!("10mWh")),
+            (None, serde_json::Value::Null),
+        ] {
+            let mut diag = DerivedPowerSnapshot::empty();
+            let core = &mut diag.hardware.bq40_core;
+            core.battery_mode.raw = mode;
+            core.remaining_capacity.raw = Some(2597);
+            core.full_charge_capacity.raw = Some(2624);
+            let mut packages = Vec::<String<32>, DIAG_SNAPSHOT_MAX_PACKAGES>::new();
+            packages
+                .push(String::try_from("bq40.core").unwrap())
+                .unwrap();
+            let mut body = String::<WEB_SERIAL_DIAG_SNAPSHOT_BODY_CAP>::new();
+            render_diag_snapshot_json(
+                &mut body,
+                packages.as_slice(),
+                UpsStatusSnapshot::empty(),
+                diag,
+            );
+            let parsed: serde_json::Value = serde_json::from_str(body.as_str()).unwrap();
+            let m = &parsed["packages"]["bq40.core"]["payload"]["measurements"];
+            assert_eq!(m["capacity_unit"], unit);
+            assert_eq!(m["full_charge_capacity_raw"], 2624);
+        }
+    }
+
+    #[test]
     fn charge_observation_is_independent_of_full_manufacturing_capture() {
         let mut diag = DerivedPowerSnapshot::empty();
         diag.bms.charge_term_taper_ma = Some(120);

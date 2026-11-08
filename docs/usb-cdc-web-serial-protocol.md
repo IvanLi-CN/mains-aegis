@@ -247,3 +247,5 @@ BQ40 诊断保留旧 `current_at_eoc_ma` 字段，并增加 `charge_term_taper_m
 显式 START/STOP 可经 `mains-aegis device <id> charge start|stop` 调用既有 `control.manual_charge` IPC。命令绑定设备、默认不确认回路风险，沿用既有安全校验；调整目标和速度仍经独立 settings 命令。该入口不绕过保护或自动重试异常终止。
 
 连续充电观测使用 `bq40.charge`，仅新读 ChargingStatus、GaugingStatus、SafetyAlert/Status、PFStatus、AFE 均衡与 AverageCurrent；包内未读取的配置字段保持空值。温度字段 `cell_temperature_max_c_x10`、`cell_temperature_captured_at_ms`、`temperature_configuration_verified` 明确为安全缓存及其时间，不伪装成同步采样。完整 DF 与历史配置另用 `bq40.manufacturing` 读取，避免每两秒的观测被慢速配置读取占满。诊断导致温度缓存过期时，充电决策重新读取温度配置和 DAStatus2；读取失败仍禁充，有效期仍为 1 秒。
+
+`bq40.core` 同轮新读 BatteryMode(0x03)、RemainingCapacity(0x0F)、FullChargeCapacity(0x10)，保留寄存器原值与各自错误。`remaining_capacity_raw`、`full_charge_capacity_raw` 由 `capacity_unit` 解释：BatteryMode[CAPACITY_MODE]=0 为 `mAh`，置位为 `10mWh`；模式读取失败时单位为空，禁止猜测或直接标为 mAh。

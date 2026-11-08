@@ -5963,6 +5963,30 @@ where
         };
 
         snapshot.address = Some(addr);
+        snapshot.battery_mode = diag_i2c_u16(bq40z50::read_u16(
+            &mut self.i2c,
+            addr,
+            bq40z50::cmd::BATTERY_MODE,
+        ));
+        if let Some(error) = snapshot.battery_mode.error {
+            push_diag_read_error(&mut snapshot.errors, "BATTERY_MODE", error);
+        }
+        snapshot.remaining_capacity = diag_i2c_u16(bq40z50::read_u16(
+            &mut self.i2c,
+            addr,
+            bq40z50::cmd::REMAINING_CAPACITY,
+        ));
+        if let Some(error) = snapshot.remaining_capacity.error {
+            push_diag_read_error(&mut snapshot.errors, "REMAINING_CAPACITY", error);
+        }
+        snapshot.full_charge_capacity = diag_i2c_u16(bq40z50::read_u16(
+            &mut self.i2c,
+            addr,
+            bq40z50::cmd::FULL_CHARGE_CAPACITY,
+        ));
+        if let Some(error) = snapshot.full_charge_capacity.error {
+            push_diag_read_error(&mut snapshot.errors, "FULL_CHARGE_CAPACITY", error);
+        }
         snapshot.voltage = diag_i2c_u16(bq40z50::read_u16(
             &mut self.i2c,
             addr,

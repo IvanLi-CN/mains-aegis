@@ -1521,6 +1521,21 @@ fn render_diag_bq40_core_package<'a, const N: usize>(
         "{{\"device\":{{\"address\":{}}},\"registers\":{{",
         snapshot.address.unwrap_or(0)
     );
+    render_diag_register_u16(buf, "BATTERY_MODE", 0x03, snapshot.battery_mode, true);
+    render_diag_register_u16(
+        buf,
+        "REMAINING_CAPACITY",
+        0x0f,
+        snapshot.remaining_capacity,
+        true,
+    );
+    render_diag_register_u16(
+        buf,
+        "FULL_CHARGE_CAPACITY",
+        0x10,
+        snapshot.full_charge_capacity,
+        true,
+    );
     render_diag_register_u16(buf, "VOLTAGE", 0x09, snapshot.voltage, true);
     render_diag_register_u16(buf, "CURRENT", 0x0a, snapshot.current, true);
     render_diag_register_u16(
@@ -1540,7 +1555,28 @@ fn render_diag_bq40_core_package<'a, const N: usize>(
         snapshot.current.raw.map(|raw| raw as i16),
         true,
     );
-    json_field_opt_u16(buf, "soc_pct", snapshot.relative_state_of_charge.raw, false);
+    json_field_opt_u16(buf, "soc_pct", snapshot.relative_state_of_charge.raw, true);
+    json_field_opt_u16(
+        buf,
+        "remaining_capacity_raw",
+        snapshot.remaining_capacity.raw,
+        true,
+    );
+    json_field_opt_u16(
+        buf,
+        "full_charge_capacity_raw",
+        snapshot.full_charge_capacity.raw,
+        true,
+    );
+    json_field_opt_str(
+        buf,
+        "capacity_unit",
+        snapshot
+            .battery_mode
+            .raw
+            .map(|mode| if mode & 0x8000 == 0 { "mAh" } else { "10mWh" }),
+        false,
+    );
     let _ = buf.push_str("},\"runtime\":{}},\"read_errors\":[");
     render_diag_error_list(buf, &snapshot.errors);
     let _ = buf.push_str("]}");

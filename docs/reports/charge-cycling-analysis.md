@@ -1,5 +1,7 @@
 # 充电反复启停与均衡电流分析报告
 
+本报告前半部分记录原始固件的调查结论；修正后候选的实际配置与失败验收见文末，不能把历史采样当作最终候选通过证据。
+
 采集日期：2026-11-07（Asia/Shanghai）。设备：`mains-aegis-198840`。操作范围：经仓库 devd CLI 读取诊断；本次分析未改设置、未刷写固件。PCB 修改由设备所有者完成，内容为增强 BGND 与最低位电芯负极的连接。
 
 ## 结论
@@ -101,3 +103,21 @@ BQ25792 的 40 mA 步进不能精确设为 100 mA；80/120 mA 都不应未经误
 [ADR 0003](../adr/0003-charge-termination-coordination.md) 删除普通 200mA 补电，采用真实 taper=120mA、ITERM=80mA；FC/VCT 与硬件终止共同收口，硬件提前终止则锁存异常，不自动重试。独立配置 writer 只写 taper 两字节并检查其余块字节不变；原温度白名单和学习历史保持原边界。
 
 软件测试覆盖旧冲突、SOC99/HV、不同终止顺序、保护和低电流路径；配置合同覆盖回显及最终块校验。测试通过不等于实机验收：需绑定最终候选读取前后配置、每 2 秒采样 10 分钟，再捕获完整自然终止与终止后 10 分钟。缺失过程或未出现的 mask 应明确记录，不能宣称 Step 5C Ready。实机记录由同一候选的 PR 证据提供，未取得前保持未验收。
+
+## 修正候选的实机结果
+
+修正候选 `adb8d0c9` 已经 devd 恢复到绑定设备 `mains-aegis-198840`。真实 taper 从初始读回的 250mA 调整为 120mA，历史 Current at EoC 保持 201mA；普通 500mA 充电阶段实际 ITERM=80mA、EN_TERM=1。ChgCurrentThreshold=50mA、QuitCurrent=10mA、FET Options=0x19（CHGFET=0）、SBS Gauging Configuration=0x05（RSOCL=1）、IT Gauging Configuration=0xD0FE（CSYNC=1）。
+
+首次 250→120mA 应用缺少完整启动日志，因此不声称该次完整原始块证据可复现。后续完整捕获的 120→120mA 幂等应用通过身份、Full Access、CE 高、禁充、回显及前后 32 字节块校验，其他字节不变；parser 判定通过。原始厂商资产未修改，ChemID、Qmax、Ra、校准和保护阈值未人工改写。
+
+密集读取完整 manufacturing 会使温度缓存超过 1 秒并停充；普通充电决策现先刷新过期温度配置和 DAStatus2，读取失败仍禁充，1 秒有效期不变。连续观测改用不含 DF 和历史读取的 bq40.charge 包。持续 product monitor 与诊断并行曾造成 4 次 CDC 超时和采样延迟，缺样保留；关闭 monitor 后另起连续窗口，不把该段争用包装成器件电流异常。
+
+连续窗口从约第 332 秒开始。到第 836 秒，mask=0/2/4/8 的 fresh Current 为 498–503mA；AverageCurrent 接近 500mA，ITERM 和 EN_TERM 正确，没有无法解释的大电流跳变。mask=1 未覆盖，不作该通道通过结论。第 838 秒出现安全停充，打断了要求的连续 10 分钟充电窗口。
+
+2026-11-08 04:20:38～04:20:40 UTC 之间，SafetyAlert[OC] 从告警转为 SafetyStatus[OC]=1（0x00400000），XCHG=1、PFStatus=0。此前仍以约 500mA 恒流充电，VCT/FC 未成立，未观察到硬件 termination_done 或 FULL。停充后电流下降到 −6～0mA。该变化有明确安全状态对应，不能解释成均衡导致的伪电流。
+
+这里的 OC 是容量过充保护，不是 OCC/OCD 瞬时过流，也不是 COV 电芯过压。根据 [BQ40Z50-R2 TRM §2.17](../manuals/BQ40Z50-R2-TRM/BQ40Z50-R2-TRM.md#217-overcharge-protection)，容量达到满充容量后，内部累计充电量达到 OC 阈值会置位 OC/XCHG。保护后的日志原值为 FCC=2624、RemainingCapacity=2597、SOC=99%（容量单位待同轮 BatteryMode 读回核验），电芯约 4.001–4.036V；RSOCL=1 会在有效终止前限制对外 SOC/容量到 99%，不能仅凭这个显示值否认容量保护，也不能以 SOC99 证明真实电池已满。
+
+OC 的真实阈值及内部累计量未读回，不用 TRM 默认值冒充实测。FCC、ChemID、容量标定、学习历史与电芯当前实际状态是否匹配，尚未形成根因结论；Qmax/Ra 更新计数非零也不等同于当前容量模型准确。不得把 FCC=2624 单独当成学习损坏的证明。
+
+本轮 A3 充电稳定性窗口和 A4 完整自然终止均未通过，120mA/80mA 的终止窗口尚未得到实机验证。已明确 STOP，保留保护与学习数据；不清保护、不强制放电、不自动重新 START、不放宽参数。配置和软件检查通过不能替代这项失败的经验验收。PR 保持 Draft，未启动要求通过实机门禁后的 Tier 4 正式审查，未达到 Step 5C Ready。
