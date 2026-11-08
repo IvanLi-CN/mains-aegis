@@ -6879,7 +6879,6 @@ where
         self.diag_snapshot.bms.temperature_configuration_verified = temperature_configuration_ok;
         self.bq40_charge_evidence
             .observe_temperature(read_succeeded, temperature_configuration_ok);
-        self.bms_next_da_status2_refresh_at = Instant::now() + BMS_CHARGE_TEMP_REFRESH_PERIOD;
     }
 
     fn bq40_charge_temperature_decision(
@@ -14315,9 +14314,11 @@ where
         };
         // Diagnostics run on this same task. Refresh expired temperature
         // evidence at the decision boundary, just like SBS charge requests.
-        if self.bms_cached_da_status2_at_ms.map_or(true, |observed| {
-            !charge_temperature::is_temperature_fresh(self.fan_now_ms(), observed)
-        }) {
+        if !activation_pending
+            && self.bms_cached_da_status2_at_ms.map_or(true, |observed| {
+                !charge_temperature::is_temperature_fresh(self.fan_now_ms(), observed)
+            })
+        {
             if let Some(addr) = self.bms_addr {
                 self.refresh_bq40_charge_temperature(addr);
             }
@@ -16292,6 +16293,7 @@ where
         if now >= self.bms_next_da_status2_refresh_at {
             spin_delay(BMS_ACTIVATION_WORD_GAP);
             self.refresh_bq40_charge_temperature(addr);
+            self.bms_next_da_status2_refresh_at = now + BMS_CHARGE_TEMP_REFRESH_PERIOD;
             da_status2 = self.bms_cached_da_status2;
         }
         let mut filter_capacity = self.bms_cached_filter_capacity;
