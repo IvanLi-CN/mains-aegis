@@ -3960,13 +3960,11 @@ function DeviceOverviewPage({ record }: { record: DeviceRecord }) {
             value={boolLabel(status?.battery.discharge_ready, "yes", "no")}
           />
           <MetricLine label="Charge" value={status?.charger.allow_charge ? "allowed" : "blocked"} />
-          <p id="issue-detail" className="panel-note">
+          <p id="issue-detail" className="panel-note battery-issue-summary">
             {batteryGuidance ? (
               <>
                 <strong>{batteryGuidance.title}</strong>
                 <span>{batteryGuidance.cause}</span>
-                <span><b>Impact:</b> {batteryGuidance.impact}</span>
-                <span><b>Next step:</b> {batteryGuidance.action}</span>
               </>
             ) : "No active battery protection reported."}
           </p>
@@ -8143,6 +8141,13 @@ function batteryIssueGuidance(
         cause: "At least one cell is below the BMS undervoltage recovery threshold.",
         impact: "The BMS is holding the charge path until the pack reaches a safe recovery state.",
         action: "Inspect individual cell voltages and follow the pack recovery procedure; do not force charge blindly.",
+      };
+    case "battery_protection":
+      return {
+        title: "Battery protection is active",
+        cause: "The BMS has restricted the battery path because a protection condition is still present.",
+        impact: `${input.title} is reported; charging or discharge may be restricted (battery current: ${batteryCurrent}).`,
+        action: "Open battery diagnostics and inspect cell voltage, BMS readiness, and MOS states.",
       };
     default:
       return {
