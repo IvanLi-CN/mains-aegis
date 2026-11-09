@@ -54,6 +54,12 @@ This folder stores project documentation and offline-renderable datasheets.
 ## PCBs
 
 - PCBs index: `docs/pcbs/README.md`
+- PCB 工程与制造文件：`hardware/pcb/README.md`
+
+## Hardware engineering files
+
+- PCB 工程、原理图和 Gerber：`hardware/pcb/README.md`
+- 外壳 FreeCAD/STEP/面板图纸：`hardware/mechanical/README.md`
 
 ## Manuals
 
