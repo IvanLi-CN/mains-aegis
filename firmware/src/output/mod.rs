@@ -6878,6 +6878,52 @@ where
         self.fan_started_at.elapsed().as_millis()
     }
 
+    /// Prepare the explicit wake at its decision boundary, after the long
+    /// no-charge phases. Never relax the ordinary charge or Dashboard gates.
+    fn prepare_bms_wake_charge(&mut self) -> bool {
+        if self.bms_activation_state != BmsActivationState::Pending
+            || self.bms_activation_current_is_auto
+            || !self.bms_activation_force_charge_requested
+            || !bms_activation_phase_allows_force_charge(self.bms_activation_phase)
+            || !self
+                .bms_activation_deadline
+                .is_some_and(|deadline| Instant::now() < deadline)
+        {
+            return false;
+        }
+        let Some(addr) = self.bms_addr else {
+            // Preserve the quiet offline wake; observed BQ40 evidence still
+            // has to pass bq40_activation_wake_gate, including failure latches.
+            return self.bms_activation_request_kind == BmsRecoveryRequestKind::Activation;
+        };
+        let safe = self.read_online_bms_wake_safety(addr);
+        self.refresh_bq40_charge_temperature(addr);
+        // Force a new request after the slower safety/temperature reads.
+        self.bq40_charge_request_next_poll_at = Instant::now();
+        self.refresh_bq40_charge_request(Instant::now());
+        safe && self.bms_activation_request_kind == BmsRecoveryRequestKind::DischargeAuthorization
+            && self
+                .bms_activation_deadline
+                .is_some_and(|deadline| Instant::now() < deadline)
+    }
+
+    fn read_online_bms_wake_safety(&mut self, addr: u8) -> bool {
+        let pack_mv = self
+            .read_bq40_u16_with_optional_pec(addr, bq40z50::cmd::VOLTAGE)
+            .ok();
+        let op = bq40z50::read_operation_status(&mut self.i2c, addr)
+            .ok()
+            .flatten();
+        let safety = bq40z50::read_safety_status(&mut self.i2c, addr)
+            .ok()
+            .flatten();
+        let pf = bq40z50::read_pf_status(&mut self.i2c, addr).ok().flatten();
+        let manufacturing = bq40z50::read_manufacturing_status(&mut self.i2c, addr)
+            .ok()
+            .flatten();
+        online_bms_wake_safe(pack_mv, op, safety, pf, manufacturing)
+    }
+
     fn refresh_bq40_charge_request(&mut self, now: Instant) {
         if now < self.bq40_charge_request_next_poll_at {
             return;
@@ -14453,6 +14499,7 @@ where
                 self.refresh_bq40_charge_temperature(addr);
             }
         }
+        let allow_low_vbat_activation_wake = self.prepare_bms_wake_charge();
         let charge_policy_now_ms = self.fan_now_ms();
         let charger_chg_stat = bq25792::status1::chg_stat(status1);
         let charge_policy_decision = if activation_pending {
@@ -14495,18 +14542,6 @@ where
         let force_charge_jeita_allowed =
             bq25792::jeita_normal_window_allows_charge(ts_cold, ts_cool, ts_warm, ts_hot);
         let force_charge_bq40_allowed = self.bq40_activation_wake_gate(charge_policy_now_ms);
-        // A manually requested, bounded offline wake must be able to apply
-        // a charger to a PACK terminal isolated by the BMS FETs. A low BAT
-        // reading is expected here, not evidence that the cells are absent.
-        // Do not extend this exception to boot diagnostics, discharge
-        // authorization, ordinary charging, or a known online gauge.
-        let allow_low_vbat_activation_wake = activation_force_charge
-            && !self.bms_activation_current_is_auto
-            && self.bms_activation_request_kind == BmsRecoveryRequestKind::Activation
-            && self.bms_addr.is_none()
-            && self
-                .bms_activation_deadline
-                .is_some_and(|deadline| now < deadline);
         let force_allow_charge = activation_force_charge_allows_ce(
             force_charge_requested,
             input_present,

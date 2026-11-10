@@ -59,7 +59,7 @@
 
 ## USB BMS 激活入口
 
-- 固件 CDC 提供 `activate_bms` 与 `get_bms_activation`，前者复用前面板 `request_bms_activation`，后者只读共享状态机。hello 通过 `bms_activation` capability 声明支持。
+- 固件 CDC 提供 `activate_bms` 与 `get_bms_activation`，前者复用前面板 `request_bms_activation`，后者只读共享状态机。在线放电授权恢复在低 BAT 决策点重新读取 BQ40 pack/保护/FET、温度和充电请求；只有完整健康证据、手动请求、受限阶段与绝对 deadline 同时满足时才允许受限唤醒。hello 通过 `bms_activation` capability 声明支持。
 - host-tools 提供 CLI `device <id> recovery bms-activation [--status]`、IPC `device.recovery.bms_activation` 与 devd HTTP `POST|GET /api/v1/devices/{id}/recovery/bms-activation`。USB-only，无 companion LAN 回退；启动响应不确定时不自动重发。
 - 协议解析、CLI 映射和 devd transport 测试覆盖启动/查询分离、pending 原样返回、mock/LAN/unknown 拒绝及不确定响应不重发。
 

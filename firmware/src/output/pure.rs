@@ -740,6 +740,35 @@ pub(super) fn bq40_pack_indicates_no_battery(vpack_mv: u16) -> bool {
     vpack_mv < BMS_NO_BATTERY_VPACK_MAX_MV
 }
 
+/// Fresh, complete gauge facts required to wake an isolated PACK terminal.
+/// Communication alone is not evidence that applying a charger is safe.
+pub(super) fn online_bms_wake_safe(
+    pack_mv: Option<u16>,
+    op_status: Option<u32>,
+    safety_status: Option<u32>,
+    pf_status: Option<u32>,
+    manufacturing_status: Option<u32>,
+) -> bool {
+    let (Some(pack_mv), Some(op), Some(0), Some(0), Some(mfg)) = (
+        pack_mv,
+        op_status,
+        safety_status,
+        pf_status,
+        manufacturing_status,
+    ) else {
+        return false;
+    };
+    let required = bq40z50::operation_status::CHG | bq40z50::operation_status::DSG;
+    let blocked = bq40z50::operation_status::XCHG
+        | bq40z50::operation_status::XDSG
+        | bq40z50::operation_status::EMSHUT
+        | bq40z50::operation_status::PF;
+    (BMS_NO_BATTERY_VPACK_MAX_MV..=16_800).contains(&pack_mv)
+        && op & required == required
+        && op & blocked == 0
+        && mfg & bq40z50::manufacturing_status::FET_EN != 0
+}
+
 pub(super) fn bq40_physical_discharge_path_absent(
     pack_mv: Option<u16>,
     discharge_ready: Option<bool>,
@@ -802,7 +831,7 @@ pub(super) const fn activation_force_charge_allows_ce(
     force_charge_requested
         && charger_enable_safety_gate(
             input_present,
-            // Only the caller's bounded offline activation context can
+            // Only the caller's qualified, bounded maintenance context can
             // waive battery-path presence. All other interlocks still apply.
             status_vbat_present || allow_low_vbat_wake,
             ts_cold,
@@ -4639,6 +4668,67 @@ mod tests {
                 jeita,
                 bq40,
                 true,
+            ));
+        }
+    }
+
+    #[test]
+    fn online_bms_wake_requires_complete_healthy_fresh_facts() {
+        let op = bq40z50::operation_status::CHG | bq40z50::operation_status::DSG;
+        let mfg = bq40z50::manufacturing_status::FET_EN;
+        assert!(online_bms_wake_safe(
+            Some(12_000),
+            Some(op),
+            Some(0),
+            Some(0),
+            Some(mfg)
+        ));
+        assert!(!online_bms_wake_safe(
+            Some(2_499),
+            Some(op),
+            Some(0),
+            Some(0),
+            Some(mfg)
+        ));
+        assert!(!online_bms_wake_safe(
+            Some(12_000),
+            None,
+            Some(0),
+            Some(0),
+            Some(mfg)
+        ));
+        assert!(!online_bms_wake_safe(
+            Some(12_000),
+            Some(op),
+            Some(1),
+            Some(0),
+            Some(mfg)
+        ));
+        assert!(!online_bms_wake_safe(
+            Some(12_000),
+            Some(op),
+            Some(0),
+            Some(0),
+            Some(0)
+        ));
+    }
+
+    #[test]
+    fn online_bms_wake_rejects_each_protection_or_fet_path_blocker() {
+        let healthy = bq40z50::operation_status::CHG | bq40z50::operation_status::DSG;
+        let mfg = bq40z50::manufacturing_status::FET_EN;
+        for blocked in [
+            bq40z50::operation_status::XCHG,
+            bq40z50::operation_status::XDSG,
+            bq40z50::operation_status::EMSHUT,
+            bq40z50::operation_status::PF,
+        ] {
+            assert!(!online_bms_wake_safe(
+                Some(12_000),
+                Some(healthy | blocked),
+                Some(0),
+                Some(0),
+                Some(mfg),
             ));
         }
     }

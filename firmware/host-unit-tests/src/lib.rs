@@ -1017,6 +1017,190 @@ pub mod output {
         }
     }
 
+    #[cfg(test)]
+    mod bms_wake_preparation {
+        use super::pure::Bq40ChargeEvidence;
+        use crate::charge_temperature::{self, Bq40ChargeRequest};
+        use crate::front_panel_scene::BmsActivationState;
+        use std::cell::Cell;
+        thread_local! { static NOW: Cell<u64> = const { Cell::new(22_000) }; }
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        struct Instant(u64);
+        impl Instant {
+            fn now() -> Self {
+                Self(NOW.with(Cell::get))
+            }
+        }
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum BmsRecoveryRequestKind {
+            Activation,
+            DischargeAuthorization,
+        }
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum BmsActivationPhase {
+            ProbeWithoutCharge,
+            WaitChargeOff,
+            WaitMinChargeSettle,
+            MinChargeProbe,
+            WakeProbe,
+        }
+        fn bms_activation_phase_allows_force_charge(p: BmsActivationPhase) -> bool {
+            matches!(
+                p,
+                BmsActivationPhase::WaitMinChargeSettle
+                    | BmsActivationPhase::MinChargeProbe
+                    | BmsActivationPhase::WakeProbe
+            )
+        }
+        struct WakeHarness {
+            bms_activation_state: BmsActivationState,
+            bms_activation_current_is_auto: bool,
+            bms_activation_force_charge_requested: bool,
+            bms_activation_phase: BmsActivationPhase,
+            bms_activation_deadline: Option<Instant>,
+            bms_activation_request_kind: BmsRecoveryRequestKind,
+            bms_addr: Option<u8>,
+            bq40_charge_request_next_poll_at: Instant,
+            bq40_charge_request: Option<Bq40ChargeRequest>,
+            temperature_at: Option<u64>,
+            evidence: Bq40ChargeEvidence,
+            safety_ok: bool,
+            refresh_ok: bool,
+            calls: Vec<&'static str>,
+        }
+        impl WakeHarness {
+            fn fixture() -> Self {
+                Self {
+                    bms_activation_state: BmsActivationState::Pending,
+                    bms_activation_current_is_auto: false,
+                    bms_activation_force_charge_requested: true,
+                    bms_activation_phase: BmsActivationPhase::WaitMinChargeSettle,
+                    bms_activation_deadline: Some(Instant(40_000)),
+                    bms_activation_request_kind: BmsRecoveryRequestKind::DischargeAuthorization,
+                    bms_addr: Some(11),
+                    bq40_charge_request_next_poll_at: Instant(23_000),
+                    bq40_charge_request: None,
+                    temperature_at: Some(0),
+                    evidence: Bq40ChargeEvidence::new(),
+                    safety_ok: true,
+                    refresh_ok: true,
+                    calls: Vec::new(),
+                }
+            }
+            fn read_online_bms_wake_safety(&mut self, _: u8) -> bool {
+                self.calls.push("safety");
+                self.safety_ok
+            }
+            fn refresh_bq40_charge_temperature(&mut self, _: u8) {
+                self.calls.push("temperature");
+                self.temperature_at = self.refresh_ok.then(|| Instant::now().0);
+                self.evidence
+                    .observe_temperature(self.refresh_ok, Some(true));
+            }
+            fn refresh_bq40_charge_request(&mut self, now: Instant) {
+                if now < self.bq40_charge_request_next_poll_at {
+                    return;
+                }
+                self.calls.push("request");
+                self.evidence.observe_charge_request(true, true);
+                self.bq40_charge_request = self.refresh_ok.then_some(Bq40ChargeRequest {
+                    current_ma: 500,
+                    voltage_mv: 16800,
+                    observed_at_ms: now.0,
+                });
+            }
+            fn gate(&self) -> bool {
+                let temperature = self.temperature_at.map(|at| {
+                    if charge_temperature::is_temperature_fresh(Instant::now().0, at) {
+                        charge_temperature::ChargeTemperatureDecision::normal()
+                    } else {
+                        charge_temperature::ChargeTemperatureDecision::no_charge()
+                    }
+                });
+                self.evidence.activation_wake_charge_allowed(
+                    Instant::now().0,
+                    Some(true),
+                    temperature,
+                    self.bq40_charge_request,
+                )
+            }
+        }
+        include!(concat!(env!("OUT_DIR"), "/bms_wake_preparation.rs"));
+        #[test]
+        fn online_wake_refreshes_evidence_after_22_second_no_charge_window() {
+            let mut h = WakeHarness::fixture();
+            h.evidence.observe_temperature(true, Some(true));
+            h.evidence.observe_charge_request(true, true);
+            assert!(!h.gate());
+            let low_bat_exception = h.prepare_bms_wake_charge();
+            assert!(low_bat_exception);
+            assert!(h.gate());
+            assert_eq!(h.calls, ["safety", "temperature", "request"]);
+            assert!(super::pure::activation_force_charge_allows_ce(
+                true,
+                true,
+                false,
+                false,
+                false,
+                false,
+                true,
+                h.gate(),
+                low_bat_exception
+            ));
+            assert!(!super::pure::charger_enable_safety_gate(
+                true, false, false, false, false
+            ));
+        }
+        #[test]
+        fn failed_evidence_refresh_never_authorizes_charge() {
+            let mut h = WakeHarness::fixture();
+            h.refresh_ok = false;
+            let exception = h.prepare_bms_wake_charge();
+            assert!(!super::pure::activation_force_charge_allows_ce(
+                true,
+                true,
+                false,
+                false,
+                false,
+                false,
+                true,
+                h.gate(),
+                exception
+            ));
+        }
+        #[test]
+        fn unsafe_online_pack_never_gets_low_bat_exception() {
+            let mut h = WakeHarness::fixture();
+            h.safety_ok = false;
+            assert!(!h.prepare_bms_wake_charge());
+        }
+        #[test]
+        fn wake_exception_requires_manual_bounded_charge_phase() {
+            for case in 0..6 {
+                let mut h = WakeHarness::fixture();
+                match case {
+                    0 => h.bms_activation_current_is_auto = true,
+                    1 => h.bms_activation_deadline = None,
+                    2 => h.bms_activation_deadline = Some(Instant(22_000)),
+                    3 => h.bms_activation_phase = BmsActivationPhase::ProbeWithoutCharge,
+                    4 => h.bms_activation_phase = BmsActivationPhase::WaitChargeOff,
+                    _ => h.bms_activation_state = BmsActivationState::Idle,
+                }
+                assert!(!h.prepare_bms_wake_charge());
+                assert!(h.calls.is_empty());
+            }
+        }
+        #[test]
+        fn offline_activation_keeps_quiet_wake_but_missing_online_recovery_does_not() {
+            let mut h = WakeHarness::fixture();
+            h.bms_addr = None;
+            assert!(!h.prepare_bms_wake_charge());
+            h.bms_activation_request_kind = BmsRecoveryRequestKind::Activation;
+            assert!(h.prepare_bms_wake_charge());
+            assert!(h.calls.is_empty());
+        }
+    }
+
     pub mod channel {
         include!(concat!(
             env!("CARGO_MANIFEST_DIR"),
