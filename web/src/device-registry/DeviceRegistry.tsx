@@ -2303,11 +2303,10 @@ export function DeviceRegistryProvider({
           : null;
         if (
           operationContext &&
-          (operationContext.deviceId !== identity.device_id ||
-            !currentDeviceOperation(
-              operationContext.deviceId,
-              operationContext.token,
-            ))
+          !currentDeviceOperation(
+            operationContext.deviceId,
+            operationContext.token,
+          )
         ) {
           await transport.close().catch(() => undefined);
           openedTransport = null;
@@ -2422,7 +2421,17 @@ export function DeviceRegistryProvider({
           return staleAddDeviceResult();
         }
         invalidateDeviceReads(identity.device_id);
-        setRecords((current) => upsertRecord(current, record));
+        setRecords((current) => {
+          const replacingPreviousTarget =
+            operationContext && operationContext.deviceId !== identity.device_id;
+          const next = replacingPreviousTarget
+            ? current.filter(
+                (candidate) =>
+                  candidate.target.deviceId !== operationContext?.deviceId,
+              )
+            : current;
+          return upsertRecord(next, record);
+        });
         openedTransport = null;
         return { ok: true, record };
       } catch (error) {

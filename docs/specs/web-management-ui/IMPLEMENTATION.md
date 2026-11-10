@@ -11,6 +11,7 @@
 - `DeviceRegistry` 维护浏览器侧设备清单、localStorage 持久化、LAN 探活、settings 读取、SSE 订阅与轮询兜底，并持有当前浏览器连接内的 USB CDC `SerialPort`。
 - `DeviceRegistry` 的设备通道切换、同通道重连和 companion 确认使用操作/读取代次 fence；替换前清理旧 stream、serial session、heartbeat 与 devd Web lease，并等待租约释放后提交新记录。
 - USB CDC / Web Serial 设备使用 `serial:` target，不持久化真实 `SerialPort`；刷新后需要重新授权。
+- Web Serial 每次重新授权都必须以握手返回的 `identity.device_id` 作为当前逻辑设备身份；USB 端口可被不同设备复用，身份变化时应替换旧路由目标并接管新设备，不得因旧的页面目标 ID 将有效会话标记为 stale。
 - `web/src/serial/transport.ts` 实现 JSONL framing、`request_id` response matching、握手、状态读取、WiFi 配网、日志级别与手动充电偏好命令。
 - `web/src/firmware/` 负责 firmware catalog 合并、Bundled 优先去重、Web Serial 烧录 helper 和 Firmware 页面数据流。
 - 固件新增 `usb_cdc_protocol` host-testable 协议模块，定义 `hello/status/log/request/response/error/wifi_config` frame、WiFi secret validation、PSK redaction 与 128B EEPROM WiFi config record CRC。
