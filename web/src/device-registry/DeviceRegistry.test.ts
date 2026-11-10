@@ -9,6 +9,7 @@ import {
   recoverReadRecord,
   resolveManualHttpChannelPersistence,
   rememberedHttpBaseUrls,
+  replaceSerialRouteRecord,
   sameDeviceRuntime,
   waitForPendingDevdLeaseRelease,
 } from "./DeviceRegistry";
@@ -133,6 +134,41 @@ describe("rememberedHttpBaseUrls", () => {
     expect(rememberedHttpBaseUrls(record)).toEqual([
       "http://mains-aegis-a1b2c3.local",
       "http://192.168.31.42",
+    ]);
+  });
+});
+
+describe("replaceSerialRouteRecord", () => {
+  test("replaces a stale route target when a reused USB port reports a new identity", () => {
+    const makeRecord = (deviceId: string): DeviceRecord => ({
+      target: {
+        deviceId,
+        baseUrl: `serial:${deviceId}`,
+        alias: deviceId,
+        location: "USB",
+        addedAt: "2026-06-07T00:00:00.000Z",
+        transport: "serial",
+      },
+      identity: null,
+      network: null,
+      settings: null,
+      status: null,
+      connectionState: "offline",
+      streamState: "idle",
+      error: null,
+      lastUpdated: "2026-06-07T00:00:00.000Z",
+    });
+    const replacement = makeRecord("new-device");
+
+    const records = replaceSerialRouteRecord(
+      [makeRecord("old-device"), makeRecord("other-device")],
+      replacement,
+      "old-device",
+    );
+
+    expect(records.map((record) => record.target.deviceId)).toEqual([
+      "other-device",
+      "new-device",
     ]);
   });
 });

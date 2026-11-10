@@ -2421,17 +2421,13 @@ export function DeviceRegistryProvider({
           return staleAddDeviceResult();
         }
         invalidateDeviceReads(identity.device_id);
-        setRecords((current) => {
-          const replacingPreviousTarget =
-            operationContext && operationContext.deviceId !== identity.device_id;
-          const next = replacingPreviousTarget
-            ? current.filter(
-                (candidate) =>
-                  candidate.target.deviceId !== operationContext?.deviceId,
-              )
-            : current;
-          return upsertRecord(next, record);
-        });
+        setRecords((current) =>
+          replaceSerialRouteRecord(
+            current,
+            record,
+            operationContext?.deviceId,
+          ),
+        );
         openedTransport = null;
         return { ok: true, record };
       } catch (error) {
@@ -5159,6 +5155,18 @@ function upsertRecord(
   );
   next.push(existing ? mergeDeviceRecord(existing, record) : record);
   return next;
+}
+
+export function replaceSerialRouteRecord(
+  records: DeviceRecord[],
+  record: DeviceRecord,
+  previousDeviceId?: string,
+): DeviceRecord[] {
+  const next =
+    previousDeviceId && previousDeviceId !== record.target.deviceId
+      ? records.filter((candidate) => candidate.target.deviceId !== previousDeviceId)
+      : records;
+  return upsertRecord(next, record);
 }
 
 function mergeDeviceRecord(
