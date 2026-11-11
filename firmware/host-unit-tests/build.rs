@@ -97,6 +97,19 @@ fn main() {
     )
     .expect("write production completion fixture");
 
+    let start = output_source
+        .find("    fn prepare_bms_wake_charge(")
+        .expect("find wake preparation");
+    let end = output_source[start..]
+        .find("\n    fn read_online_bms_wake_safety(")
+        .map(|offset| start + offset)
+        .expect("find wake preparation boundary");
+    fs::write(
+        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR")).join("bms_wake_preparation.rs"),
+        format!("impl WakeHarness {{\n{}\n}}\n", &output_source[start..end]),
+    )
+    .expect("write wake preparation fixture");
+
     let profiles_path = manifest_dir.join("../../schemas/runtime_mode_profiles.json");
     println!("cargo:rerun-if-changed={}", profiles_path.display());
 
