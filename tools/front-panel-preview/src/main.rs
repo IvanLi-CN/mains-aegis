@@ -1015,6 +1015,17 @@ fn bq40_snapshot_for_scenario(
                 mains_aegis_firmware::output_state::OutputGateReason::BmsNotReady;
             SelfCheckOverlay::None
         }
+        ScenarioArg::Bq40RcaDegraded => {
+            snapshot.bq40z50 = SelfCheckCommState::Warn;
+            snapshot.bq40z50_no_battery = Some(false);
+            snapshot.bq40z50_discharge_ready = Some(true);
+            snapshot.bq40z50_rca_alarm = Some(true);
+            snapshot.bq40z50_issue_detail = Some("remaining_capacity_alarm");
+            snapshot.bq40z50_recovery_action = None;
+            snapshot.requested_outputs = mains_aegis_firmware::output_state::EnabledOutputs::Both;
+            snapshot.active_outputs = snapshot.requested_outputs;
+            SelfCheckOverlay::None
+        }
         ScenarioArg::Bq40Offline => SelfCheckOverlay::None,
         ScenarioArg::Bq40OfflineDialog => SelfCheckOverlay::BmsActivateConfirm,
         ScenarioArg::Bq40DischargeBlocked => {
@@ -1982,6 +1993,7 @@ fn run() -> Result<(), String> {
             .map_err(|_| "render failed unexpectedly".to_string())?;
         }
         ScenarioArg::Bq40Offline
+        | ScenarioArg::Bq40RcaDegraded
         | ScenarioArg::SelfCheckOutAFailed
         | ScenarioArg::SelfCheckBmsMissingTpsWarn
         | ScenarioArg::Bq40OfflineDialog
@@ -2280,6 +2292,7 @@ enum ScenarioArg {
     SelfCheckOutAFailed,
     SelfCheckBmsMissingTpsWarn,
     Bq40Offline,
+    Bq40RcaDegraded,
     Bq40OfflineDialog,
     Bq40DischargeBlocked,
     Bq40EmshutBlocked,
@@ -2408,6 +2421,7 @@ impl ScenarioArg {
             "self-check-out-a-failed" => Ok(Self::SelfCheckOutAFailed),
             "self-check-bms-missing-tps-warn" => Ok(Self::SelfCheckBmsMissingTpsWarn),
             "bq40-offline" => Ok(Self::Bq40Offline),
+            "bq40-rca-degraded" => Ok(Self::Bq40RcaDegraded),
             "bq40-offline-dialog" => Ok(Self::Bq40OfflineDialog),
             "bq40-discharge-blocked" => Ok(Self::Bq40DischargeBlocked),
             "bq40-emshut-blocked" => Ok(Self::Bq40EmshutBlocked),
@@ -2545,6 +2559,7 @@ impl ScenarioArg {
             ScenarioArg::SelfCheckOutAFailed => "self-check-out-a-failed",
             ScenarioArg::SelfCheckBmsMissingTpsWarn => "self-check-bms-missing-tps-warn",
             ScenarioArg::Bq40Offline => "bq40-offline",
+            ScenarioArg::Bq40RcaDegraded => "bq40-rca-degraded",
             ScenarioArg::Bq40OfflineDialog => "bq40-offline-dialog",
             ScenarioArg::Bq40DischargeBlocked => "bq40-discharge-blocked",
             ScenarioArg::Bq40EmshutBlocked => "bq40-emshut-blocked",

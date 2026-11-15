@@ -1929,20 +1929,28 @@ pub fn self_check_dashboard_block_reason(snapshot: &SelfCheckUiSnapshot) -> Opti
     if !state_ok(snapshot.tca6408a) {
         return Some("tca6408a");
     }
-    if !state_ok(snapshot.fusb302) {
+    if !state_ok(snapshot.fusb302)
+        && snapshot.dcin_present != Some(true)
+        && snapshot.aggregate_input_present != Some(true)
+    {
         return Some("fusb302");
     }
     if !state_ok(snapshot.ina3221) {
         return Some("ina3221");
     }
-    if !state_ok(snapshot.bq25792) {
+    if !state_ok(snapshot.bq25792) && !charger_path_only_degraded(snapshot) {
         return Some("bq25792");
     }
-    if !bq40_dashboard_clear(snapshot) {
+    if !bq40_dashboard_fatal_clear(snapshot) {
         return Some("bq40z50");
     }
-    if snapshot.output_gate_reason != OutputGateReason::None {
+    if output_gate_is_fatal(snapshot) {
         return Some(snapshot.output_gate_reason.as_str());
+    }
+    if snapshot.requested_outputs != EnabledOutputs::None
+        && snapshot.requested_outputs != snapshot.active_outputs
+    {
+        return Some("requested_active_outputs_mismatch");
     }
     if outputs_include(snapshot, OutputSelector::OutA)
         && (!state_ok(snapshot.tps_a)
@@ -1967,24 +1975,45 @@ pub fn self_check_dashboard_block_reason(snapshot: &SelfCheckUiSnapshot) -> Opti
     None
 }
 
-fn bq40_dashboard_clear(snapshot: &SelfCheckUiSnapshot) -> bool {
-    if snapshot.bq40z50_no_battery == Some(true)
-        || snapshot.bq40z50_discharge_ready == Some(false)
-        || snapshot.bq40z50_recovery_pending
-    {
+fn bq40_dashboard_fatal_clear(snapshot: &SelfCheckUiSnapshot) -> bool {
+    if snapshot.bq40z50_no_battery == Some(true) || snapshot.bq40z50_recovery_pending {
+        return false;
+    }
+    if matches!(
+        snapshot.bq40z50_issue_detail,
+        Some("xdsg_blocked" | "physical_vbat_absent" | "no_battery")
+    ) {
         return false;
     }
 
     match snapshot.bq40z50 {
         SelfCheckCommState::Ok => true,
-        SelfCheckCommState::Warn => matches!(
-            snapshot.bq40z50_issue_detail,
-            Some("xchg_blocked" | "chg_fet_off")
-        ),
+        SelfCheckCommState::Warn => {
+            snapshot.bq40z50_no_battery == Some(false)
+                && snapshot.bq40z50_discharge_ready != Some(false)
+        }
         SelfCheckCommState::Pending
         | SelfCheckCommState::Err
         | SelfCheckCommState::NotAvailable => false,
     }
+}
+
+fn charger_path_only_degraded(snapshot: &SelfCheckUiSnapshot) -> bool {
+    snapshot.bq40z50_no_battery == Some(false)
+        && snapshot.bq40z50 != SelfCheckCommState::Err
+        && snapshot.requested_outputs == snapshot.active_outputs
+        && snapshot.requested_outputs != EnabledOutputs::None
+}
+
+fn output_gate_is_fatal(snapshot: &SelfCheckUiSnapshot) -> bool {
+    matches!(
+        snapshot.output_gate_reason,
+        OutputGateReason::ThermKill
+            | OutputGateReason::TpsFault
+            | OutputGateReason::TpsConfigFailed
+            | OutputGateReason::ActiveProtection
+            | OutputGateReason::ManualBypass
+    )
 }
 
 #[allow(dead_code)]
@@ -15659,10 +15688,16 @@ mod tests {
         snapshot.tmp_b = SelfCheckCommState::Ok;
 
         snapshot.active_outputs = EnabledOutputs::Only(OutputSelector::OutA);
-        assert_eq!(self_check_dashboard_block_reason(&snapshot), Some("out_b"));
+        assert_eq!(
+            self_check_dashboard_block_reason(&snapshot),
+            Some("requested_active_outputs_mismatch")
+        );
 
         snapshot.active_outputs = EnabledOutputs::Only(OutputSelector::OutB);
-        assert_eq!(self_check_dashboard_block_reason(&snapshot), Some("out_a"));
+        assert_eq!(
+            self_check_dashboard_block_reason(&snapshot),
+            Some("requested_active_outputs_mismatch")
+        );
 
         snapshot.active_outputs = EnabledOutputs::Both;
         assert!(self_check_can_enter_dashboard(&snapshot));
@@ -15688,6 +15723,39 @@ mod tests {
         snapshot.tmp_b = SelfCheckCommState::Ok;
 
         assert!(self_check_can_enter_dashboard(&snapshot));
+    }
+
+    #[test]
+    fn self_check_allows_online_battery_degraded_bms_conditions() {
+        for issue_detail in [
+            Some("remaining_capacity_alarm"),
+            Some("cell_undervoltage"),
+            Some("xchg_blocked"),
+            Some("chg_fet_off"),
+        ] {
+            let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
+            snapshot.gc9307 = SelfCheckCommState::Ok;
+            snapshot.tca6408a = SelfCheckCommState::Ok;
+            snapshot.fusb302 = SelfCheckCommState::Ok;
+            snapshot.ina3221 = SelfCheckCommState::Ok;
+            snapshot.bq25792 = SelfCheckCommState::Ok;
+            snapshot.bq40z50 = SelfCheckCommState::Warn;
+            snapshot.bq40z50_no_battery = Some(false);
+            snapshot.bq40z50_discharge_ready = Some(true);
+            snapshot.bq40z50_rca_alarm = Some(issue_detail == Some("remaining_capacity_alarm"));
+            snapshot.bq40z50_issue_detail = issue_detail;
+            snapshot.requested_outputs = EnabledOutputs::Both;
+            snapshot.active_outputs = EnabledOutputs::Both;
+            snapshot.tps_a = SelfCheckCommState::Ok;
+            snapshot.tps_b = SelfCheckCommState::Ok;
+            snapshot.tmp_a = SelfCheckCommState::Ok;
+            snapshot.tmp_b = SelfCheckCommState::Ok;
+
+            assert!(
+                self_check_can_enter_dashboard(&snapshot),
+                "{issue_detail:?}"
+            );
+        }
     }
 
     #[test]
