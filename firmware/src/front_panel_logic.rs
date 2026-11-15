@@ -62,8 +62,7 @@ pub fn dashboard_enter_requires_variant_switch(variant: UiVariant) -> bool {
 }
 
 pub fn dashboard_allowed(snapshot: &SelfCheckUiSnapshot) -> bool {
-    !matches!(snapshot.mode, front_panel_scene::UpsMode::Blocked)
-        && front_panel_scene::self_check_can_enter_dashboard(snapshot)
+    front_panel_scene::self_check_can_enter_dashboard(snapshot)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -240,10 +239,10 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_allowed_rejects_blocked_mode() {
+    fn dashboard_allowed_allows_safe_degraded_blocked_mode() {
         let snapshot = clear_self_check_snapshot(front_panel_scene::UpsMode::Blocked);
 
-        assert!(!dashboard_allowed(&snapshot));
+        assert!(dashboard_allowed(&snapshot));
     }
 
     #[test]
