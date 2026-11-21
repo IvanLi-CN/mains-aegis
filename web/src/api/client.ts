@@ -27,6 +27,8 @@ import type {
   DevdDiagSnapshot,
   TpsEnableReleaseResponse,
   UpsStatus,
+  UvPrechargeActionResponse,
+  UvPrechargePolicy,
   WifiApplyNetwork,
 } from "./types";
 
@@ -1511,6 +1513,49 @@ export const getDevdDeviceDiagSnapshot = (baseUrl: string, deviceId: string) =>
     `/api/v1/devices/${encodeURIComponent(deviceId)}/diag-snapshot?package=mcu.runtime`,
     { bridgeAuth: true },
   );
+export const requestDevdBmsLowVoltagePrecharge = (
+  baseUrl: string,
+  deviceId: string,
+) =>
+  requestWithBody<UvPrechargeActionResponse>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/recovery/bms-low-voltage-precharge`,
+    "POST",
+    undefined,
+    { bridgeAuth: true },
+  );
+
+export const requestDirectBmsLowVoltagePrecharge = (baseUrl: string) =>
+  requestWithBody<UvPrechargeActionResponse>(
+    baseUrl,
+    "/api/v1/recovery/bms-low-voltage-precharge",
+    "POST",
+  );
+
+export const getDevdUvPrechargePolicy = async (
+  baseUrl: string,
+  deviceId: string,
+): Promise<UvPrechargePolicy | null> => {
+  const snapshot = await requestJson<DevdDiagSnapshot>(
+    baseUrl,
+    `/api/v1/devices/${encodeURIComponent(deviceId)}/diag-snapshot?package=derived.power&fresh=true`,
+    { bridgeAuth: true },
+  );
+  const pkg = snapshot.packages?.["derived.power"];
+  return pkg?.payload?.policy ?? pkg?.policy ?? null;
+};
+
+export const getDirectUvPrechargePolicy = async (
+  baseUrl: string,
+): Promise<UvPrechargePolicy | null> => {
+  const snapshot = await requestJson<DevdDiagSnapshot>(
+    baseUrl,
+    "/api/v1/diag-snapshot?package=derived.power",
+  );
+  const pkg = snapshot.packages?.["derived.power"];
+  return pkg?.payload?.policy ?? pkg?.policy ?? null;
+};
+
 export const releaseDevdTpsEnableInterlock = (
   baseUrl: string,
   deviceId: string,

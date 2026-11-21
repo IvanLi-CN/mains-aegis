@@ -58,7 +58,11 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   bindDevdDevice,
   getDevdDeviceDiagSnapshot,
+  getDevdUvPrechargePolicy,
   getDevdDeviceAlerts,
+  getDirectUvPrechargePolicy,
+  requestDevdBmsLowVoltagePrecharge,
+  requestDirectBmsLowVoltagePrecharge,
   getDeviceAlerts,
   getIdentity,
   isHostedHttpServiceApp,
@@ -85,6 +89,8 @@ import type {
   SerialTraceEntry,
   TpsEnableInterlock,
   UpsStatus,
+  UvPrechargeActionResponse,
+  UvPrechargePolicy,
 } from "../api/types";
 import {
   buildAdvancedPowerDefaults,
@@ -5864,6 +5870,79 @@ function BatteryPage({ record }: { record: DeviceRecord }) {
     : null;
   const cells = normalizeCellVoltages(battery?.cell_mv);
   const cellModel = buildCellBalanceModel(cells, battery);
+  const transport =
+    record.target.transport ??
+    (record.serial?.source === "devd"
+      ? "devd"
+      : record.serial?.source === "web_serial"
+        ? "serial"
+        : "http");
+  const baseUrl = record.target.baseUrl || record.serial?.baseUrl || "";
+  const deviceId = record.target.deviceId;
+  const canReadPrecharge =
+    baseUrl.length > 0 && (transport === "devd" || transport === "http");
+  const canRequestPrecharge =
+    canReadPrecharge && battery?.issue_detail === "cell_undervoltage";
+  const [prechargePolicy, setPrechargePolicy] =
+    useState<UvPrechargePolicy | null>(null);
+  const [prechargeConfirming, setPrechargeConfirming] = useState(false);
+  const [prechargeBusy, setPrechargeBusy] = useState(false);
+  const [prechargeMessage, setPrechargeMessage] = useState<string | null>(null);
+  const [prechargeError, setPrechargeError] = useState<string | null>(null);
+
+  const refreshPrechargePolicy = useCallback(async () => {
+    if (!canReadPrecharge) return;
+    try {
+      const next =
+        transport === "devd"
+          ? await getDevdUvPrechargePolicy(baseUrl, deviceId)
+          : await getDirectUvPrechargePolicy(baseUrl);
+      if (next) setPrechargePolicy(next);
+    } catch {
+      // The status stream remains authoritative; a diag read failure is non-fatal.
+    }
+  }, [baseUrl, canReadPrecharge, deviceId, transport]);
+
+  useEffect(() => {
+    void refreshPrechargePolicy();
+  }, [refreshPrechargePolicy]);
+
+  const prechargeActive =
+    prechargePolicy?.uv_precharge_state === "verifying" ||
+    prechargePolicy?.uv_precharge_state === "observing" ||
+    prechargePolicy?.uv_precharge_state === "resetting";
+
+  useEffect(() => {
+    if (!prechargeActive) return;
+    const timer = window.setInterval(() => {
+      void refreshPrechargePolicy();
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [prechargeActive, refreshPrechargePolicy]);
+
+  const startPrecharge = async () => {
+    if (!canRequestPrecharge) return;
+    setPrechargeBusy(true);
+    setPrechargeError(null);
+    setPrechargeMessage(null);
+    try {
+      const response =
+        transport === "devd"
+          ? await requestDevdBmsLowVoltagePrecharge(baseUrl, deviceId)
+          : await requestDirectBmsLowVoltagePrecharge(baseUrl);
+      setPrechargePolicy(uvPrechargePolicyFromResponse(response));
+      setPrechargeMessage(uvPrechargeResponseText(response));
+      setPrechargeConfirming(false);
+      void refreshPrechargePolicy();
+    } catch (error) {
+      setPrechargeError(
+        error instanceof Error ? error.message : "Precharge request failed.",
+      );
+    } finally {
+      setPrechargeBusy(false);
+    }
+  };
+
   return (
     <section className="page-flow">
       <div className="detail-grid">
@@ -5950,9 +6029,130 @@ function BatteryPage({ record }: { record: DeviceRecord }) {
             <p className="panel-note">No active battery issue reported by the v1 status snapshot.</p>
           )}
         </InfoPanel>
+        <InfoPanel title="Low-voltage precharge" icon={BatteryCharging}>
+          <MetricLine
+            label="State"
+            value={prechargePolicy?.uv_precharge_state ?? "--"}
+          />
+          <MetricLine
+            label="Result"
+            value={prechargePolicy?.uv_precharge_result ?? "--"}
+          />
+          <MetricLine
+            label="Reason"
+            value={prechargePolicy?.uv_precharge_reason ?? "--"}
+          />
+          <MetricLine
+            label="Target"
+            value={formatCurrent(prechargePolicy?.uv_precharge_target_ichg_ma)}
+          />
+          {canRequestPrecharge ? (
+            prechargeConfirming ? (
+              <div className="tps-enable-interlock-actions">
+                <p className="field-help">
+                  This resets the BQ40 and bypasses the low-voltage charge block
+                  for up to 60 minutes. If protection retrips or recovery times
+                  out, automatic charging stays latched off until another
+                  explicit action or a reboot.
+                </p>
+                <button
+                  className="primary-button small"
+                  type="button"
+                  disabled={prechargeBusy}
+                  onClick={() => void startPrecharge()}
+                >
+                  <ButtonLabel
+                    icon={BatteryCharging}
+                    busy={prechargeBusy}
+                    busyText="Starting"
+                    text="Confirm precharge"
+                  />
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={prechargeBusy}
+                  onClick={() => setPrechargeConfirming(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div className="tps-enable-interlock-actions">
+                <button
+                  className="secondary-button danger-action"
+                  type="button"
+                  disabled={prechargeBusy}
+                  onClick={() => setPrechargeConfirming(true)}
+                >
+                  <ButtonLabel
+                    icon={BatteryCharging}
+                    busy={false}
+                    busyText="Starting"
+                    text="Start low-voltage precharge"
+                  />
+                </button>
+              </div>
+            )
+          ) : (
+            <p className="panel-note">
+              {canReadPrecharge
+                ? "Available when the BMS reports cell undervoltage."
+                : "Use the CLI or devd connection to start low-voltage precharge."}
+            </p>
+          )}
+          {prechargeMessage ? (
+            <p className="panel-note">{prechargeMessage}</p>
+          ) : null}
+          {prechargeError ? (
+            <p className="field-help">{prechargeError}</p>
+          ) : null}
+        </InfoPanel>
       </div>
     </section>
   );
+}
+
+function uvPrechargePolicyFromResponse(
+  response: UvPrechargeActionResponse,
+): UvPrechargePolicy {
+  return {
+    uv_precharge_state:
+      response.state ?? response.uv_precharge_state ?? null,
+    uv_precharge_result:
+      response.result ?? response.uv_precharge_result ?? null,
+    uv_precharge_reason:
+      response.reason ?? response.uv_precharge_reason ?? null,
+    uv_precharge_source:
+      response.source ?? response.uv_precharge_source ?? null,
+    uv_suspect: response.uv_suspect ?? null,
+    uv_precharge_blocked:
+      response.blocked ?? response.uv_precharge_blocked ?? null,
+    uv_precharge_baseline_unverified:
+      response.baseline_unverified ??
+      response.uv_precharge_baseline_unverified ??
+      null,
+    uv_precharge_reset_verified:
+      response.reset_verified ?? response.uv_precharge_reset_verified ?? null,
+    uv_precharge_target_ichg_ma:
+      response.target_ichg_ma ?? response.uv_precharge_target_ichg_ma ?? null,
+  };
+}
+
+function uvPrechargeResponseText(
+  response: UvPrechargeActionResponse,
+): string {
+  if (response.accepted === false) {
+    return response.reason
+      ? `Precharge not started: ${response.reason}.`
+      : "Precharge not started.";
+  }
+  const state = response.state ?? response.uv_precharge_state ?? "unknown";
+  const result = response.result ?? response.uv_precharge_result;
+  const reason = response.reason ?? response.uv_precharge_reason;
+  return `Precharge ${state}${result ? `: ${result}` : ""}${
+    reason ? ` (${reason})` : ""
+  }.`;
 }
 
 function normalizeCellVoltages(

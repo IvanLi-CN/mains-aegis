@@ -10,6 +10,8 @@
 - 2026-04-06: 主线 charger state machine 正式作为 SoT；`LOAD` 增加 `2入3出` 回差，输出功率未知改为保守禁充，首页 `ChargeCard` 同步到 runtime 紧凑 token。
 - 2026-06-14: DC IN 停充判据改为 `TPS 总输出电流 > 100mA` 优先；根因在 cooldown 期间持续可见。DC profile 改为 `IINDPM=1000mA`、`VINDPM=输入电压*96%`；`/api/v1/status`、`diag-snapshot`、CLI trace 与 Web PowerPage/trace console 同步暴露 `tps_total_iout_ma`、阈值和停充原因。
 - 2026-06-04: 现场复核发现 `ICHG=100mA` 搭配 `ITERM=120mA` 会让 BQ25792 立即进入 `termination_done` 且 `IBAT_ADC=0`；修正 `REG09` 16-bit 写入路径，并让 `100mA` 模式写入 `ITERM=40mA`，确保硬件能持续预充。
+- 2026-11-21: 现场 `runtime.mode=blocked` + `charger.policy=recovering_low_voltage` 被 `runtime_blocked_no_charge` 覆盖。裁决：`runtime.mode` 不再自动关闭 charger，`RECOV/100mA` 在输入在线、无保护且 `cell_min >= 2500mV` 时允许自动充电；`charger.vbat_present=false` 不再单独禁充，只有 backfeed contradiction 才禁充；硬低压 floor 为 `2500mV/cell`。
+- 2026-11-21: 实机复核通过。`runtime.mode=backup` 的 USB-C 例外下，`target_ichg_ma=100`、`allow_charge=true`、`vbat_present=true`、`CHG_STAT=fast_cc`；BMS 实测电流 `93mA`、BQ25792 `ibat_adc_ma=60`，稳定 60s，cell_min `2962→2984mV`；`output.active=both`、`gate_reason=none`、约 `12.06V`。`recovering_low_voltage` 不得被 BACKUP+USB-C 的 500mA 例外升级覆盖。
 
 ## References
 

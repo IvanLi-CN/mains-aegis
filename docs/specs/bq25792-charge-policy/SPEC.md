@@ -20,7 +20,10 @@
 - DC IN/VAC2 被 BQ25792 实际选中时，输入源判定必须优先使用 charger-side VBUS/VAC ADC 事实，而不是 USB PD attach 状态；DC 输入 profile 必须写入 `IINDPM=1000mA`，`VINDPM=当前 DC 输入电压 * 96%`。
 - 当固件把输入源判为 `DcIn` 或 `UsbC` 时，必须同时把 BQ25792 `ACDRV` 实际路径切到对应的 `VAC2` 或 `VAC1`；仅修改 owner-facing `input_source` 文案而不切换 `EN_ACDRV1/EN_ACDRV2` 不算满足本规格。
 - BMS CUV 低电恢复允许在 `PCHG=true`、`PF=0`、`CUVC=false` 且 DC IN 或 USB-C 输入在线时进入受控 `100mA` 恢复；该恢复态显示为 `RECOV`，不同于 DC 过流降档 `CHG100`。所有 `100mA` 充电/恢复模式必须把 BQ25792 `ITERM` 写到低于目标电流的安全值（当前 `40mA`），否则 BQ 会立即进入 `termination_done` 而不持续充电。
+- `runtime.mode=blocked` 只表示输出门控未证明，不关闭 `charger.policy`；只要输入在线、无 `Safety/PF/XCHG/XDSG/charge-inhibit` 且 `cell_min >= 2500mV`，`recovering_low_voltage` 仍可自动以 `100mA` 充电。`runtime.mode=assist` / `backup` 也不得覆盖该 `RECOV` 例外；输出模式恢复另由 output gate 判定。
+- `charger.vbat_present=false` 不是独立禁充条件；只有 `charger.vbat_present=true` 且 BMS 报告输出/充电路径断开（`op_dsg_fet=false`、`xdsg=true` 或 `afe_dsg_fet=false`）时，才按 backfeed contradiction 禁止充电。
 - 低压恢复采用两段式：`charge_ready=false` 且 BQ40 `PCHG` 可用时为 `policy.recovery_stage=bq40_pchg`；BQ40 在 `CUV Recovery=2550mV/cell` 释放 CUV 后，只要 `cell_min_mv < 3000`、`PCHG=true`、`XCHG=false` 且无 Safety/PF/charging-inhibit，主固件仍保持 `RECOV/100mA`，随后 `charge_ready=true` 时转入 `policy.recovery_stage=bq25792_precharge`。只有 `cell_min_mv >= 3000` 后才恢复常规 `500mA`。
+- `cell_undervoltage` 的显式复位预充电动作和 `uv_suspect` 迟滞由 [bq40-low-voltage-precharge](../bq40-low-voltage-precharge/SPEC.md) 承接；本规格的自动 `recovering_low_voltage` 语义按本文件 2026-11-21 裁决扩展：允许在 `runtime.mode=blocked/assist/backup` 且输入在线、高于 2500mV floor 时继续 100mA。
 - BQ25792 必须显式写入并诊断 `REG08`: `VBAT_LOWV=71.4%`、`IPRECHG=120mA`。
 - `TPS55288` 总输出功率门控必须有回差：连续 `2` 个 poll `>5.0W` 才停充，进入 `LOAD` 后连续 `3` 个 poll `<4.5W` 才恢复。
 - 任一路输出已开启但聚合输出功率不可可信计算时，必须保守禁充，并在 notice/log 中明确标成 `blocked_output_power_unknown`。
@@ -71,7 +74,9 @@
 - 输出开启时，已放行会话连续两次独立 TPS 遥测采样尝试都不能得到可信聚合功率，必须停充并锁存 `backup_usb_telemetry_lost_latched`；更快的 charger poll 不得重复计数同一采样缺失。
 - 上述两类 `BACKUP + USB-C` 锁存只可由新的前面板手动 `START` 判定或真实 USB-C detach 后的新会话清除；临时运行模式波动不得清除锁存。
 - 手动确认仅能绕过本段新增的 `<2W`、两次 TPS 缺样和 `>3W` 门，不得绕过 BMS、温度、PD、输入故障或既有通用输出过载安全门。
-- BMS 遥测缺失、输入缺失、`VBAT_PRESENT=false`、`TS_COLD=true` 或 `TS_HOT=true` 时 fail-safe 禁充。
+- BMS 遥测缺失、输入缺失、`TS_COLD=true` 或 `TS_HOT=true` 时 fail-safe 禁充。
+- `charger.vbat_present=false` 不得单独作为禁充理由；只有 `charger.vbat_present=true` 且 BMS 报告输出/充电路径断开（`op_dsg_fet=false`、`xdsg=true` 或 `afe_dsg_fet=false`）时，才按 backfeed contradiction 禁充。
+- `cell_min_mv < 2500mV` 是硬低压 floor，禁止自动充电；`2500mV <= cell_min_mv < 3000mV` 才进入 `recovering_low_voltage`。
 - `charge_ready=false` 默认 fail-safe 禁充；唯一例外是 DC IN 或 USB-C 输入在线且 BMS 明确处于可恢复 CUV 预充窗口（`PCHG=true`、`CUV=true`、`CUVC=false`、`PF=0`、无 charge inhibit/suspend）时，允许 `recovering_low_voltage`。
 
 ### SHOULD
@@ -82,7 +87,7 @@
 - `DC IN` 自适应限充的当前输入压力、限流值与限流原因必须作为 owner-facing 状态输出，不允许只存在于 defmt 或局部寄存器日志里。
 - Dashboard charger detail 与首页 charge 区域应优先显示 `BQ25792 IBAT_ADC` 实测电流；若 `IBAT_ADC` 暂时不可用，则回退到目标 `ICHG`。
 - 首页 `ChargeCard` 应直接从 runtime charger state 派生紧凑 token，而不是按 `UpsMode` 或 `allow_charge + current` 推导。
-- `LOAD / NOAC` 是否生效首先服从运行态 mode coupling；唯一例外是本规格定义的已受控放行 `BACKUP + USB-C` 会话，其余 `CHG100 / CHG500 / RECOV / FULL / WARM / TEMP / WAIT` 等内部细节仍由主线 policy 决定。
+- `runtime.mode=blocked/assist/backup` 只约束输出或不充电模式边界；`recovering_low_voltage` 是唯一允许在这些模式下继续自动充电的 charger policy，前提是输入在线、无保护且高于硬低压 floor。`LOAD/NOAC` 的模式耦合不得覆盖该 `RECOV` 例外。
 - `IBUS/VBUS/VBAT/VSYS/IBAT` 的 BQ25792 ADC 遥测应保持真实量级，不得把 `~5.2V/102mA` 误解成 `~21.8V/26.1A` 一类 swapped 假值。
 - 当目标 `ICHG` 已写入但实测 `IBAT/BMS current` 长时间明显低于目标，日志应输出 `charger: delivery_diag`，明确区分目标值、实测值、PD 合约、电流限制寄存器与 `IINDPM/VINDPM` 限流状态。
 
@@ -105,7 +110,7 @@
 - `recovering_low_voltage` 期间，BQ25792 的 `termination_done` 不能作为满充依据；策略必须保持 `full_latched=false`，直到 `cell_min_mv >= 3000` 并重新满足常规满充定义。该路径还必须把 `ITERM` 降到低于 `ICHG=100mA`，不能仅在软件层忽略 `termination_done`。
 - 当 `TPS55288` 总输出功率连续 `2` 个 poll 超过 `5W` 时，策略进入 `blocked_output_over_limit` 并停充；只有连续 `3` 个 poll 低于 `4.5W` 才退出该阻断态。
 - 当任一路输出已开启但聚合输出功率不可可信计算时，策略进入保守禁充分支；前台 token 继续显示 `LOAD`，notice/log 使用 `blocked_output_power_unknown`。
-- 在 `BACKUP` 中，只有 VIN 已确认无市电、USB-C PD 已可充电且主线 policy 已允许时才评估 USB 例外。输出关闭立即按 `0W` 放行；输出开启时必须等待本会话内新鲜的 `<2.0W` 聚合 TPS 样本，放行后保持自动 `500mA`。
+- 在 `BACKUP` 中，只有 VIN 已确认无市电、USB-C PD 已可充电且主线 policy 已允许时才评估 USB 例外。输出关闭立即按 `0W` 放行；输出开启时必须等待本会话内新鲜的 `<2.0W` 聚合 TPS 样本，放行后保持自动 `500mA`。若 `charger.policy=recovering_low_voltage`，该例外必须保持 `100mA`，不得把目标升级到 `BACKUP_USB_AUTO_CHARGE_ICHG_MA=500mA`。
 - USB 例外保持期间，`2.0W <= P <= 3.0W` 不改变充电；一个新鲜 `P > 3.0W` 样本立刻停充、状态为 `LOAD`、notice 为 `backup_usb_output_high_latched`。两次不同 TPS 遥测采样尝试缺失则状态为 `LOCK`、notice 为 `backup_usb_telemetry_lost_latched`。
 - USB-C detach 创建新判断周期而不恢复旧会话；只在 detach 或确认后的新手动 `START` 清除上述锁存。确认手动会话由 `manual-charge-dashboard` 拥有，但在它有效时可绕过本段三个新回环门。
 - 前面板的 charger 电流显示优先取 `BQ25792 IBAT_ADC`，不再把 `ICHG` 设定值伪装成实测电流。
@@ -144,6 +149,11 @@ None。
 - Given `BQ40` 遥测缺失或 `charge_ready=false`，When 进入 charger poll，Then 系统进入 `blocked_no_bms` 并禁止充电。
 - Given `charge_ready=false`、`CUV=true`、`PCHG=true`、`CUVC=false`、`PF=0` 且输入源为 `DcIn` 或 `UsbC`，When `RSOC < 80%` 或 `cell_min_mv < 3700`，Then 系统进入 `recovering_low_voltage`，目标 `ICHG=100mA`，状态 token 为 `RECOV`，`policy.recovery_stage=bq40_pchg`。
 - Given `charge_ready=true` 且 `cell_min_mv < 3000`，When 进入 charger poll，Then 系统继续进入 `recovering_low_voltage`，目标 `ICHG=100mA`，`policy.recovery_stage=bq25792_precharge`。
+- Given `runtime.mode=blocked`、`output.gate_reason=bms_not_ready`、`charger.policy.state=recovering_low_voltage`、输入在线、无 `Safety/PF/XCHG/XDSG/charge-inhibit` 且 `cell_min_mv=2950`，When 进入 charger poll，Then `charger.allow_charge=true`、`charger.policy.target_ichg_ma=100`，不得发布 `runtime_blocked_no_charge`。
+- Given `cell_min_mv=2499`，When 进入 charger poll，Then `charger.policy.state=blocked_hard_low_voltage`、`charger.allow_charge=false`。
+- Given `charger.vbat_present=false` 且没有 backfeed contradiction，When 进入 charger poll，Then 不得仅因 `vbat_present=false` 禁充。
+- Given `charger.vbat_present=true` 且 `bms.op_dsg_fet=false`/`bms.xdsg=true`/`bms.afe_dsg_fet=false`，When 进入 charger poll，Then `charger.allow_charge=false`、`charger.policy.notice=backfeed_contradiction`。
+- Given `charger.policy.target_ichg_ma=100` 且实测 `charger.ibat_adc_ma` 或 BMS 正向电流 > `10mA` 持续 `60s`，Then 低压恢复充电成功；仅有 `op_chg_fet=true` 不算成功。
 - Given 系统处于 `recovering_low_voltage`，When `BQ25792 CHG_STAT=termination_done`，Then 系统不得进入 `full_latched`，`full_reason` 保持为空，并继续允许 `100mA` 恢复充电。
 - Given `cell_min_mv >= 3000` 且常规启充条件仍成立，When 进入 charger poll，Then 系统离开 `RECOV` 并恢复常规 `CHG500`。
 - Given charger poll 有效，When 读取 `diag-snapshot`，Then `charger.vbat_lowv_pct_x10=714`、`charger.iprechg_ma=120` 可见。
@@ -206,17 +216,32 @@ None。
 - 用现有 `dashboard_detail.charger_status / charger_notice` 承载状态 token 与精确状态名；首页 `ChargeCard` 直接从 runtime token 做紧凑映射，不新增外部协议。
 - 使用 `tools/front-panel-preview/` 复用固件真实渲染链路，生成 owner-facing charger detail 预览图。
 
+## 诊断字段限定（Diagnostic field qualifiers）
+
+- `runtime.mode`：owner-facing 运行态（`standby/supplement/backup/blocked`）；不是充电策略。
+- `output.gate_reason`：输出门控原因；不是充电路径状态。
+- `charger.policy.state` / `charger.policy.notice`：自动充电策略状态与 notice。
+- `charger.allow_charge`：是否使能 charger；不是 `runtime.mode`。
+- `charger.vbat_present` / `charger.vbat_adc_mv`：BQ25792 BAT 节点观测。
+- `bms.op_dsg_fet` / `bms.afe_dsg_fet` / `bms.afe_chg_fet` / `bms.xdsg`：BQ40 逻辑与 AFE 观测面。
+- 文档和日志不再裸写 `mode` 或 `policy`；必须带上述限定。
+
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）
 
 - 风险：`cargo test --lib` 在当前 `xtensa-esp32s3-none-elf` 目标下需要 `std/test`，不能作为本仓库现状下的可执行验证命令；本轮以编译通过和新增单测源码覆盖为主。
 - 风险：首页与 detail 虽已同源，但首页只保留紧凑 token；若后续需要暴露更多诊断细节，仍需继续通过 notice/log 或详情页承载。
 - 假设：常规充电中 `BQ40 FC` 与 `BQ25792 termination_done` 任一成立即可视为满充停充；CUV recovery 预充态下 `termination_done` 只作为 charger 状态观测值，不触发满充锁存。`ICHG=100mA` 模式必须配套低于目标电流的 `ITERM`。
+- **已裁决 2026-11-21**：`runtime.mode=blocked/assist/backup` 不再自动关闭 charger；`recovering_low_voltage` 是唯一在这些模式下仍可自动 100mA 的例外。输出模式与 `charger.policy` 分离；`output.gate_reason` 仍由 output gate 拥有。
+- **已裁决 2026-11-21**：`charger.vbat_present=false` 不是禁充理由；只有 `vbat_present=true` 且 BMS 报告输出/充电路径断开时才按 backfeed contradiction 禁充。AFE CHG FET 关闭导致的低 BAT 节点是该路径打开的预期现象。
+- **已裁决 2026-11-21**：自动充电硬低压 floor 为 `2500mV/cell`；低于该值返回 `blocked_hard_low_voltage`，不进入 `recovering_low_voltage`。
+- **暂缓**：当前 `FD + RCA + AFE CHG off` 不新增显式 reset 动作。先修自动 100mA；若实测仍无充电电流且 AFE CHG 仍 off，再按 ADR 0006 评估显式 BQ40 reset。`bms-low-voltage-precharge` 继续保持 CUV/CUVC 语义。
 
 ## 参考（References）
 
 - `docs/charger-design.md`
 - `docs/specs/bq40-charge-temperature-profile/SPEC.md`
 - `docs/specs/bq25792-charging-enable/SPEC.md`
+- [ADR 0006: 输出模式与充电策略分离](../adr/0006-charge-policy-output-mode-separation.md)
 - `firmware/src/output/mod.rs`
 - `firmware/src/front_panel_scene.rs`
 - `tools/front-panel-preview/src/main.rs`

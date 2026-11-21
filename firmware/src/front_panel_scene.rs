@@ -1065,6 +1065,49 @@ pub enum BmsResultKind {
 pub enum BmsRecoveryUiAction {
     Activation,
     DischargeAuthorization,
+    LowVoltagePrecharge,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UvPrechargeState {
+    Idle,
+    Verifying,
+    Observing,
+    Completed,
+}
+
+impl UvPrechargeState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Verifying => "verifying",
+            Self::Observing => "observing",
+            Self::Completed => "completed",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UvPrechargeResult {
+    Success,
+    Blocked,
+    ResetFailed,
+    ProtectionRetripped,
+    Timeout,
+    NotDetected,
+}
+
+impl UvPrechargeResult {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Blocked => "blocked",
+            Self::ResetFailed => "reset_failed",
+            Self::ProtectionRetripped => "protection_retripped",
+            Self::Timeout => "timeout",
+            Self::NotDetected => "not_detected",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1264,6 +1307,11 @@ pub struct SelfCheckUiSnapshot {
     pub bq40z50_recovery_action: Option<BmsRecoveryUiAction>,
     pub bq40z50_recovery_pending: bool,
     pub bq40z50_last_result: Option<BmsResultKind>,
+    pub bq40z50_uv_precharge_state: UvPrechargeState,
+    pub bq40z50_uv_precharge_result: Option<UvPrechargeResult>,
+    pub bq40z50_uv_precharge_reason: Option<&'static str>,
+    pub bq40z50_uv_precharge_baseline_unverified: bool,
+    pub bq40z50_uv_suspect: bool,
     pub tps_a: SelfCheckCommState,
     pub tps_a_enabled: Option<bool>,
     pub out_a_vbus_mv: Option<u16>,
@@ -1320,6 +1368,11 @@ impl SelfCheckUiSnapshot {
             bq40z50_recovery_action: None,
             bq40z50_recovery_pending: false,
             bq40z50_last_result: None,
+            bq40z50_uv_precharge_state: UvPrechargeState::Idle,
+            bq40z50_uv_precharge_result: None,
+            bq40z50_uv_precharge_reason: None,
+            bq40z50_uv_precharge_baseline_unverified: false,
+            bq40z50_uv_suspect: false,
             tps_a: SelfCheckCommState::Pending,
             tps_a_enabled: None,
             out_a_vbus_mv: None,
@@ -1491,6 +1544,9 @@ pub enum SelfCheckOverlay {
     BmsActivateProgress,
     BmsDischargeAuthorizeConfirm,
     BmsDischargeAuthorizeProgress,
+    BmsLowVoltagePrechargeConfirm,
+    BmsLowVoltagePrechargeProgress,
+    BmsLowVoltagePrechargeResult(UvPrechargeResult),
     BmsActivateResult(BmsResultKind),
     HardwareIssue(SelfCheckHardwareTarget),
 }
@@ -1794,13 +1850,17 @@ pub fn bq40_recovery_action(snapshot: &SelfCheckUiSnapshot) -> Option<BmsRecover
         && snapshot.output_gate_reason == OutputGateReason::BmsNotReady
         && snapshot.bq40z50 != SelfCheckCommState::Err
         && snapshot.bq40z50_no_battery != Some(true)
-        && snapshot.bq40z50_rca_alarm != Some(true)
-        && snapshot.bq40z50_issue_detail != Some("cell_undervoltage")
         && snapshot.bq40z50_discharge_ready == Some(false)
         && discharge_authorization_input_ready(snapshot)
         && snapshot.bq25792 != SelfCheckCommState::Err
     {
-        Some(BmsRecoveryUiAction::DischargeAuthorization)
+        if snapshot.bq40z50_issue_detail == Some("cell_undervoltage") {
+            Some(BmsRecoveryUiAction::LowVoltagePrecharge)
+        } else if snapshot.bq40z50_rca_alarm != Some(true) {
+            Some(BmsRecoveryUiAction::DischargeAuthorization)
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -2031,8 +2091,20 @@ pub fn bq40_recovery_overlay(snapshot: &SelfCheckUiSnapshot) -> Option<SelfCheck
         Some(BmsRecoveryUiAction::DischargeAuthorization) => {
             Some(SelfCheckOverlay::BmsDischargeAuthorizeConfirm)
         }
+        Some(BmsRecoveryUiAction::LowVoltagePrecharge) => {
+            Some(SelfCheckOverlay::BmsLowVoltagePrechargeConfirm)
+        }
         None => None,
     }
+}
+
+#[allow(dead_code)]
+pub fn bq40_uv_precharge_result_overlay(
+    snapshot: &SelfCheckUiSnapshot,
+) -> Option<SelfCheckOverlay> {
+    snapshot
+        .bq40z50_uv_precharge_result
+        .map(SelfCheckOverlay::BmsLowVoltagePrechargeResult)
 }
 
 #[allow(dead_code)]
@@ -2133,7 +2205,9 @@ pub fn self_check_hit_test(
             self_check_hardware_target_at(x, y).map(SelfCheckTouchTarget::HardwareCard)
         }
         SelfCheckOverlay::ManualChargeLoopbackConfirm => None,
-        SelfCheckOverlay::BmsActivateConfirm | SelfCheckOverlay::BmsDischargeAuthorizeConfirm => {
+        SelfCheckOverlay::BmsActivateConfirm
+        | SelfCheckOverlay::BmsDischargeAuthorizeConfirm
+        | SelfCheckOverlay::BmsLowVoltagePrechargeConfirm => {
             if contains(
                 x,
                 y,
@@ -2158,7 +2232,9 @@ pub fn self_check_hit_test(
         }
         SelfCheckOverlay::BmsActivateProgress
         | SelfCheckOverlay::BmsDischargeAuthorizeProgress
+        | SelfCheckOverlay::BmsLowVoltagePrechargeProgress
         | SelfCheckOverlay::BmsActivateResult(..)
+        | SelfCheckOverlay::BmsLowVoltagePrechargeResult(..)
         | SelfCheckOverlay::HardwareIssue(..) => None,
     }
 }
@@ -11746,8 +11822,11 @@ fn draw_self_check_overlay<P: UiPainter>(
         SelfCheckOverlay::BmsActivateConfirm
         | SelfCheckOverlay::BmsActivateProgress
         | SelfCheckOverlay::BmsDischargeAuthorizeConfirm
-        | SelfCheckOverlay::BmsDischargeAuthorizeProgress => "BQ40 RECOVERY",
+        | SelfCheckOverlay::BmsDischargeAuthorizeProgress
+        | SelfCheckOverlay::BmsLowVoltagePrechargeConfirm
+        | SelfCheckOverlay::BmsLowVoltagePrechargeProgress => "BQ40 RECOVERY",
         SelfCheckOverlay::BmsActivateResult(..) => "BQ40 RESULT",
+        SelfCheckOverlay::BmsLowVoltagePrechargeResult(..) => "BQ40 RESULT",
         SelfCheckOverlay::HardwareIssue(..) => "SELF CHECK ISSUE",
         SelfCheckOverlay::None | SelfCheckOverlay::ManualChargeLoopbackConfirm => "",
     };
@@ -11837,6 +11916,106 @@ fn draw_self_check_overlay<P: UiPainter>(
             let copy =
                 bq40_recovery_dialog_copy(snapshot, BmsRecoveryUiAction::DischargeAuthorization);
             draw_bms_progress_dialog(painter, variant, body_text, copy)?;
+        }
+        SelfCheckOverlay::BmsLowVoltagePrechargeConfirm => {
+            let copy =
+                bq40_recovery_dialog_copy(snapshot, BmsRecoveryUiAction::LowVoltagePrecharge);
+            draw_bms_confirm_dialog(
+                painter,
+                variant,
+                body_text,
+                cancel_border,
+                cancel_fill,
+                cancel_text,
+                confirm_border,
+                confirm_fill,
+                confirm_text,
+                copy,
+            )?;
+        }
+        SelfCheckOverlay::BmsLowVoltagePrechargeProgress => {
+            let copy =
+                bq40_recovery_dialog_copy(snapshot, BmsRecoveryUiAction::LowVoltagePrecharge);
+            draw_bms_progress_dialog(painter, variant, body_text, copy)?;
+        }
+        SelfCheckOverlay::BmsLowVoltagePrechargeResult(result) => {
+            let icon_x = SELF_CHECK_DIALOG_X + 10;
+            let icon_y = SELF_CHECK_DIALOG_Y + 28;
+            let text_x = SELF_CHECK_DIALOG_X + 50;
+            let (headline, body1, body2, accent, icon) = match result {
+                UvPrechargeResult::Success => (
+                    "Precharge started.",
+                    "100mA recovery is active.",
+                    "Tap to close",
+                    SUCCESS_COLOR,
+                    ActivationIcon::Success,
+                ),
+                UvPrechargeResult::Blocked => (
+                    "Precharge blocked.",
+                    snapshot
+                        .bq40z50_uv_precharge_reason
+                        .unwrap_or("Check input and pack state."),
+                    "Tap to close",
+                    ATTENTION_COLOR,
+                    ActivationIcon::Failed,
+                ),
+                UvPrechargeResult::ResetFailed => (
+                    "Gauge reset failed.",
+                    "Check BQ40 wiring.",
+                    "Tap to close",
+                    ERROR_COLOR,
+                    ActivationIcon::Failed,
+                ),
+                UvPrechargeResult::ProtectionRetripped => (
+                    "Protection returned.",
+                    "Pack stopped charging.",
+                    "Tap to close",
+                    ATTENTION_COLOR,
+                    ActivationIcon::Failed,
+                ),
+                UvPrechargeResult::Timeout => (
+                    "Precharge timed out.",
+                    "Review pack diagnostics.",
+                    "Tap to close",
+                    ATTENTION_COLOR,
+                    ActivationIcon::Failed,
+                ),
+                UvPrechargeResult::NotDetected => (
+                    "Gauge not detected.",
+                    "Check power and wiring.",
+                    "Tap to close",
+                    ERROR_COLOR,
+                    ActivationIcon::Failed,
+                ),
+            };
+            draw_activation_icon(painter, icon_x, icon_y, icon)?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                headline,
+                Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 28) as i32),
+                HorizontalAlignment::Left,
+                accent,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                body1,
+                Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 46) as i32),
+                HorizontalAlignment::Left,
+                body_text,
+            )?;
+            text(
+                painter,
+                variant,
+                FontRole::TextBody,
+                body2,
+                Point::new(text_x as i32, (SELF_CHECK_DIALOG_Y + 84) as i32),
+                HorizontalAlignment::Left,
+                palette.text_dim,
+            )?;
         }
         SelfCheckOverlay::BmsActivateResult(result) => {
             let icon_x = SELF_CHECK_DIALOG_X + 10;
@@ -12256,6 +12435,7 @@ fn bq40_issue_headline(
             Some("permanent_failure") => "PERMANENT FAILURE",
             _ => "DISCHARGE BLOCKED",
         },
+        BmsRecoveryUiAction::LowVoltagePrecharge => "CELL UV",
     }
 }
 
@@ -12312,6 +12492,14 @@ fn bq40_recovery_dialog_copy(
             confirm_label: "Recover",
             progress1: "Trying discharge recovery.",
             progress2: "Checking path ready...",
+        },
+        BmsRecoveryUiAction::LowVoltagePrecharge => Bq40RecoveryDialogCopy {
+            headline: bq40_issue_headline(snapshot, action),
+            body1: bq40_issue_detail_body(snapshot),
+            body2: "Start low-voltage precharge?",
+            confirm_label: "Precharge",
+            progress1: "Resetting gauge.",
+            progress2: "Verifying recovery...",
         },
     }
 }
@@ -15506,7 +15694,7 @@ mod tests {
     }
 
     #[test]
-    fn bq40_recovery_action_blocks_discharge_authorization_during_cell_undervoltage() {
+    fn bq40_recovery_action_offers_low_voltage_precharge_during_cell_undervoltage() {
         let mut snapshot = SelfCheckUiSnapshot::pending(UpsMode::Standby);
         snapshot.requested_outputs = EnabledOutputs::Only(OutputSelector::OutA);
         snapshot.output_gate_reason = OutputGateReason::BmsNotReady;
@@ -15518,7 +15706,15 @@ mod tests {
         snapshot.bq40z50_discharge_ready = Some(false);
         snapshot.bq40z50_issue_detail = Some("cell_undervoltage");
 
-        assert_eq!(bq40_recovery_action(&snapshot), None);
+        assert_eq!(
+            bq40_recovery_action(&snapshot),
+            Some(BmsRecoveryUiAction::LowVoltagePrecharge)
+        );
+        snapshot.bq40z50_recovery_action = Some(BmsRecoveryUiAction::LowVoltagePrecharge);
+        assert_eq!(
+            bq40_recovery_overlay(&snapshot),
+            Some(SelfCheckOverlay::BmsLowVoltagePrechargeConfirm)
+        );
         assert_eq!(
             self_check_hardware_issue_overlay(&snapshot, SelfCheckHardwareTarget::Bq40z50),
             Some(SelfCheckOverlay::HardwareIssue(

@@ -77,3 +77,4 @@ Spec 不使用 ID。`Implementation` 只保留轻量摘要；详细状态写入�
 | TMP112A 过温告警输出：Comparator 模式保持输出 | archived | [complete](tps-tmp112-alert-overtemp-hold/IMPLEMENTATION.md) | [SPEC](tps-tmp112-alert-overtemp-hold/SPEC.md) | - | Migrated from the retired planning catalog. |
 | 主动告警逐实例消音 | active | [current](active-alert-muting/IMPLEMENTATION.md) | [SPEC](active-alert-muting/SPEC.md) | - | 固件权威的当前告警实例消音、跨端合同与前面板审批门禁 |
 | BQ40 charge-temperature profile | active | [current](bq40-charge-temperature-profile/IMPLEMENTATION.md) | [SPEC](bq40-charge-temperature-profile/SPEC.md) | - | EVE INR21700/50E 4S1P 的 `0–45°C` 电芯充电窗口、TS2/TS3/TS4 最高温、BQ40 SBS request gate、`100mA/500mA` 策略与 BQ25792 JEITA 协同 |
+| BQ40 low-voltage precharge | active | [pending](bq40-low-voltage-precharge/IMPLEMENTATION.md) | [SPEC](bq40-low-voltage-precharge/SPEC.md) | - | 显式 BQ40 `device_reset` + 100mA 低压预充电动作；当前设备 `CUVC/XDSG` 为首个 HIL 目标 |

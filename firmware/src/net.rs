@@ -136,6 +136,7 @@ pub enum LanManagementCommand {
     SetAdvancedPower(AdvancedPowerSettingsSnapshot),
     ResetAdvancedPower,
     RecoverBmsDischargeAuthorization,
+    RecoverBmsLowVoltagePrecharge,
     MuteAlert(MuteAlertCommand),
     Reset,
 }
@@ -1107,6 +1108,11 @@ async fn handle_http_write(
             await_command_result = true;
             await_command_timeout = LAN_RECOVERY_TIMEOUT;
             queue_lan_command(LanManagementCommand::RecoverBmsDischargeAuthorization)
+        }
+        ("POST", "/api/v1/recovery/bms-low-voltage-precharge") => {
+            await_command_result = true;
+            await_command_timeout = LAN_RECOVERY_TIMEOUT;
+            queue_lan_command(LanManagementCommand::RecoverBmsLowVoltagePrecharge)
         }
         ("POST", "/api/v1/reset") => match parse_http_reset_request(request_body) {
             Ok(()) => queue_lan_command(LanManagementCommand::Reset),

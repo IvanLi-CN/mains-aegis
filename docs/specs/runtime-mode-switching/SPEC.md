@@ -1,6 +1,8 @@
 # UPS 运行态模式切换与充电联动
 
 > 当前有效规范以本文为准；实现覆盖与当前状态见 `./IMPLEMENTATION.md`，关键演进原因见 `./HISTORY.md`。
+>
+> 术语：本文裸写的 `mode` 均指 `runtime.mode`；`charger.allow_charge` 与 `charger.policy` 是独立维度。`output.gate_reason` 只描述输出门控。
 
 ## 背景 / 问题陈述
 
@@ -227,7 +229,7 @@
   - API / diag 必须发布 `mode=blocked`
   - front-panel 必须保持或退回自检/阻断界面，不得渲染 Dashboard
   - 不得发布 `mode=backup`、`mode=supplement` 或 `mode=standby`
-  - charger policy 必须按 non-charging mode 处理
+  - charger policy 默认按 non-charging mode 处理；`recovering_low_voltage` 的 100mA 例外仍由 `bq25792-charge-policy` 决定
 - 若 `requested_outputs == none`，发布门槛不阻断候选 mode；该场景表示当前没有要求 TPS
   输出供电。
 
@@ -237,17 +239,17 @@
   - charger 是否允许工作，继续由 `bq25792-charge-policy` 主线策略决定。
   - `CHG / WAIT / FULL / WARM / TEMP / CHG100 / RECOV` 等语义只在此模式内讨论。
 - `ASSIST`
-  - 必须视为 non-charging mode。
-  - `charger.allow_charge=false`
-  - owner-facing charger token/notice 收敛到 `LOAD` 语义边界。
+  - 默认视为 non-charging mode。
+  - 例外：`charger.policy=recovering_low_voltage` 且输入在线、无 `Safety/PF/XCHG/XDSG/charge-inhibit`、`cell_min >= 2500mV` 时，允许自动 100mA；不再强制 `charger.allow_charge=false`。
+  - 其他 charger token/notice 收敛到 `LOAD` 语义边界。
 - `BACKUP`
-  - `backup_reason=source_limited` 必须视为 non-charging mode，`charger.allow_charge=false`，token/notice 收敛到 `LOAD` 与 source-limited backup notice。
-  - `backup_reason=input_absent` 默认视为 non-charging mode，`charger.allow_charge=false`，token/notice 收敛到 `NOAC`。
-  - 唯一例外由 `bq25792-charge-policy` 定义：当 `backup_reason=input_absent`、VIN 已确认无市电、USB-C PD 可充电、既有安全门通过且输出功率满足专用回环门时，可发布 `CHG500`；其 `LOAD/LOCK` 锁存、TPS 采样、手动确认与会话重置均不属于 mode state machine。
+  - `backup_reason=source_limited` 默认 non-charging，token/notice 收敛到 `LOAD` 与 source-limited backup notice。
+  - `backup_reason=input_absent` 默认 non-charging，token/notice 收敛到 `NOAC`。
+  - 例外由 `bq25792-charge-policy` 定义：`recovering_low_voltage` 在输入在线且满足充电安全门时允许 100mA；`backup_reason=input_absent` 的 USB-C PD 低输出 `CHG500` 例外保持原契约，但不得把 `recovering_low_voltage` 的目标从 100mA 升级到 500mA。
 - `BLOCKED`
-  - 必须视为 non-charging mode。
-  - `charger.allow_charge=false`
-  - owner-facing charger token/notice 收敛到 `LOCK` 语义边界。
+  - 表示输出门控未证明，不表示充电策略必须关闭。
+  - `charger.allow_charge` 和 `charger.policy` 由 `bq25792-charge-policy` 决定；`recovering_low_voltage` 在输入在线、无保护且 `cell_min >= 2500mV` 时允许自动 100mA。
+  - 输出仍不得进入 Dashboard；`output.gate_reason` 保持阻断原因。不得把 `mode=blocked` 当作 `runtime_blocked_no_charge` 的通用充电阻断。
 - 本联动只定义模式与 charger 的边界，不覆盖 `bq25792-charge-policy` 内部关于 `DC IN` 压力、cooldown、recovery ramp 或手动 charge 的全部细节。
 
 ## owner-facing 可观测性要求
@@ -308,8 +310,10 @@
 - Given 已建立 DCIN `VIN baseline`，When `VIN <= 85% baseline` 且 `vin_iin_ma` 已低于 source-limited 入口门槛，Then 结果为 `BACKUP` 且 `backup_reason=input_absent`，即使 `mains_present` 尚未转为 false。
 - Given 输入仍在线、`TPS total output current` 超过 source-limited 进入门槛、`VIN` 低于合理工作电压或 `VIN drop + VIN input current` 显示上级限流，When 连续 fresh 样本满足，Then 结果为 `BACKUP` 且 `backup_reason=source_limited`，TPS 目标切到额定输出。
 - Given 已处于 `backup_reason=source_limited`，When `VIN` 与 `vin_drop_mv` 恢复到回差内且输出电流低于退出门槛，Then 必须连续满足样本数后才退出 `BACKUP`，不得在阈值附近抖动。
-- Given `ASSIST` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD`。
-- Given `backup_reason=input_absent` 已锁存且不满足 `bq25792-charge-policy` 的 USB-C 例外，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
+- Given `ASSIST` 已锁存且 `charger.policy` 不是 `recovering_low_voltage`，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD`。
+- Given `ASSIST` 已锁存、`charger.policy=recovering_low_voltage`、输入在线且无保护，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=true` 且 token 保持 `RECOV`。
+- Given `mode=blocked`、`charger.policy=recovering_low_voltage`、输入在线且无保护，When 查看 `status/diag-snapshot`，Then `output.gate_reason` 保持阻断，但 `charger.allow_charge=true`、token 为 `RECOV`。
+- Given `backup_reason=input_absent` 已锁存且不满足 `bq25792-charge-policy` 的例外，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `NOAC`。
 - Given `backup_reason=source_limited` 已锁存，When 查看 `status/diag-snapshot`，Then `charger.allow_charge=false` 且 charger token 对齐 `LOAD` / source-limited backup notice。
 - Given `mode=backup`、`backup_reason=input_absent`、VIN 已确认无市电且 `bq25792-charge-policy` 已以新鲜 `<2W` USB-C 输出样本放行，When 查看 mode，Then mode 仍为 `backup`，但 charger 可显示 `CHG500`；该例外不得把 mode 改写为 `standby`。
 - Given 执行 `--suite-contract source-limited-12v`，When Power Path Validation 生成执行计划，Then 必须只生成 `12V backup_only / 1000mA`、`12V source_in_budget / 2500mA`、`12V source_limited_online / 3900mA`、`12V source_limited_cut / 3900mA` 四个独立 scene；不得复用 dual-voltage 四场景的签核合同。

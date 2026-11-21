@@ -230,6 +230,7 @@ devd 的 Web 控制面必须以显式 Web session 租约作为 USB 占用依据�
 - Given `POST /api/v1/devices/{id}/flash` 触发 ESP32-S3 USB 烧录，When flash 写入完成，Then backend 优先使用 `watchdog-reset` after-operation，避免 DTR/RTS normal reset 在当前样机上被 strap 采样为 ROM download。
 - Given native serial `reset` 占用已绑定端口，When devd 需要让 ESP32-S3 运行 app，Then devd 必须用自身 serial handle 执行 boot-release、RTS pulse、boot-release 的 app-boot 控制线序列，不得通过额外进程重新打开端口；monitor/start 不得在已打开 monitor fd 上重复执行该复位序列。
 - 低压恢复维护流程必须可通过 `tools/recovery/low-voltage-recovery.sh` 完成“`tools/bq40-comm-tool` 临时固件 apply DF -> devd 烧回主固件 -> USB `diag-snapshot` 验证”的双烧录流程；runner 必须拒绝缺少本次显式 `--device-id` / `--port` 的 real 运行，校验 devd scan 与 selector cache 完全匹配显式 target，并且不得内置固定 device id / port allowlist 或 denylist。
+- `POST /api/v1/devices/{id}/recovery/bms-low-voltage-precharge` 的 devd 桥接合同由 [bq40-low-voltage-precharge](../bq40-low-voltage-precharge/SPEC.md) 定义。
 - `diag-snapshot` HIL 测试必须走 `tools/hil/diag_snapshot_readonly.py`，只允许读取 `GET /api/v1/devices/{id}/diag-snapshot` 并验证 package shape，不得执行 bind、flash、reset、monitor、settings write 或 BQ40 Data Flash 操作。
 
 ## Related ADRs

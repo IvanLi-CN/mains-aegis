@@ -35,8 +35,9 @@
   - `standby` 使用低于额定输出的热备目标
   - `assist_low` 通过运行时双判据进入，并按 `assist_ramp_step_mv / assist_ramp_interval_ms` 限速爬升
   - `assist_rated` 与 `backup` 使用额定输出目标
-- `ASSIST` 收敛到 non-charging mode；`BACKUP` 默认同样停充，但把 VIN 已确认无市电时的受控 USB-C 低输出充电例外委托给 `bq25792-charge-policy`
-- `BLOCKED` 也按 non-charging mode 处理，且不是 Dashboard 可渲染模式
+- `ASSIST` 默认 non-charging；`BACKUP` 默认同样停充，但把 VIN 已确认无市电时的受控 USB-C 低输出充电例外委托给 `bq25792-charge-policy`
+- `recovering_low_voltage` 在输入在线、无保护且 `cell_min >= 2500mV` 时可在 `assist/backup/blocked` 下继续自动 100mA；这是 charger policy 的例外，不由 mode 决定
+- `BLOCKED` 只表示输出门控未证明，不是 Dashboard 可渲染模式，也不再把 charger 一律按 non-charging 处理
 - `backup_reason=input_absent` 的 charger token 对齐 `NOAC`
 - `backup_reason=source_limited` 的 charger token 对齐 `LOAD`，并使用 `runtime_source_limited_backup_no_charge`
 

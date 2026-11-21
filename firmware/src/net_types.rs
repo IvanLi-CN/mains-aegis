@@ -1484,6 +1484,13 @@ pub struct DerivedPowerPolicySnapshot {
     pub output_blocked: bool,
     pub manual_active: bool,
     pub manual_stop_inhibit: bool,
+    pub uv_suspect: bool,
+    pub uv_precharge_state: &'static str,
+    pub uv_precharge_result: Option<&'static str>,
+    pub uv_precharge_reason: Option<&'static str>,
+    pub uv_precharge_baseline_unverified: bool,
+    pub uv_precharge_blocked: bool,
+    pub uv_precharge_reset_verified: bool,
 }
 
 impl DerivedPowerPolicySnapshot {
@@ -1518,6 +1525,13 @@ impl DerivedPowerPolicySnapshot {
             output_blocked: false,
             manual_active: false,
             manual_stop_inhibit: false,
+            uv_suspect: false,
+            uv_precharge_state: "idle",
+            uv_precharge_result: None,
+            uv_precharge_reason: None,
+            uv_precharge_baseline_unverified: false,
+            uv_precharge_blocked: false,
+            uv_precharge_reset_verified: false,
         }
     }
 }

@@ -140,6 +140,10 @@ The BMS discharge authorization recovery API should report a completed firmware-
 
 The API must not directly force TPS output. It may only request the existing recovery chain after firmware-side preconditions pass. Success requires the discharge path to be observable after recovery; if AFE DSG remains off, the result is a failure such as `afe_dsg_fet_off`. Raw CDC callers may observe a `pending` intermediate result while the firmware state machine is still running; devd/CLI and device LAN HTTP should wait for the terminal firmware result instead of treating `pending` as failure.
 
+## Charge-path caveat
+
+The charge path has the same observation-plane split as the discharge path, but the AFE CHG bit is not a sufficient proof of the physical path. On 2026-11-21, a pack reported `afe_chg_fet=false` while the BMS current was `93mA` and BQ25792 `CHG_STAT` was `fast_cc`; the AFE bit was therefore a diagnostic artifact, not a charge-path blocker. Use measured charge current (`charger.ibat_adc_ma` or BMS positive current) as the success signal; do not disable charging solely from the AFE CHG bit.
+
 ## Guardrails / Reuse Notes
 
 - Do not use `OperationStatus()[DSG]` as the final proof of a physically conducting discharge path.

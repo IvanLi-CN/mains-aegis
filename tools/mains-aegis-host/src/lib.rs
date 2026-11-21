@@ -1043,6 +1043,10 @@ pub async fn serve_http_service(config: HttpServiceConfig) -> anyhow::Result<()>
             post(device_recover_bms_discharge_authorization),
         )
         .route(
+            "/api/v1/devices/{id}/recovery/bms-low-voltage-precharge",
+            post(device_recover_bms_low_voltage_precharge),
+        )
+        .route(
             "/api/v1/devices/{id}/recovery/bms-activation",
             post(device_activate_bms).get(device_bms_activation_status),
         )
@@ -1932,6 +1936,12 @@ async fn dispatch_ipc_request(
             let id = require_param(&params, "device_id")?;
             json_result(
                 device_recover_bms_discharge_authorization(State(state.clone()), Path(id)).await,
+            )
+        }
+        "device.recovery.bms_low_voltage_precharge" => {
+            let id = require_param(&params, "device_id")?;
+            json_result(
+                device_recover_bms_low_voltage_precharge(State(state.clone()), Path(id)).await,
             )
         }
         "device.settings" => {
@@ -4632,6 +4642,102 @@ async fn device_recover_bms_discharge_authorization(
     Ok(Json(result))
 }
 
+async fn device_recover_bms_low_voltage_precharge(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, HttpError> {
+    ensure_bound_device_record(&state, &id)?;
+    let (transport, lan_address, identity, cached_status) = {
+        let guard = state.inner.lock().expect("state lock");
+        let device = guard
+            .devices
+            .get(&id)
+            .ok_or_else(|| HttpError::not_found("device_not_found", "device is not known"))?;
+        (
+            device.transport.clone(),
+            device.lan_address.clone(),
+            device.identity.clone(),
+            device.status.clone(),
+        )
+    };
+    let recovery_lan_address = recovery_lan_address_for_state_changing_write(
+        lan_address.clone(),
+        identity.as_ref(),
+        cached_status.as_ref(),
+    );
+    let result = if matches!(transport, DeviceTransport::Mock) {
+        json!({
+            "ok": false,
+            "accepted": false,
+            "state": "completed",
+            "result": "blocked",
+            "reason": "mock_device",
+            "source": "devd"
+        })
+    } else if matches!(transport, DeviceTransport::Lan) {
+        let address = lan_address.ok_or_else(|| {
+            HttpError::retryable(
+                "lan_address_missing",
+                format!("recovery is unavailable for {id}: LAN device has no address"),
+            )
+        })?;
+        lan_recovery_http_json_path(&address, "/api/v1/recovery/bms-low-voltage-precharge").await?
+    } else if let Some(address) = recovery_lan_address.clone() {
+        match lan_recovery_http_json_path(&address, "/api/v1/recovery/bms-low-voltage-precharge")
+            .await
+        {
+            Ok(result) => result,
+            Err(lan_error) => {
+                tracing::warn!(
+                    device_id = %id,
+                    address = %address,
+                    code = %lan_error.0.code,
+                    "native serial low-voltage precharge LAN companion failed; falling back to CDC"
+                );
+                send_device_cdc_request(
+                    &state,
+                    &id,
+                    "recover_bms_low_voltage_precharge",
+                    RECOVERY_CDC_REQUEST_PREFIX,
+                )
+                .await?
+            }
+        }
+    } else {
+        send_device_cdc_request(
+            &state,
+            &id,
+            "recover_bms_low_voltage_precharge",
+            RECOVERY_CDC_REQUEST_PREFIX,
+        )
+        .await?
+    };
+
+    let refresh_query = DeviceReadQuery {
+        fresh: Some(true),
+        cache_only: Some(false),
+        allow_stale_cache: Some(true),
+        include_meta: Some(false),
+        watch_freshness_ms: None,
+    };
+    let _ = device_status(Query(refresh_query), State(state.clone()), Path(id.clone())).await;
+    let _ = device_diag_snapshot_inner(
+        DeviceReadQuery {
+            fresh: Some(true),
+            cache_only: Some(false),
+            allow_stale_cache: Some(true),
+            include_meta: Some(false),
+            watch_freshness_ms: None,
+        },
+        state,
+        id,
+        Vec::new(),
+    )
+    .await;
+
+    Ok(Json(result))
+}
+
 async fn device_output_bypass(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -4764,12 +4870,15 @@ fn recovery_result_pending(value: &Value) -> bool {
 }
 
 async fn lan_recovery_http_json(address: &str) -> Result<Value, HttpError> {
-    lan_recovery_http_json_blocking(address).await
+    lan_recovery_http_json_path(address, "/api/v1/recovery/bms-discharge-authorization").await
 }
 
-async fn lan_recovery_http_json_blocking(address: &str) -> Result<Value, HttpError> {
+async fn lan_recovery_http_json_path(
+    address: &str,
+    path: &'static str,
+) -> Result<Value, HttpError> {
     let address = address.to_string();
-    tokio::task::spawn_blocking(move || lan_recovery_http_json_blocking_inner(&address))
+    tokio::task::spawn_blocking(move || lan_recovery_http_json_blocking_inner(&address, path))
         .await
         .map_err(|error| {
             HttpError::retryable(
@@ -4779,7 +4888,10 @@ async fn lan_recovery_http_json_blocking(address: &str) -> Result<Value, HttpErr
         })?
 }
 
-fn lan_recovery_http_json_blocking_inner(address: &str) -> Result<Value, HttpError> {
+fn lan_recovery_http_json_blocking_inner(
+    address: &str,
+    path: &'static str,
+) -> Result<Value, HttpError> {
     let mut stream =
         std::net::TcpStream::connect((address, LAN_DISCOVERY_PORT)).map_err(|error| {
             HttpError::retryable(
@@ -4795,29 +4907,24 @@ fn lan_recovery_http_json_blocking_inner(address: &str) -> Result<Value, HttpErr
         .ok();
     let body = "{}";
     let request = format!(
-        "POST /api/v1/recovery/bms-discharge-authorization HTTP/1.1\r\nHost: {address}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "POST {path} HTTP/1.1\r\nHost: {address}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
         body
     );
     stream.write_all(request.as_bytes()).map_err(|error| {
         HttpError::retryable(
             "lan_http_write_failed",
-            format!("failed to write POST /api/v1/recovery/bms-discharge-authorization to {address}: {error}"),
+            format!("failed to write POST {path} to {address}: {error}"),
         )
     })?;
     let mut response = Vec::new();
     stream.read_to_end(&mut response).map_err(|error| {
         HttpError::retryable(
             "lan_http_read_failed",
-            format!("failed to read POST /api/v1/recovery/bms-discharge-authorization from {address}: {error}"),
+            format!("failed to read POST {path} from {address}: {error}"),
         )
     })?;
-    parse_lan_http_json_response(
-        &response,
-        "POST",
-        "/api/v1/recovery/bms-discharge-authorization",
-        address,
-    )
+    parse_lan_http_json_response(&response, "POST", path, address)
 }
 
 async fn device_diag_snapshot_inner(

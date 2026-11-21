@@ -13,6 +13,7 @@
 - 保留 ADR 0002 的温度窗口、100mA/500mA 目标、SBS 请求安全上限、BQ25792 JEITA、七字段温度 writer 和有界 200mA 维护唤醒规则。普通 200mA 补电分支删除。
 - 正常阶段读取并核验 BQ40 Charge Term Taper Current=120mA；BQ25792 ITERM=80mA、EN_TERM=1。启动爬坡先禁终止，最终目标建立后恢复。100mA 与独立维护唤醒仍关闭 EN_TERM。
 - 本轮新鲜 VCT/FC 满充资格与 charger_done 共同成立才进入 FULL。FC 本身不提前断充；零请求、温度和保护始终优先。硬件先终止且无有效资格时锁存 termination_incomplete，只有明确且安全的 START 可以重试。
+- 低压恢复是独立于常规 500mA 重试的受控路径：`charge_ready` 或 BQ40 `PCHG` 可用且 `cell_min < 3000mV` 时目标 `100mA`、`ITERM` 低于目标且不参与 FULL。该路径必须优先于已存在的 `termination_incomplete` 锁存，否则规格要求的 `recovering_low_voltage` 永远无法进入；未进入恢复窗口的常规 500mA 仍只允许显式 START。
 - 新增独立 bq40-charge-termination profile，仅允许写 0x4A6D 两字节。身份、R2、Full Access、CE 高、充电禁用和已接受的相关配置必须先通过。保存 0x4A60 的 32 字节快照，校验回显与最终读回，并验证其他字节不变。出错即停，不自动整块回滚。普通固件不写 DF。
 - asset-df-mainboard 恢复 overlay 采用同一 taper；原厂二进制不变。ChemID、Qmax、Ra、校准、保护和学习历史不变。
 

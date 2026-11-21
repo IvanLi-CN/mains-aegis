@@ -204,6 +204,7 @@
 - 普通访问仅负责区分“正常 / 异常 / 未识别”；点击卡片时再根据当前问题选择 `Activate / Recover / 失败结果回显`。
 - `EMSHUT` 是比 `XDSG` 更具体的放电阻断原因；UI 先显示 `EMSHUT ACTIVE`，恢复链路则复用放电授权路径并主动发送有效 SBS 通信触发退出。
 - 最近一次失败结果作为只读 UI 状态保存在运行态快照中；成功恢复则直接回到实时自检页，并把“是否自动进入 Dashboard”交给自检清零逻辑统一处理。
+- `cell_undervoltage` 的显式复位预充电动作由 [bq40-low-voltage-precharge](../bq40-low-voltage-precharge/SPEC.md) 承接；本规格原有的 `Activate / Recover` 语义不变。
 
 ## 风险 / 开放问题 / 假设（Risks, Open Questions, Assumptions）
 

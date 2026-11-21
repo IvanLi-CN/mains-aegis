@@ -885,6 +885,43 @@ pub fn render_derived_power_json<const N: usize>(buf: &mut String<N>, diag: Deri
         buf,
         "manual_stop_inhibit",
         diag.policy.manual_stop_inhibit,
+        true,
+    );
+    json_field_bool(buf, "uv_suspect", diag.policy.uv_suspect, true);
+    json_field_str(
+        buf,
+        "uv_precharge_state",
+        diag.policy.uv_precharge_state,
+        true,
+    );
+    json_field_opt_str(
+        buf,
+        "uv_precharge_result",
+        diag.policy.uv_precharge_result,
+        true,
+    );
+    json_field_opt_str(
+        buf,
+        "uv_precharge_reason",
+        diag.policy.uv_precharge_reason,
+        true,
+    );
+    json_field_bool(
+        buf,
+        "uv_precharge_baseline_unverified",
+        diag.policy.uv_precharge_baseline_unverified,
+        true,
+    );
+    json_field_bool(
+        buf,
+        "uv_precharge_blocked",
+        diag.policy.uv_precharge_blocked,
+        true,
+    );
+    json_field_bool(
+        buf,
+        "uv_precharge_reset_verified",
+        diag.policy.uv_precharge_reset_verified,
         false,
     );
     let _ = buf.push_str("},\"bms\":{");

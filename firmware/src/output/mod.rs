@@ -9,7 +9,7 @@ use crate::front_panel_scene::{
     BmsActivationState, BmsRecoveryUiAction, BmsResultKind, DashboardInputSource,
     ManualChargePowerPath, ManualChargePrefs, ManualChargeRuntimeState, ManualChargeSpeed,
     ManualChargeStopReason, ManualChargeTarget, ManualChargeTimerLimit, ManualChargeUiAction,
-    SelfCheckCommState, SelfCheckUiSnapshot, UpsMode,
+    SelfCheckCommState, SelfCheckUiSnapshot, UpsMode, UvPrechargeResult, UvPrechargeState,
 };
 use crate::irq::IrqSnapshot;
 use crate::net_bridge;
@@ -96,6 +96,8 @@ const BMS_ACTIVATION_AUTO_DELAY: Duration = Duration::from_secs(30);
 const BMS_DISCHARGE_AUTH_MANUAL_WINDOW: Duration = Duration::from_secs(62);
 const BMS_DISCHARGE_AUTH_FRONT_PANEL_SOURCE: &str = "front_panel";
 const BMS_DISCHARGE_AUTH_FRONT_PANEL_BODY_CAP: usize = 4096;
+const BMS_UV_PRECHARGE_BODY_CAP: usize = 1024;
+const BMS_UV_PRECHARGE_FRONT_PANEL_SOURCE: &str = "front_panel";
 const BMS_BOOT_DIAG_SHIP_RESET_DELAY: Duration = Duration::from_secs(20);
 const BMS_BOOT_DIAG_SHIP_RESET_SETTLE: Duration = Duration::from_millis(800);
 const CHARGER_LIMIT_DIAG_PERIOD: Duration = Duration::from_secs(1);
@@ -3095,8 +3097,6 @@ fn bq40_recovery_action_for_snapshot(
         && bms_addr.is_some()
         && snapshot.bq40z50 != SelfCheckCommState::Err
         && snapshot.bq40z50_no_battery != Some(true)
-        && snapshot.bq40z50_rca_alarm != Some(true)
-        && snapshot.bq40z50_issue_detail != Some("cell_undervoltage")
         && snapshot.bq40z50_discharge_ready == Some(false)
         && discharge_authorization_input_ready(
             stable_mains_present(
@@ -3110,7 +3110,13 @@ fn bq40_recovery_action_for_snapshot(
         && snapshot.bq25792 != SelfCheckCommState::Err
         && !therm_kill_asserted
     {
-        Some(BmsRecoveryUiAction::DischargeAuthorization)
+        if snapshot.bq40z50_issue_detail == Some("cell_undervoltage") {
+            Some(BmsRecoveryUiAction::LowVoltagePrecharge)
+        } else if snapshot.bq40z50_rca_alarm != Some(true) {
+            Some(BmsRecoveryUiAction::DischargeAuthorization)
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -4087,6 +4093,11 @@ where
         therm_kill_asserted,
     );
     ui.bq40z50_recovery_pending = false;
+    ui.bq40z50_uv_precharge_state = UvPrechargeState::Idle;
+    ui.bq40z50_uv_precharge_result = None;
+    ui.bq40z50_uv_precharge_reason = None;
+    ui.bq40z50_uv_precharge_baseline_unverified = false;
+    ui.bq40z50_uv_suspect = false;
     ui.tps_a_enabled = Some(false);
     ui.tps_b_enabled = Some(false);
     ui.bq25792_allow_charge = Some(charger_enabled);
@@ -4262,6 +4273,9 @@ pub struct PowerManager<'d, I2C> {
     bms_activation_last_reason: Option<&'static str>,
     chg_watchdog_restore: Option<u8>,
     bms_discharge_authorization_manual_recovery: Option<BmsDischargeAuthorizationManualRecovery>,
+    bms_uv_precharge: UvPrechargeRuntime,
+    uv_precharge_blocked: bool,
+    uv_precharge_next_poll_at: Instant,
     output_state: OutputRuntimeState,
     recoverable_output_source: OutputGateReason,
     output_bypass_active: bool,
@@ -4334,6 +4348,7 @@ impl BmsRecoveryRequestKind {
 #[derive(Clone, Copy)]
 struct BmsDischargeAuthorizationRecoveryFacts {
     emshut: Option<bool>,
+    pres: Option<bool>,
     xchg: Option<bool>,
     xdsg: Option<bool>,
     op_chg_fet: Option<bool>,
@@ -4373,6 +4388,7 @@ impl BmsDischargeAuthorizationRecoveryFacts {
     const fn empty() -> Self {
         Self {
             emshut: None,
+            pres: None,
             xchg: None,
             xdsg: None,
             op_chg_fet: None,
@@ -4430,6 +4446,82 @@ struct BmsDischargeAuthorizationManualRecovery {
     before: BmsDischargeAuthorizationRecoveryFacts,
     deadline: Instant,
     reason: &'static str,
+}
+
+const UV_PRECHARGE_RESET_VERIFY_SECS: u64 = 10;
+const UV_PRECHARGE_WINDOW_SECS: u64 = 60 * 60;
+const UV_PRECHARGE_STABLE_SECS: u64 = 10 * 60;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UvPrechargePhase {
+    Idle,
+    Verifying {
+        deadline: Instant,
+    },
+    Observing {
+        deadline: Instant,
+        stable_since: Option<Instant>,
+    },
+    Completed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct UvPrechargeRuntime {
+    phase: UvPrechargePhase,
+    result: Option<UvPrechargeResult>,
+    reason: Option<&'static str>,
+    baseline_unverified: bool,
+    source: Option<&'static str>,
+    reset_verified: bool,
+}
+
+impl Default for UvPrechargeRuntime {
+    fn default() -> Self {
+        Self {
+            phase: UvPrechargePhase::Idle,
+            result: None,
+            reason: None,
+            baseline_unverified: false,
+            source: None,
+            reset_verified: false,
+        }
+    }
+}
+
+fn bms_uv_precharge_reset_verified(facts: BmsDischargeAuthorizationRecoveryFacts) -> bool {
+    facts.safety_status == Some(0)
+        && facts.pf_status == Some(0)
+        && facts.xdsg == Some(false)
+        && facts.discharge_ready == Some(true)
+}
+
+fn push_uv_precharge_opt_str<const N: usize>(buf: &mut String<N>, value: Option<&'static str>) {
+    match value {
+        Some(value) => {
+            let _ = write!(buf, "\"{}\"", value);
+        }
+        None => {
+            let _ = buf.push_str("null");
+        }
+    }
+}
+
+impl UvPrechargeRuntime {
+    const fn state(self) -> UvPrechargeState {
+        match self.phase {
+            UvPrechargePhase::Idle => UvPrechargeState::Idle,
+            UvPrechargePhase::Verifying { .. } => UvPrechargeState::Verifying,
+            UvPrechargePhase::Observing { .. } => UvPrechargeState::Observing,
+            UvPrechargePhase::Completed => UvPrechargeState::Completed,
+        }
+    }
+
+    const fn pending(self) -> bool {
+        matches!(
+            self.phase,
+            UvPrechargePhase::Verifying { .. } | UvPrechargePhase::Observing { .. }
+        )
+    }
 }
 
 fn render_bms_discharge_authorization_facts<const N: usize>(
@@ -5094,6 +5186,9 @@ where
             bms_activation_last_reason: None,
             chg_watchdog_restore: None,
             bms_discharge_authorization_manual_recovery: None,
+            bms_uv_precharge: UvPrechargeRuntime::default(),
+            uv_precharge_blocked: false,
+            uv_precharge_next_poll_at: now,
             output_state,
             recoverable_output_source,
             output_bypass_active: false,
@@ -5645,7 +5740,13 @@ where
             self.charger_allowed,
             self.therm_kill.is_low(),
         );
-        snapshot.bq40z50_recovery_pending = bms_recovery_pending;
+        snapshot.bq40z50_recovery_pending = bms_recovery_pending || self.bms_uv_precharge.pending();
+        snapshot.bq40z50_uv_precharge_state = self.bms_uv_precharge.state();
+        snapshot.bq40z50_uv_precharge_result = self.bms_uv_precharge.result;
+        snapshot.bq40z50_uv_precharge_reason = self.bms_uv_precharge.reason;
+        snapshot.bq40z50_uv_precharge_baseline_unverified =
+            self.bms_uv_precharge.baseline_unverified;
+        snapshot.bq40z50_uv_suspect = self.charge_policy.uv_suspect;
         detail.out_a_temp_c = snapshot.tmp_a_c;
         detail.out_b_temp_c = snapshot.tmp_b_c;
         detail.fan_rpm = self.fan_rpm_tracker.display_rpm();
@@ -5653,6 +5754,8 @@ where
         detail.fan_status = Some(detail_fan_status_text(applied_fan, fan_status.tach_fault));
         detail.battery_notice = if bms_recovery_pending {
             Some("DISCHARGE AUTHORIZATION IN PROGRESS")
+        } else if self.bms_uv_precharge.pending() {
+            Some("UV PRECHARGE IN PROGRESS")
         } else if snapshot.bq40z50_no_battery == Some(true) {
             Some("PACK PRESENT CHECK FAILED")
         } else if snapshot.bq40z50_discharge_ready == Some(false) {
@@ -5667,6 +5770,8 @@ where
         {
             if bms_recovery_pending {
                 Some("WAITING FOR BMS RECOVERY")
+            } else if self.bms_uv_precharge.pending() {
+                Some("WAITING FOR UV PRECHARGE")
             } else {
                 Some("OUTPUT HELD BY BMS DISCHARGE POLICY")
             }
@@ -7588,6 +7693,325 @@ where
         );
     }
 
+    fn bms_uv_precharge_baseline_unverified(&self) -> bool {
+        self.bms_cached_lock_diag.map_or(true, |diag| {
+            diag.cuv_recovery_mv.is_none() || diag.protection_configuration.is_none()
+        })
+    }
+
+    fn bms_uv_precharge_reject_reason(&mut self) -> &'static str {
+        if self.bms_uv_precharge.pending() {
+            return "recovery_pending";
+        }
+        if self.output_state.requested_outputs == EnabledOutputs::None {
+            return "output_not_requested";
+        }
+        if self.output_state.gate_reason != OutputGateReason::BmsNotReady {
+            return "output_gate_not_bms_not_ready";
+        }
+        if self.bms_addr.is_none() || self.ui_snapshot.bq40z50 == SelfCheckCommState::Err {
+            return "bms_missing";
+        }
+        if self.therm_kill.is_low() {
+            return "therm_kill_asserted";
+        }
+        if !discharge_authorization_input_ready(
+            self.current_mains_present(),
+            self.ui_snapshot.aggregate_input_present,
+        ) {
+            return "input_missing";
+        }
+        if self.ui_snapshot.bq25792 == SelfCheckCommState::Err {
+            return "charger_missing";
+        }
+        if self.ui_snapshot.bq40z50_no_battery == Some(true) {
+            return "no_battery";
+        }
+        let facts = self.read_bms_discharge_authorization_recovery_facts();
+        let (Some(safety), Some(pf), Some(pres), Some(mfg)) = (
+            facts.safety_status,
+            facts.pf_status,
+            facts.pres,
+            facts.manufacturing_status,
+        ) else {
+            return "bms_status_unavailable";
+        };
+        if pf != 0 {
+            return "pf_active";
+        }
+        if mfg & bq40z50::manufacturing_status::FET_EN == 0 {
+            return "fet_disabled";
+        }
+        if !pres {
+            return "pack_present_absent";
+        }
+        if safety & (bq40z50::safety_status::CUV | bq40z50::safety_status::CUVC) == 0 {
+            return "not_undervoltage";
+        }
+        if facts.discharge_ready == Some(true) {
+            return "already_ready";
+        }
+        let Some(pack_mv) = facts.pack_mv else {
+            return "pack_voltage_unavailable";
+        };
+        if !(2_500..=16_800).contains(&pack_mv) {
+            return "pack_voltage";
+        }
+        if !self
+            .bq40_charge_temperature_decision(self.fan_now_ms())
+            .allows_charge()
+        {
+            return "temp";
+        }
+        "allowed"
+    }
+
+    fn render_bms_uv_precharge_json<const N: usize>(&self) -> String<N> {
+        let mut buf = String::new();
+        let accepted = self.bms_uv_precharge.source.is_some();
+        let ok = matches!(
+            self.bms_uv_precharge.result,
+            Some(UvPrechargeResult::Success)
+        );
+        let _ = write!(
+            buf,
+            "{{\"ok\":{},\"accepted\":{},\"state\":\"{}\",\"result\":",
+            ok,
+            accepted,
+            self.bms_uv_precharge.state().as_str()
+        );
+        push_uv_precharge_opt_str(
+            &mut buf,
+            self.bms_uv_precharge.result.map(UvPrechargeResult::as_str),
+        );
+        let _ = buf.push_str(",\"reason\":");
+        push_uv_precharge_opt_str(&mut buf, self.bms_uv_precharge.reason);
+        let _ = buf.push_str(",\"source\":");
+        push_uv_precharge_opt_str(&mut buf, self.bms_uv_precharge.source);
+        let _ = write!(
+            buf,
+            ",\"uv_suspect\":{},\"baseline_unverified\":{},\"reset_verified\":{},\"blocked\":{},\"discharge_ready\":",
+            self.charge_policy.uv_suspect,
+            self.bms_uv_precharge.baseline_unverified,
+            self.bms_uv_precharge.reset_verified,
+            self.uv_precharge_blocked
+        );
+        match self.ui_snapshot.bq40z50_discharge_ready {
+            Some(value) => {
+                let _ = write!(buf, "{}", value);
+            }
+            None => {
+                let _ = buf.push_str("null");
+            }
+        }
+        let _ = buf.push_str(",\"policy_state\":");
+        push_uv_precharge_opt_str(&mut buf, self.diag_snapshot.policy.state);
+        let _ = buf.push_str(",\"target_ichg_ma\":");
+        match self.diag_snapshot.policy.target_ichg_ma {
+            Some(value) => {
+                let _ = write!(buf, "{}", value);
+            }
+            None => {
+                let _ = buf.push_str("null");
+            }
+        }
+        let _ = write!(
+            buf,
+            ",\"outputs\":\"{}\"}}",
+            self.output_state.active_outputs.describe()
+        );
+        buf
+    }
+
+    fn finish_bms_uv_precharge(
+        &mut self,
+        result: UvPrechargeResult,
+        reason: &'static str,
+        block_auto_charge: bool,
+    ) {
+        self.bms_uv_precharge.phase = UvPrechargePhase::Completed;
+        self.bms_uv_precharge.result = Some(result);
+        self.bms_uv_precharge.reason = Some(reason);
+        if block_auto_charge {
+            self.uv_precharge_blocked = true;
+        }
+        if matches!(result, UvPrechargeResult::Success) {
+            self.uv_precharge_blocked = false;
+        }
+        self.ui_snapshot.bq40z50_uv_precharge_state = self.bms_uv_precharge.state();
+        self.ui_snapshot.bq40z50_uv_precharge_result = Some(result);
+        self.ui_snapshot.bq40z50_uv_precharge_reason = Some(reason);
+        self.bms_activation_last_reason = Some(reason);
+        defmt::info!(
+            "bms: uv_precharge result={} reason={} blocked={=bool}",
+            result.as_str(),
+            reason,
+            self.uv_precharge_blocked
+        );
+    }
+
+    pub fn request_bms_low_voltage_precharge_json<const N: usize>(
+        &mut self,
+        source: &'static str,
+    ) -> String<N> {
+        if self.bms_uv_precharge.pending() {
+            return self.render_bms_uv_precharge_json();
+        }
+        let reason = self.bms_uv_precharge_reject_reason();
+        if reason != "allowed" {
+            self.bms_uv_precharge.phase = UvPrechargePhase::Completed;
+            self.bms_uv_precharge.result = Some(UvPrechargeResult::Blocked);
+            self.bms_uv_precharge.reason = Some(reason);
+            self.bms_uv_precharge.source = None;
+            self.bms_uv_precharge.baseline_unverified = self.bms_uv_precharge_baseline_unverified();
+            self.bms_uv_precharge.reset_verified = false;
+            self.ui_snapshot.bq40z50_uv_precharge_state = self.bms_uv_precharge.state();
+            self.ui_snapshot.bq40z50_uv_precharge_result = Some(UvPrechargeResult::Blocked);
+            self.ui_snapshot.bq40z50_uv_precharge_reason = Some(reason);
+            defmt::info!("bms: uv_precharge blocked reason={}", reason);
+            return self.render_bms_uv_precharge_json();
+        }
+
+        let baseline_unverified = self.bms_uv_precharge_baseline_unverified();
+        let Some(addr) = self.bms_addr else {
+            self.finish_bms_uv_precharge(UvPrechargeResult::Blocked, "bms_missing", false);
+            return self.render_bms_uv_precharge_json();
+        };
+        if bq40z50::device_reset(&mut self.i2c, addr).is_err() {
+            self.bms_uv_precharge.source = Some(source);
+            self.bms_uv_precharge.baseline_unverified = baseline_unverified;
+            self.finish_bms_uv_precharge(
+                UvPrechargeResult::ResetFailed,
+                "bq40_device_reset_write_failed",
+                true,
+            );
+            return self.render_bms_uv_precharge_json();
+        }
+
+        let now = Instant::now();
+        self.bms_uv_precharge = UvPrechargeRuntime {
+            phase: UvPrechargePhase::Verifying {
+                deadline: now + Duration::from_secs(UV_PRECHARGE_RESET_VERIFY_SECS),
+            },
+            result: None,
+            reason: None,
+            baseline_unverified,
+            source: Some(source),
+            reset_verified: false,
+        };
+        self.uv_precharge_blocked = false;
+        self.uv_precharge_next_poll_at = now;
+        self.output_restore_after_bms_recovery = true;
+        self.bms_activation_last_reason = Some("uv_precharge_reset_sent");
+        self.ui_snapshot.bq40z50_uv_precharge_state = self.bms_uv_precharge.state();
+        self.ui_snapshot.bq40z50_uv_precharge_result = None;
+        self.ui_snapshot.bq40z50_uv_precharge_reason = None;
+        self.ui_snapshot.bq40z50_uv_precharge_baseline_unverified = baseline_unverified;
+        defmt::info!(
+            "bms: uv_precharge requested source={} baseline_unverified={=bool}",
+            source,
+            baseline_unverified
+        );
+        self.render_bms_uv_precharge_json()
+    }
+
+    pub fn poll_bms_low_voltage_precharge(&mut self) {
+        if !self.bms_uv_precharge.pending() {
+            return;
+        }
+        let now = Instant::now();
+        if now < self.uv_precharge_next_poll_at {
+            return;
+        }
+        self.uv_precharge_next_poll_at = now + Duration::from_secs(1);
+        let facts = self.read_bms_discharge_authorization_recovery_facts();
+        match self.bms_uv_precharge.phase {
+            UvPrechargePhase::Verifying { deadline } => {
+                if bms_uv_precharge_reset_verified(facts) {
+                    self.bms_uv_precharge.phase = UvPrechargePhase::Observing {
+                        deadline: now + Duration::from_secs(UV_PRECHARGE_WINDOW_SECS),
+                        stable_since: None,
+                    };
+                    self.bms_uv_precharge.reset_verified = true;
+                    self.charge_policy.uv_suspect = true;
+                    self.charge_policy.uv_suspect_high_streak = 0;
+                    self.charge_policy.termination_incomplete = false;
+                    self.bms_activation_last_reason = Some("uv_precharge_reset_verified");
+                    defmt::info!("bms: uv_precharge reset_verified");
+                } else if now >= deadline {
+                    self.finish_bms_uv_precharge(
+                        UvPrechargeResult::ResetFailed,
+                        "reset_verify_timeout",
+                        true,
+                    );
+                }
+            }
+            UvPrechargePhase::Observing {
+                deadline,
+                stable_since,
+            } => {
+                if self.bms_addr.is_none() || self.ui_snapshot.bq40z50 == SelfCheckCommState::Err {
+                    self.finish_bms_uv_precharge(
+                        UvPrechargeResult::NotDetected,
+                        "bms_missing",
+                        true,
+                    );
+                    return;
+                }
+                let protection_active = facts
+                    .safety_status
+                    .map(|safety| {
+                        safety & (bq40z50::safety_status::CUV | bq40z50::safety_status::CUVC) != 0
+                    })
+                    .unwrap_or(true)
+                    || facts.xdsg == Some(true)
+                    || facts.pf_status.map(|pf| pf != 0).unwrap_or(true);
+                if protection_active {
+                    self.finish_bms_uv_precharge(
+                        UvPrechargeResult::ProtectionRetripped,
+                        "protection_retripped",
+                        true,
+                    );
+                    return;
+                }
+                let charging_100ma = self.diag_snapshot.policy.target_ichg_ma
+                    == Some(CHARGE_POLICY_BMS_RECOVERY_ICHG_MA)
+                    && self.diag_snapshot.charger.allow_charge
+                    && facts.current_ma.unwrap_or(0) > 0;
+                let outputs_active = self.output_state.requested_outputs != EnabledOutputs::None
+                    && self.output_state.active_outputs == self.output_state.requested_outputs;
+                let mut stable = stable_since;
+                if charging_100ma && outputs_active {
+                    let since = stable.unwrap_or(now);
+                    if now - since >= Duration::from_secs(UV_PRECHARGE_STABLE_SECS) {
+                        self.finish_bms_uv_precharge(
+                            UvPrechargeResult::Success,
+                            "stable_100ma",
+                            false,
+                        );
+                        return;
+                    }
+                    stable = Some(since);
+                } else {
+                    stable = None;
+                }
+                if now >= deadline {
+                    self.finish_bms_uv_precharge(
+                        UvPrechargeResult::Timeout,
+                        "precharge_timeout",
+                        true,
+                    );
+                } else {
+                    self.bms_uv_precharge.phase = UvPrechargePhase::Observing {
+                        deadline,
+                        stable_since: stable,
+                    };
+                }
+            }
+            UvPrechargePhase::Idle | UvPrechargePhase::Completed => {}
+        }
+    }
+
     pub fn recover_bms_discharge_authorization_json<const N: usize>(
         &mut self,
         source: &'static str,
@@ -8183,6 +8607,7 @@ where
         if let Some(addr) = self.bms_addr {
             if let Ok(Some(op)) = bq40z50::read_operation_status(&mut self.i2c, addr) {
                 facts.emshut = Some((op & bq40z50::operation_status::EMSHUT) != 0);
+                facts.pres = Some((op & bq40z50::operation_status::PRES) != 0);
                 facts.xchg = Some((op & bq40z50::operation_status::XCHG) != 0);
                 facts.xdsg = Some((op & bq40z50::operation_status::XDSG) != 0);
                 facts.op_chg_fet = Some((op & bq40z50::operation_status::CHG) != 0);
@@ -8353,6 +8778,11 @@ where
                         "front_panel_recovery_completed_synchronously",
                     );
                 }
+            }
+            BmsRecoveryUiAction::LowVoltagePrecharge => {
+                let _ = self.request_bms_low_voltage_precharge_json::<BMS_UV_PRECHARGE_BODY_CAP>(
+                    BMS_UV_PRECHARGE_FRONT_PANEL_SOURCE,
+                );
             }
         }
     }
@@ -14606,10 +15036,18 @@ where
         // Automatic charging still requires the normal PD/input qualification.
         let manual_non_pd_input_override =
             self.manual_charge_runtime.active && input_present && !usb_pd_unsafe_latched;
+        let policy_state = charge_policy_decision.map(|decision| decision.state);
+        let backfeed_contradiction = bq40_charge_path_backfeed_contradiction(
+            self.ui_snapshot.bq25792_vbat_present,
+            self.diag_snapshot.bms.op_dsg_fet,
+            self.diag_snapshot.bms.xdsg,
+            self.diag_snapshot.bms.afe_dsg_fet,
+        );
         let mut allow_charge = if usb_pd_unsafe_latched
             || activation_force_charge_off
             || (!usb_pd_charge_gate_ready && !manual_non_pd_input_override)
             || force_charge_blocked
+            || backfeed_contradiction
         {
             false
         } else {
@@ -14619,7 +15057,6 @@ where
                 || force_allow_charge
         };
 
-        let policy_state = charge_policy_decision.map(|decision| decision.state);
         let mut policy_target_ichg_ma =
             charge_policy_decision.and_then(|decision| decision.target_ichg_ma);
         let policy_start_reason = charge_policy_decision.and_then(|decision| decision.start_reason);
@@ -14628,7 +15065,9 @@ where
             charge_policy_decision.and_then(|decision| decision.output_block_reason);
         let policy_recovery_stage =
             charge_policy_decision.and_then(|decision| decision.recovery_stage);
-        let mut policy_status_text = if usb_pd_unsafe_latched {
+        let mut policy_status_text = if backfeed_contradiction {
+            "LOCK"
+        } else if usb_pd_unsafe_latched {
             "FAULT"
         } else if !usb_pd_charge_gate_ready {
             "WAIT"
@@ -14645,7 +15084,9 @@ where
                 .map(detail_charger_status_text)
                 .unwrap_or("READY")
         };
-        let mut policy_notice_text = if usb_pd_unsafe_latched {
+        let mut policy_notice_text = if backfeed_contradiction {
+            "backfeed_contradiction"
+        } else if usb_pd_unsafe_latched {
             "unsafe_source_latched"
         } else if !usb_pd_charge_gate_ready {
             "usb_pd_wait_stable_input"
@@ -14665,20 +15106,30 @@ where
                 .or_else(|| policy_state.map(ChargePolicyState::as_str))
                 .unwrap_or("charger_policy_pending")
         };
-        let runtime_charge_override = runtime_charge_override_for_backup_usb_charger(
-            self.ui_snapshot.mode,
-            self.ui_snapshot.dashboard_detail.backup_reason,
-            force_allow_charge,
-            auto_force_charge,
-            backup_usb_charge_decision.allows_charge(),
-        );
+        let runtime_charge_override =
+            if runtime_charge_override_suppressed_by_charge_policy(policy_state) {
+                None
+            } else {
+                runtime_charge_override_for_backup_usb_charger(
+                    self.ui_snapshot.mode,
+                    self.ui_snapshot.dashboard_detail.backup_reason,
+                    force_allow_charge,
+                    auto_force_charge,
+                    backup_usb_charge_decision.allows_charge(),
+                )
+            };
         let manual_stop_hold_blocks_charge = manual_charge_stop_hold_blocks_charge(
             self.manual_charge_runtime.stop_inhibit,
             activation_pending,
             activation_force_charge,
         );
 
-        if force_charge_blocked {
+        if backfeed_contradiction {
+            allow_charge = false;
+            policy_target_ichg_ma = None;
+            policy_status_text = "LOCK";
+            policy_notice_text = "backfeed_contradiction";
+        } else if force_charge_blocked {
             allow_charge = false;
             policy_target_ichg_ma = None;
             policy_status_text = "LOCK";
@@ -14707,6 +15158,14 @@ where
             }
             policy_notice_text =
                 manual_charge_stop_notice(self.manual_charge_runtime.last_stop_reason);
+        } else if self.uv_precharge_blocked
+            && !self.manual_charge_runtime.active
+            && !force_allow_charge
+        {
+            allow_charge = false;
+            policy_target_ichg_ma = None;
+            policy_status_text = "LOCK";
+            policy_notice_text = "uv_precharge_blocked";
         } else if !activation_pending && !force_allow_charge && !force_charge_requested {
             let manual_blocked = !self.cfg.charger_enabled
                 || !can_enable
@@ -14859,6 +15318,7 @@ where
             policy_detail_status_text = guard_status_text;
         } else if backup_usb_charge_context
             && !manual_loopback_override
+            && !runtime_charge_override_suppressed_by_charge_policy(policy_state)
             && normal_allow_charge
             && matches!(
                 backup_usb_charge_decision,
@@ -15562,6 +16022,13 @@ where
             output_blocked: self.charge_policy_output_load.blocked,
             manual_active: self.manual_charge_runtime.active,
             manual_stop_inhibit: self.manual_charge_runtime.stop_inhibit,
+            uv_suspect: self.charge_policy.uv_suspect,
+            uv_precharge_state: self.bms_uv_precharge.state().as_str(),
+            uv_precharge_result: self.bms_uv_precharge.result.map(UvPrechargeResult::as_str),
+            uv_precharge_reason: self.bms_uv_precharge.reason,
+            uv_precharge_baseline_unverified: self.bms_uv_precharge.baseline_unverified,
+            uv_precharge_blocked: self.uv_precharge_blocked,
+            uv_precharge_reset_verified: self.bms_uv_precharge.reset_verified,
         };
 
         self.maybe_log_charger_limit_mismatch(
@@ -15992,8 +16459,15 @@ where
                     self.bms_charge_ready = bq40_decode_charge_path(s.op_status).0;
                     self.bms_full = Some((s.batt_status & bq40z50::battery_status::FC) != 0);
                     self.bms_charge_sample_seq = self.bms_charge_sample_seq.wrapping_add(1);
-                    self.bms_cell_min_mv = Some(bq40_cell_min_mv(&s));
+                    let cell_min_mv = bq40_cell_min_mv(&s);
+                    self.bms_cell_min_mv = Some(cell_min_mv);
                     self.bms_cell_max_mv = Some(bq40_cell_max_mv(&s));
+                    if bq40_lock_diag_low_voltage_blocked(self.bms_cached_lock_diag)
+                        || (s.rsoc_pct == 0 && rca_alarm)
+                        || cell_min_mv < CHARGE_POLICY_UV_SUSPECT_CELL_MIN_MV
+                    {
+                        self.charge_policy.uv_suspect = true;
+                    }
                     self.apply_bms_detail_snapshot(&s);
                     let protection_active = bq40_protection_active(s.batt_status, s.op_status);
                     self.bms_audio = BmsAudioState {
