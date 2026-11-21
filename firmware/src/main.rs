@@ -1959,6 +1959,7 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
 
             let fan_telemetry_due = power.tick(&irq_events);
             power.poll_front_panel_bms_discharge_authorization_recovery();
+            power.poll_bms_low_voltage_precharge();
             #[cfg(feature = "web_serial")]
             {
                 let web_serial_snapshot = power.ui_snapshot();
@@ -2188,6 +2189,15 @@ async fn firmware_main(main_entry: MainEntry) -> ! {
                                     );
                                 }
                             }
+                        }
+                        mains_aegis_firmware::net::LanManagementCommand::RecoverBmsLowVoltagePrecharge => {
+                            let body = power.request_bms_low_voltage_precharge_json::<
+                                { mains_aegis_firmware::net::HTTP_RESPONSE_BODY_CAP },
+                            >("lan_http");
+                            mains_aegis_firmware::net::set_lan_command_result(
+                                mains_aegis_firmware::net::LanCommandResult::Json(body),
+                            );
+                            defmt::info!("net: LAN low-voltage precharge requested");
                         }
                         mains_aegis_firmware::net::LanManagementCommand::RecoverBmsDischargeAuthorization => {
                             if let Some(body) = power.begin_bms_discharge_authorization_recovery_json::<
@@ -2768,6 +2778,15 @@ fn handle_web_serial_frame<'d, I2C>(
             UsbCdcRequest::RecoverBmsDischargeAuthorization => {
                 let body = power
                     .recover_bms_discharge_authorization_json::<WEB_SERIAL_RESPONSE_BODY_CAP>(
+                        "usb_cdc",
+                    );
+                let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();
+                render_response_json(&mut frame, request_id.as_str(), body.as_str());
+                write_web_serial_line(serial, frame.as_str());
+            }
+            UsbCdcRequest::RecoverBmsLowVoltagePrecharge => {
+                let body = power
+                    .request_bms_low_voltage_precharge_json::<WEB_SERIAL_RESPONSE_BODY_CAP>(
                         "usb_cdc",
                     );
                 let mut frame = heapless::String::<WEB_SERIAL_RESPONSE_FRAME_CAP>::new();

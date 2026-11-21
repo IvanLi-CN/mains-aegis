@@ -1056,9 +1056,20 @@ where
         }
         log_self_check_snapshot_transition(&previous, &snapshot);
         self.self_check_snapshot = snapshot;
+        if let Some(result) = self.self_check_snapshot.bq40z50_uv_precharge_result {
+            if matches!(
+                self.self_check_overlay,
+                SelfCheckOverlay::BmsLowVoltagePrechargeProgress
+            ) {
+                self.self_check_overlay = SelfCheckOverlay::BmsLowVoltagePrechargeResult(result);
+                self.needs_redraw = true;
+            }
+        }
         if matches!(
             self.self_check_overlay,
-            SelfCheckOverlay::BmsActivateConfirm | SelfCheckOverlay::BmsDischargeAuthorizeConfirm
+            SelfCheckOverlay::BmsActivateConfirm
+                | SelfCheckOverlay::BmsDischargeAuthorizeConfirm
+                | SelfCheckOverlay::BmsLowVoltagePrechargeConfirm
         ) && front_panel_scene::bq40_recovery_overlay(&self.self_check_snapshot).is_none()
         {
             defmt::info!(
@@ -1112,6 +1123,15 @@ where
             self.needs_redraw = self.ui_variant == DASHBOARD_VARIANT;
             return;
         }
+        if matches!(
+            self.self_check_overlay,
+            SelfCheckOverlay::BmsLowVoltagePrechargeConfirm
+                | SelfCheckOverlay::BmsLowVoltagePrechargeProgress
+                | SelfCheckOverlay::BmsLowVoltagePrechargeResult(..)
+        ) {
+            self.needs_redraw = self.ui_variant == SELF_CHECK_VARIANT;
+            return;
+        }
         let recovery_overlay = front_panel_scene::bq40_recovery_overlay(&self.self_check_snapshot);
         let overlay_allowed = self.ui_variant == SELF_CHECK_VARIANT
             && (recovery_overlay.is_some()
@@ -1121,6 +1141,9 @@ where
                         | SelfCheckOverlay::BmsActivateProgress
                         | SelfCheckOverlay::BmsDischargeAuthorizeConfirm
                         | SelfCheckOverlay::BmsDischargeAuthorizeProgress
+                        | SelfCheckOverlay::BmsLowVoltagePrechargeConfirm
+                        | SelfCheckOverlay::BmsLowVoltagePrechargeProgress
+                        | SelfCheckOverlay::BmsLowVoltagePrechargeResult(..)
                         | SelfCheckOverlay::BmsActivateResult(..)
                 ));
         self.self_check_overlay = if overlay_allowed {
@@ -1134,6 +1157,9 @@ where
                         }
                         Some(BmsRecoveryUiAction::DischargeAuthorization) => {
                             SelfCheckOverlay::BmsDischargeAuthorizeProgress
+                        }
+                        Some(BmsRecoveryUiAction::LowVoltagePrecharge) => {
+                            SelfCheckOverlay::BmsLowVoltagePrechargeProgress
                         }
                         None => SelfCheckOverlay::None,
                     }
@@ -1580,7 +1606,9 @@ where
 
         if matches!(
             self.self_check_overlay,
-            SelfCheckOverlay::BmsActivateResult(..) | SelfCheckOverlay::HardwareIssue(..)
+            SelfCheckOverlay::BmsActivateResult(..)
+                | SelfCheckOverlay::BmsLowVoltagePrechargeResult(..)
+                | SelfCheckOverlay::HardwareIssue(..)
         ) {
             if left_edge || right_edge || center_edge {
                 let was_result = matches!(
@@ -1617,12 +1645,22 @@ where
                         self.note_interaction_feedback();
                         self.needs_redraw = true;
                         defmt::info!("ui: bms result dialog reopen via key");
+                    } else if let Some(result_overlay) =
+                        front_panel_scene::bq40_uv_precharge_result_overlay(
+                            &self.self_check_snapshot,
+                        )
+                    {
+                        self.self_check_overlay = result_overlay;
+                        self.note_interaction_feedback();
+                        self.needs_redraw = true;
+                        defmt::info!("ui: uv precharge result dialog reopen via key");
                     }
                 }
             }
             SelfCheckOverlay::ManualChargeLoopbackConfirm => {}
             SelfCheckOverlay::BmsActivateConfirm
-            | SelfCheckOverlay::BmsDischargeAuthorizeConfirm => {
+            | SelfCheckOverlay::BmsDischargeAuthorizeConfirm
+            | SelfCheckOverlay::BmsLowVoltagePrechargeConfirm => {
                 if right_edge {
                     self.self_check_overlay = SelfCheckOverlay::None;
                     self.note_interaction_feedback();
@@ -1634,12 +1672,18 @@ where
                         SelfCheckOverlay::BmsDischargeAuthorizeConfirm => {
                             BmsRecoveryUiAction::DischargeAuthorization
                         }
+                        SelfCheckOverlay::BmsLowVoltagePrechargeConfirm => {
+                            BmsRecoveryUiAction::LowVoltagePrecharge
+                        }
                         _ => unreachable!(),
                     };
                     self.self_check_overlay = match action {
                         BmsRecoveryUiAction::Activation => SelfCheckOverlay::BmsActivateProgress,
                         BmsRecoveryUiAction::DischargeAuthorization => {
                             SelfCheckOverlay::BmsDischargeAuthorizeProgress
+                        }
+                        BmsRecoveryUiAction::LowVoltagePrecharge => {
+                            SelfCheckOverlay::BmsLowVoltagePrechargeProgress
                         }
                     };
                     self.note_interaction_feedback();
@@ -1652,8 +1696,11 @@ where
                 }
             }
             SelfCheckOverlay::BmsActivateProgress
-            | SelfCheckOverlay::BmsDischargeAuthorizeProgress => {}
-            SelfCheckOverlay::BmsActivateResult(..) | SelfCheckOverlay::HardwareIssue(..) => {}
+            | SelfCheckOverlay::BmsDischargeAuthorizeProgress
+            | SelfCheckOverlay::BmsLowVoltagePrechargeProgress => {}
+            SelfCheckOverlay::BmsActivateResult(..)
+            | SelfCheckOverlay::BmsLowVoltagePrechargeResult(..)
+            | SelfCheckOverlay::HardwareIssue(..) => {}
         }
 
         None
@@ -2114,7 +2161,9 @@ where
 
         if matches!(
             self.self_check_overlay,
-            SelfCheckOverlay::BmsActivateResult(..) | SelfCheckOverlay::HardwareIssue(..)
+            SelfCheckOverlay::BmsActivateResult(..)
+                | SelfCheckOverlay::BmsLowVoltagePrechargeResult(..)
+                | SelfCheckOverlay::HardwareIssue(..)
         ) {
             let was_result = matches!(
                 self.self_check_overlay,
@@ -2157,12 +2206,18 @@ where
                     SelfCheckOverlay::BmsDischargeAuthorizeConfirm => {
                         BmsRecoveryUiAction::DischargeAuthorization
                     }
+                    SelfCheckOverlay::BmsLowVoltagePrechargeConfirm => {
+                        BmsRecoveryUiAction::LowVoltagePrecharge
+                    }
                     _ => return None,
                 };
                 self.self_check_overlay = match action {
                     BmsRecoveryUiAction::Activation => SelfCheckOverlay::BmsActivateProgress,
                     BmsRecoveryUiAction::DischargeAuthorization => {
                         SelfCheckOverlay::BmsDischargeAuthorizeProgress
+                    }
+                    BmsRecoveryUiAction::LowVoltagePrecharge => {
+                        SelfCheckOverlay::BmsLowVoltagePrechargeProgress
                     }
                 };
                 self.note_interaction_feedback();
@@ -3438,6 +3493,9 @@ fn overlay_name(overlay: SelfCheckOverlay) -> &'static str {
         SelfCheckOverlay::BmsActivateProgress => "progress_activation",
         SelfCheckOverlay::BmsDischargeAuthorizeConfirm => "confirm_discharge",
         SelfCheckOverlay::BmsDischargeAuthorizeProgress => "progress_discharge",
+        SelfCheckOverlay::BmsLowVoltagePrechargeConfirm => "confirm_uv_precharge",
+        SelfCheckOverlay::BmsLowVoltagePrechargeProgress => "progress_uv_precharge",
+        SelfCheckOverlay::BmsLowVoltagePrechargeResult(..) => "result_uv_precharge",
         SelfCheckOverlay::BmsActivateResult(front_panel_scene::BmsResultKind::Success) => {
             "result_success"
         }
@@ -3510,6 +3568,7 @@ fn bms_recovery_ui_action_name(action: BmsRecoveryUiAction) -> &'static str {
     match action {
         BmsRecoveryUiAction::Activation => "activation",
         BmsRecoveryUiAction::DischargeAuthorization => "discharge_authorization",
+        BmsRecoveryUiAction::LowVoltagePrecharge => "low_voltage_precharge",
     }
 }
 
@@ -3529,13 +3588,21 @@ fn current_recovery_overlay_action(
         | SelfCheckOverlay::BmsDischargeAuthorizeProgress => {
             Some(BmsRecoveryUiAction::DischargeAuthorization)
         }
+        SelfCheckOverlay::BmsLowVoltagePrechargeConfirm
+        | SelfCheckOverlay::BmsLowVoltagePrechargeProgress => {
+            Some(BmsRecoveryUiAction::LowVoltagePrecharge)
+        }
         SelfCheckOverlay::BmsActivateResult(..)
+        | SelfCheckOverlay::BmsLowVoltagePrechargeResult(..)
         | SelfCheckOverlay::HardwareIssue(..)
         | SelfCheckOverlay::ManualChargeLoopbackConfirm
         | SelfCheckOverlay::None => match recovery_overlay {
             Some(SelfCheckOverlay::BmsActivateConfirm) => Some(BmsRecoveryUiAction::Activation),
             Some(SelfCheckOverlay::BmsDischargeAuthorizeConfirm) => {
                 Some(BmsRecoveryUiAction::DischargeAuthorization)
+            }
+            Some(SelfCheckOverlay::BmsLowVoltagePrechargeConfirm) => {
+                Some(BmsRecoveryUiAction::LowVoltagePrecharge)
             }
             _ => None,
         },

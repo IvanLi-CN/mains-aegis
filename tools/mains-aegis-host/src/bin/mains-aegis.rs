@@ -200,6 +200,7 @@ enum RecoveryCommand {
         status: bool,
     },
     BmsDischargeAuthorization,
+    BmsLowVoltagePrecharge,
 }
 
 #[derive(Debug, Subcommand)]
@@ -929,6 +930,10 @@ fn device_to_ipc(device_id: String, command: DeviceCommand) -> (&'static str, Va
                 "device.recovery.bms_discharge_authorization",
                 json!({ "device_id": device_id }),
             ),
+            RecoveryCommand::BmsLowVoltagePrecharge => (
+                "device.recovery.bms_low_voltage_precharge",
+                json!({ "device_id": device_id }),
+            ),
         },
         DeviceCommand::Settings => ("device.settings", json!({ "device_id": device_id })),
         DeviceCommand::OutputBypass { enable, restore } => (
@@ -1170,6 +1175,32 @@ mod tests {
 
         let (method, params) = device_to_ipc(device_id, command);
         assert_eq!(method, "device.recovery.bms_discharge_authorization");
+        assert_eq!(params, json!({"device_id": "serial-04f3bb3f5367"}));
+    }
+
+    #[test]
+    fn cli_maps_bms_low_voltage_precharge_recovery_to_ipc() {
+        let cli = Cli::try_parse_from([
+            "mains-aegis",
+            "device",
+            "serial-04f3bb3f5367",
+            "recovery",
+            "bms-low-voltage-precharge",
+        ])
+        .unwrap();
+
+        let Command::Device { device_id, command } = cli.command else {
+            panic!("expected device command");
+        };
+        assert!(matches!(
+            command,
+            DeviceCommand::Recovery {
+                command: RecoveryCommand::BmsLowVoltagePrecharge
+            }
+        ));
+
+        let (method, params) = device_to_ipc(device_id, command);
+        assert_eq!(method, "device.recovery.bms_low_voltage_precharge");
         assert_eq!(params, json!({"device_id": "serial-04f3bb3f5367"}));
     }
 

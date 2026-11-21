@@ -252,6 +252,42 @@ export type UpsStatus = {
   };
 };
 
+export type UvPrechargeState =
+  | "idle"
+  | "verifying"
+  | "observing"
+  | "resetting"
+  | "failed"
+  | string;
+
+export type UvPrechargePolicy = {
+  uv_precharge_state?: UvPrechargeState | null;
+  uv_precharge_result?: string | null;
+  uv_precharge_reason?: string | null;
+  uv_precharge_source?: string | null;
+  uv_suspect?: boolean | null;
+  uv_precharge_blocked?: boolean | null;
+  uv_precharge_baseline_unverified?: boolean | null;
+  uv_precharge_reset_verified?: boolean | null;
+  uv_precharge_target_ichg_ma?: number | null;
+};
+
+export type UvPrechargeActionResponse = UvPrechargePolicy & {
+  ok?: boolean;
+  accepted?: boolean;
+  state?: UvPrechargeState;
+  result?: string | null;
+  reason?: string | null;
+  source?: string | null;
+  uv_suspect?: boolean | null;
+  baseline_unverified?: boolean | null;
+  reset_verified?: boolean | null;
+  blocked?: boolean | null;
+  target_ichg_ma?: number | null;
+  outputs?: string;
+  discharge_ready?: boolean | null;
+};
+
 export type DeviceTarget = {
   deviceId: string;
   baseUrl: string;
@@ -550,6 +586,12 @@ export type DevdDiagSnapshot = {
       payload?: {
         tps_enable_interlock?: TpsEnableInterlock;
       };
+    };
+    "derived.power"?: {
+      payload?: {
+        policy?: UvPrechargePolicy;
+      };
+      policy?: UvPrechargePolicy;
     };
   };
   errors?: Record<string, unknown>;

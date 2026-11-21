@@ -54,6 +54,7 @@ pub enum UsbCdcRequest {
     GetChargeControl,
     GetDiagSnapshot(DiagSnapshotRequest),
     RecoverBmsDischargeAuthorization,
+    RecoverBmsLowVoltagePrecharge,
     ActivateBms,
     GetBmsActivation,
     SetLogLevel(LogLevel),
@@ -677,6 +678,7 @@ fn parse_request_op(line: &str, op: &str) -> Result<UsbCdcRequest, UsbCdcProtoco
         "recover_bms_discharge_authorization" => {
             Ok(UsbCdcRequest::RecoverBmsDischargeAuthorization)
         }
+        "recover_bms_low_voltage_precharge" => Ok(UsbCdcRequest::RecoverBmsLowVoltagePrecharge),
         "activate_bms" => Ok(UsbCdcRequest::ActivateBms),
         "get_bms_activation" => Ok(UsbCdcRequest::GetBmsActivation),
         "set_log_level" => {
@@ -1572,6 +1574,13 @@ mod tests {
                 output_blocked: false,
                 manual_active: true,
                 manual_stop_inhibit: false,
+                uv_suspect: false,
+                uv_precharge_state: "idle",
+                uv_precharge_result: None,
+                uv_precharge_reason: None,
+                uv_precharge_baseline_unverified: false,
+                uv_precharge_blocked: false,
+                uv_precharge_reset_verified: false,
             },
             bms: DerivedPowerBmsSnapshot {
                 addr: Some(11),

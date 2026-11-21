@@ -198,10 +198,13 @@ pub(super) fn ina_alert_registers(rated_vout_mv: u16) -> [(u8, u16); 9] {
 const BMS_SELF_CHECK_AUTO_RECOVERY_ENABLED: bool = false;
 const CHARGE_POLICY_NORMAL_ICHG_MA: u16 = 500;
 const CHARGE_POLICY_DC_DERATED_ICHG_MA: u16 = 100;
-const CHARGE_POLICY_BMS_RECOVERY_ICHG_MA: u16 = 100;
+pub(super) const CHARGE_POLICY_BMS_RECOVERY_ICHG_MA: u16 = 100;
 const CHARGE_POLICY_START_RSOC_PCT: u16 = 80;
 const CHARGE_POLICY_START_CELL_MIN_MV: u16 = 3_700;
 pub(super) const CHARGE_POLICY_LOW_VOLTAGE_RECOVERY_EXIT_CELL_MIN_MV: u16 = 3_000;
+pub(super) const CHARGE_POLICY_UV_SUSPECT_CELL_MIN_MV: u16 = 3_100;
+pub(super) const CHARGE_POLICY_UV_SUSPECT_RECOVER_SAMPLES: u8 = 3;
+pub(super) const CHARGE_POLICY_HARD_LOW_VOLTAGE_FLOOR_MV: u16 = 2_500;
 const CHARGE_POLICY_DC_DERATE_ENTER_IBUS_MA: i32 = 3_000;
 const CHARGE_POLICY_DC_DERATE_EXIT_IBUS_MA: i32 = 2_700;
 const CHARGE_POLICY_DC_DERATE_ENTER_HOLD: Duration = Duration::from_secs(1);
@@ -712,6 +715,12 @@ pub(super) fn runtime_charge_override_for_charger(
     }
 }
 
+pub(super) fn runtime_charge_override_suppressed_by_charge_policy(
+    state: Option<ChargePolicyState>,
+) -> bool {
+    matches!(state, Some(ChargePolicyState::RecoveringLowVoltage))
+}
+
 pub(super) fn runtime_charge_override_for_backup_usb_charger(
     mode: UpsMode,
     backup_reason: Option<&'static str>,
@@ -779,6 +788,16 @@ pub(super) fn bq40_physical_discharge_path_absent(
         && pack_mv
             .map(|mv| !bq40_pack_indicates_no_battery(mv))
             .unwrap_or(false)
+}
+
+pub(super) fn bq40_charge_path_backfeed_contradiction(
+    charger_vbat_present: Option<bool>,
+    op_dsg_fet: Option<bool>,
+    xdsg: Option<bool>,
+    afe_dsg_fet: Option<bool>,
+) -> bool {
+    charger_vbat_present == Some(true)
+        && (op_dsg_fet == Some(false) || xdsg == Some(true) || afe_dsg_fet == Some(false))
 }
 
 pub(super) fn bq40_physical_discharge_path_issue(
@@ -1015,6 +1034,7 @@ pub(super) enum ChargePolicyState {
     BlockedTemp,
     BlockedOutputOverload,
     BlockedNoBms,
+    BlockedHardLowVoltage,
     IdleWaitThreshold,
     Charging500mA,
     Charging100mADcDerated,
@@ -1060,6 +1080,7 @@ impl ChargePolicyState {
             Self::BlockedTemp => "blocked_temp",
             Self::BlockedOutputOverload => "blocked_output_over_limit",
             Self::BlockedNoBms => "blocked_no_bms",
+            Self::BlockedHardLowVoltage => "blocked_hard_low_voltage",
             Self::IdleWaitThreshold => "idle_wait_threshold",
             Self::Charging500mA => "charging_500ma",
             Self::Charging100mADcDerated => "charging_100ma_dc_derated",
@@ -1075,6 +1096,7 @@ impl ChargePolicyState {
             Self::BlockedTemp => "TEMP",
             Self::BlockedOutputOverload => "LOAD",
             Self::BlockedNoBms => "LOCK",
+            Self::BlockedHardLowVoltage => "LOCK",
             Self::IdleWaitThreshold => "WAIT",
             Self::Charging500mA => "CHG500",
             Self::Charging100mADcDerated => "CHG100",
@@ -1089,6 +1111,10 @@ impl ChargePolicyState {
             self,
             Self::Charging500mA | Self::Charging100mADcDerated | Self::RecoveringLowVoltage
         )
+    }
+
+    pub(super) const fn blocks_below_hard_low_voltage_floor(self) -> bool {
+        matches!(self, Self::BlockedHardLowVoltage)
     }
 }
 
@@ -1292,6 +1318,8 @@ pub(super) struct ChargePolicyMemory {
     pub(super) bms_qualified: bool,
     pub(super) qualification_after_sample_seq: Option<u32>,
     pub(super) termination_incomplete: bool,
+    pub(super) uv_suspect: bool,
+    pub(super) uv_suspect_high_streak: u8,
 }
 
 impl ChargePolicyMemory {
@@ -2863,6 +2891,40 @@ pub(super) fn charge_policy_step(
         };
     };
 
+    if telemetry.cell_min_mv < CHARGE_POLICY_HARD_LOW_VOLTAGE_FLOOR_MV {
+        memory.charge_latched = false;
+        memory.bms_qualified = false;
+        derate.reset();
+        output_load.reset();
+        return ChargePolicyDecision {
+            state: ChargePolicyState::BlockedHardLowVoltage,
+            allow_charge: false,
+            target_ichg_ma: None,
+            start_reason,
+            full_reason: None,
+            output_block_reason: None,
+            recovery_stage: None,
+        };
+    }
+
+    // A UV-suspect session stays conservative even after an unloaded cell
+    // reading rebounds above the 3000mV recovery exit. The high streak is the
+    // only path back to 500mA, and any dip below 3100mV restarts it.
+    if telemetry.cell_min_mv < CHARGE_POLICY_UV_SUSPECT_CELL_MIN_MV {
+        memory.uv_suspect = true;
+    }
+    if memory.uv_suspect {
+        if telemetry.cell_min_mv >= CHARGE_POLICY_UV_SUSPECT_CELL_MIN_MV {
+            memory.uv_suspect_high_streak = memory.uv_suspect_high_streak.saturating_add(1);
+        } else {
+            memory.uv_suspect_high_streak = 0;
+        }
+    } else {
+        memory.uv_suspect_high_streak = 0;
+    }
+    let uv_suspect_100ma = memory.uv_suspect
+        && memory.uv_suspect_high_streak < CHARGE_POLICY_UV_SUSPECT_RECOVER_SAMPLES;
+
     let low_voltage_recovery_input = matches!(
         input.input_source,
         Some(DashboardInputSource::DcIn | DashboardInputSource::UsbC)
@@ -2888,7 +2950,8 @@ pub(super) fn charge_policy_step(
         low_voltage_recovery_stage,
         Some(ChargePolicyRecoveryStage::Bq25792Precharge)
     ) && start_reason.is_some();
-    let low_voltage_recovery_active = bms_recovery_active || bq25792_precharge_active;
+    let low_voltage_recovery_active =
+        bms_recovery_active || bq25792_precharge_active || uv_suspect_100ma;
 
     if !telemetry.charge_ready && !bms_recovery_active {
         memory.charge_latched = false;
@@ -2926,6 +2989,13 @@ pub(super) fn charge_policy_step(
     {
         memory.termination_incomplete = true;
     }
+    // Low-voltage recovery is an independent 100 mA path: it keeps ITERM below
+    // ICHG and never participates in FULL. SPEC bq25792-charge-policy requires
+    // it to continue after termination_done, so it also supersedes an earlier
+    // incomplete normal termination instead of being short-circuited by it.
+    if low_voltage_recovery_active {
+        memory.termination_incomplete = false;
+    }
     if memory.termination_incomplete {
         memory.charge_latched = false;
         derate.reset();
@@ -2948,6 +3018,8 @@ pub(super) fn charge_policy_step(
     if let Some(full_reason) = full_reason {
         memory.charge_latched = false;
         memory.full_latched = true;
+        memory.uv_suspect = false;
+        memory.uv_suspect_high_streak = 0;
         derate.reset();
         return ChargePolicyDecision {
             state: ChargePolicyState::FullLatched,
@@ -2963,6 +3035,8 @@ pub(super) fn charge_policy_step(
     if memory.full_latched {
         memory.charge_latched = false;
         memory.bms_qualified = false;
+        memory.uv_suspect = false;
+        memory.uv_suspect_high_streak = 0;
         derate.reset();
         return ChargePolicyDecision {
             state: ChargePolicyState::FullLatched,
@@ -6155,6 +6229,93 @@ mod tests {
     }
 
     #[test]
+    fn charge_policy_blocks_automatic_charge_below_hard_low_voltage_floor() {
+        let mut memory = ChargePolicyMemory::default();
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+        let mut input = policy_input(
+            Some(policy_telemetry(0, 2_499, 3_015)),
+            Some(DashboardInputSource::UsbC),
+            Some(112),
+        );
+        input.vbat_present = false;
+
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut output_load, 0, input);
+
+        assert_eq!(decision.state, ChargePolicyState::BlockedHardLowVoltage);
+        assert!(!decision.allow_charge);
+        assert_eq!(decision.target_ichg_ma, None);
+        assert!(!memory.charge_latched);
+    }
+
+    #[test]
+    fn charge_policy_allows_recovery_at_hard_low_voltage_floor() {
+        let mut memory = ChargePolicyMemory::default();
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut output_load = ChargePolicyOutputLoadTracker::default();
+        let mut input = policy_input(
+            Some(policy_telemetry(0, 2_500, 3_015)),
+            Some(DashboardInputSource::UsbC),
+            Some(112),
+        );
+        input.vbat_present = false;
+
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut output_load, 0, input);
+
+        assert_eq!(decision.state, ChargePolicyState::RecoveringLowVoltage);
+        assert!(decision.allow_charge);
+        assert_eq!(
+            decision.target_ichg_ma,
+            Some(CHARGE_POLICY_BMS_RECOVERY_ICHG_MA)
+        );
+    }
+
+    #[test]
+    fn recovery_policy_suppresses_blocked_mode_charge_override() {
+        assert!(runtime_charge_override_suppressed_by_charge_policy(Some(
+            ChargePolicyState::RecoveringLowVoltage
+        )));
+        assert!(!runtime_charge_override_suppressed_by_charge_policy(Some(
+            ChargePolicyState::Charging500mA
+        )));
+        assert!(!runtime_charge_override_suppressed_by_charge_policy(None));
+    }
+
+    #[test]
+    fn backfeed_contradiction_requires_vbat_present_and_open_bms_output_path() {
+        assert!(!bq40_charge_path_backfeed_contradiction(
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false)
+        ));
+        assert!(!bq40_charge_path_backfeed_contradiction(
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(true)
+        ));
+        assert!(bq40_charge_path_backfeed_contradiction(
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(true)
+        ));
+        assert!(bq40_charge_path_backfeed_contradiction(
+            Some(true),
+            Some(true),
+            Some(true),
+            Some(true)
+        ));
+        assert!(bq40_charge_path_backfeed_contradiction(
+            Some(true),
+            Some(true),
+            Some(false),
+            Some(false)
+        ));
+    }
+
+    #[test]
     fn charge_policy_allows_cuv_precharge_on_dc_recovery_path() {
         let mut memory = ChargePolicyMemory::default();
         let mut derate = ChargePolicyDerateTracker::default();
@@ -6445,6 +6606,134 @@ mod tests {
         );
         memory.start_explicit_session(0); // Accepted explicit START.
         assert!(charge_policy_step(&mut memory, &mut derate, &mut load, 3, input).allow_charge);
+    }
+
+    #[test]
+    fn low_voltage_recovery_supersedes_incomplete_termination_latch() {
+        let mut memory = ChargePolicyMemory {
+            charge_latched: true,
+            ..Default::default()
+        };
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut load = ChargePolicyOutputLoadTracker::default();
+        let mut input = policy_input(
+            Some(policy_telemetry(79, 3900, 4000)),
+            Some(DashboardInputSource::UsbC),
+            Some(100),
+        );
+        input.charger_done = true;
+        assert_eq!(
+            charge_policy_step(&mut memory, &mut derate, &mut load, 0, input).state,
+            ChargePolicyState::TerminationIncomplete
+        );
+        assert!(memory.termination_incomplete);
+
+        // The pack falls below the recovery threshold while charge_ready stays
+        // true: the 100 mA recovery path must take over from the latch.
+        input.charger_done = false;
+        input.telemetry = Some(policy_telemetry(0, 2939, 3073));
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut load, 1, input);
+        assert_eq!(decision.state, ChargePolicyState::RecoveringLowVoltage);
+        assert!(decision.allow_charge);
+        assert_eq!(
+            decision.target_ichg_ma,
+            Some(CHARGE_POLICY_BMS_RECOVERY_ICHG_MA)
+        );
+        assert_eq!(
+            decision.recovery_stage,
+            Some(ChargePolicyRecoveryStage::Bq25792Precharge)
+        );
+        assert!(!memory.termination_incomplete);
+        assert!(memory.charge_latched);
+
+        // Above 3100mV the UV-suspect session needs three consecutive samples
+        // before the normal 500 mA target resumes.
+        input.telemetry = Some(policy_telemetry(0, 3100, 3200));
+        for now in 2..4 {
+            let decision = charge_policy_step(&mut memory, &mut derate, &mut load, now, input);
+            assert_eq!(decision.state, ChargePolicyState::RecoveringLowVoltage);
+            assert_eq!(
+                decision.target_ichg_ma,
+                Some(CHARGE_POLICY_BMS_RECOVERY_ICHG_MA)
+            );
+        }
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut load, 4, input);
+        assert_eq!(decision.state, ChargePolicyState::Charging500mA);
+        assert_eq!(decision.target_ichg_ma, Some(CHARGE_POLICY_NORMAL_ICHG_MA));
+        assert_eq!(decision.recovery_stage, None);
+    }
+
+    #[test]
+    fn uv_suspect_reenters_100ma_after_a_dip_below_3100mv() {
+        let mut memory = ChargePolicyMemory {
+            charge_latched: true,
+            uv_suspect: true,
+            uv_suspect_high_streak: CHARGE_POLICY_UV_SUSPECT_RECOVER_SAMPLES,
+            ..Default::default()
+        };
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut load = ChargePolicyOutputLoadTracker::default();
+        let mut input = policy_input(
+            Some(policy_telemetry(0, 3_150, 3_200)),
+            Some(DashboardInputSource::UsbC),
+            Some(100),
+        );
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut load, 0, input);
+        assert_eq!(decision.state, ChargePolicyState::Charging500mA);
+
+        input.telemetry = Some(policy_telemetry(0, 3_050, 3_100));
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut load, 1, input);
+        assert_eq!(decision.state, ChargePolicyState::RecoveringLowVoltage);
+        assert_eq!(
+            decision.target_ichg_ma,
+            Some(CHARGE_POLICY_BMS_RECOVERY_ICHG_MA)
+        );
+        assert_eq!(memory.uv_suspect_high_streak, 0);
+    }
+
+    #[test]
+    fn uv_suspect_clears_an_existing_termination_incomplete_latch() {
+        let mut memory = ChargePolicyMemory {
+            charge_latched: true,
+            termination_incomplete: true,
+            uv_suspect: true,
+            ..Default::default()
+        };
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut load = ChargePolicyOutputLoadTracker::default();
+        let input = policy_input(
+            Some(policy_telemetry(0, 3_050, 3_100)),
+            Some(DashboardInputSource::UsbC),
+            Some(100),
+        );
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut load, 0, input);
+        assert_eq!(decision.state, ChargePolicyState::RecoveringLowVoltage);
+        assert!(decision.allow_charge);
+        assert!(!memory.termination_incomplete);
+    }
+
+    #[test]
+    fn full_charge_clears_uv_suspect() {
+        let mut memory = ChargePolicyMemory {
+            charge_latched: true,
+            bms_qualified: true,
+            uv_suspect: true,
+            uv_suspect_high_streak: CHARGE_POLICY_UV_SUSPECT_RECOVER_SAMPLES,
+            ..Default::default()
+        };
+        let mut derate = ChargePolicyDerateTracker::default();
+        let mut load = ChargePolicyOutputLoadTracker::default();
+        let mut input = policy_input(
+            Some(policy_telemetry(99, 4_150, 4_200)),
+            Some(DashboardInputSource::UsbC),
+            Some(100),
+        );
+        input.telemetry.as_mut().unwrap().bms_full = true;
+        input.charger_done = true;
+        let decision = charge_policy_step(&mut memory, &mut derate, &mut load, 0, input);
+        assert_eq!(decision.state, ChargePolicyState::FullLatched);
+        assert!(!memory.uv_suspect);
+        assert_eq!(memory.uv_suspect_high_streak, 0);
     }
 
     #[test]
